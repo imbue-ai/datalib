@@ -80,8 +80,6 @@ by uuid.
 5. **A page is landed** (`land`): each document shown opens on one of its
    rows, the message its hit named where the terms keep it, and is quoted
    from that row's text.
-6. **The first page says what meaning could not reach** (`without_vectors`):
-   the documents the terms keep that have pages to search and no vectors.
 
 A part that fails costs that part and says so. The list and what the terms
 keep are cached under the query and the index's generation, so the next
@@ -95,7 +93,6 @@ Each takes its `WHERE` from `db::build_where`.
 |---|---|---|
 | the listing | `dolt_repo::listing_sql` | indexes alone, when each key has one |
 | the rows the terms keep, for ranking (step 1) | `db::matching_sql` | row ids from the indexes, then `rows` |
-| what meaning cannot reach (step 6) | `dolt_repo::documents_with_pages_sql` | row ids from the indexes, then `grid_rows_by_markdown_source` |
 | a grouped grid's groups | `group::group_sql` | the kept rows, from the table |
 | the values a key suggests | `group::values_sql` | the kept rows, from the table |
 | one page's rows | `rows_by_uuids` | those rows |
@@ -253,18 +250,18 @@ words, one of its `orderings`.
 
 On that library, with the ranks, best of two runs, in seconds:
 
-| search | listed | grouped by author | what meaning cannot reach |
-|---|---|---|---|
-| a 585k-row source | 0.11 | 1.6 | 0.5 |
-| it, `is:document` | 0.05 | 3.8 | 0.3 |
-| it, an empty channel | 0.00 | 0.00 | 0.05 |
-| it, one kind (320k rows) | 0.07 | 4.2 | 0.4 |
-| it, one account (585k rows) | 0.13 | 4.7 | 0.6 |
-| it, one person (542 rows) | 0.03 | 0.03 | 0.13 |
-| that account in a 2k-row source | 0.04 | 0.05 | 0.18 |
-| `at:<page> is:document` | 0.01 | 0.01 | 0.15 |
-| a label with 14.5k threads, beside its source | 0.03 | 0.08 | 0.15 |
-| one account and one kind, no source | 4.5 | 8.4 | 9.0 |
+| search | listed | grouped by author |
+|---|---|---|
+| a 585k-row source | 0.11 | 1.6 |
+| it, `is:document` | 0.05 | 3.8 |
+| it, an empty channel | 0.00 | 0.00 |
+| it, one kind (320k rows) | 0.07 | 4.2 |
+| it, one account (585k rows) | 0.13 | 4.7 |
+| it, one person (542 rows) | 0.03 | 0.03 |
+| that account in a 2k-row source | 0.04 | 0.05 |
+| `at:<page> is:document` | 0.01 | 0.01 |
+| a label with 14.5k threads, beside its source | 0.03 | 0.08 |
+| one account and one kind, no source | 4.5 | 8.4 |
 
 Grouping reads each kept row for its author; the last row is the one no
 index serves.

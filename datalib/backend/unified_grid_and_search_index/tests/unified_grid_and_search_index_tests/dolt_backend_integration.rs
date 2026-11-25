@@ -11,7 +11,7 @@ use datalib_unified_grid_and_search_index::db::{
     matching_sql, DOCUMENTS_INDEX, KEPT_DOCUMENTS, KEPT_ROWS,
 };
 use datalib_unified_grid_and_search_index::dolt_repo::{
-    documents_with_pages_sql, listing_sql, DoltRepo,
+    listing_sql, DoltRepo,
 };
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::{group_sql, where_within, Within};
@@ -842,13 +842,6 @@ fn statements_of(
             "groups",
             (
                 group_sql("grid_rows", &where_sql, &[GridRowColumn::Author]),
-                params.clone(),
-            ),
-        ),
-        (
-            "pages",
-            (
-                documents_with_pages_sql("grid_rows", "markdowns", &where_sql),
                 params,
             ),
         ),
@@ -917,7 +910,7 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                 ] {
                     let parsed = parse_query(&q);
                     for (what, (sql, params)) in statements_of(&parsed, &within) {
-                        let plan = plan_of_filters(&writer, what, &sql, &params).await;
+                        let plan = explain(&writer, &sql, &params).await;
                         // `email:` is in no index, so its row is read.
                         let reads_the_index_alone =
                             covered && what != "groups" && !beside.contains("email");
@@ -952,7 +945,7 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                     let read = std::collections::HashMap::from([(node.to_string(), *arms)]);
                     let parsed = parse_query(&q).with_arms(&read);
                     for (what, (sql, params)) in statements_of(&parsed, &within) {
-                        let plan = plan_of_filters(&writer, what, &sql, &params).await;
+                        let plan = explain(&writer, &sql, &params).await;
                         let reads_the_index_alone = what != "groups" && !beside.contains("email");
                         let first = plan.iter().find(|d| d.contains(" grid_rows"));
                         let starts = |with: &str| first.is_some_and(|d| d.starts_with(with));
@@ -1012,28 +1005,6 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
 async fn plan_of(db: &sqlx::SqlitePool, q: &str) -> Vec<String> {
     let (sql, params) = listing_sql(&parse_query(q), &[], &[]);
     explain(db, &sql, &params).await
-}
-
-/// How a statement finds the rows its filters keep. The one over the
-/// searchable documents finds them in a set of its own, beside the single
-/// walk of the index its answer is in; a search that started at the
-/// documents instead tried each with each row kept, and had not finished
-/// in a minute.
-async fn plan_of_filters(
-    db: &sqlx::SqlitePool,
-    what: &str,
-    sql: &str,
-    params: &[String],
-) -> Vec<String> {
-    let mut plan = explain(db, sql, params).await;
-    if what == "pages" {
-        assert_eq!(
-            plan.remove(0),
-            "SCAN grid_rows USING COVERING INDEX grid_rows_by_markdown_source",
-            "{sql}"
-        );
-    }
-    plan
 }
 
 pub(crate) async fn explain(db: &sqlx::SqlitePool, sql: &str, params: &[String]) -> Vec<String> {

@@ -2601,7 +2601,6 @@ onBeforeUnmount(() => {
       :key="n.text"
       class="search-notice"
       role="status"
-      :title="n.title"
       data-testid="search-notice"
     >
       {{ n.text }}

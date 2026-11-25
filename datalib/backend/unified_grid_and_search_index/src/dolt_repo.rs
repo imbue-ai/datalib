@@ -288,28 +288,6 @@ fn search_row_select() -> String {
     names.join(", ")
 }
 
-/// What `documents_with_pages` runs. The searchable documents are listed
-/// once, from the step's `markdowns_searchable`, never looked up per grid
-/// row: a correlated look-up read each row's whole `markdowns` row, seconds
-/// on a large library. `INDEXED BY` refuses rather than fall back to that.
-/// The rows the search's filters keep come out of their own indexes as row
-/// ids, and are looked for in the one index that holds a document and its
-/// source, read once, never in the table. The `+` keeps that index from
-/// being searched a document at a time.
-pub fn documents_with_pages_sql(grid_rows: &str, markdowns: &str, where_sql: &str) -> String {
-    let kept = if where_sql.is_empty() {
-        String::new()
-    } else {
-        format!("rowid IN (SELECT rowid FROM {grid_rows}{where_sql}) AND ")
-    };
-    format!(
-        "SELECT DISTINCT markdown_uuid, source_id \
-         FROM {grid_rows} INDEXED BY grid_rows_by_markdown_source WHERE {kept}\
-         +markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
-                            INDEXED BY markdowns_searchable WHERE searchable = 1)"
-    )
-}
-
 /// What `ordered_uuids` runs, with its parameters.
 pub fn listing_sql(q: &ParsedQuery, sort: &[Sort], within: &[Within]) -> (String, Vec<String>) {
     ordered_sql("grid_rows", q, sort, within)
@@ -1389,29 +1367,6 @@ impl IndexRepo for DoltRepo {
             })
             .collect::<Result<_, sqlx::Error>>()
             .map_err(|e| RepoError::Internal(format!("decode a matching row: {e}")))
-    }
-
-    async fn documents_with_pages(
-        &self,
-        q: &ParsedQuery,
-    ) -> Result<Vec<(String, String)>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(Vec::new());
-        };
-        let q = at.read_at(q).await?;
-        let (where_sql, params) = build_where(&q);
-        // Audited: as `matching` — literal table names and `build_where`'s
-        // static column names; every value is bound.
-        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(
-            documents_with_pages_sql(at.grid_rows, at.markdowns, &where_sql),
-        ));
-        for p in &params {
-            query = query.bind(p);
-        }
-        query
-            .fetch_all(&mut *at.tx)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))
     }
 
     async fn documents_kept(

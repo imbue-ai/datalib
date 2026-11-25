@@ -249,7 +249,6 @@ test("a search says above its results what it could not reach, in either view", 
     const response = await route.fetch();
     const body = (await response.json()) as { query_echo: Record<string, unknown> };
     if (url.searchParams.get("q")?.startsWith("warp core")) {
-      body.query_echo.without_vectors = { total: 1511, by_source: [["slack", 1511]] };
       body.query_echo.partial = "Part of this search could not answer";
     }
     await route.fulfill({ response, json: body });
@@ -265,11 +264,7 @@ test("a search says above its results what it could not reach, in either view", 
   await expect(listShows(page)).toHaveAttribute("data-shown-query", "warp core", {
     timeout: SEARCH_SETTLE,
   });
-  await expect(notices).toHaveText([
-    "Part of this search could not answer",
-    "1,511 candidates lack semantic embedding vectors",
-  ]);
-  await expect(notices.nth(1)).toHaveAttribute("title", /slack 1,511/);
+  await expect(notices).toHaveText(["Part of this search could not answer"]);
   expect(asked.filter((u) => u.searchParams.get("q") === "warp core").length).toBe(1);
   expect(asked.some((u) => u.searchParams.has("tab"))).toBe(false);
 
@@ -277,7 +272,7 @@ test("a search says above its results what it could not reach, in either view", 
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core", {
     timeout: SEARCH_SETTLE,
   });
-  await expect(notices).toHaveCount(2);
+  await expect(notices).toHaveCount(1);
 
   await runSearch(page, "tea semantic:off");
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "tea semantic:off", {
