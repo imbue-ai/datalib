@@ -30,35 +30,3 @@ pub fn datalib_step_pass_env(root: &std::path::Path) -> Vec<String> {
         .map(|p| p.pass_env)
         .unwrap_or_default()
 }
-
-/// The function a `datalib-step run <function> …` command performs; `None`
-/// for any other command.
-pub fn datalib_step_function(command: &str) -> Option<String> {
-    let argv = shlex::split(command)?;
-    match argv.as_slice() {
-        [program, run, function, ..] if is_datalib_step(program) && run == "run" => {
-            Some(function.clone())
-        }
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_function_is_read_off_a_datalib_step_command_and_nothing_else() {
-        assert_eq!(
-            datalib_step_function("datalib-step run render_markdown slack").as_deref(),
-            Some("render_markdown")
-        );
-        assert_eq!(
-            datalib_step_function("/opt/bin/datalib-step run unified_grid_and_search_index")
-                .as_deref(),
-            Some("unified_grid_and_search_index")
-        );
-        assert_eq!(datalib_step_function("datalib-step help"), None);
-        assert_eq!(datalib_step_function("./bin/fetch run ingest"), None);
-    }
-}

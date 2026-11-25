@@ -5,8 +5,9 @@ The step protocol redesign
 ([`completed/dag_and_step_decoupling.md`](completed/dag_and_step_decoupling.md),
 #1894) took `datalib-step` out of the runner. This file lists what that
 redesign left alone on purpose, so it is not forgotten. Done: items 1,
-5a, 5b and 6, and of item 7 all but one constant. Untouched: items 2 to
-5 and 8, and the reconciler in section 10. Item 9 is half done.
+5a, 5b and 6, and of item 7 all but one constant; item 5 is closed as
+not a coupling. Untouched: items 2 to 4 and 8, and the reconciler in
+section 10. Item 9 is half done.
 
 ## The end state
 
@@ -74,13 +75,15 @@ an old `datalib-step` step should become is `datalib-step`'s knowledge,
 so the end state needs a way for a program to rewrite its own steps'
 entries.
 
-### 5. Every step's metrics are named `datalib_step_…`
+### 5. Every step's metrics are named `datalib_step_…` (closed: not a coupling)
 
-`GET /metrics` prefixes every series with `datalib_step_`, custom
-steps' included (`datalib/backend/http/src/prometheus.rs:173`, `:194`,
-`:208`). The name says the series came from `datalib-step` when it came
-from any step. A rename breaks a person's dashboards and alerts, so the
-old names have to be kept for a while.
+`GET /metrics` names a step's series `datalib_step_<name>`, custom
+steps' included (`datalib/backend/http/src/prometheus.rs:173`). That
+reads as Prometheus's `<namespace>_<subsystem>_<name>`, the same form
+as its siblings `datalib_tree_*`, `datalib_disk_*` and
+`datalib_applet_*`: `step` is the subject of the series, not the
+program `datalib-step`. `docs/dev/logging.md` now says so, and the
+names stay, so no dashboard or alert breaks.
 
 ### 5a. The server hands two of datalib-step's secrets to every step (done)
 
@@ -164,9 +167,11 @@ reads it. The text:
 
 Add the check that keeps it true at the same time: `//:lint_repo`
 refuses the string `datalib-step` in `datalib/backend/dag/src` and in
-`datalib/backend/http/src` outside tests. The runner's half exists
-(check 23 in `scripts/lint_repo.py`); the server's waits on items 1 to
-5.
+`datalib/backend/http/src` outside tests. The runner's half is check 23
+in `scripts/lint_repo.py`. The server's is check 24, which for now lets
+the string stand in the files of the items still open (2 and 3), named
+in `_SERVER_STEP_PROGRAM_FILES`, and refuses a listed file that no
+longer needs it; the list empties as those items land.
 
 ## 10. The runner's runtime model
 

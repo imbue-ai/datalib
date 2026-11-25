@@ -11,6 +11,7 @@ from lint_repo import (
     reader_grant_problems,
     release_grant_problems,
     release_key_problems,
+    server_step_program_problems,
     step_program_mentions,
     unliteral_opens,
 )
@@ -445,6 +446,25 @@ class StepProgramMentionTest(unittest.TestCase):
     def test_a_cfg_test_on_one_item_hides_nothing_after_it(self) -> None:
         source = '#[cfg(test)]\nfn helper() {}\nconst P: &str = "datalib-step";\n'
         self.assertEqual(step_program_mentions(source), [3])
+
+
+class ServerStepProgramTest(unittest.TestCase):
+    def test_a_file_off_the_list_and_a_listed_file_that_stopped_are_both_refused(
+        self,
+    ) -> None:
+        listed = "datalib/backend/http/src/probe.rs"
+        found = server_step_program_problems(
+            {
+                "datalib/backend/http/src/new.rs": [4],
+                listed: [],
+                "datalib/backend/http/src/binaries.rs": [2],
+                "datalib/backend/http/src/starter.rs": [22],
+                "datalib/backend/http/src/step_program.rs": [1],
+            }
+        )
+        self.assertEqual(len(found), 2, found)
+        self.assertIn("new.rs:4", found[0])
+        self.assertIn(listed, found[1])
 
 
 if __name__ == "__main__":
