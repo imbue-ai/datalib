@@ -400,6 +400,39 @@ An `addressbooks` list of names narrows a server to those address books,
 matched exactly; leave it out for all of them. The wizard's **Test
 connection** lists them to pick from.
 
+## Discord
+
+`type = "discord"` — Discord's API through latchkey (`api`), signed in
+as you. Copies your direct messages, and the channels, threads and forum
+posts of the servers you name, with the files in them. Each channel,
+thread and direct message becomes one document.
+
+**Discord forbids this, so decide whether the risk is worth it.** Its
+rules say that automating a personal account outside its bot API is
+forbidden and can get the account terminated. A bot, which is the way
+Discord allows, cannot read your direct messages or a server whose admin
+has not added it. The download only reads, one request at a time, and
+asks for nothing in a conversation with nothing new.
+
+Sign in once in the browser; latchkey keeps your session:
+
+```sh
+latchkey auth browser discord
+```
+
+An empty `api` table copies your direct messages and no server. Name
+servers in `servers`, by name or id, or set `all_servers = true`;
+`channels` narrows them to channels you name by name, id or pasted link.
+A server with years of history is read 100 messages a request, so set
+`since` (a day, or an offset from the sync such as `"-90d"`) on a big
+one. Each sync after the first reads only the conversations with
+something new, and re-reads the last week of those for edits, reactions
+and deletions (`refresh_window_days`).
+
+Not copied: who reacted (only how many), the nicknames people use on one
+server, what you have and have not read, and a direct message you have
+closed, until it opens again.
+
 ## Email (mbox or JMAP)
 
 `type = "email"` — a Google Takeout `.mbox` on disk (`mbox`), **or** a
@@ -1098,8 +1131,10 @@ adb pull /sdcard/Signal/SignalBackups ~/backups/SignalBackups
 ```
 
 You'll also need the 30-digit passphrase shown when you enabled backups.
-The provider reads it from the `SIGNAL_BACKUP_PASSPHRASE` env var (override
-per source with `aep_env_var`).
+The provider reads it from the environment variable `aep_env_var` names;
+the app writes `SIGNAL_BACKUP_PASSPHRASE` there. Name the variable even
+when it is that one: the runner hands a step only the variables its
+params name.
 
 ## Slack
 
@@ -1207,9 +1242,10 @@ read; a backup protected by a password cannot be decrypted offline.
 → Chat backup → End-to-end encrypted backup, turn it on and choose the
 **64-digit key** option, not a password. Write that key down. If you
 already turned it on with a password, turn it off and on again with the
-64-digit key. The sync reads the key from the
-`WHATSAPP_BACKUP_DECRYPTION_KEY` environment variable (`key_env_var`
-names another).
+64-digit key. The sync reads the key from the environment variable
+`key_env_var` names; the app writes `WHATSAPP_BACKUP_DECRYPTION_KEY`
+there. Name the variable even when it is that one: the runner hands a
+step only the variables its params name.
 
 **Pull the backup.** Trigger a fresh local backup first (Settings →
 Chats → Chat backup → Back Up) so it is current, then plug the phone in

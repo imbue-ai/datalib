@@ -68,6 +68,7 @@ fn spawn(cwd: &Path, root: &Path, env: &[(&str, &str)]) -> Server {
         .arg(&url_file)
         .arg(root)
         .env("DATALIB_BIND", "127.0.0.1:0")
+        .env("DATALIB_PIPELINE_BIN", pipeline_bin())
         .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -110,6 +111,12 @@ fn spawn(cwd: &Path, root: &Path, env: &[(&str, &str)]) -> Server {
 fn bin() -> std::path::PathBuf {
     std::path::absolute(std::env::var("DATALIB_HTTP_BIN").expect("DATALIB_HTTP_BIN is set"))
         .expect("absolute DATALIB_HTTP_BIN")
+}
+
+/// The runner the server keeps as a child, absolute for the same reason.
+fn pipeline_bin() -> std::path::PathBuf {
+    std::path::absolute(std::env::var("DATALIB_PIPELINE_BIN").expect("DATALIB_PIPELINE_BIN is set"))
+        .expect("absolute DATALIB_PIPELINE_BIN")
 }
 
 impl Server {

@@ -318,6 +318,7 @@ export async function startWorld(internet, options) {
     DATALIB_TOKEN: API_TOKEN,
     DATALIB_PARENT_PIPE: "0",
     DATALIB_STEP_BIN: need("DATALIB_STEP_BIN"),
+    DATALIB_PIPELINE_BIN: need("DATALIB_PIPELINE_BIN"),
     DATALIB_RUNTIME_DIR: runtime ? need("DATALIB_TEST_AUTH_RUNTIME_DIR") : path.join(dir, "no-runtime"),
     DATALIB_CACHE_DIR: path.join(dir, "cache"),
     DATALIB_TEST_AUTH_SPY_LOG: spyLog,

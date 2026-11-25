@@ -347,9 +347,33 @@ TAKEOUT_SAVED_PLACE_WITHOUT_KEY = (
     "|skipped:maps_saved_places:17f4280e0ea1d5c3"
     "||date|no_identity|"
 )
+# Discord's 404 for a file, a file over the fixture's 1 MB limit, and Q's
+# message of a type no build knows.
+DISCORD_FILE_GONE = (
+    "3ebf1167-47eb-5e00-a32a-0cbec4cd3e45"
+    "|error|fetch|entity|discord_attachments"
+    ":1224633672007681701#01235186960302081702#1235186960302081701"
+    "|||fetch_failed|HTTP 404"
+)
+DISCORD_FILE_TOO_LARGE = (
+    "e2bcbf56-056b-5eea-9842-2bc44dc59d7e"
+    "|warning|fetch|entity|discord_attachments"
+    ":1224633672007681701#01235186456985601702#1235186456985601701"
+    "|||over_size_limit|size 48000000 > limit 1000000"
+)
+DISCORD_UNKNOWN_TYPE = (
+    "c729c0ca-afe2-5cbc-b707-8f13abf2c2fa"
+    "|info|parse|markdown"
+    "|00000000-0000-88dc-9673-98f058735e2a"  # the Enterprise's #bridge
+    "|018f38d6-eac0-8bbe-8261-cb05b68e8f33"
+    "|type|uncovered_type|a message of type 99, shown as its text alone"
+)
 EXPECTED_PROBLEMS = {
     "claude-api": [POISONED_PROBLEM, CLAUDE_ATTACHMENT_WITHOUT_BYTES],
     "garmin": [GARMIN_RIDE_WITH_NO_FIT],
+    "discord": sorted(
+        [DISCORD_FILE_GONE, DISCORD_FILE_TOO_LARGE, DISCORD_UNKNOWN_TYPE]
+    ),
     "facebook": sorted(
         [
             FACEBOOK_TABLES_NOT_READ,
@@ -476,6 +500,9 @@ EXPECTED_PROVIDERS = frozenset(
         "garmin",
         # Ingested through playback; each Doc and each of its comments.
         "google_drive",
+        # Ingested through playback: two servers' channels and threads,
+        # and the direct messages.
+        "discord",
     }
 )
 
@@ -1289,9 +1316,10 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "every source that rendered must also have measured itself",
         )
         # Who a handle is, as each source that mentions it says: the
-        # rows a chip reads. One address, six sources, one name — Slack's
+        # rows a chip reads. One address, seven sources, one name — Slack's
         # through its profile, which ties his Slack user to the address,
-        # Drive's through the comments the account wrote, Facebook's
+        # Drive's through the comments the account wrote, Discord's because
+        # the account is his, Facebook's
         # through the owner's profile, and the address book's, whose
         # photo is what his chips draw.
         self.assertEqual(
@@ -1303,6 +1331,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "WHERE h.handle = 'email:picard@enterprise.starfleet' ORDER BY 1;",
             ),
             [
+                "discord|Jean-Luc Picard",
                 "facebook|Jean-Luc Picard",
                 "google-drive|Jean-Luc Picard",
                 "google-takeout|Jean-Luc Picard",
@@ -1354,6 +1383,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "chatgpt-api|me:self",
                 "claude-api|email:jlpicard@enterprise.starfleet.test",
                 "claude-api|me:self",
+                "discord|discord:170100000000000001",
+                "discord|email:picard@enterprise.starfleet",
                 "facebook|email:picard@enterprise.starfleet",
                 "facebook|facebook:name/Jean-Luc Picard",
                 "github|github:jlpicard",
@@ -1425,6 +1456,7 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 "claude-api",
                 "claude-code",
                 "codex",
+                "discord",
                 "facebook",
                 "github",
                 "gitlab",
@@ -2060,8 +2092,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         # A download names only its raw record; render says which grid row
         # that record belongs to, and the reader links the two. These are
         # the rows a person opens from the problem: the claude
-        # conversation (its uuid minted from the raw key) and Riker's
-        # Takeout message (found by its upstream id).
+        # conversation (its uuid minted from the raw key), Riker's
+        # Takeout message (found by its upstream id), and the Discord
+        # message each file is on.
         self.assertEqual(
             self._linked_fetch_problems(),
             {
@@ -2070,6 +2103,12 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 ),
                 TAKEOUT_CHAT_ATTACHMENT_NOT_IN_EXPORT.split("|")[0]: (
                     "0195683a-d140-87f9-bdf6-234da6d6880c"
+                ),
+                DISCORD_FILE_GONE.split("|")[0]: (
+                    "018f33da-ac00-8cd8-95e0-e67cf1265158"
+                ),
+                DISCORD_FILE_TOO_LARGE.split("|")[0]: (
+                    "018f33d8-d740-8ed1-8e31-2f810f5c8a20"
                 ),
             },
             "each download problem whose record has a row links to it",

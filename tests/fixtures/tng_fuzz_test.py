@@ -311,7 +311,9 @@ class FuzzTest(unittest.TestCase):
             argv[6] = str(Path(tmp) / "ws")
             fx = prepare(argv)
             assert fx.http_bin, "the fuzzer drives a server: pass datalib-http"
-            driver = HttpDriver(fx.http_bin, fx.workspace, fx.bindir, fx.now, fx.env)
+            driver = HttpDriver(
+                fx.http_bin, fx.dag_bin, fx.workspace, fx.bindir, fx.now, fx.env
+            )
             try:
                 config_text = fx.config_texts({})[0]
                 driver.build_config([config_text])

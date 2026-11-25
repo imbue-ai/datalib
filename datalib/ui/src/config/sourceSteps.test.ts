@@ -178,6 +178,33 @@ describe("a path field left empty", () => {
   });
 });
 
+describe("a secret's variable left empty", () => {
+  it.each([
+    ["whatsapp", "backup.key_env_var", "key_env_var", "WHATSAPP_BACKUP_DECRYPTION_KEY"],
+    ["signal", "backup.aep_env_var", "aep_env_var", "SIGNAL_BACKUP_PASSPHRASE"],
+  ])("names %s's default variable, which is all the step is handed", (type, target, key, name) => {
+    const entry = catalogFor(type)!;
+    const out = buildStep({
+      entry,
+      group: type,
+      phase: "download",
+      values: { "backup.path": "/backups", [target]: "" },
+    });
+    expect(out).toContain(`${key} = "${name}"`);
+  });
+
+  it("names the variable typed in its place", () => {
+    const out = buildStep({
+      entry: catalogFor("whatsapp")!,
+      group: "whatsapp",
+      phase: "download",
+      values: { "backup.path": "/backups", "backup.key_env_var": "WORK_PHONE_KEY" },
+    });
+    expect(out).toContain('key_env_var = "WORK_PHONE_KEY"');
+    expect(out).not.toContain("WHATSAPP_BACKUP_DECRYPTION_KEY");
+  });
+});
+
 describe("buildDiffSource", () => {
   /// What "Compare…" writes reads back as a diff group with its one
   /// render step reading the source's ingest tree, and the fan-ins name

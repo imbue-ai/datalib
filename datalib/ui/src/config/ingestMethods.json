@@ -97,6 +97,12 @@
       "reach": "local"
     }
   ],
+  "discord": [
+    {
+      "path": "api",
+      "reach": "origin"
+    }
+  ],
   "email": [
     {
       "path": "jmap",

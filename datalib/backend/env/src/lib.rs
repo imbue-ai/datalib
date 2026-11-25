@@ -53,10 +53,11 @@ names! { LATCHKEY:
 /// big buffers holds gigabytes it no longer uses.
 pub const MALLOC_LARGE_CACHE: &str = "MallocLargeCache";
 
-names! { BACKUP_SECRET_KEYS:
-    WHATSAPP_BACKUP_DECRYPTION_KEY,
-    SIGNAL_BACKUP_PASSPHRASE,
-}
+/// The variables WhatsApp's and Signal's ingests read their backup secret
+/// from when their params name none. A step is handed them only when its
+/// params name them, as the wizard writes.
+pub const WHATSAPP_BACKUP_DECRYPTION_KEY: &str = "WHATSAPP_BACKUP_DECRYPTION_KEY";
+pub const SIGNAL_BACKUP_PASSPHRASE: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 /// Set by the desktop app on the server of a library in the protected
 /// folder, whose latchkey store a person's terminal cannot reach. Children
@@ -228,6 +229,23 @@ pub fn child_env_names(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
+/// What the server keeps from the runner it starts, `datalib-pipeline
+/// serve`: its own API token and address, and the protected-library flag
+/// no child is handed. The runner gets the rest of the server's
+/// environment, the one a person's terminal would give it, because it is
+/// the runner that hands each step only what [`hands_down`] allows and
+/// the variables the step's params name, and a source added later may
+/// name any variable.
+const KEPT_FROM_THE_RUNNER: &[&str] = &["DATALIB_TOKEN", "DATALIB_BIND", DATALIB_PROTECTED_LIBRARY];
+
+/// Starts `cmd`, the server's runner, from this process's environment
+/// less [`KEPT_FROM_THE_RUNNER`].
+pub fn inherit_for_runner(cmd: &mut std::process::Command) {
+    for name in KEPT_FROM_THE_RUNNER {
+        cmd.env_remove(name);
+    }
+}
+
 /// Starts `cmd` from nothing but what [`hands_down`] lets `child` have
 /// of this process's environment, plus `also`. What the caller set on
 /// `cmd` itself is kept, and wins.
@@ -322,6 +340,28 @@ mod tests {
         assert_eq!(
             table, ours,
             "docs/dev/step_protocol.md's variable table and datalib_env::STEP_PROTOCOL disagree"
+        );
+    }
+
+    /// The server's runner keeps everything but the server's own token,
+    /// address and protected-library flag: it is the runner that filters
+    /// what each step gets.
+    #[test]
+    fn the_runner_is_kept_from_the_servers_own_variables_only() {
+        let mut cmd = std::process::Command::new("true");
+        inherit_for_runner(&mut cmd);
+        let removed: Vec<String> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            removed,
+            ["DATALIB_BIND", "DATALIB_PROTECTED_LIBRARY", "DATALIB_TOKEN"]
+        );
+        assert!(
+            cmd.get_envs().all(|(_, v)| v.is_none()),
+            "nothing is set or cleared"
         );
     }
 

@@ -338,6 +338,7 @@ fn to_attachment(m: &Event, b: &Blob) -> NormalizedAttachment {
 
 fn to_reaction(source_id: &str, r: &Event) -> NormalizedReaction {
     NormalizedReaction {
+        count: 1,
         // Beeper's own event_uuid already collapses sender+target+emoji
         // on the source side, so it is the reaction's identity.
         reaction_uuid: ids::event(source_id, &r.native_event_id, r.timestamp_ms).uuid,

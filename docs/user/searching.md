@@ -269,6 +269,7 @@ your number finds only your MMS.
 |---|---|---|
 | Email | the mailbox's address | |
 | Slack | the signed-in user, and the address on their profile | `to:me`: Slack has no recipients; use `mention:me` or `with:me` |
+| Discord | the signed-in user | `to:me`: Discord has no recipients; use `mention:me` or `with:me` |
 | Beeper | the account's own person, by the handles Beeper lists | |
 | GitHub, GitLab | the signed-in user, on pull and merge requests they opened or commented on | |
 | Google Drive | the account's address, on comments it wrote | |
@@ -285,7 +286,7 @@ Two more limits, whatever the source:
 
 - **`to:me` needs you as a recipient.** Email lists you in its headers,
   and a phone's backup received every message in it that you did not
-  send. Slack, Beeper, Google Chat, Messenger and LinkedIn messages
+  send. Slack, Discord, Beeper, Google Chat, Messenger and LinkedIn messages
   name no recipient: a message there reached everyone in the
   conversation, so use `mention:me`, or `with:me` for the conversations
   you were in.

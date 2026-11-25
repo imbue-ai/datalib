@@ -218,6 +218,7 @@ export DATALIB_TEST_E2E_MATERIALIZE_TNG_ROOT="$MATERIALIZE_RUNFILE"
 # so an absolute path is the only way a step can be spawned there —
 # same reason the materializer writes the applet's path absolutely.
 STEP_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_STEP_BIN_RLOC:-}" -x)"
+PIPELINE_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_PIPELINE_BIN_RLOC:-}" -x)"
 export DATALIB_TEST_E2E_DATALIB_STEP="$STEP_BIN_RUNFILE"
 
 # A directory holding every shipped binary under its **public
@@ -240,6 +241,7 @@ APPLET_BIN_RUNFILE="$(need_runfile "${DATALIB_TEST_E2E_APPLET_BIN_RLOC:-}" -x)"
 export DATALIB_TEST_E2E_DATALIB_APPLET="$APPLET_BIN_RUNFILE"
 for pair in \
   "datalib-step:$STEP_BIN_RUNFILE" \
+  "datalib-pipeline:$PIPELINE_BIN_RUNFILE" \
   "datalib-applet:$APPLET_BIN_RUNFILE"; do
   ln -sfn "${pair#*:}" "$BIN_STAGE/${pair%%:*}"
 done

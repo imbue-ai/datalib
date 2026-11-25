@@ -1,0 +1,70 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    dependencies:
+      '@emulators/core':
+        specifier: 0.11.2
+        version: 0.11.2
+      '@emulators/google':
+        specifier: 0.11.2
+        version: 0.11.2
+      '@emulators/linear':
+        specifier: 0.11.2
+        version: 0.11.2
+      '@emulators/slack':
+        specifier: 0.11.2
+        version: 0.11.2
+      graphql:
+        specifier: 17.0.2
+        version: 17.0.2
+
+packages:
+
+  '@emulators/core@0.11.2':
+    resolution: {integrity: sha512-A4zbSpSu8IyHK+NW8kSd5Ya0ti7w97GIumdIL3rIEfgHxxGUAJrpgEckKlK4b/QKRy/qxVedU+lCtkA5zJyPlQ==}
+
+  '@emulators/google@0.11.2':
+    resolution: {integrity: sha512-mGcwoNlveFb09gu7npQjvGvrO3xpGw2VDuNRs6/FVx5+BlaEfliENKYfFu16ZscA/bNt/7Bjn3OHCwW8vZgQqA==}
+
+  '@emulators/linear@0.11.2':
+    resolution: {integrity: sha512-bt7eeP4eH/K5jo1NJNXgedUdGBJBGK98feX4mUDUZ0VexnYJCwBnjyDwSlzht//GBUYCT0MO4rUpeqfwjF1APA==}
+
+  '@emulators/slack@0.11.2':
+    resolution: {integrity: sha512-vKdbTTZbxAdoScU5E7NawRnvf96qjm6TrgHT4V+WJ8snilidiV3j3URJoH9a32yXV/re+UJxJ4uyV2Fgc2h47A==}
+
+  graphql@17.0.2:
+    resolution: {integrity: sha512-FRWbddMxfkjiB7z+aQDWIR+E34xo9I8c9mtK2RPv8PmMzKRvrdsreHL/Ui/TmwHJfhHChEtsFPyMHKI+xuarQQ==}
+    engines: {node: ^22.0.0 || ^24.0.0 || ^25.0.0 || >=26.0.0}
+
+  jose@6.2.18:
+    resolution: {integrity: sha512-doV4thUwgkrycJH4yLeqwTGIIZphHl+pk7CPReuMIhYhncmgzdko85MaCG4YQFTxqMFr1/oEH32tZuKKovcDEg==}
+
+snapshots:
+
+  '@emulators/core@0.11.2':
+    dependencies:
+      jose: 6.2.18
+
+  '@emulators/google@0.11.2':
+    dependencies:
+      '@emulators/core': 0.11.2
+      jose: 6.2.18
+
+  '@emulators/linear@0.11.2':
+    dependencies:
+      '@emulators/core': 0.11.2
+      graphql: 17.0.2
+
+  '@emulators/slack@0.11.2':
+    dependencies:
+      '@emulators/core': 0.11.2
+
+  graphql@17.0.2: {}
+
+  jose@6.2.18: {}

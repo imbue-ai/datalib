@@ -79,6 +79,8 @@ pub enum IdNamespace {
     Codex,
     Chatgpt,
     Contacts,
+    /// Discord's snowflakes: servers, channels, messages.
+    Discord,
     /// Every email method — JMAP, the Gmail API, an mbox — one keyspace
     /// per account id.
     Email,

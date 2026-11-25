@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::future::Future;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,8 +11,9 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
 use datalib_etl::read_marks::{self, ReadMark};
+use datalib_etl_chat_common::Page;
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_render::pages::{KeyColumn, RenderUnitPages};
+use datalib_etl_render::pages::{block_on, KeyColumn, RenderUnitPages};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -151,17 +151,6 @@ pub struct SlackStore {
     pub unparsed: Vec<Unparsed>,
 }
 
-/// One page of threads, their messages loaded and no attachment bytes.
-pub struct Page {
-    pub threads: Vec<SlackThreadRenderUnit>,
-    /// On a narrowed run, the stale thread keys this page looked at,
-    /// declared empty before the ones it renders. Empty on a full walk,
-    /// whose threads all come from rows.
-    pub looked_at: Vec<String>,
-    /// `messages` rows of the page that would not read as JSON.
-    pub unparsed: Vec<Unparsed>,
-}
-
 impl SlackStore {
     /// The thread keys to render, a page of `page` at a time.
     pub fn pages(&self, page: usize) -> RenderUnitPages {
@@ -171,8 +160,12 @@ impl SlackStore {
         }
     }
 
-    /// The next page's threads, or `None` once every page is read.
-    pub fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page>> {
+    /// The next page's threads and, on a narrowed run, the key of every one
+    /// it looked at; `None` once every page is read.
+    pub fn next_page(
+        &self,
+        pages: &mut RenderUnitPages,
+    ) -> Result<Option<Page<SlackThreadRenderUnit>>> {
         block_on(async {
             let pool = self.reader.pool();
             let Some(keys) = pages.next(pool).await? else {
@@ -186,7 +179,7 @@ impl SlackStore {
                 Some(_) => keys,
             };
             Ok(Some(Page {
-                threads,
+                conversations: threads,
                 looked_at,
                 unparsed,
             }))
@@ -270,10 +263,6 @@ impl SlackStore {
             }
         })
     }
-}
-
-fn block_on<F: Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// The store under `path`, open at the driver's commit. `None` when

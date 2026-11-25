@@ -19,9 +19,19 @@ type Row = {
   uuid: string;
   conversation_uuid: string;
   markdown_uuid: string | null;
+  conversation_name: string | null;
+  source_id: string | null;
   kind: string;
   message_index: number | null;
 };
+
+// A renderer numbers every conversation of its source the same way, so a
+// few of each stand for the rest: a click per conversation in the corpus
+// grows past any timeout as sources are added to it.
+const CONVERSATIONS_PER_SOURCE = 3;
+
+// The conversation the bug was found in, which is always one of them.
+const REPRO = "Sonnet on a Cat Named Spot";
 
 test("clicked grid row highlights the section with the matching uuid", async ({
   page,
@@ -42,8 +52,7 @@ test("clicked grid row highlights the section with the matching uuid", async ({
   // renderer drops some messages — system / model_editable_context —
   // and those have no section to highlight). Cache chat bodies by
   // conversation so we don't refetch per row; sample one row per
-  // conversation so a fixture with thousands of messages still
-  // finishes in reasonable time.
+  // conversation, and a few conversations per source.
   const bodyCache = new Map<string, string>();
   async function bodyFor(conv: string): Promise<string | null> {
     const cached = bodyCache.get(conv);
@@ -62,16 +71,23 @@ test("clicked grid row highlights the section with the matching uuid", async ({
 
   const candidates: Row[] = [];
   const seenConvs = new Set<string>();
-  for (const r of data.rows) {
+  const perSource = new Map<string, number>();
+  const isRepro = (r: Row) => r.conversation_name === REPRO;
+  const rows = [...data.rows.filter(isRepro), ...data.rows.filter((r) => !isRepro(r))];
+  for (const r of rows) {
     if (r.kind === "Chat") continue;
     if (r.message_index == null) continue;
     if (seenConvs.has(r.conversation_uuid)) continue;
+    const taken = perSource.get(r.source_id ?? "") ?? 0;
+    if (taken >= CONVERSATIONS_PER_SOURCE) continue;
     const body = await bodyFor(r.conversation_uuid);
     if (!body) continue;
     if (!body.includes(`id="m-${r.uuid}"`)) continue;
     candidates.push(r);
     seenConvs.add(r.conversation_uuid);
+    perSource.set(r.source_id ?? "", taken + 1);
   }
+  expect(candidates.some(isRepro), `${REPRO} is sampled`).toBe(true);
   expect(
     candidates.length,
     "fixture must contain at least one message row whose rendered section exists",

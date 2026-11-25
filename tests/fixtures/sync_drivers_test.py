@@ -63,7 +63,9 @@ class DiskHold(unittest.TestCase):
         return CliDriver(self.dag, self.root, self.root, NOW, dict(os.environ))
 
     def http_driver(self) -> HttpDriver:
-        driver = HttpDriver(self.http, self.root, self.root, NOW, dict(os.environ))
+        driver = HttpDriver(
+            self.http, self.dag, self.root, self.root, NOW, dict(os.environ)
+        )
         self.addCleanup(driver.close)
         return driver
 

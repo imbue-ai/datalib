@@ -116,7 +116,11 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
         name: "Channel",
         field: "path",
         width: 260,
-        formatter: (_r, _c, _v, _col, item) => ({ text: item ? `#${item.path}` : "" }),
+        // Slack's path is the channel's name, Discord's its id.
+        formatter: (_r, _c, _v, _col, item) => ({
+          text: item ? (item.title ?? `#${item.path}`) : "",
+          toolTip: item?.path ?? "",
+        }),
       },
       { id: "role", name: "Notes", field: "role", width: 180, formatter: (_r, _c, v) => text(v) },
       {
@@ -166,6 +170,18 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
         field: "updated_at",
         width: 118,
         formatter: (_r, _c, _v, _col, item) => ({ text: byDate(item) }),
+      },
+    ],
+  },
+  server: {
+    placeholder: "Search these servers…",
+    columns: [
+      {
+        id: "title",
+        name: "Server",
+        field: "path",
+        width: 280,
+        formatter: (_r, _c, _v, _col, item) => ({ text: byTitle(item), toolTip: item.path ?? "" }),
       },
     ],
   },

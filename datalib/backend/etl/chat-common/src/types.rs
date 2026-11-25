@@ -83,6 +83,9 @@ pub struct NormalizedReaction {
     pub reactor_display: String,
     /// Whether `reactor_display` names the reactor or stands in for them.
     pub reactor_kind: AuthorKind,
+    /// How many reacted: one, or the source's count where it names nobody
+    /// and `reactor_display` says so ("3 people").
+    pub count: u32,
     /// The emoji or short string (`🫡`, `🔥`, …).
     pub emoji: String,
     /// Unix milliseconds when the reaction was sent, or `None` when
