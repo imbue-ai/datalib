@@ -161,7 +161,7 @@ const menuAt = ref<MenuAt | null>(null);
 
 function openMenu(el: HTMLElement | null, x: number, y: number) {
   const chip = el ? chipOf(el) : null;
-  if (chip) menuAt.value = { chip, entries: chipMenuOf(chip, false), x, y };
+  if (chip) menuAt.value = { chip, entries: chipMenuOf(chip), x, y };
 }
 
 async function onMenuPick(id: string) {

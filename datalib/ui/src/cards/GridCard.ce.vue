@@ -48,7 +48,6 @@ import type { Identity } from "@/api";
 import { handleFromUri } from "./chipLinks";
 import { entities, entityCopyText } from "./entities";
 import {
-  canLinkHandles,
   chipCell,
   contactsById,
   handleKind,
@@ -60,11 +59,11 @@ import { CONTACT } from "@/search/queryText";
 import { dateWallText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
-  chipCardSource,
   chipElAt,
   chipMenuOf,
   chipOf,
   asMenuEntries,
+  openChip,
   runChipAction,
   type Chip,
   type ChipEntry,
@@ -1529,7 +1528,7 @@ const textFormatter: Formatter<Row> = (_r, _c, value) => ({
 const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
   const ref = row.author_ref;
   const handle = ref ? handleFromUri(ref.id) : null;
-  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle), canLinkHandles());
+  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle));
   return { text: row.author ?? "" };
 };
 
@@ -1683,7 +1682,6 @@ watch(
       groupable: true,
       chips: {
         who: (h) => people.lookup(h),
-        canLink: canLinkHandles,
         entity: (uri) => entities.lookup(uri),
       },
     });
@@ -1802,9 +1800,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     el?.querySelectorAll(selector).length === 1 ? el.querySelector<HTMLElement>(selector) : null;
   const chipEl = pointed ?? first(CHIP_SELECTOR);
   const pressed = chipEl ? chipOf(chipEl) : null;
-  // No popover in a grid cell yet, so the link entry is not offered
-  // here; the document view has it.
-  const chip = pressed ? { chip: pressed, entries: chipMenuOf(pressed, false) } : null;
+  const chip = pressed ? { chip: pressed, entries: chipMenuOf(pressed) } : null;
   return {
     anchor,
     copy,
@@ -2472,8 +2468,7 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
     pickAndOpen(data);
     return;
   }
-  const source = chipCardSource(chip.ref, data?.source_id || null);
-  if (source) props.ctx.host.openCards(source);
+  openChip(chip.ref, data?.source_id || null, (source) => props.ctx.host.openCards(source));
 }
 
 // Any change a USER can make to columns gets reflected in the persisted

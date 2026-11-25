@@ -4,7 +4,7 @@
 // floating menu over a document, a grid's context menu, the search
 // field's tooltip — and hands the pick back here (docs/dev/chips.md
 // § Clicks).
-import { ref } from "vue";
+import { ref, shallowRef } from "vue";
 import * as api from "@/api";
 import type { ManageRow } from "@/api";
 import { copyRichToClipboard, copyToClipboard } from "@/clipboard";
@@ -25,6 +25,7 @@ import {
   contactsById,
   copyText,
   handleValue,
+  hasContactsApp,
   NOBODY,
   people,
   searchQueryFor,
@@ -70,7 +71,7 @@ export type Chip = { ref: AnyChipRef; shownAs: string };
 
 /** Every menu entry any chip offers, in the one order every menu shows
  *  them: open what it names first (the double-click's card) and a step's
- *  log, then write to it, copy it, search for it, and link it. */
+ *  log, then write to it, copy it, search for it, and add it. */
 export const CHIP_ACTIONS = [
   "open",
   "log",
@@ -82,7 +83,7 @@ export const CHIP_ACTIONS = [
   "before",
   "after",
   "browse",
-  "edit",
+  "add",
   "use-t0",
   "clear-t0",
 ] as const;
@@ -211,7 +212,7 @@ export function chipName(chip: Chip): string {
     case "entity":
       return entities.get(ref.uri)?.label || shownAs || entityFromUri(ref.uri)?.id || ref.uri;
     case "person":
-      return chipLook(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY, false).text;
+      return chipLook(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY).text;
     case "contact":
       return contactLook(shownAs || "a contact", contactsById.get(ref.id)).text;
     case "document":
@@ -237,15 +238,14 @@ export function everythingWith(handle: string, mine: NormalizedContact | null): 
   return mine ? contactQuery(mine.key) : searchQueryFor(handle);
 }
 
-/** A chip's right-click menu. `canLink` is whether this surface hosts
- *  the link popover, so a person's menu can offer to link them. */
-export function chipMenuOf(chip: Chip, canLink: boolean): ChipEntry[] {
+/** A chip's right-click menu. */
+export function chipMenuOf(chip: Chip): ChipEntry[] {
   const { ref, shownAs } = chip;
   switch (ref.kind) {
     case "entity":
       return entityChipMenu(ref.uri, chipName(chip), entities.get(ref.uri)?.row);
     case "person":
-      return chipMenu(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY, canLink);
+      return chipMenu(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY, hasContactsApp());
     case "contact": {
       const name = chipName(chip);
       return [
@@ -317,6 +317,24 @@ export function chipCardSource(
   }
 }
 
+/** The person a chip just opened. Their page takes the keyboard from it,
+ *  so Enter adds them; a page opened any other way leaves it alone. */
+export const justOpened = shallowRef<{ handle: string } | null>(null);
+
+/** Open what a chip names; false for one that names nothing to open. */
+export function openChip(
+  ref: AnyChipRef,
+  seenIn: string | null,
+  openCard: (source: string) => void,
+  shownAs = "",
+): boolean {
+  const source = chipCardSource(ref, seenIn, shownAs);
+  if (!source) return false;
+  justOpened.value = ref.kind === "person" ? { handle: ref.handle } : null;
+  openCard(source);
+  return true;
+}
+
 /** What a surface lets a chip's entries do there. */
 export type ChipHost = {
   openCard: (source: string) => void;
@@ -324,9 +342,6 @@ export type ChipHost = {
    *  one unless the surface has a search of its own to narrow
    *  ("narrow", Everything with) or replace ("replace", Browse). */
   search?: (q: string, how: "narrow" | "replace") => void;
-  /** Linking a handle to a contact: the popover, where this surface
-   *  hosts one. */
-  editLink?: () => void;
   /** The source the chip was seen in, which a person's card leads with. */
   seenIn?: string | null;
 };
@@ -390,11 +405,10 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
   const search = (q: string, how: "narrow" | "replace") =>
     host.search ? host.search(q, how) : host.openCard(searchSource(q));
   switch (id) {
-    case "open": {
-      const source = chipCardSource(ref, host.seenIn ?? null, name);
-      if (source) host.openCard(source);
+    case "open":
+    case "add":
+      openChip(ref, host.seenIn ?? null, host.openCard, name);
       return;
-    }
     case "log": {
       const source = ref.kind === "entity" ? entityLogSource(ref.uri) : null;
       if (source) host.openCard(source);
@@ -445,9 +459,6 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
       if (q) search(q, "replace");
       return;
     }
-    case "edit":
-      host.editLink?.();
-      return;
     case "use-t0": {
       const s = ref.kind === "date" ? parseStamp(ref.datetime) : null;
       if (s?.kind === "instant") setT0({ ms: s.ms, offsetMin: s.offsetMin });

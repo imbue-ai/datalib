@@ -37,7 +37,6 @@ import {
 import { fetchSearchKeys, fetchSearchValues, type KeyValues, type SearchKeySpec } from "@/api";
 import { chipMenuOf, chipName, runChipAction, type Chip } from "@/cards/chipActions";
 import {
-  canLinkHandles,
   chipCell,
   contactCell,
   contactHandles,
@@ -196,7 +195,7 @@ function chipDom(chip: ChipRef, shown: string): HTMLAnchorElement {
     chip.kind === "entity"
       ? entityCell(chip.uri, shown, entities.get(chip.uri), null)
       : chip.kind === "person"
-        ? chipCell(chip.handle, handleValue(chip.handle), people.get(chip.handle), canLinkHandles())
+        ? chipCell(chip.handle, handleValue(chip.handle), people.get(chip.handle))
         : contactCell(
             chip.id,
             shown.startsWith(CONTACT) ? "a contact" : shown,
@@ -358,8 +357,7 @@ function menuDom(view: EditorView, at: number): HTMLElement {
   )?.chip;
   if (!w || !chip) return dom;
   const pressed = asChip(chip, w.value);
-  // Linking a handle is the popover's, which the field does not host.
-  const own = chipMenuOf(pressed, false);
+  const own = chipMenuOf(pressed);
   for (const entry of fieldChipMenu(chipName(pressed), w.negate, own)) {
     if (entry.separator)
       dom.append(

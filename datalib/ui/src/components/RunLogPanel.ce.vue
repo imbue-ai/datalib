@@ -964,7 +964,7 @@ function chipUnderMenu(args: MenuFromCellCallbackArgs): Chip | null {
 /// The chip's own menu, as it is everywhere.
 function chipEntries(chip: Chip): MenuEntry[] {
   const host = { openCard: (source: string) => emit("open-card", source) };
-  return asMenuEntries(chipMenuOf(chip, false), (id) => void runChipAction(id, chip, host));
+  return asMenuEntries(chipMenuOf(chip), (id) => void runChipAction(id, chip, host));
 }
 
 /// The menu for the cell under the right-click: its chip's entries, then

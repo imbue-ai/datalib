@@ -119,9 +119,8 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   header, shows the name that message gave instead of the source's
   (see [Trust](#trust)). A name that spells out an address or another
   handle the person does not hold is never shown; the chip shows its
-  own identifier instead. A chip not linked to a contact shows its
-  kind's mark, and a quiet "+" when a contacts app is there to link it.
-  A chip linked to one of your contacts is blue, and one that is not is
+  own identifier instead. A chip not on a contact shows its kind's mark.
+  One that is on a contact of yours is blue, and one that is not is
   grey (`chip.css`). [`contacts.md`](contacts.md) §"In the UI" has the
   ranking.
 - **A group or a step** — `entityLook` and `entityTitle` in
@@ -346,8 +345,8 @@ the query text under it is unchanged. The field's host includes `chip.css`.
 Its clicks are a text field's: a click selects the chip whole, and a
 double-click opens it as text to edit, the one place a double-click
 does not open what the chip names. The right-click menu is the field's
-(Edit as text, Exclude) followed by `entityMenu`'s or `chipMenu`'s;
-linking a handle stays the popover's (`ui/src/search/chipMenu.ts`).
+(Edit as text, Exclude) followed by `entityMenu`'s or `chipMenu`'s
+(`ui/src/search/chipMenu.ts`).
 
 ## A document
 
@@ -507,9 +506,9 @@ and no resolver.
 
 | | a person | a group | a step |
 |---|---|---|---|
-| **click** | the link popover, where a contacts app is configured | nothing; the href is never followed | nothing; the href is never followed |
+| **click** | nothing (in a grid, it selects the row); the href is never followed | the same | the same |
 | **double-click** | the person card (`personView`): your contact and each source's record of them, the source the chip was seen in first | the source's card (`sourceView`), on its documents | its group's card on Sync, scrolled to the step's section |
-| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); link to a contact or edit the link | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row |
+| **right-click** | `chipMenu`: open the person card; compose mail to an email address; copy the identifier, the name or both; everything with them (`with:`); add them to your contacts, which opens their card | `entityChipMenu`: open its dashboard; then its Sources row's entries — Browse, Sync now or Stop, Turn off or on, history, step log, reveal, copy path, Reset; then copy the id, the name or both | the same, for the step's row |
 | **hover** | the tooltip: who, the identifier, what each source calls them, their other handles | the tooltip: name and id, its type, its status | the same |
 | **copy** | `Will Riker <riker@enterprise.org>` as text, a working `mailto:` link as HTML | `Work Slack (datalib:group/slack)`, and the link | the same |
 
@@ -529,13 +528,21 @@ kind's entries in the one order `CHIP_ACTIONS` gives), and what each
 entry does (`runChipAction`). A surface only draws the menu — the
 floating `ChipMenu.ce.vue` over a document or a card, a grid's context
 menu, the search field's tooltip — and hands it a `ChipHost` saying
-what it can do there: open a card, search in place, link a handle. The
+what it can do there: open a card, search in place. The
 search grid narrows its own query for "Everything with" and replaces it
 for a group chip's own Browse; everywhere else both open a search
 beside the card. The row's Browse opens its browse card, with the
 source's columns, from every surface. A contact chip (`data-contact`)
 has no card of its own yet, so it offers copy and "Everything with"
 only.
+
+**A click on a chip is safe**: it changes nothing and opens nothing, so a
+person can click anywhere in a document or a grid without looking first.
+What a chip opens is a double-click away (`openChip`, the one function
+every surface calls), and what changes anything is a menu entry or a
+button. Opening a person's card this way also says so (`justOpened`),
+and the card takes the keyboard, so that Enter on *Add to contacts* adds
+them; a card opened by a link or a kept layout leaves the keyboard alone.
 
 A click with a modifier on a person chip opens a web, mail or phone
 link outside the app, as on any link; a `slack://` one goes nowhere, and

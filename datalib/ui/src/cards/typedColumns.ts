@@ -65,7 +65,6 @@ export type SlickColumnOptions<T> = {
   /// every identity is icon and label.
   chips?: {
     who: (handle: string) => Who | undefined;
-    canLink: () => boolean;
     /// A group or step identity (`Identity.entity`): what is known of it.
     entity?: (uri: string) => EntityView | undefined;
     /// A group or step chip keeps the cell's own label, where the grid
@@ -347,7 +346,7 @@ function identityChip<T>(
     return contactCell(contactId, v.label, chips.contact(contactId));
   }
   const handle = chips ? handleFromUri(v.id) : null;
-  return handle && chips ? chipCell(handle, v.label, chips.who(handle), chips.canLink()) : null;
+  return handle && chips ? chipCell(handle, v.label, chips.who(handle)) : null;
 }
 
 /// Show `text` on a drawn chip in place of its full label, which its

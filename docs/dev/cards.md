@@ -404,14 +404,15 @@ it names, or the tab it names. The tab keeps its own source: the step is
 where to look this time, not what the card is. Every other view is the same card only by its exact source, near
 its opener, as above.
 
-A main window with no kept tree starts with three pinned tabs
+A main window with no kept tree starts with four pinned tabs
 (`defaultPins` in `ContainersView.vue`): the Dashboard, Search
-(`searchView()`) and Sources (`sourcesView()`). A kept tree written
-before tabs could be pinned says `pinned` on none of its tabs
-(`predatesPins`), and is given the same three once, pinning a tab it
-already has for one rather than adding a second. A tree written since
-says `pinned` on every tab, so a default the person unpinned or closed
-stays that way.
+(`searchView()`), Sources (`sourcesView()`) and Contacts
+(`contactsView()`). A kept tree counts how many of them it has been
+given (`pinsGiven`), and is given the rest once, pinning a tab it
+already has for one rather than adding a second; so a default the
+person unpinned or closed stays that way, and a new default goes last
+in the list. A tree from before the count had the first three, or none
+if it is from before tabs could be pinned.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
