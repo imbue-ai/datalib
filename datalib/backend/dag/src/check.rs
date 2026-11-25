@@ -76,10 +76,14 @@ pub async fn check_params(
         .collect()
         .await;
     answers.sort_by(|a, b| a.0.cmp(&b.0));
-    answers
+    let mut found: Vec<Diagnostic> = answers
         .into_iter()
         .flat_map(|(step, answer)| diagnostics(&checked.text, &step, answer))
-        .collect()
+        .collect();
+    // In file order, as the loader's are: the order someone fixing them
+    // reads.
+    found.sort_by_key(|d| d.span.map(|(start, _)| start));
+    found
 }
 
 async fn ask(runner: &Runner, graph: &crate::graph::Graph, step: &str) -> (String, Answer) {
