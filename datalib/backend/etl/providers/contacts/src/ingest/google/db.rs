@@ -144,6 +144,7 @@ impl RawDb {
         let people = prune::prune_scope_in_tx(tx, PEOPLE, &scope, &none).await?;
         prune::delete_owned_in_tx(tx, PHOTOS, GooglePhotoRow::OWNING_COLUMN, &people).await?;
         prune::prune_scope_in_tx(tx, GROUPS, &scope, &none).await?;
+        Self::forget_google_sync_token(tx, book).await?;
         Ok(people.len())
     }
 
@@ -185,30 +186,54 @@ impl RawDb {
         Ok(())
     }
 
-    /// The choice of labels the sync token was listed under
-    /// ([`super::selection::Selection::key`]).
-    pub async fn google_listed_under(&self, book: &str) -> Result<Option<String>> {
-        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind(listed_under(book))
-            .fetch_optional(self.pool())
-            .await
-            .context("select what the contacts were listed under")
+    /// The sync token of `book`'s last whole listing or delta, if it was
+    /// listed under this choice of labels
+    /// ([`super::selection::Selection::key`]). It is the run's own state
+    /// and differs with every listing, so it is not on the book's row.
+    pub async fn google_sync_token(
+        &self,
+        book: &str,
+        labels: Option<&str>,
+    ) -> Result<Option<String>> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope IN (?, ?)",
+        )
+        .bind(token_scope(book))
+        .bind(labels_scope(book))
+        .fetch_all(self.pool())
+        .await
+        .context("select the sync token")?;
+        let mut rows: HashMap<String, String> = rows.into_iter().collect();
+        let listed_under = rows.remove(&labels_scope(book));
+        Ok(rows
+            .remove(&token_scope(book))
+            .filter(|_| listed_under.as_deref() == labels))
     }
 
-    pub async fn set_google_listed_under(
+    pub async fn set_google_sync_token(
         tx: &mut Transaction<'_, Sqlite>,
         book: &str,
-        key: Option<&str>,
+        token: &str,
+        labels: Option<&str>,
     ) -> Result<()> {
-        let scope = listed_under(book);
-        if let Some(key) = key {
-            return dr::upsert_scope_state(&mut **tx, &scope, key).await;
+        Self::forget_google_sync_token(tx, book).await?;
+        dr::upsert_scope_state(&mut **tx, &token_scope(book), token).await?;
+        if let Some(labels) = labels {
+            dr::upsert_scope_state(&mut **tx, &labels_scope(book), labels).await?;
         }
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-            .bind(scope)
+        Ok(())
+    }
+
+    pub async fn forget_google_sync_token(
+        tx: &mut Transaction<'_, Sqlite>,
+        book: &str,
+    ) -> Result<()> {
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope IN (?, ?)")
+            .bind(token_scope(book))
+            .bind(labels_scope(book))
             .execute(&mut **tx)
             .await
-            .context("clear what the contacts were listed under")?;
+            .context("forget the sync token")?;
         Ok(())
     }
 
@@ -332,7 +357,11 @@ async fn payloads(
         .collect()
 }
 
-fn listed_under(book: &str) -> String {
+fn token_scope(book: &str) -> String {
+    format!("{book}:sync_token")
+}
+
+fn labels_scope(book: &str) -> String {
     format!("{book}:labels")
 }
 

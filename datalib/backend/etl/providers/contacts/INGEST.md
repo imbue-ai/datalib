@@ -44,10 +44,21 @@ not mirrored:
 | table | key | holds |
 |---|---|---|
 | `accounts` | `google` | the signed-in account: `principal_href` is its resource name (`people/<id>`), `login` its address |
-| `addressbooks` | `google!people/<id>/connections` | the account's one list, named "Contacts", and its `sync_token` |
+| `addressbooks` | `google!people/<id>/connections` | the account's one list, named "Contacts" |
+| `sync_scope_state` | `<address book>:sync_token`, `<address book>:labels` | the sync token, which differs with every listing, and the choice of labels it was listed under |
 | `google_people` | `<address book>#people/<id>` | a contact, verbatim but for its `memberships`, which are a set and are stored sorted. `etag`s, each source's `updateTime` and each photo's `url` are in the sidecar's `volatile_payload` |
 | `google_contact_groups` | `<address book>#contactGroups/<id>` | a label, or one of Google's own groups (`myContacts`, `starred`). Who is in it is each contact's `memberships` |
 | `google_photos` | `<contact's key>#<source>`, the source being `PROFILE/<id>` or `CONTACT/<id>` | the photo Google lists for a contact, and the `blake3` of its bytes in `blobs.sqlite` once fetched. The link they came from is the sidecar's `held_version` |
+
+With `google.labels` set, a contact with none of those labels is not
+stored, nor is a label not named; Google's own groups always are. The API
+cannot be asked for one label's contacts, so every contact is still
+listed, and the choice the sync token was listed under is kept beside it
+(`sync_scope_state`, `<address book>:labels`): a delta does not name the
+contacts a new choice takes in, so a run under another choice lists
+everyone again and drops what it leaves out. A name that matches no label
+is a `config:labels:` problem and deletes nothing, and a run where none
+matches fails.
 
 A login for a different account has a different address book, so the
 first run with it drops the other account's contacts.
@@ -81,7 +92,7 @@ address book, and a changed photo is one more.
   does not refuse one sent with other fields (*measured*), so nothing
   would say a new field is missing from the contacts that did not
   change: a change to `PERSON_FIELDS` needs a rung on the ladder that clears
-  `addressbooks.sync_token`.
+  `sync_scope_state`'s `:sync_token` rows.
 - **A page with nobody on it has no `connections`.** What says a reply
   is a page is its `nextPageToken` or `nextSyncToken`; one with neither
   fails the listing.
@@ -96,9 +107,6 @@ address book, and a changed photo is one more.
 - **A delta can lag a write by some seconds** (*measured*), a contact's
   more than a label's. The run in between sees nothing new, and the next
   one's token still covers the write.
-- **The sync token moves with any edit** and is kept on the
-  `addressbooks` row, so no Google page reads that row: the book's name
-  is a constant.
 
 ### Photos
 

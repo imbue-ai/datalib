@@ -188,7 +188,8 @@ const LABELS: &str = "SELECT resource_name FROM google_contact_groups ORDER BY r
 const PHOTOS: &str = "SELECT b.held_version FROM google_photos p \
      JOIN google_photos_bookkeeping b ON b.id = p.id WHERE p.blake3 IS NOT NULL ORDER BY p.id";
 const PROBLEMS: &str = "SELECT scope_key FROM problems ORDER BY scope_key";
-const TOKEN: &str = "SELECT coalesce(sync_token, 'none') FROM addressbooks";
+const TOKEN: &str =
+    "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope LIKE '%:sync_token'";
 
 fn dirs(d: &tempfile::TempDir, n: usize) -> (Vec<PathBuf>, PathBuf) {
     let tapes: Vec<PathBuf> = (0..n).map(|i| d.path().join(format!("run{i}"))).collect();
@@ -760,7 +761,8 @@ async fn a_photo_that_failed_is_asked_for_again() {
     assert_eq!(strings(&store, PROBLEMS).await, [key("c2")]);
 }
 
-/// A login for another account loses the contacts of the one before.
+/// A login for another account loses the contacts of the one before, and
+/// the token with them: back on the first, everyone is listed again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn another_account_replaces_the_one_before() {
     let d = tempfile::tempdir().unwrap();
@@ -803,4 +805,11 @@ async fn another_account_replaces_the_one_before() {
         .await,
         ["google!people/74656/connections"]
     );
+    let third = run(&tapes[0], &store).await;
+    assert_eq!(
+        (third.contacts_new, third.contacts_deleted),
+        (1, 1),
+        "{third:?}"
+    );
+    assert_eq!(strings(&store, TOKEN).await, ["s1"]);
 }

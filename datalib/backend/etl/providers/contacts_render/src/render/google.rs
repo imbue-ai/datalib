@@ -634,11 +634,6 @@ mod tests {
         ] {
             assert!(card.contains(&want), "{want} not in {card:?}");
         }
-        let book = format!("addressbooks:{BOOK}");
-        assert!(
-            !card.contains(&book) && !read(&parsed[1]).contains(&book),
-            "that row holds the sync token, which every edit of any contact moves"
-        );
         assert_eq!(parsed[1].members, ["people/c1"]);
         assert!(
             read(&parsed[1]).contains(&format!("google_contact_groups:{BOOK}#contactGroups/5ea9"))

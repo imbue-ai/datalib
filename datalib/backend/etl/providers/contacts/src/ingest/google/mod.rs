@@ -37,7 +37,7 @@ pub const ADDRESSBOOK_NAME: &str = "Contacts";
 
 /// Every field Google keeps on a contact. A sync token is only good for
 /// the fields it was asked for with, so a change here needs a rung on the
-/// ladder that clears `addressbooks.sync_token`.
+/// ladder that deletes `sync_scope_state`'s `:sync_token` rows.
 pub const PERSON_FIELDS: &str = "addresses,ageRanges,biographies,birthdays,calendarUrls,\
     clientData,emailAddresses,events,externalIds,genders,imClients,interests,locales,locations,\
     memberships,metadata,miscKeywords,names,nicknames,occupations,organizations,phoneNumbers,\
@@ -260,11 +260,11 @@ impl Listing<'_> {
     /// would not name the contacts the new choice takes in. The reason nothing was deleted and the token was left, when
     /// something was listed that could be any stored contact.
     async fn sync(&self, summary: &mut FetchSummary) -> Result<Option<String>> {
-        let listed_under = self.db.google_listed_under(self.book).await?;
-        let token = match listed_under == self.selection.key() {
-            true => self.db.sync_token(self.book).await?,
-            false => None,
-        };
+        let labels = self.selection.key();
+        let token = self
+            .db
+            .google_sync_token(self.book, labels.as_deref())
+            .await?;
         match self.list(token.as_deref(), summary).await {
             Err(e) if token.is_some() && is_expired(&e) => {
                 warn!(
@@ -272,7 +272,7 @@ impl Listing<'_> {
                     "Google expired the sync token; listing every contact"
                 );
                 let mut tx = self.db.pool().begin().await.context("begin")?;
-                RawDb::set_sync_token(&mut tx, self.book, None).await?;
+                RawDb::forget_google_sync_token(&mut tx, self.book).await?;
                 tx.commit().await.context("commit")?;
                 self.list(None, summary).await
             }
@@ -315,9 +315,14 @@ impl Listing<'_> {
                     wrote += gone as u64;
                 }
                 if held_back.is_none() {
-                    RawDb::set_sync_token(&mut tx, self.book, Some(&next_token)).await?;
-                    let key = self.selection.key();
-                    RawDb::set_google_listed_under(&mut tx, self.book, key.as_deref()).await?;
+                    let labels = self.selection.key();
+                    RawDb::set_google_sync_token(
+                        &mut tx,
+                        self.book,
+                        &next_token,
+                        labels.as_deref(),
+                    )
+                    .await?;
                 }
             }
             tx.commit().await.context("commit a page")?;

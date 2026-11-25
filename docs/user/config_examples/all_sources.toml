@@ -999,8 +999,10 @@ enabled = false
 [steps.params.latchkey_settings]
 account = "picard@example.com"
 
-# No settings of its own: every contact, label and photo on the account.
+# Only the contacts with one of these labels, by the name Google Contacts
+# shows, matched exactly. Omit it for every contact on the account.
 [steps.params.google]
+labels = ["Bridge crew", "Away team"]
 
 [[steps]]
 id = "contacts-google/render_markdown"

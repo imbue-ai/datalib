@@ -33,11 +33,16 @@ describe("the catalog's contacts variants", () => {
     expect(byKey("vcf").canProbe).toBeFalsy();
   });
 
-  it("signs in to Google with a service of its own, and has nothing to pick", () => {
+  it("signs in to Google with a service of its own, and picks labels", () => {
     const google = byKey("google");
     expect(google.credentialService).toBe("google-people");
     expect(google.canProbe).toBe(true);
-    expect(google.fields!.map((f) => f.target)).toEqual(["latchkey_settings.account"]);
+    expect(google.fields!.map((f) => f.target)).toEqual([
+      "latchkey_settings.account",
+      "google.labels",
+    ]);
+    const labels = google.fields!.find((f) => f.target === "google.labels")!;
+    expect(labels.kind === "string_list" && labels.probe).toBe("labels");
   });
 
   it("logs in to Fastmail with the app password Fastmail Calendar uses", () => {
@@ -78,6 +83,9 @@ describe("writing and reading a step", () => {
     const vcf = write("vcf", { "vcf.path": "~/backups/crew_vcf" });
     expect(vcf).toContain("[steps.params.vcf]");
     expect(vcf).toContain('path = "~/backups/crew_vcf"');
+    const google = write("google", { "google.labels": ["Bridge crew"] });
+    expect(google).toContain("[steps.params.google]");
+    expect(google).toContain('labels = ["Bridge crew"]');
   });
 
   it("finds each method's form from the table it carries", () => {

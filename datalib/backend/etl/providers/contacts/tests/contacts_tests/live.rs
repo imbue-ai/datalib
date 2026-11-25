@@ -101,7 +101,7 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
 
     let rendered = render_reads(&store).await;
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    sqlx::query("UPDATE addressbooks SET sync_token = NULL")
+    sqlx::query("DELETE FROM sync_scope_state")
         .execute(db.pool())
         .await
         .unwrap();

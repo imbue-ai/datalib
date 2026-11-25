@@ -1697,6 +1697,16 @@ export const CATALOG: CatalogEntry[] = [
     wizard: true,
     credentialService: "google-people",
     canProbe: true,
+    mailboxNoun: "labels",
+    sections: [
+      {
+        heading: "Which contacts?",
+        answers: [
+          { label: "Every contact" },
+          { label: "Only the contacts with the labels I choose", fields: ["google.labels"] },
+        ],
+      },
+    ],
     fields: [
       {
         kind: "text",
@@ -1707,6 +1717,7 @@ export const CATALOG: CatalogEntry[] = [
           "Which stored Google login to copy. Leave it empty if only one is stored " +
           "for google-people.",
       },
+      { kind: "string_list", probe: "labels", target: "google.labels", label: "Labels" },
     ],
   },
   {

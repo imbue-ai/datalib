@@ -27,6 +27,7 @@ const TABLES: &[&str] = &[
     "google_people",
     "google_contact_groups",
     "google_photos",
+    "sync_scope_state",
 ];
 
 #[derive(Clone, Copy)]

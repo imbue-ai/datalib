@@ -784,7 +784,11 @@ The first time, latchkey needs an OAuth client to sign in with:
 login it makes can change contacts as well as read them; Datalib only
 ever reads.
 
-The `google` table needs nothing else. After the first sync, each run
+An empty `google` table copies every contact. `labels = ["Bridge crew"]`
+copies only the contacts with one of those labels, named as Google
+Contacts shows them. A contact that loses the label leaves the copy, and
+so does one whose label you take out of the list; a name no label has is
+reported on the source and deletes nothing. After the first sync, each run
 asks Google only for what changed since the last, and fetches only the
 photos that are new. Two lists Google keeps apart are not mirrored:
 **Other contacts** (the addresses Google saved because you wrote to
