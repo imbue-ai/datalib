@@ -74,8 +74,9 @@ pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 pub const DATALIB_SQL_VALUES: &str = "DATALIB_SQL_VALUES";
 
 /// A folder `datalib_sql_work` records every statement a process runs in,
-/// with the file it ran on, for the fixture sync's scan check. Handed to
-/// every child.
+/// with the file it ran on, for the fixture sync's scan check. No child
+/// is handed it by default: the fixture sync names it in
+/// [`DATALIB_CHILD_ENV`], as every test names its own switches.
 pub const DATALIB_SQL_CENSUS: &str = "DATALIB_SQL_CENSUS";
 
 /// How many threads the embedder computes on where its caller leaves that
@@ -143,7 +144,6 @@ const EVERY_CHILD: &[&str] = &[
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
     DATALIB_SQL_VALUES,
-    DATALIB_SQL_CENSUS,
     "DATALIB_MODELS_NO_FETCH",
     "DATALIB_QMD_MODELS_NO_FETCH",
     "DATALIB_NO_FETCH",
@@ -168,27 +168,19 @@ const LATCHKEY_ALSO: &[&str] = &[
 ];
 
 /// What a step reads beyond what latchkey does: where the fingerprint
-/// cache is, replayed HTTP in tests, the URL prefix a Minds workspace
-/// routes some requests through, and how many threads `embed` takes.
+/// cache is, the URL prefix a Minds workspace routes some requests
+/// through, and how many threads `embed` takes. A switch only tests set
+/// (replayed HTTP, the search's pinned now) is on no list here: the test
+/// names it in [`DATALIB_CHILD_ENV`].
 const STEP_ALSO: &[&str] = &[
     "DATALIB_CACHE_DIR",
-    "DATALIB_HTTP_PLAYBACK",
-    "DATALIB_HTTP_PLAYBACK_DELAY_MS",
-    "DATALIB_HTTP_PLAYBACK_HOLD",
-    "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
-    "DATALIB_HTTP_PLAYBACK_OFFLINE",
     "MINDS_VIA_DESKTOP_URL_PREFIX",
     DATALIB_EMBED_THREADS,
 ];
 
-/// What an applet reads beyond every child's: the search's pinned now,
-/// and whether it warms the search by meaning at launch, both for tests;
-/// how many threads its embedder takes.
-const APPLET_ALSO: &[&str] = &[
-    "DATALIB_SEARCH_NOW",
-    "DATALIB_SEARCH_NO_WARM",
-    DATALIB_EMBED_THREADS,
-];
+/// What an applet reads beyond every child's: how many threads its
+/// embedder takes.
+const APPLET_ALSO: &[&str] = &[DATALIB_EMBED_THREADS];
 
 /// What Modal's SDK signs in with and is pointed by, beyond every child's.
 /// A step is not handed these: a sync's runner passes them on only when
@@ -295,13 +287,26 @@ mod tests {
         assert!(!hands_down("LATCHKEY_ENCRYPTION_KEY", Child::Modal, &[]));
     }
 
-    /// The e2e suite turns the applet's launch warming off for its sandbox
-    /// backends; dropped on the way down, the variable would leave every
-    /// one of them loading the model at once.
+    /// A switch only tests set reaches no child of a real install: the
+    /// test that sets it names it in `DATALIB_CHILD_ENV`.
     #[test]
-    fn the_search_warming_switch_reaches_the_applet() {
-        assert!(hands_down("DATALIB_SEARCH_NO_WARM", Child::Applet, &[]));
-        assert!(!hands_down("DATALIB_SEARCH_NO_WARM", Child::Step, &[]));
+    fn a_test_s_switch_reaches_a_child_only_when_named() {
+        let switches = [
+            "DATALIB_HTTP_PLAYBACK",
+            "DATALIB_HTTP_PLAYBACK_HOLD",
+            "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
+            "DATALIB_HTTP_PLAYBACK_OFFLINE",
+            "DATALIB_HTTP_PLAYBACK_DELAY_MS",
+            "DATALIB_SEARCH_NOW",
+            "DATALIB_SEARCH_NO_WARM",
+            DATALIB_SQL_CENSUS,
+        ];
+        for name in switches {
+            for child in [Child::Step, Child::Applet, Child::Latchkey, Child::Modal] {
+                assert!(!hands_down(name, child, &[]), "{name} to {child:?}");
+                assert!(hands_down(name, child, &[name.to_string()]), "{name} named");
+            }
+        }
     }
 
     /// Tests cap the embedder's threads; dropped on the way down, a step's

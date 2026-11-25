@@ -212,8 +212,8 @@ fn routes(state: AppState) -> Router {
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         // Credentials and connection testing for the Add-a-source
-        // wizard. See `connect.rs` — each shells out to latchkey or
-        // datalib-step, deliberately.
+        // wizard: `connect.rs` runs latchkey, `probe.rs` the step
+        // program's probe.
         .route("/api/latchkey/{service}", get(connect::get_service))
         .route(
             "/api/latchkey/{service}/connect",
@@ -1183,8 +1183,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 #[derive(Debug, Serialize)]
 pub struct DagStepInfo {
     pub id: String,
-    /// The command that runs: the step's `command` as written, or
-    /// `datalib-step` for a built-in step that wrote none.
+    /// The step's `command` as written.
     pub command: String,
     /// Declared input artifact patterns (may contain wildcards).
     pub inputs: Vec<String>,

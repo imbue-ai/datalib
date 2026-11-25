@@ -65,17 +65,17 @@ same check-params door is where they belong, as warnings.
 
 The wizard's "Check connection" and a picker's "Load" run
 `datalib-step probe <type>` (`datalib/backend/http/src/probe.rs:1-4`,
-`:84-91`), found by name next to the server
-(`datalib/backend/http/src/binaries.rs:15-40`). A package's program
+`:84-108`), found by name next to the server
+(`datalib/backend/http/src/binaries.rs:10-25`). A package's program
 cannot offer a probe.
 
 ### 3. Adding a source writes datalib-step's steps
 
 The source wizard knows `datalib-step`'s source types, their params and
 the steps each one needs, and writes `command = "datalib-step"`
-(`datalib/ui/src/config/sourceSteps.ts:221-223`,
+(`datalib/ui/src/config/sourceSteps.ts:225`,
 `datalib/ui/src/config/catalog.ts`). A package already supplies its
-own programs to the wizard (`datalib/ui/src/config/catalog.ts:242`).
+own programs to the wizard (`datalib/ui/src/config/catalog.ts:243-245`).
 The end state treats `datalib-step` the same way: a program that
 describes what it offers, which the wizard reads, with no list of
 Datalib's sources compiled into the UI.
@@ -141,7 +141,7 @@ item 8.
 
 The gateway in `datalib-http` starts applets
 (`datalib/backend/http/src/applets.rs:91`), using `AppletEntry` from the
-runner's crate (`datalib/backend/dag/src/config.rs:430`). Either the
+runner's crate (`datalib/backend/dag/src/config.rs:357`). Either the
 runner treats `[[applets]]` as a section that belongs to another
 program and only skips it, or applets move to a file of their own.
 
@@ -218,7 +218,7 @@ proposes the design we would pick if we started from the requirements.
 
 Paths are relative to the repo root.
 
-- **A pure core.** `tick()` (`datalib/backend/dag/src/supervisor/tick.rs:200`)
+- **A pure core.** `tick()` (`datalib/backend/dag/src/supervisor/tick.rs:239`)
   takes the graph's shape, the open requests and switches, and the
   facts, and returns every step's state plus the starts, stops and
   request closures to make. This is already the design we would want.
@@ -323,7 +323,7 @@ Paths are relative to the repo root.
    both hosts' prepare pass, call into the runner outside the loop and
    need the root to themselves. So `reset` and `free-disk-space`
    are refused while the app is up (`acquire_or_explain`,
-   `datalib/backend/dag/src/bin/datalib_pipeline.rs:542`), and maintenance
+   `datalib/backend/dag/src/bin/datalib_pipeline.rs:577`), and maintenance
    runs through two paths with their own tests. The prepare pass's
    progress is in the server's memory rather than the store, carried
    from the child as `ServeEvent` lines: a client other than the
