@@ -152,13 +152,13 @@ pub async fn run(
         max_bytes: MAX_PAGE_BYTES,
     };
     let (sql, kind, store_name) = (request.sql, store.kind, store.name.clone());
-    let read = tokio::task::spawn_blocking(move || {
+    let read = tokio::task::spawn_blocking(datalib_sql_work::with_count(move || {
         let mut reader = guard::Reader::open(&name, deadline).map_err(|e| match kind {
             StoreKind::Doltlite => Failure::new(StatusCode::NOT_FOUND, e),
             StoreKind::Sqlite => Failure::bad(e),
         })?;
         reader.read(&sql, &params, window).map_err(refused)
-    })
+    }))
     .await
     .map_err(|e| Failure::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
     .map_err(|e| {

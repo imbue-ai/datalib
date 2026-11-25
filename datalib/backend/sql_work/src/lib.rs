@@ -6,12 +6,14 @@
 //!
 //! [`install`] once, before the first connection opens, and every
 //! connection this process opens afterwards is counted. A test can
-//! [`record_under`] a folder to read each statement's work back.
+//! [`record_under`] a folder to read each statement's work back, and a
+//! server asks [`counted`] how many rows a request's statements returned.
 
 mod census;
 pub mod judge;
 pub mod params;
 mod recording;
+mod rows_read;
 
 // Links the SQLite (doltlite) the C calls below resolve against.
 use sqlx as _;
@@ -19,10 +21,12 @@ use sqlx as _;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uint, c_void, CStr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Once;
 
 pub use judge::Work;
 pub use recording::{record_under, Ran, Recording};
+pub use rows_read::{counted, counted_blocking, with_count, ROWS_READ_HEADER};
 
 /// The target of every line this writes, which the runner sums per attempt.
 pub const TARGET: &str = "datalib::sql_work";
@@ -70,6 +74,12 @@ const SQLITE_STMTSTATUS_SORT: c_int = 2;
 const SQLITE_STMTSTATUS_AUTOINDEX: c_int = 3;
 const SQLITE_STMTSTATUS_VM_STEP: c_int = 4;
 
+static INSTALLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn installed() -> bool {
+    INSTALLED.load(Ordering::Relaxed)
+}
+
 /// Counts every statement of every connection this process opens from now
 /// on. Calling it again does nothing.
 pub fn install() {
@@ -80,7 +90,9 @@ pub fn install() {
         let rc = unsafe { sqlite3_auto_extension(on_open as *const c_void) };
         if rc != 0 {
             tracing::error!(target: TARGET, rc, "could not count SQLite statements");
+            return;
         }
+        INSTALLED.store(true, Ordering::Relaxed);
     });
 }
 
@@ -135,8 +147,9 @@ unsafe extern "C" fn on_trace(
     0
 }
 
-/// One run of `stmt` has ended: read and reset its counters, log it if it
-/// was heavy, and record it in the census if one was asked for.
+/// One run of `stmt` has ended: read and reset its counters, add its rows
+/// to the count it ran inside, log it if it was heavy, and record it in the
+/// census if one was asked for.
 unsafe fn finished(stmt: *mut c_void, nanos: i64) {
     // Safety, for every call below: `stmt` is the statement SQLite has
     // just finished running, alive until this callback returns.
@@ -144,6 +157,7 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
     let returned = ROWS
         .with(|rows| rows.borrow_mut().remove(&(stmt as usize)))
         .unwrap_or(0);
+    rows_read::note(returned);
     let mut work = Work {
         vm_steps: status(SQLITE_STMTSTATUS_VM_STEP),
         fullscan_steps: status(SQLITE_STMTSTATUS_FULLSCAN_STEP),

@@ -10,6 +10,7 @@ rust_library(
         "src/lib.rs",
         "src/params.rs",
         "src/recording.rs",
+        "src/rows_read.rs",
     ],
     crate_name = "datalib_sql_work",
     edition = "2021",
@@ -20,6 +21,7 @@ rust_library(
         # Links the SQLite (doltlite) the C calls here resolve against.
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tracing",
+        "@datalib_crates//:tracing-subscriber",
     ],
 )
 
@@ -72,5 +74,22 @@ rust_test(
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "sql_work_rows_read_test",
+    size = "small",
+    srcs = ["tests/rows_read.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sql_work",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:tracing-subscriber",
     ],
 )

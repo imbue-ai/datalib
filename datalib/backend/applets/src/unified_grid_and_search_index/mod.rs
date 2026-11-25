@@ -16,13 +16,13 @@ use axum::{
     Router,
 };
 mod body_pieces;
-mod children;
 pub(crate) mod columns;
 mod grouping;
 mod local_embedder;
 mod map;
 mod models;
 mod mutes;
+mod places;
 mod problems;
 mod results;
 #[cfg(test)]
@@ -218,11 +218,8 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/values", get(problems::values_handler))
             .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
-            .route("/children/{uuid}", get(children::handler))
-            .route(
-                "/sources_with_places",
-                get(children::sources_with_places_handler),
-            )
+            .route("/places/{parent}", get(places::handler))
+            .route("/sources_with_places", get(places::sources_handler))
             .route("/sql", post(sql::handler))
             .route("/sql/stores", get(sql::stores_handler))
             .route(
@@ -251,7 +248,12 @@ pub(crate) async fn require_gateway(
         gate.admits(header("host"), header(crate::gate::SECRET_HEADER))
     };
     if admitted {
-        return next.run(req).await;
+        let (mut resp, rows_read) = datalib_sql_work::counted(next.run(req)).await;
+        if let Some(n) = rows_read {
+            resp.headers_mut()
+                .insert(datalib_sql_work::ROWS_READ_HEADER, n.into());
+        }
+        return resp;
     }
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
@@ -919,7 +921,7 @@ async fn land(
         .collect();
     let n = work.len();
     let root = (*s.root).clone();
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(datalib_sql_work::with_count(move || {
         // Each hit lands by the item the search index named, and reads
         // only what the item it quotes says.
         let landed: Vec<_> = work
@@ -950,7 +952,7 @@ async fn land(
             // Another page may have landed it first, on the same row.
             let _ = cell.set(found);
         }
-    })
+    }))
     .await
     .map_err(|e| SearchFailure::Ranking(format!("landing a page's hits: {e}")))?;
     tracing::info!(
@@ -1849,7 +1851,7 @@ async fn chat(
     let version = where_kept.get(&markdown_uuid).map(|k| k.commit.clone());
     let root = (*s.root).clone();
     let document = markdown_uuid.clone();
-    let read = tokio::task::spawn_blocking(move || match page {
+    let read = tokio::task::spawn_blocking(datalib_sql_work::with_count(move || match page {
         Some((ask, limit)) => stored_text::page(&root, &where_kept, &document, ask, limit),
         None => Ok(stored_text::spell(&root, &where_kept)?
             .remove(&document)
@@ -1858,7 +1860,7 @@ async fn chat(
                 from_top: true,
                 ..Default::default()
             })),
-    })
+    }))
     .await
     .map_err(|e| {
         tracing::error!(document = %markdown_uuid, error = %e, "reading the document panicked");

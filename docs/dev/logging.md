@@ -129,9 +129,34 @@ has none. A page has the server's.
 | Rust in `datalib-step`'s steps | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
-| the server, per request | nothing — the server logs every request | `target:http.request`: method, path, query, status, `ms`, `bytes`, the `page` that asked, and the `card` and `card_type` when a card asked (`ui.card_open` says what source that card ran). These are pages asking this server, not traffic off the machine. `debug` when it succeeded and only read (below), `info` for what changes something or was refused, `warn` for a 5xx |
+| the server, per request | nothing — the server logs every request | `target:http.request`: method, path, query, status, `ms`, `rows_read` and `bytes` (below), the `page` that asked, and the `card` and `card_type` when a card asked (`ui.card_open` says what source that card ran). These are pages asking this server, not traffic off the machine. `debug` when it succeeded and only read (below), `info` for what changes something or was refused, `warn` for a 5xx |
 | Rust that reaches a web service | nothing: every request goes through `datalib_etl_web::http`, which says so | `target:http.outbound`, whose lines start `outbound:`. One `debug` line per request, with its `url` (no query), `status` and `duration_ms`; and at `info`, per host, a line at the first request, one a minute while it goes on, and the whole at the step's end. A remote image the server fetches is an `info` line naming its host alone. A request played back from a test's tape is not outbound |
 | the UI | `track("name", { …fields }, { level, msg })` from `ui/src/telemetry.ts` | `target:ui.name` under the page's own process, with the page's clock; batched, `keepalive`, never throws |
+
+**A request line says what it read and what it answered with.**
+`rows_read` is how many rows the request's SQL statements returned to
+the code that ran them, and `bytes` the size of the answer, so a request
+that reads 31,000 rows to send 5 KB shows it on one line; what SQLite
+walked to find those rows is the heavy-statement line's business. The
+checks an open of a store makes count too, some hundred rows. An
+applet's reads are in its own process: it counts them and says so in an
+`X-Datalib-Rows-Read` response header, which the gateway takes off and
+writes on its own line. `rows_read` is left out when the applet does not
+say, and `bytes` when the answer is a stream of unknown length. The count
+follows the request's `tracing` span (`datalib_sql_work::counted`), which
+sqlx carries to its own threads; a handler that reads on another thread
+wraps that work in `datalib_sql_work::with_count`, or its rows are not
+counted. Work a request leaves to a background task belongs to nobody's
+line. What reads the most:
+
+```sh
+sqlite3 -readonly <root>/system/runs/runs.sqlite \
+  "SELECT json_extract(fields, '$.path') AS path, count(*) AS requests,
+          max(json_extract(fields, '$.rows_read')) AS most_rows,
+          max(json_extract(fields, '$.bytes')) AS most_bytes
+     FROM log WHERE target = 'http.request'
+    GROUP BY path ORDER BY most_rows DESC LIMIT 20"
+```
 
 Adding a UI event is one word in the `PageEventName` union and the
 call; the server files any word. Uncaught exceptions, route changes
