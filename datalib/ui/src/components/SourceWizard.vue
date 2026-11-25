@@ -2429,7 +2429,10 @@ function submit() {
                         <small class="wiz-help">
                           Set this variable to your {{ f.envVar.holds }} before the first sync.
                         </small>
-                        <details class="wiz-sub" :open="!!values[f.target]">
+                        <details
+                          class="wiz-sub"
+                          :open="!!values[f.target] && values[f.target] !== f.envVar.default"
+                        >
                           <summary>Use a different variable name</summary>
                           <input
                             class="wiz-input"

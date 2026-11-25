@@ -1,21 +1,23 @@
 //! The server's side of the supervisor loop (`dag/README.md`
-//! §"Two locks, two files"): it runs the loop `datalib-pipeline serve` runs
-//! (`datalib_dag::supervisor::serve`) for as long as it is up, keeps what
-//! the loop says that no store holds — the prepare pass, whether a sync
-//! is running — and is how the handlers write to the loop's mailbox.
+//! §"Two locks, two files"): it keeps `datalib-pipeline serve` running as
+//! a child for as long as it is up, keeps what the child says on its
+//! stderr that no store holds — the prepare pass, whether a sync is
+//! running — and is how the handlers write to the loop's mailbox.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::pass::PassRow;
-use datalib_dag::supervisor::serve::{self, ServeEvent, ServeOptions};
+use datalib_dag::supervisor::serve::{self, ServeEvent};
 use datalib_dag::supervisor::store::{Store, WipeKind};
 use datalib_dag::supervisor::wipe::tree_group;
+use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, OnceCell};
 
 /// Whether a reset or purge is done, or still waits for its steps to stop.
@@ -34,8 +36,9 @@ const WIPE_WAIT: Duration = Duration::from_secs(10);
 pub struct Upgrade {
     /// The pass is running: nothing syncs until it is done.
     pub migrating: bool,
-    /// This server has run its pass, or found it had none to run. False
-    /// until it holds the runner lock, which another process may hold.
+    /// This server's runner has run its pass, or found it had none to
+    /// run. False until the runner holds the runner lock, which another
+    /// process may hold.
     pub settled: bool,
     /// Every step the pass asks, in the order it asks them.
     pub steps: Vec<PassRow>,
@@ -63,9 +66,13 @@ pub struct FreeSpace {
 #[derive(Clone)]
 pub struct SyncControl {
     root: Arc<PathBuf>,
+    /// This server's runner holds `runner-lock`.
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
     upgrade: Arc<Mutex<Upgrade>>,
+    /// Why nothing can sync from this server: no runner found, or one
+    /// that keeps stopping. Every Sync button says it.
+    trouble: Arc<Mutex<Option<String>>>,
     /// When this server started, as the record stamps: a free-space pass
     /// opened before it is not this server's to report.
     started_at_utc: Arc<String>,
@@ -83,6 +90,7 @@ impl SyncControl {
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
             upgrade: Arc::new(Mutex::new(Upgrade::default())),
+            trouble: Arc::new(Mutex::new(None)),
             started_at_utc: Arc::new(datalib_dag::supervisor::store::now_utc()),
             mailbox: Arc::new(OnceCell::new()),
             stop: Arc::new(watch::channel(false).0),
@@ -90,8 +98,8 @@ impl SyncControl {
         }
     }
 
-    /// Is a sync running on this root? This server's answer while it runs
-    /// the loop; before it has the lock, whether anyone holds it — a
+    /// Is a sync running on this root? This server's runner's answer
+    /// while it holds the lock; before that, whether anyone holds it — a
     /// `datalib-pipeline` that was running when the server started.
     pub fn running(&self) -> bool {
         if self.runs_the_loop.load(Ordering::SeqCst) {
@@ -106,6 +114,21 @@ impl SyncControl {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Why nothing can sync from this server, when nothing can.
+    pub fn trouble(&self) -> Option<String> {
+        self.trouble
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    fn set_trouble(&self, why: Option<String>) -> bool {
+        let mut trouble = self.trouble.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = *trouble != why;
+        *trouble = why;
+        changed
     }
 
     /// The newest compaction or collection opened since this server
@@ -171,23 +194,23 @@ impl SyncControl {
     }
 
     /// Ask the loop for a wipe and wait, up to [`WIPE_WAIT`], for it to
-    /// say how it went.
+    /// say how it went. Whichever process runs the loop carries it out.
     async fn wipe(
         &self,
         kind: WipeKind,
         targets: &[String],
         by: &str,
     ) -> Result<WipeAnswer, String> {
-        if !self.runs_the_loop.load(Ordering::SeqCst) {
-            return Err(format!(
-                "another process is running syncs on this root; {} once it is done",
-                match kind {
-                    WipeKind::Reset => "reset",
-                    WipeKind::Purge => "delete",
-                    WipeKind::Compact | WipeKind::Collect => "free up disk space",
-                }
-            ));
-        }
+        self.wipe_waiting(kind, targets, by, WIPE_WAIT).await
+    }
+
+    async fn wipe_waiting(
+        &self,
+        kind: WipeKind,
+        targets: &[String],
+        by: &str,
+        wait: Duration,
+    ) -> Result<WipeAnswer, String> {
         let store = self.mailbox().await.map_err(|e| format!("{e:#}"))?;
         // Made before the row, so the loop's close is not missed.
         let mut listener = Listener::new(store, "a wipe's answer");
@@ -204,16 +227,18 @@ impl SyncControl {
                 listener.next().await;
             }
         };
-        match tokio::time::timeout(WIPE_WAIT, answer).await {
+        match tokio::time::timeout(wait, answer).await {
             Ok(Ok(())) => Ok(WipeAnswer::Done),
             Ok(Err(why)) => Err(why),
             Err(_) => Ok(WipeAnswer::Queued),
         }
     }
 
-    /// Stop the loop's steps (SIGINT each, and their requests stay open
-    /// for the next boot) and wait, up to `within`, for it to let go.
-    /// Whether it did.
+    /// Stop the runner (SIGTERM: it interrupts its steps, and their
+    /// requests stay open for the next boot) and wait, up to `within`,
+    /// for it to exit. Whether it did. One that has not is left to see
+    /// this server go: its parent pipe closes, and it stops its steps and
+    /// kills what is left after their grace.
     pub async fn shutdown(&self, within: Duration) -> bool {
         let _ = self.stop.send(true);
         let mut exited = self.exited.subscribe();
@@ -226,6 +251,9 @@ impl SyncControl {
 /// What the host runs the loop with.
 pub struct HostConfig {
     pub control: SyncControl,
+    /// The `datalib-pipeline` binary ([`crate::binaries::resolve_pipeline_bin`]);
+    /// with none, nothing syncs and every Sync button says why.
+    pub pipeline: Option<PathBuf>,
     /// The step binaries' directory, ahead of the config's `binary_dir`.
     pub binary_dir: Option<PathBuf>,
     /// Every busy period's "now", in place of the clock: what
@@ -234,29 +262,169 @@ pub struct HostConfig {
     pub now: Option<String>,
     /// Where the prepare pass says it moved, so the page asks again.
     pub announce: Option<crate::watch::RootTx>,
+    /// Told each time the runner writes to the run store.
+    pub nudge: Option<crate::watch::Nudge>,
 }
 
-/// Run the loop in this process (`datalib_dag::supervisor::serve`) until
-/// [`SyncControl::shutdown`], keeping what it says for the handlers.
+/// What the Sync buttons say when no runner was found.
+const NO_PIPELINE: &str = "Syncing is unavailable: no datalib-pipeline was found next to \
+     datalib-http (or at $DATALIB_PIPELINE_BIN, in $DATALIB_BINARY_DIR or on PATH).";
+
+/// A runner that lived this long was working, and its next death starts
+/// the count of deaths in a row again.
+const HEALTHY_FOR: Duration = Duration::from_secs(60);
+
+/// After this many deaths in a row, every Sync button says the runner
+/// keeps stopping.
+const TROUBLE_AFTER: u32 = 3;
+
+/// The wait before restarting a runner after its `n`th death in a row:
+/// one second, doubling, at most a minute.
+fn backoff(deaths: u32) -> Duration {
+    Duration::from_secs(1u64 << deaths.saturating_sub(1).min(6)).min(Duration::from_secs(60))
+}
+
+/// Keep `datalib-pipeline serve` running on this root until
+/// [`SyncControl::shutdown`], restarting it when it dies, and keep what
+/// it says for the handlers.
 pub async fn run(cfg: HostConfig) {
     let control = cfg.control.clone();
-    let opts = ServeOptions {
-        root: (*control.root).clone(),
-        binary_dir: cfg.binary_dir.clone(),
-        now: cfg.now.clone(),
-        parallelism: None,
-        extra_env: backup_secrets(),
+    let mut stop = control.stop.subscribe();
+    let Some(bin) = cfg.pipeline.clone() else {
+        tracing::error!("{NO_PIPELINE}");
+        control.set_trouble(Some(NO_PIPELINE.to_string()));
+        let _ = stop.wait_for(|stopped| *stopped).await;
+        let _ = control.exited.send(true);
+        return;
     };
-    let heard = control.clone();
-    let announce = cfg.announce.clone();
-    let emit: serve::Emit = Arc::new(move |event| heard.hear(event, announce.as_ref()));
-    serve::run(&opts, emit, control.stop.subscribe()).await;
+    let mut deaths = 0u32;
+    while !*stop.borrow() {
+        let started = Instant::now();
+        let ended = run_child(&bin, &cfg, &mut stop).await;
+        control.runs_the_loop.store(false, Ordering::SeqCst);
+        control.busy.store(false, Ordering::SeqCst);
+        let why = match ended {
+            Ok(()) => break,
+            Err(why) => why,
+        };
+        if started.elapsed() >= HEALTHY_FOR {
+            deaths = 0;
+        }
+        deaths += 1;
+        let wait = backoff(deaths);
+        tracing::error!(
+            deaths,
+            "supervisor: datalib-pipeline serve stopped ({why}); starting it again in {wait:?}"
+        );
+        if deaths >= TROUBLE_AFTER
+            && control.set_trouble(Some(format!(
+                "Syncing is unavailable: the runner keeps stopping ({why}). \
+                 The log has each time it stopped."
+            )))
+        {
+            control.rows_changed(cfg.announce.as_ref());
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = stop.wait_for(|stopped| *stopped) => break,
+        }
+    }
     let _ = control.exited.send(true);
 }
 
+/// Run one `datalib-pipeline serve` until it exits. `Ok` when it exited
+/// because this server asked it to stop; otherwise why it died.
+async fn run_child(
+    bin: &Path,
+    cfg: &HostConfig,
+    stop: &mut watch::Receiver<bool>,
+) -> Result<(), String> {
+    let control = &cfg.control;
+    let mut cmd = tokio::process::Command::new(bin);
+    cmd.arg("serve").arg(control.root.as_path());
+    if let Some(dir) = &cfg.binary_dir {
+        cmd.arg("--binary-dir").arg(dir);
+    }
+    if let Some(now) = &cfg.now {
+        cmd.arg("--now").arg(now);
+    }
+    datalib_env::inherit_for_runner(cmd.as_std_mut());
+    // A group of its own, so a terminal's Ctrl-C reaches only this
+    // server, which stops the runner itself rather than see it die.
+    std::os::unix::process::CommandExt::process_group(cmd.as_std_mut(), 0);
+    // stdin is a liveness pipe, never written: however this server ends,
+    // the kernel closes it, and the runner stops its steps and exits
+    // (`datalib_parent_watch`).
+    cmd.env(datalib_parent_watch::ENV_VAR, "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("could not start {}: {e}", bin.display()))?;
+    let Some(stderr) = child.stderr.take() else {
+        return Err("its stderr was not captured".into());
+    };
+    let mut lines = tokio::io::BufReader::new(stderr).lines();
+    // What it printed that was not an event: a panic, or why it would not
+    // start. The last few say why it died.
+    let mut said: VecDeque<String> = VecDeque::new();
+    let mut stopping = false;
+    loop {
+        tokio::select! {
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => match serde_json::from_str::<ServeEvent>(&line) {
+                    Ok(event) => control.hear(event, cfg.announce.as_ref(), cfg.nudge.as_ref()),
+                    Err(_) => {
+                        tracing::warn!("datalib-pipeline serve: {line}");
+                        said.push_back(line);
+                        if said.len() > 5 {
+                            said.pop_front();
+                        }
+                    }
+                },
+                Ok(None) | Err(_) => break,
+            },
+            _ = stop.wait_for(|stopped| *stopped), if !stopping => {
+                stopping = true;
+                if let Some(pid) = child.id().and_then(|p| i32::try_from(p).ok()) {
+                    // Safety: kill(2) on the child this function started
+                    // and has not yet reaped, so the pid is still its.
+                    unsafe { libc::kill(pid, libc::SIGTERM) };
+                }
+            }
+        }
+    }
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("could not wait for it: {e}"))?;
+    if stopping {
+        return Ok(());
+    }
+    let last = said.back().map(|l| format!(": {l}")).unwrap_or_default();
+    Err(format!("{status}{last}"))
+}
+
 impl SyncControl {
-    /// Keep what the loop said, and tell the page what it changed.
-    fn hear(&self, event: ServeEvent, announce: Option<&crate::watch::RootTx>) {
+    fn rows_changed(&self, announce: Option<&crate::watch::RootTx>) {
+        if let Some(tx) = announce {
+            let _ = tx.send(
+                crate::watch::RootEvent::TableChanged {
+                    table: crate::watch::Table::ManageRows,
+                }
+                .into(),
+            );
+        }
+    }
+
+    /// Keep what the runner said, and tell the page what it changed.
+    fn hear(
+        &self,
+        event: ServeEvent,
+        announce: Option<&crate::watch::RootTx>,
+        nudge: Option<&crate::watch::Nudge>,
+    ) {
         let tell = |event: crate::watch::RootEvent| {
             if let Some(tx) = announce {
                 let _ = tx.send(event.into());
@@ -264,14 +432,15 @@ impl SyncControl {
         };
         // Every row's Sync is disabled while the pass runs and enabled
         // after: a change to the rows as much as to `upgrade`.
-        let rows_changed = || {
-            tell(crate::watch::RootEvent::TableChanged {
-                table: crate::watch::Table::ManageRows,
-            })
-        };
+        let rows_changed = || self.rows_changed(announce);
         let upgrade = || self.upgrade.lock().unwrap_or_else(|e| e.into_inner());
         match event {
-            ServeEvent::Holding => self.runs_the_loop.store(true, Ordering::SeqCst),
+            ServeEvent::Holding => {
+                self.runs_the_loop.store(true, Ordering::SeqCst);
+                if self.set_trouble(None) {
+                    rows_changed();
+                }
+            }
             ServeEvent::PreparePlan { steps } => {
                 *upgrade() = Upgrade {
                     migrating: true,
@@ -300,22 +469,13 @@ impl SyncControl {
             }
             ServeEvent::SyncStarted { .. } => self.busy.store(true, Ordering::SeqCst),
             ServeEvent::SyncOver { .. } => self.busy.store(false, Ordering::SeqCst),
-            // This process's own run-store hook already says so
-            // (`boot.rs`), for every writer in it.
-            ServeEvent::RunStoreWritten => {}
+            ServeEvent::RunStoreWritten => {
+                if let Some(nudge) = nudge {
+                    nudge.the_run_store_moved();
+                }
+            }
         }
     }
-}
-
-/// The backup secrets `datalib-step`'s WhatsApp and Signal sources read
-/// when the config names no variable of its own, when this server was
-/// started with them. A step is handed only an allowlist of the runner's
-/// environment (`datalib_env::Child::Step`), which leaves these out.
-fn backup_secrets() -> std::collections::BTreeMap<String, String> {
-    datalib_env::BACKUP_SECRET_KEYS
-        .iter()
-        .filter_map(|key| Some((key.to_string(), std::env::var(key).ok()?)))
-        .collect()
 }
 
 /// The config as the loop would run it, or why it cannot.
@@ -383,15 +543,46 @@ mod tests {
         assert!(!lock.exists(), "the probe created {}", lock.display());
     }
 
-    /// A reset is not refused while a sync runs: the loop does it as soon
-    /// as its step has stopped. Only another process's loop refuses it.
+    /// A reset is not refused while another process runs the loop, as
+    /// it was when the server ran the loop itself: whichever process holds
+    /// the lock carries out the wipe row. With no loop to answer, it is
+    /// queued.
     #[tokio::test]
-    async fn a_reset_is_refused_only_when_another_process_runs_the_loop() {
+    async fn a_reset_is_queued_for_whichever_process_runs_the_loop() {
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
-        control.busy.store(true, Ordering::SeqCst);
-        let err = control.reset(&["a/ingest".into()], "ui").await.unwrap_err();
-        assert!(err.contains("another process"), "{err}");
+        let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
+        let answer = control
+            .wipe_waiting(
+                WipeKind::Reset,
+                &["a/ingest".into()],
+                "ui",
+                Duration::from_millis(200),
+            )
+            .await;
+        assert_eq!(answer, Ok(WipeAnswer::Queued));
+        let store = control.mailbox().await.unwrap();
+        let open = store.open_wipes().await.unwrap();
+        assert_eq!(open.len(), 1, "{open:?}");
+        drop(held);
+    }
+
+    /// One second, doubling, never more than a minute.
+    #[test]
+    fn a_dead_runner_is_restarted_after_a_growing_wait() {
+        let waits: Vec<u64> = (1..=9).map(|n| backoff(n).as_secs()).collect();
+        assert_eq!(waits, [1, 2, 4, 8, 16, 32, 60, 60, 60]);
+    }
+
+    /// The runner's being back clears what its deaths made every Sync
+    /// button say.
+    #[test]
+    fn holding_the_lock_clears_the_trouble() {
+        let td = tempfile::tempdir().unwrap();
+        let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
+        control.set_trouble(Some("keeps stopping".into()));
+        control.hear(ServeEvent::Holding, None, None);
+        assert_eq!(control.trouble(), None);
     }
 
     /// The prepare pass reaches `/api/config` as the loop says it: every
@@ -402,12 +593,13 @@ mod tests {
         use datalib_dag::supervisor::pass::PassState;
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
-        control.hear(ServeEvent::Holding, None);
+        control.hear(ServeEvent::Holding, None, None);
         assert!(control.runs_the_loop.load(Ordering::SeqCst));
         control.hear(
             ServeEvent::PreparePlan {
                 steps: vec!["a/ingest".into(), "a/render".into()],
             },
+            None,
             None,
         );
         let u = control.upgrade();
@@ -421,19 +613,20 @@ mod tests {
                 error: Some("why".into()),
             },
             None,
+            None,
         );
         let u = control.upgrade();
         assert_eq!(u.steps[0].state, PassState::Waiting);
         assert_eq!(u.steps[1].state, PassState::Failed);
         assert_eq!(u.steps[1].error.as_deref(), Some("why"));
-        control.hear(ServeEvent::PrepareDone, None);
+        control.hear(ServeEvent::PrepareDone, None, None);
         let u = control.upgrade();
         assert!(!u.migrating && u.settled && !control.running());
         assert_eq!(u.steps[1].state, PassState::Failed, "kept for the pill");
 
-        control.hear(ServeEvent::SyncStarted { run_id: "r".into() }, None);
+        control.hear(ServeEvent::SyncStarted { run_id: "r".into() }, None, None);
         assert!(control.running());
-        control.hear(ServeEvent::SyncOver { run_id: "r".into() }, None);
+        control.hear(ServeEvent::SyncOver { run_id: "r".into() }, None, None);
         assert!(!control.running());
     }
 
@@ -470,13 +663,5 @@ mod tests {
                 "{bad:?}"
             );
         }
-    }
-
-    #[tokio::test]
-    async fn a_purge_is_refused_when_another_process_runs_the_loop() {
-        let td = root_keeping_one_group();
-        let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
-        let err = control.purge(&["gone".into()], "ui").await.unwrap_err();
-        assert!(err.contains("another process"), "{err}");
     }
 }

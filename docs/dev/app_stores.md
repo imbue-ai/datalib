@@ -161,8 +161,8 @@ changes it drops only its own tables. Deleting the file by hand deletes
 the search index's rows with it; `unified_grid_and_search_index` puts them back on its
 next run. `runs.sqlite` is the other exception to doltlite: plain
 SQLite in WAL mode, written by whoever runs the loop (its
-runs) and the server (its own log) — one process while the server is
-up, two while a `datalib-pipeline` runs the loop — which SQLite's own locking
+runs) and the server (its own log) — the server and its runner child
+while the server is up — which SQLite's own locking
 makes ordinary; `runs_two_process_test` is the measurement.
 
 Who writes which line of it, how to add one, and how to read it is

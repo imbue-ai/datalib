@@ -1,10 +1,12 @@
 # Decoupling datalib-dag from datalib-step
 
-**Status: plan, 2026-11-18, being built on `mngr/better-dag-config`.**
-The design was settled in review on that date. When it lands,
-`docs/dev/step_protocol.md` describes the protocol below and this file
-moves to `completed/`. What it leaves for later is in
-[`decoupling_followups.md`](decoupling_followups.md).
+**Status: landed in #1894 (2026-11-19), kept as the record.** The
+protocol below is described as it is now in
+[`docs/dev/step_protocol.md`](../../step_protocol.md), and the runner's
+rules in [`datalib/backend/dag/README.md`](../../../../datalib/backend/dag/README.md).
+The binary has since been renamed `datalib-pipeline` (#1921). What this
+plan left for later is in
+[`decoupling_followups.md`](../decoupling_followups.md).
 
 ## The goal
 
@@ -242,5 +244,5 @@ what is new.
   rule of the protocol and qmd is a known exception until it is
   replaced. The upgrade writes its locks.
 - **Checking params before a run** stays a `datalib-step` subcommand
-  that `datalib-http` runs: [`decoupling_followups.md`](decoupling_followups.md)
+  that `datalib-http` runs: [`decoupling_followups.md`](../decoupling_followups.md)
   item 1.

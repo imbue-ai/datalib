@@ -442,8 +442,8 @@ point and says so with a `checkpoint` event
 the loop manage processes correctly? A puppet step (`tests/puppet`)
 does only what it is told over a FIFO and acks each instruction; the
 harness (`tests/supervisor_harness`) writes a real `config.toml` of
-puppets, runs the loop in-process under `host::run_idle` as the server
-does, and plays a person through the store. It waits only on what it
+puppets, runs the loop in-process under `host::run_idle` as `datalib-pipeline
+serve` does, and plays a person through the store. It waits only on what it
 can observe (an ack, a loop event, an announcement), each under a
 deadline, and asserts only what the loop owns: processes started and
 ended, never two of one step at once (checked on every start), each
@@ -574,25 +574,38 @@ naming no step) looks exactly like one it did.
 - **One loop per data root** (`system/runner-lock`). The loop is the
   only writer of its record, and the steps it spawns write raw stores
   whose doltlite working set is shared across every connection on the
-  branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it holds this lock
-  for its life and runs the loop in-process
-  (`supervisor/serve.rs`, which `datalib-pipeline serve` runs too), so every
+  branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it keeps
+  `datalib-pipeline serve` (`supervisor/serve.rs`) running as a child, which
+  holds this lock and runs the loop, so every other
   `datalib-pipeline` sync is a client of it. A `datalib-pipeline` is never refused for the lock: a sync is a request
   row in `system/supervisor.sqlite`, so it writes its row and follows it
   while whoever holds the lock runs it, trying the lock again whenever
   anything is announced, its release included, in case that loop ends
   first. Only `reset`, which empties stores, and `free-disk-space`,
   which rewrites them, need the root to themselves and is refused while a loop runs —
-  always, with the app up; the app's resets are rows the loop carries out
-  (§"Resets and purges").
+  always, with the app up; the app's resets are rows whichever loop
+  holds the lock carries out (§"Resets and purges").
 - **One server per data root** (`system/lock`), which `datalib-http`
   takes for its own reasons (the API token, the feedback, usage and
   remote-media stores).
 
 They must be *different* files: a server that starts while a
-`datalib-pipeline` runs the loop holds the root as a server and waits for
-`runner-lock` — the UI's syncs are rows that loop serves meanwhile — and
-takes the loop over when it ends.
+`datalib-pipeline` runs the loop holds the root as a server, and its
+child waits for `runner-lock` — the UI's syncs, resets and purges are
+rows that loop serves meanwhile — and takes the loop over when it ends.
+
+The server restarts a child that dies, after one second, doubling to a
+minute, each time logged at ERROR; after three deaths in a row, each
+quicker than a minute, every Sync button says the runner keeps stopping,
+until a child holds the lock again. With no `datalib-pipeline` to start
+(`$DATALIB_PIPELINE_BIN`, `$DATALIB_BINARY_DIR`, beside the server, then
+`PATH`), the server serves everything else and every Sync button says
+why. The child is handed the server's environment but the server's own
+token and address and the protected-library flag
+(`datalib_env::inherit_for_runner`): it is the runner that hands each
+step only what the step protocol allows. At shutdown the server sends it
+SIGTERM; one that outlives the server's wait sees its parent pipe
+close, and stops its steps the same way.
 
 Whoever runs the loop owns its steps' processes. Each step holds a pipe
 from that process (`DATALIB_PARENT_PIPE`) and stops itself when the pipe
@@ -740,7 +753,7 @@ period whenever a request or a wipe is open, requests asked to stop
 before any period took them closed as `stopped`, the record settled when
 the switches or the config move, then a wait for an announcement or the
 host's stop. `supervisor::serve::run` runs it after taking the lock and
-the prepare pass; the server and `datalib-pipeline serve` both call that, and
+the prepare pass; `datalib-pipeline serve` calls that, and
 the harness runs `run_idle` itself. A `datalib-pipeline` sync has no idle
 side: it serves until nothing is open, then exits.
 
@@ -751,8 +764,10 @@ holds: that it holds the lock (`holding`), the prepare pass
 (`sync_started`, `sync_over`), and every write it makes to the run
 store (`run_store_written`), which a filesystem watch would report late.
 Its own log lines go to the run store, as a `dag` process outside any
-run. SIGINT or SIGTERM stops it the way the app's shutdown stops the
-loop: its steps are interrupted and their requests stay open.
+run, which the log card offers under "The runner". SIGINT or SIGTERM
+stops it: its steps are interrupted and their requests stay open. A root
+with no config, or one it cannot read, is served all the same, and
+nothing runs until the file holds a config.
 
 ## Resets and purges
 

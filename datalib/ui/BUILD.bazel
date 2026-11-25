@@ -351,6 +351,7 @@ copy_to_bin(
 
 _E2E_AUTH_DATA = [
     "//datalib/backend/http:datalib_http_bin",
+    "//datalib/backend/dag:datalib_pipeline_bin",
     "//datalib/backend/datalib_step:datalib_step",
     # The router and its impersonating curl, side by side as they ship;
     # the suite's curl hands every request to the real router.
@@ -368,6 +369,7 @@ _E2E_AUTH_ENV = dict(
     DEV_RUNTIME_ENV,
     DATALIB_TEST_AUTH_HTTP_BIN_RLOC = "$(rlocationpath //datalib/backend/http:datalib_http_bin)",
     DATALIB_TEST_AUTH_STEP_BIN_RLOC = "$(rlocationpath //datalib/backend/datalib_step:datalib_step)",
+    DATALIB_TEST_AUTH_PIPELINE_BIN_RLOC = "$(rlocationpath //datalib/backend/dag:datalib_pipeline_bin)",
     DATALIB_TEST_AUTH_ROUTER_RLOC = "$(rlocationpath //third-party/latchkey-curl-shims:latchkey_curl_router)",
     DATALIB_TEST_AUTH_GARMIN_PLUGIN_RLOC = "$(rlocationpath //third-party/latchkey-garmin:package.json)",
 )

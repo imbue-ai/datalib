@@ -144,9 +144,11 @@ pub async fn build_state(
     let sync = supervisor::SyncControl::new(root.clone());
     tokio::spawn(supervisor::run(supervisor::HostConfig {
         control: sync.clone(),
+        pipeline: crate::binaries::resolve_pipeline_bin(),
         binary_dir: binary_dir.clone(),
         now,
         announce: Some(root_tx.clone()),
+        nudge: Some(nudge.clone()),
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a

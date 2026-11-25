@@ -192,6 +192,7 @@ id = "whatsapp/ingest"
 command = "datalib-step run ingest whatsapp"
 [steps.params.backup]
 path = "~/backups/WhatsApp"      # holds Databases/msgstore.db.crypt15 and Media/
+key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"  # the variable holding the key
 
 [[steps]]
 id = "whatsapp/render_markdown"
@@ -200,8 +201,9 @@ inputs = ["whatsapp/ingest"]
 reads = "pinned"
 ```
 
-The key comes from `WHATSAPP_BACKUP_DECRYPTION_KEY` (or the env var
-named by `key_env_var`); how to get it is in
+The key comes from the environment variable `key_env_var` names, which
+the wizard sets to `WHATSAPP_BACKUP_DECRYPTION_KEY`; the runner hands a
+step only the variables its params name. How to get it is in
 [`getting_your_data.md`](/docs/user/getting_your_data.md#whatsapp-backups).
 
 ## Measuring a backup

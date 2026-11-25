@@ -1,6 +1,6 @@
-//! The loop held for the whole life of the process that runs it:
-//! `datalib-pipeline serve`, and the app's server until it starts that as a
-//! child. It takes `runner-lock` (waiting while another process holds
+//! The loop held for the whole life of the process that runs it,
+//! `datalib-pipeline serve`, which the app's server starts as a child. It
+//! takes `runner-lock` (waiting while another process holds
 //! it), closes what a dead loop left, runs the prepare pass, then serves
 //! every request and wipe until told to stop. What a parent needs to
 //! hear and the stores do not hold, it says as [`ServeEvent`]s.
@@ -33,9 +33,6 @@ pub struct ServeOptions {
     pub now: Option<String>,
     /// At most this many steps at once; the runner's default when `None`.
     pub parallelism: Option<usize>,
-    /// Variables every step gets that its environment would not otherwise
-    /// carry; the config's `[env]` wins over them.
-    pub extra_env: BTreeMap<String, String>,
 }
 
 /// One thing the loop says to whoever started it, one NDJSON line each
@@ -258,25 +255,20 @@ fn prepare_error(e: &PrepareError) -> String {
     }
 }
 
-/// The environment every step of one run gets: the runner's, then
-/// `opts.extra_env` where the config's `[env]` does not name the variable.
+/// The environment every step of one run gets.
 fn steps_env(
     opts: &ServeOptions,
     cfg: &crate::config::DagConfig,
     now: &str,
     run_id: &str,
 ) -> anyhow::Result<host::StepEnv> {
-    let mut env = host::step_env(
+    host::step_env(
         cfg,
         opts.binary_dir.as_deref(),
         &extra_path(&opts.root),
         now,
         run_id,
-    )?;
-    for (key, value) in &opts.extra_env {
-        env.vars.entry(key.clone()).or_insert_with(|| value.clone());
-    }
-    Ok(env)
+    )
 }
 
 /// Where the loop's steps find the library's own programs, whether or not

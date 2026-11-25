@@ -636,8 +636,9 @@ impl Nudge {
         let _ = self.0.send(Moved::Curated);
     }
 
-    /// A run-store writer in this process wrote: the server's own log,
-    /// or the loop's runs (`datalib_runs::after_every_write`).
+    /// A run-store writer wrote: the server's own log
+    /// (`datalib_runs::after_every_write`), or the runner, as its
+    /// `run_store_written` event says.
     pub fn the_run_store_moved(&self) {
         let _ = self.0.send(Moved::RunStore);
     }
