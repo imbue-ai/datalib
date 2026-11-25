@@ -33,6 +33,10 @@ impl SourceRender for ContactsRender {
         crate::render::render::RENDER_VERSION
     }
 
+    fn item_of_entity(&self, source_id: &str, table: &str, id: &str) -> Option<String> {
+        crate::render::google::document_of(source_id, table, id)
+    }
+
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String> {
         use crate::render::{parse, render};
 

@@ -667,7 +667,7 @@ your app's own calls can be refused.
   (5000 by default, of the 6000 a minute Google allows one user), so
   about 1000 a minute are left for your app. Lower it in the source's
   `[steps.params.gmail]` to leave more.
-- **Google Calendar and CalDAV** have no such setting; a refusal is
+- **Google Calendar, Google Contacts and CalDAV** have no such setting; a refusal is
   retried with backoff.
 
 ## Changing the config while a sync runs

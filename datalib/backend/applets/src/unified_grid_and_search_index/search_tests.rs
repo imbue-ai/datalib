@@ -6,8 +6,9 @@
 use std::collections::HashSet;
 
 use super::tests::{groups, index_over, search, search_part, search_within, uuids, Part};
+use super::warm::Warming;
 use super::*;
-use sqlx::ConnectOptions;
+use sqlx::{ConnectOptions, Connection};
 
 /// A word the fixture's corpus uses across several sources.
 const QUERY: &str = "the enterprise";
@@ -110,9 +111,32 @@ async fn warming_reads_what_the_first_searches_would_wait_for() {
     let s = index_over(root.path()).await;
     assert_eq!(s.held_vectors.held().await, 0);
 
-    super::warm::warm_once(&s).await;
+    let warming = super::warm::warm_once(&s).await;
 
+    assert!(matches!(warming, Warming::Done { .. }), "{warming:?}");
     assert!(s.held_vectors.held().await > 0, "no vector was read");
+}
+
+/// An index an upgrade is about to build again is not a failure: the app
+/// shows its upgrade screen, and warming waits for the step to finish.
+#[tokio::test]
+async fn warming_waits_for_an_index_in_another_shape() {
+    let root = fixture_root();
+    let s = index_over(root.path()).await;
+    let mut conn = datalib_sqlite_open::file(&datalib_runtime::layout::grid_index_db(root.path()))
+        .connect()
+        .await
+        .unwrap();
+    sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    conn.close().await.unwrap();
+
+    let warming = super::warm::warm_once(&s).await;
+
+    assert!(matches!(warming, Warming::Refused(_)), "{warming:?}");
+    assert_eq!(s.held_vectors.held().await, 0);
 }
 
 /// A source the search index holds and the grid does not, as a turned-off

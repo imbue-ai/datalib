@@ -1,4 +1,5 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("//tools:live.bzl", "live_run")
 
 # Checked-in TNG-themed vCard fixture consumed by both this crate's
 # parse tests and //tests/fixtures:ingested_tng (which runs the
@@ -27,6 +28,7 @@ rust_library(
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
         "//datalib/backend/probe:datalib_probe",
+        "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:base64",
@@ -53,6 +55,10 @@ rust_test(
 rust_test(
     name = "contacts_tests",
     srcs = glob(["tests/contacts_tests/*.rs"]),
+    args = [
+        "--skip",
+        "live::",
+    ],
     compile_data = glob(["tests/fixtures/carddav_tng*/*.vcf"]),
     crate_root = "tests/contacts_tests/main.rs",
     edition = "2021",
@@ -61,10 +67,20 @@ rust_test(
         ":datalib_etl_contacts",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/etl/providers/contacts_config:datalib_etl_contacts_config",
+        "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
     ],
+)
+
+# `bazel run` it with a `google-people` login stored in latchkey; see
+# tests/contacts_tests/live.rs.
+live_run(
+    name = "contacts_live",
+    test = ":contacts_tests",
 )
