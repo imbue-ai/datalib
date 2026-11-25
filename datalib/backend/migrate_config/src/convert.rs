@@ -158,6 +158,9 @@ pub enum Retired {
     /// arguments, locks and `reads` the runner worked out
     /// (`explicit_steps.rs`).
     InferredByTheRunner,
+    /// A WhatsApp or Signal ingest whose params name no variable for its
+    /// backup secret (`backup_secrets.rs`).
+    UnnamedBackupSecret,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

@@ -148,11 +148,22 @@ pub async fn build_state(
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());
+    // Made here, before the runner starts and before any handler reads
+    // them: two processes making one of these files at once can leave
+    // it unreadable.
+    if let Err(e) = sync.mailbox().await {
+        tracing::error!("supervisor: cannot open the request store: {e:#}");
+    }
+    if let Err(e) = datalib_runs::prepare_store(&root).await {
+        tracing::error!("cannot make the run store: {e:#}");
+    }
     tokio::spawn(supervisor::run(supervisor::HostConfig {
         control: sync.clone(),
+        pipeline: crate::binaries::resolve_pipeline_bin(),
         binary_dir: binary_dir.clone(),
         now,
         announce: Some(root_tx.clone()),
+        nudge: Some(nudge.clone()),
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a

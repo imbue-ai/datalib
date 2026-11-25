@@ -1,6 +1,6 @@
 //! One process writing or reading `system/supervisor.sqlite` the way one
 //! of its real users does, for `supervisor_contention_test`:
-//! `<root> mailbox|record|reader <tag> <n>`.
+//! `<root> mailbox|record|reader <tag> <n>`, or `<root> try-write`.
 
 use std::path::PathBuf;
 
@@ -11,8 +11,13 @@ use datalib_dag::supervisor::store::Store;
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let [root, role] = args.as_slice() {
+        if role == "try-write" {
+            return try_write(&PathBuf::from(root)).await;
+        }
+    }
     let [root, role, tag, n] = args.as_slice() else {
-        bail!("usage: <root> mailbox|record|reader <tag> <n>");
+        bail!("usage: <root> mailbox|record|reader <tag> <n>, or <root> try-write");
     };
     let root = PathBuf::from(root);
     let n: usize = n.parse().context("n")?;
@@ -57,5 +62,23 @@ async fn main() -> Result<()> {
         other => bail!("no role {other:?}"),
     }
     store.close().await;
+    Ok(())
+}
+
+/// Take the store's write lock without waiting, and say whether another
+/// process held it: prints `held` or `got it`.
+async fn try_write(root: &std::path::Path) -> Result<()> {
+    use sqlx::Connection;
+    let db = datalib_runtime::layout::supervisor_db(root);
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(datalib_runtime::plain_sqlite::uri(&db))
+        .busy_timeout(std::time::Duration::ZERO);
+    let mut conn = sqlx::SqliteConnection::connect_with(&opts).await?;
+    let answer = match sqlx::query("BEGIN IMMEDIATE").execute(&mut conn).await {
+        Ok(_) => "got it",
+        Err(_) => "held",
+    };
+    std::io::Write::write_all(&mut std::io::stdout(), answer.as_bytes())?;
+    conn.close().await?;
     Ok(())
 }

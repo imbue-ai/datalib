@@ -699,8 +699,8 @@ the next would put the first back:
 
 15. What the runner used to infer for `datalib-step`
     (`upgrade_explicit_steps`, `explicit_steps.rs`), the shape from
-    before the runner stopped knowing that program. It runs last, so it
-    reads the shape every rewrite above leaves. A file is in that shape
+    before the runner stopped knowing that program. It runs after every
+    rewrite above, so it reads the shape they leave. A file is in that shape
     when a step writes `group` or `function`; a step's `command` is
     `datalib-step` (or a path ending in `/datalib-step`) without `run`
     as its next word, or is missing; the file has a top-level
@@ -722,11 +722,18 @@ the next would put the first back:
     `DATALIB_STEP_MODAL_MAX_SANDBOXES` in place of `checkpoint_cadence`,
     `render_pages` and `[modal]`; `embed_contexts` and
     `embed_search_index`, which no step reads any more, go, with the
-    comments above them; a group loses its `source`. A WhatsApp or
-    Signal ingest gets the variable it reads its backup secret from
-    named in its params. Every step's fingerprint changes with its
-    `command`, so every step runs once at the next sync; a
-    `datalib-step` step does only what is new.
+    comments above them; a group loses its `source`. Every step's
+    fingerprint changes with its `command`, so every step runs once at
+    the next sync; a `datalib-step` step does only what is new.
+16. A backup secret's variable (`upgrade_backup_secrets`,
+    `backup_secrets.rs`): a `datalib-step run ingest whatsapp` or
+    `… signal` step whose `backup` params name no variable gets
+    `key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"` or
+    `aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"`, the names `datalib-step`
+    falls back to. The runner hands a step only the variables its params
+    name, so without the line the step could not decrypt. A step whose
+    `backup` table is inline is refused, naming the step, for a person
+    to add the line.
 
 The wizard never gives a source `unified_index`,
 `unified_document_index`, `unified_grid_and_search_index` or

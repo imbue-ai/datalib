@@ -1131,8 +1131,10 @@ adb pull /sdcard/Signal/SignalBackups ~/backups/SignalBackups
 ```
 
 You'll also need the 30-digit passphrase shown when you enabled backups.
-The provider reads it from the `SIGNAL_BACKUP_PASSPHRASE` env var (override
-per source with `aep_env_var`).
+The provider reads it from the environment variable `aep_env_var` names;
+the app writes `SIGNAL_BACKUP_PASSPHRASE` there. Name the variable even
+when it is that one: the runner hands a step only the variables its
+params name.
 
 ## Slack
 
@@ -1240,9 +1242,10 @@ read; a backup protected by a password cannot be decrypted offline.
 → Chat backup → End-to-end encrypted backup, turn it on and choose the
 **64-digit key** option, not a password. Write that key down. If you
 already turned it on with a password, turn it off and on again with the
-64-digit key. The sync reads the key from the
-`WHATSAPP_BACKUP_DECRYPTION_KEY` environment variable (`key_env_var`
-names another).
+64-digit key. The sync reads the key from the environment variable
+`key_env_var` names; the app writes `WHATSAPP_BACKUP_DECRYPTION_KEY`
+there. Name the variable even when it is that one: the runner hands a
+step only the variables its params name.
 
 **Pull the backup.** Trigger a fresh local backup first (Settings →
 Chats → Chat backup → Back Up) so it is current, then plug the phone in

@@ -44,7 +44,11 @@ async fn call(
     let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
         .unwrap();
-    assert!(status.is_success(), "{method} {uri}: {status}");
+    assert!(
+        status.is_success(),
+        "{method} {uri}: {status}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
     if status == StatusCode::NO_CONTENT {
         return serde_json::Value::Null;
     }

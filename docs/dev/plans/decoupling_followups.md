@@ -1,9 +1,12 @@
 # What is left after the runner stops knowing datalib-step
 
-**Status: notes, 2026-11-18, nothing built.** The step protocol redesign
-([`dag_and_step_decoupling.md`](dag_and_step_decoupling.md)) takes `datalib-step` out
-of the runner. This file lists what that redesign leaves alone on
-purpose, so it is not forgotten.
+**Status: notes, partly built; checked against the tree 2026-11-20.**
+The step protocol redesign
+([`completed/dag_and_step_decoupling.md`](completed/dag_and_step_decoupling.md),
+#1894) took `datalib-step` out of the runner. This file lists what that
+redesign left alone on purpose, so it is not forgotten. Done: item 5a,
+item 6, and of item 7 all but one constant. Untouched: items 2 to 5 and
+8, and the reconciler in section 10. Items 1 and 9 are half done.
 
 ## The end state
 
@@ -31,12 +34,10 @@ does in each of items 1 to 5.
 
 ### 1. Checking a step's params before a sync
 
-**Now.** `datalib-pipeline check` runs `datalib-step check-params` on a
-config that has built-in ingest or render steps
-(`datalib/backend/dag/src/bin/datalib_pipeline.rs:450-465`), and
-`datalib-http` does the same on every save
-(`datalib/backend/http/src/params_check.rs:43`, `:55`). The redesign
-removes the runner's call and keeps `datalib-http`'s, for now.
+**Now.** `datalib-pipeline check` no longer runs `datalib-step
+check-params`. `datalib-http` still does on every save, for configs with
+a `datalib-step run ingest` or `render_markdown` step
+(`datalib/backend/http/src/params_check.rs:21-58`).
 
 **What is wrong.** Only `datalib-step`'s steps get their params checked
 before they run; a custom step's mistake shows up only when it fails.
@@ -45,10 +46,9 @@ no longer sees a params error before the first sync.
 
 **Shape discussed.** A way for any program to check one step's params,
 with optional batching so a save does not start one process per step.
-Cross-step rules, such as "`qmd_aggregator` must read every
-`keyword_index`" (`datalib/backend/dag/src/config.rs:1680-1694`), do
-not go through it: the step that can see the problem reports it as a
-warning when it runs.
+Cross-step rules (the runner once had one: "`qmd_aggregator` must read
+every `keyword_index`") do not go through it: the step that can see the
+problem reports it as a warning when it runs.
 
 **Also lost: the warnings for params that do nothing.** The runner used
 to warn, at the line, about a `datalib-step` step's params that no
@@ -100,81 +100,42 @@ steps' included (`datalib/backend/http/src/prometheus.rs:173`, `:194`,
 from any step. A rename breaks a person's dashboards and alerts, so the
 old names have to be kept for a while.
 
-### 5a. The server hands two of datalib-step's secrets to every step
+### 5a. The server hands two of datalib-step's secrets to every step (done)
 
-`WHATSAPP_BACKUP_DECRYPTION_KEY` and `SIGNAL_BACKUP_PASSPHRASE`, when the
-server was started with them, go to every step it runs
-(`backup_secrets`, `datalib/backend/http/src/supervisor.rs`, handed to
-the loop as `ServeOptions::extra_env`), because the
-wizard may write a WhatsApp or Signal source without naming the
-variable in its params and `datalib-step` then falls back to these
-names. The config upgrade names them in an existing config's params,
-which is the protocol's own way. The end state: the wizard always
-writes the variable's name into the params, and the server hands
-nothing by name.
+The server used to hand `WHATSAPP_BACKUP_DECRYPTION_KEY` and
+`SIGNAL_BACKUP_PASSPHRASE` to every step. Now the wizard always writes
+the variable's name into a WhatsApp or Signal source's params
+(`paramEntries` in `datalib/ui/src/config/sourceSteps.ts`), the
+unattended rewrite `backup_secrets.rs` names the default in an existing
+config that relies on it, and the server hands nothing by name.
 
 ## Where datalib-http and datalib-pipeline are not yet separate
 
-### 6. The server runs the loop in its own process
+### 6. The server runs the loop in its own process (done)
 
-**Now.** `datalib-http` does not start `datalib-pipeline`. It links the
-runner's crate (`datalib/backend/http/BUILD.bazel:122`) and calls
-`datalib_dag::supervisor::serve::run` in-process
-(`run`, `datalib/backend/http/src/supervisor.rs`): the same loop
-`datalib-pipeline serve` runs. That takes the runner lock, closes what a dead
-loop left, runs the prepare pass, then serves every request and wipe
-until stopped. What the server needs and no store holds, the loop says
-as `ServeEvent`s, which the server turns into its `Upgrade` (the
-prepare pass `/api/config` reports) and its `busy` flag.
+`datalib-http` keeps `datalib-pipeline serve` running as a child
+(`run` in `datalib/backend/http/src/supervisor.rs`), restarts it with a
+backoff when it dies, and says on every Sync button when it cannot
+find one or it keeps dying. It still links the runner's crate, as a
+client library: config parsing, request and wipe rows, the record. It
+talks to the child only through the request rows and the record in
+`system/supervisor.sqlite`, the announcements in
+`system/supervisor-listeners/`, the run store, `config.toml`, and the
+`ServeEvent` lines on the child's stderr. A reset, purge or free-space
+request is no longer refused when another process runs the loop. How
+it behaves is in `datalib/backend/dag/README.md` §"Two locks, two
+files".
 
-**Wanted.** `datalib-http` starts `datalib-pipeline serve` as a child
-process. It may keep linking the crate as a client library (config
-parsing, writing request rows, reading the record); what goes is the
-loop running in its process. It talks to the child only through:
-- the request rows in `system/supervisor.sqlite`;
-- the record in the same file;
-- the announcements in `system/supervisor-listeners/`;
-- the run store `system/runs/runs.sqlite`;
-- `config.toml`;
-- the child's stderr, one `ServeEvent` per line: whether it holds the
-  lock, the prepare pass's progress, each busy period, and each write
-  it makes to the run store. That last one replaces the in-process
-  hook (`datalib_runs::after_every_write`, wired in
-  `datalib/backend/http/src/boot.rs:122`), which no longer fires once
-  the writes are another process's.
+### 7. Datalib's constants live in the runner's crate (mostly done)
 
-**What is left to decide or build.**
-- The server finds the binary the way it finds `datalib-step`
-  (`datalib/backend/http/src/binaries.rs`), sends SIGTERM on shutdown
-  and kills the child after its grace, and restarts a child that died,
-  logging each restart at ERROR.
-- The two backup secrets reach the steps through `ServeOptions::extra_env`
-  in-process. A child is handed only an allowlist of the server's
-  environment, so they need a way across: `DATALIB_CHILD_ENV`, or item
-  5a done first.
-- The reset, purge and free-space handlers refuse when another process
-  runs the loop (`SyncControl::wipe`). With the loop always in another
-  process that check goes: any loop carries out a wipe row.
-- The tests that build a `SyncControl` directly
-  (`datalib/backend/http/tests/http_tests/support.rs:30`) and need a
-  loop take the `datalib-pipeline` binary as a `data` dep.
-- The log card reads "the server's lines"; the child's own lines are a
-  `dag` process's, so check the card still shows the loop's.
-
-### 7. Datalib's constants live in the runner's crate
-
-`datalib-http` reads these from `datalib_dag::config`, so they stay in
-the runner after the runner stops using them. They move out of the
-runner's crate.
-- `DIFF_GROUP_TYPE` (`datalib/backend/dag/src/config.rs:380`), used at
-  `datalib/backend/http/src/manage/mod.rs:1427`.
-- `TIME_SERIES_INDEX_GROUP` (`datalib/backend/dag/src/config.rs:754`),
-  used at `datalib/backend/http/src/manage/mod.rs:1254`.
-- `RESERVED_APPLET_ID` (`datalib/backend/dag/src/config.rs:899`), used
-  by `datalib/backend/http/src/frontend.rs:17`.
-- The starter config, `datalib_dag::starter`
-  (`datalib/backend/http/src/lib.rs:23`, `:1179`;
-  `datalib/backend/http/src/main.rs:137`).
+`DIFF_GROUP_TYPE` and `TIME_SERIES_INDEX_GROUP` moved to
+`datalib/backend/http/src/step_program.rs`, and the app's starter config
+to `datalib/backend/http/src/starter.rs`; `datalib_dag::starter` now
+holds only `datalib-pipeline init`'s, which has no steps. Left:
+`RESERVED_APPLET_ID` (`datalib/backend/dag/src/config.rs`), which the
+runner enforces on `[[applets]]` ids and the server mirrors as
+`USER_NAMESPACE` (`datalib/backend/http/src/frontend.rs`). It goes with
+item 8.
 
 ### 8. `[[applets]]` is in the runner's config but the runner never runs one
 
@@ -211,17 +172,18 @@ reads it. The text:
 
 Add the check that keeps it true at the same time: `//:lint_repo`
 refuses the string `datalib-step` in `datalib/backend/dag/src` and in
-`datalib/backend/http/src` outside tests.
+`datalib/backend/http/src` outside tests. The runner's half exists
+(check 23 in `scripts/lint_repo.py`); the server's waits on items 1 to
+5.
 
 ## 10. The runner's runtime model
 
 The runner began as a batch runner and became a supervisor by being
 wrapped rather than rewritten. This is a review of how it runs, and the
 design it would have if it were written today. It was written
-2026-11-17 and checked against the tree on 2026-11-19, after the step
-protocol landed (#1894); the section "How it works now" describes the
-tree on that date. Item 6 above (the server running the loop
-in-process) is part of it.
+2026-11-17 and checked against the tree on 2026-11-20, after the server
+started the loop as a child (item 6); the section "How it works now"
+describes the tree on that date.
 
 ### Why
 
@@ -275,8 +237,8 @@ Paths are relative to the repo root.
   server and the tests run `run_idle`; the CLI calls `serve` once and
   exits.
 - **Two hosts.** `supervisor::serve::run`
-  (`datalib/backend/dag/src/supervisor/serve.rs`), which the server
-  calls in-process and `datalib-pipeline serve` runs, and the CLI's sync
+  (`datalib/backend/dag/src/supervisor/serve.rs`), which
+  `datalib-pipeline serve` runs (the server's child), and the CLI's sync
   command (`datalib/backend/dag/src/bin/datalib_pipeline.rs`). Each takes
   the lock, closes what a dead loop left (`host::take_over`,
   `host.rs:277`), runs the prepare pass, builds the step environment
@@ -295,8 +257,8 @@ Paths are relative to the repo root.
     that refuses is turned off with the marker `REFUSED_PREPARE`
     (`scheduler.rs:399`), and a later start that does not refuse turns
     it back on. `serve::run` asks one step at a time and says each
-    answer as a `ServeEvent`, which the server keeps in memory
-    (`Upgrade`, `datalib/backend/http/src/supervisor.rs:37`); the CLI's
+    answer as a `ServeEvent` on stderr, which the server keeps in memory
+    (`Upgrade`, `datalib/backend/http/src/supervisor.rs`); the CLI's
     sync runs it in one call and prints a line per step that needs
     attention. Either
     way the pass gets its own run in the run store, of kind
@@ -363,8 +325,9 @@ Paths are relative to the repo root.
    are refused while the app is up (`acquire_or_explain`,
    `datalib/backend/dag/src/bin/datalib_pipeline.rs:542`), and maintenance
    runs through two paths with their own tests. The prepare pass's
-   progress is in the server's memory rather than the store, so item 6
-   cannot carry it to a child process as it stands.
+   progress is in the server's memory rather than the store, carried
+   from the child as `ServeEvent` lines: a client other than the
+   server cannot see it.
 8. **A builder for a batch runner.** `Runner::new(..).sink(..).child_env(..).stop_on(..).reload_from(..)`
    (`datalib/backend/dag/src/scheduler.rs:90-140`) is configured once
    per run and thrown away. `StepRun::InProcess`
@@ -489,7 +452,8 @@ Each step ships alone, and the harness stays green throughout.
 3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
    and add prepare, with its progress in `job_steps` instead of the
    server's memory. Make the CLI's reset and shrink write jobs. Put
-   both hosts on `supervisor::run`. This is what item 6 needs.
+   both hosts on `supervisor::run`. Item 6 did not wait for this: the
+   prepare pass's progress reaches the server as `ServeEvent` lines.
 4. **Invocations and requests replace runs** in the run store, the
    record, the server's routes and the UI. This is the largest step.
    The run store is history, not data a person built, so the old rows
