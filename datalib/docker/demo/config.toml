@@ -209,6 +209,7 @@ inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
 [[programs]]
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect"]
+pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 # One embed at a time: each loads the model and writes the search index.
 [[locks]]

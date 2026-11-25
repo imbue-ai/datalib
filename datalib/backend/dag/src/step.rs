@@ -143,7 +143,11 @@ impl StepSpec {
         m.push('\u{1}');
         match &self.run {
             StepRun::InProcess(_) => m.push_str("in-process"),
-            StepRun::Subprocess { argv, env, params } => {
+            // `pass_env` is left out: it names variables, and their values
+            // are the runner's, unknown here.
+            StepRun::Subprocess {
+                argv, env, params, ..
+            } => {
                 for a in argv {
                     m.push_str(a);
                     m.push('\u{2}');
@@ -225,11 +229,14 @@ pub enum StepRun {
     Subprocess {
         argv: Vec<String>,
         env: BTreeMap<String, String>,
-        /// The entry's `params` subtree as JSON. Handed to the child in
-        /// a file only its owner can read, never on argv: params carry
-        /// tokens and device ids, and argv is visible to every user on
-        /// the machine through `ps`.
+        /// The entry's `params` subtree as JSON, handed to the child in
+        /// `DATALIB_DAG_PARAMS`, never on argv: params carry tokens and
+        /// device ids, and argv is visible to every user on the machine
+        /// through `ps`.
         params: Option<String>,
+        /// The variables of the runner's environment its program's
+        /// `[[programs]]` entry passes on.
+        pass_env: Vec<String>,
     },
 }
 

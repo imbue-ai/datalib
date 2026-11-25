@@ -56,6 +56,10 @@ export DATALIB_CACHE_DIR="$root/fingerprint_cache"
 # with the embedding model's tokenizer, 300 MB from HuggingFace.
 export XDG_CACHE_HOME="$root/cache" DATALIB_NO_FETCH=1 DATALIB_MODELS_NO_FETCH=1
 cat > "$root/config.toml" <<CONFIG
+[[programs]]
+command = "datalib-step"
+pass_env = ["DATALIB_CACHE_DIR"]
+
 [[groups]]
 id = "contacts"
 type = "contacts"

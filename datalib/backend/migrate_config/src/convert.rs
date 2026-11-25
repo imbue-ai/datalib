@@ -161,6 +161,9 @@ pub enum Retired {
     /// A WhatsApp or Signal ingest whose params name no variable for its
     /// backup secret (`backup_secrets.rs`).
     UnnamedBackupSecret,
+    /// A `datalib-step` `[[programs]]` entry that names no `pass_env`
+    /// (`program_pass_env.rs`).
+    UnpassedStepEnv,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

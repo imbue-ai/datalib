@@ -187,15 +187,29 @@ pub fn env_vars_named_in(params_json: &str) -> Vec<String> {
     out
 }
 
+/// What a step's own entry says about the process to start: a
+/// [`StepRun::Subprocess`](crate::step::StepRun::Subprocess), borrowed,
+/// with the argv a verb may have extended.
+pub(crate) struct Launch<'a> {
+    pub argv: &'a [String],
+    pub env: &'a BTreeMap<String, String>,
+    pub params: Option<&'a str>,
+    pub pass_env: &'a [String],
+}
+
 pub(crate) async fn run_subprocess(
-    argv: &[String],
-    env: &BTreeMap<String, String>,
-    params: Option<&str>,
+    launch: Launch<'_>,
     extra_env: &BTreeMap<String, String>,
     attempt: u32,
     ctx: &StepCtx,
     sink: &Arc<dyn EventSink>,
 ) -> Result<StepOutcome, StepError> {
+    let Launch {
+        argv,
+        env,
+        params,
+        pass_env,
+    } = launch;
     let internal = |e: anyhow::Error| StepError::new(FailureKind::Data, e);
 
     let (prog, args) = argv
@@ -243,7 +257,8 @@ pub(crate) async fn run_subprocess(
         // If the runner dies (or a step future is dropped), don't
         // leave an orphaned download running.
         .kill_on_drop(true);
-    let named = params.map(env_vars_named_in).unwrap_or_default();
+    let mut named = params.map(env_vars_named_in).unwrap_or_default();
+    named.extend_from_slice(pass_env);
     datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Step, &named);
 
     // Every step is handed the runner's pipe, and reading EOF on it is
@@ -894,6 +909,7 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
             env: BTreeMap::new(),
             params: None,
+            pass_env: Vec::new(),
         }
     }
 
@@ -1295,6 +1311,7 @@ mod tests {
                     ],
                     env: BTreeMap::new(),
                     params: params.map(str::to_string),
+                    pass_env: Vec::new(),
                 },
             )
         };
@@ -1733,6 +1750,7 @@ mod tests {
                 ],
                 env: [("OVERRIDE_ME".to_string(), "step".to_string())].into(),
                 params: None,
+                pass_env: Vec::new(),
             },
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -1779,6 +1797,7 @@ mod tests {
                 ],
                 env: BTreeMap::new(),
                 params: Some(serde_json::json!({ "backup": { "key_env_var": NAMED } }).to_string()),
+                pass_env: Vec::new(),
             },
         );
         let g = Graph::build(vec![spec]).unwrap();
@@ -1819,6 +1838,7 @@ mod tests {
                     ],
                     env,
                     params: None,
+                    pass_env: Vec::new(),
                 },
             )
         };

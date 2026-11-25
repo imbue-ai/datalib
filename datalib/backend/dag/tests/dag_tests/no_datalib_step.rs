@@ -16,6 +16,10 @@ SHADOWED = "from-config"
 command = "./prep.sh"
 verbs = ["prepare"]
 
+[[programs]]
+command = "sh"
+pass_env = ["DATALIB_TEST_PASSED"]
+
 [[groups]]
 id = "src"
 type = "anything-at-all"
@@ -39,6 +43,7 @@ command = "./prep.sh"
 const FETCH: &str = r#"echo "fetch $#:$*" >> calls.log
 mkdir -p src/fetch
 printf '%s\n%s\n%s\n' "$DATALIB_DAG_PARAMS" "$GREETING" "$SHADOWED" > src/fetch/env
+echo "${DATALIB_TEST_PASSED:-unset}/${DATALIB_TEST_NOT_PASSED:-unset}" > src/fetch/passed
 "#;
 
 const RENDER: &str = r#"echo "render $#:$DATALIB_DAG_CHANGED_INPUTS" >> calls.log
@@ -46,7 +51,8 @@ mkdir -p src/render
 cp src/fetch/env src/render/env
 "#;
 
-const PREP: &str = "#!/bin/sh\necho \"prepared $*\" >> calls.log\nmkdir -p src/prepared\n";
+const PREP: &str = "#!/bin/sh\necho \"prepared $*\" >> calls.log\nmkdir -p src/prepared\n\
+                    echo \"${DATALIB_TEST_PASSED:-unset}\" > src/prepared/passed\n";
 
 /// The runner, copied alone into a directory of its own: the directory a
 /// step's `PATH` starts with when the config names no `binary_dir`.
@@ -75,6 +81,8 @@ fn dag(bin: &Path, root: &Path, args: &[&str]) -> Output {
         .arg(root)
         .args(rest)
         .env("PATH", PATH)
+        .env("DATALIB_TEST_PASSED", "passed")
+        .env("DATALIB_TEST_NOT_PASSED", "leaked")
         .env_remove("RUST_LOG")
         .output()
         .expect("run datalib-pipeline");
@@ -137,6 +145,16 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
         std::fs::read_to_string(root.join("src/render/env")).unwrap(),
         "{\"since\":\"2026-01-01\"}\nfrom-config\nfrom-step\n",
         "params as JSON, [env] below the step's own env"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("src/fetch/passed")).unwrap(),
+        "passed/unset\n",
+        "a variable reaches a step when its program's pass_env names it, and no other does"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("src/prepared/passed")).unwrap(),
+        "unset\n",
+        "another program's pass_env is not this one's"
     );
 
     // A reset of a step whose program takes no verbs: never invoked,

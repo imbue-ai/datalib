@@ -29,6 +29,7 @@ import { catalogForStep } from "./catalog";
 import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
+import { DATALIB_STEP_PASS_ENV } from "../generated/enums";
 
 /// Which wave a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the function part of its id.
@@ -1521,7 +1522,7 @@ export function withDeclarations(text: string): string {
     if (programs.has(program) || seen.has(program)) continue;
     seen.add(program);
     blocks.push(
-      `[[programs]]\ncommand = ${quote(program)}\nverbs = [${DATALIB_STEP_VERBS.map(quote).join(", ")}]`,
+      `[[programs]]\ncommand = ${quote(program)}\nverbs = [${DATALIB_STEP_VERBS.map(quote).join(", ")}]\npass_env = [${DATALIB_STEP_PASS_ENV.map(quote).join(", ")}]`,
     );
   }
   for (const step of steps) {

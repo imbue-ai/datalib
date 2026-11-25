@@ -40,7 +40,7 @@ fn bin_dir_with_fake_step(dir: &Path) -> PathBuf {
 }
 
 const PROGRAMS: &str = "[[programs]]\ncommand = \"datalib-step\"\n\
-    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\n\n";
+    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\npass_env = [\"DATALIB_CACHE_DIR\", \"MINDS_VIA_DESKTOP_URL_PREFIX\", \"DATALIB_EMBED_THREADS\"]\n\n";
 
 fn source(group: &str) -> String {
     format!(

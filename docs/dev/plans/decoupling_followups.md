@@ -4,8 +4,8 @@
 The step protocol redesign
 ([`completed/dag_and_step_decoupling.md`](completed/dag_and_step_decoupling.md),
 #1894) took `datalib-step` out of the runner. This file lists what that
-redesign left alone on purpose, so it is not forgotten. Done: item 5a,
-item 6, and of item 7 all but one constant. Untouched: items 2 to 5 and
+redesign left alone on purpose, so it is not forgotten. Done: items 5a,
+5b and 6, and of item 7 all but one constant. Untouched: items 2 to 5 and
 8, and the reconciler in section 10. Items 1 and 9 are half done.
 
 ## The end state
@@ -108,6 +108,16 @@ the variable's name into a WhatsApp or Signal source's params
 (`paramEntries` in `datalib/ui/src/config/sourceSteps.ts`), the
 unattended rewrite `backup_secrets.rs` names the default in an existing
 config that relies on it, and the server hands nothing by name.
+
+### 5b. The runner hands every step the variables datalib-step reads (done)
+
+`datalib_env` used to list, in `STEP_ALSO`, three variables only
+`datalib-step` reads (`DATALIB_CACHE_DIR`,
+`MINDS_VIA_DESKTOP_URL_PREFIX`, `DATALIB_EMBED_THREADS`), and the runner
+handed them to every step. Now a `[[programs]]` entry names the
+variables its steps get in `pass_env`; `datalib-step`'s entry names its
+three (`datalib_env::DATALIB_STEP_PASS_ENV`), and the unattended rewrite
+`program_pass_env.rs` writes them into an existing config.
 
 ## Where datalib-http and datalib-pipeline are not yet separate
 

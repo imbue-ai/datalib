@@ -167,12 +167,12 @@ const LATCHKEY_ALSO: &[&str] = &[
     "DATALIB_CURL_ROUTER",
 ];
 
-/// What a step reads beyond what latchkey does: where the fingerprint
-/// cache is, the URL prefix a Minds workspace routes some requests
-/// through, and how many threads `embed` takes. A switch only tests set
-/// (replayed HTTP, the search's pinned now) is on no list here: the test
-/// names it in [`DATALIB_CHILD_ENV`].
-const STEP_ALSO: &[&str] = &[
+/// The variables `datalib-step` reads from its environment beyond what
+/// every step is handed: where the fingerprint cache is, the URL prefix a
+/// Minds workspace routes some requests through, and how many threads
+/// `embed` takes. Its `[[programs]]` entry names them in `pass_env`; the
+/// runner knows them only from there.
+pub const DATALIB_STEP_PASS_ENV: &[&str] = &[
     "DATALIB_CACHE_DIR",
     "MINDS_VIA_DESKTOP_URL_PREFIX",
     DATALIB_EMBED_THREADS,
@@ -203,7 +203,7 @@ pub fn hands_down(name: &str, child: Child, also: &[String]) -> bool {
         || name.starts_with("LC_")
         || also.iter().any(|a| a == name)
         || match child {
-            Child::Step => latchkey(name) || STEP_ALSO.contains(&name),
+            Child::Step => latchkey(name),
             Child::Latchkey => latchkey(name),
             Child::Applet => APPLET_ALSO.contains(&name),
             Child::Modal => MODAL_ALSO.contains(&name),
@@ -311,9 +311,15 @@ mod tests {
 
     /// Tests cap the embedder's threads; dropped on the way down, a step's
     /// `embed` and the search applet would each spin four threads again.
+    /// A step gets it from `datalib-step`'s `pass_env`, and only from there.
     #[test]
     fn the_embedder_thread_cap_reaches_steps_and_applets() {
-        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
+        let pass_env: Vec<String> = DATALIB_STEP_PASS_ENV
+            .iter()
+            .map(|n| n.to_string())
+            .collect();
+        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Step, &pass_env));
+        assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
         assert!(hands_down(DATALIB_EMBED_THREADS, Child::Applet, &[]));
         assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Latchkey, &[]));
     }

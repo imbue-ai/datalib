@@ -80,3 +80,9 @@ export type WipeKind =
   | "compact"
   | "collect";
 
+/** `DATALIB_STEP_PASS_ENV in datalib/backend/env/src/lib.rs`. */
+export const DATALIB_STEP_PASS_ENV = [
+  "DATALIB_CACHE_DIR",
+  "MINDS_VIA_DESKTOP_URL_PREFIX",
+  "DATALIB_EMBED_THREADS",
+] as const;
