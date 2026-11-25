@@ -164,6 +164,9 @@ pub enum Retired {
     /// A `datalib-step` `[[programs]]` entry that names no `pass_env`
     /// (`program_pass_env.rs`).
     UnpassedStepEnv,
+    /// A `datalib-step` `[[programs]]` entry whose verbs leave out `check`
+    /// (`check_verb.rs`).
+    UncheckedParams,
 }
 
 /// Which retired shape this config is in, or `None` when it is already

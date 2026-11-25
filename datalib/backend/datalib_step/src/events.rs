@@ -29,6 +29,9 @@ pub struct Emitter {
     /// Set by a `--collect` or `--compact` that shrank the step's store:
     /// its size before and after, in bytes.
     store_bytes: Arc<Mutex<Option<(u64, u64)>>>,
+    /// Set by a `--check` that would run the step's params with these
+    /// warnings.
+    warnings: Arc<Mutex<Vec<String>>>,
 }
 
 impl Emitter {
@@ -38,6 +41,7 @@ impl Emitter {
             out: Arc::new(Mutex::new(std::io::stdout())),
             needs_rerun: Arc::default(),
             store_bytes: Arc::default(),
+            warnings: Arc::default(),
         }
     }
 
@@ -49,6 +53,10 @@ impl Emitter {
     pub fn needs_rerun(&self) {
         self.needs_rerun
             .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn warnings(&self, warnings: Vec<String>) {
+        *self.warnings.lock().unwrap() = warnings;
     }
 
     pub fn store_bytes(&self, before: u64, after: u64) {
@@ -98,6 +106,10 @@ impl Emitter {
                 "store_bytes".into(),
                 serde_json::json!({ "before": before, "after": after }),
             );
+        }
+        let warnings = self.warnings.lock().unwrap().clone();
+        if !warnings.is_empty() {
+            m.insert("warnings".into(), warnings.into());
         }
         if let Some(f) = failure {
             m.insert("failure".into(), f.as_str().into());

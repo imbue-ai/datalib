@@ -189,24 +189,29 @@ struct Run {
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-pipeline reset`: empty what the step wrote and do
     /// nothing else (`step_protocol.md` § Verbs).
-    #[arg(long, conflicts_with_all = ["prepare", "compact", "collect"])]
+    #[arg(long, conflicts_with_all = ["prepare", "compact", "collect", "check"])]
     reset: bool,
     /// Appended each time the runner starts: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
     /// and say when it cannot, or when a newer build wrote it
     /// (`step_protocol.md` § Verbs).
-    #[arg(long, conflicts_with_all = ["compact", "collect"])]
+    #[arg(long, conflicts_with_all = ["compact", "collect", "check"])]
     prepare: bool,
     /// Appended by `datalib-pipeline free-disk-space
     /// --drop-old-versions-on-derived-data`: fold the history of a store
     /// nothing reads the history of into one commit, collect any other,
     /// and give back the disk (`step_protocol.md` § Compact and collect).
-    #[arg(long, conflicts_with = "collect")]
+    #[arg(long, conflicts_with_all = ["collect", "check"])]
     compact: bool,
     /// Appended by `datalib-pipeline free-disk-space`: delete what no commit of the
     /// step's store reaches, keeping every commit.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "check")]
     collect: bool,
+    /// Appended by `datalib-pipeline check` and the app's config save: plan
+    /// the params a sync would, open and write nothing, and refuse them or
+    /// answer with warnings (`step_protocol.md` § Check).
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Subcommand)]
@@ -856,6 +861,13 @@ async fn run(
             }
             if run.collect {
                 return compact::run(&env, data_root, compact::Verb::Collect, emitter).await;
+            }
+            if run.check {
+                let params = source::params_from_env()?;
+                let warnings =
+                    check_params::check(&env, params, data_root).map_err(anyhow::Error::msg)?;
+                emitter.warnings(warnings);
+                return Ok(Vec::new());
             }
             let params = source::params_from_env()?;
             run_function(

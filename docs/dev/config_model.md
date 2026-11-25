@@ -14,7 +14,7 @@ complete config with every line commented.
 ```toml
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 [[locks]]
@@ -333,15 +333,18 @@ holds its method alone; a complete one sets every option of its method
 and may also hold the method it pairs with (Gmail's shows its Takeout).
 A test loads and plans every stanza.
 
-`datalib-step check-params <config>` plans the params of every step
-that runs `datalib-step run` the way a sync would, and prints one JSON
-line per step it would refuse. The server links no provider, so it asks:
-`PUT /api/config` and `POST /api/config/check`
-(`http/src/params_check.rs`) refuse to write a config a sync would
-refuse a step of, and show each answer as an ordinary `rejected`
-diagnostic at the misspelled key's line. `datalib-pipeline check` does not
-ask: the runner knows no program, so it checks only what the runner
-itself reads. Another program's params are never asked about.
+Neither the runner nor the server can read a step's params: they
+belong to its program. So both ask, through the `--check` verb
+(`step_protocol.md` § Check): `datalib-pipeline check`, `PUT
+/api/config` and `POST /api/config/check` invoke every step whose
+program takes the verb, `datalib-step`'s included
+(`datalib/backend/dag/src/check.rs`). A step that would refuse its
+params is an ordinary `rejected` diagnostic at the misspelled key's
+line: the save is refused and the check exits 2. A warning it answers
+with, such as one of the keys below that no longer do anything, is a
+`warning` there. `datalib-step check-params <config>` asks the same of
+every `datalib-step` step of a file at once, and prints one JSON line
+per step it would refuse.
 
 ## `Reach`: origin or local
 
@@ -742,6 +745,11 @@ the next would put the first back:
     where the fingerprint cache is, a Minds workspace's URL prefix and
     the embedder's thread cap. An entry written inline is refused,
     naming it, for a person to add the line.
+18. The `check` verb (`upgrade_check_verb`, `check_verb.rs`): a
+    `[[programs]]` entry for `datalib-step` whose `verbs` leave out
+    `check` gets it, so a save and `datalib-pipeline check` ask each of
+    its steps about its params. An entry with no `verbs` is left alone;
+    one whose `verbs` spans lines is refused, naming it.
 
 The wizard never gives a source `unified_index`,
 `unified_document_index`, `unified_grid_and_search_index` or

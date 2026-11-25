@@ -39,7 +39,7 @@ POLL_SECS = 0.2
 # the runner gives `datalib-step` no verbs and no locks of its own.
 PROGRAM_AND_LOCKS = """[[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 [[locks]]

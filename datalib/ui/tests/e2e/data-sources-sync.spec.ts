@@ -185,7 +185,7 @@ test.describe("a real sync, driven from the grid", () => {
 
 [[programs]]
 command = "${STEP_BIN}"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 [[groups]]

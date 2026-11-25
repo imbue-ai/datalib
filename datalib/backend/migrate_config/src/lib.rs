@@ -35,15 +35,17 @@
 //! `datalib-step run …` command, and the locks and `reads` the runner
 //! used to work out for it, and the file its `[[programs]]`, `[[locks]]`
 //! and `[env]`; then `backup_secrets.rs`: a WhatsApp or Signal
-//! ingest names the variable holding its backup secret; and last
+//! ingest names the variable holding its backup secret; then
 //! `program_pass_env.rs`: `datalib-step`'s `[[programs]]` entry names the
-//! variables of the runner's environment its steps read. Every rewrite
+//! variables of the runner's environment its steps read; and last
+//! `check_verb.rs`: that entry's `verbs` take `check`. Every rewrite
 //! after `convert.rs` is also one `datalib-http` makes by itself
 //! ([`UNATTENDED`]), and every one before `explicit_steps.rs` reads the
 //! shape from before it.
 
 pub mod aggregator_drop;
 pub mod backup_secrets;
+pub mod check_verb;
 pub mod conversation_settings;
 pub mod convert;
 pub mod explicit_steps;
@@ -129,6 +131,9 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if program_pass_env::is_retired(text)? {
         return Ok(LegacyFormat::UnpassedStepEnv);
     }
+    if check_verb::is_retired(text)? {
+        return Ok(LegacyFormat::UncheckedParams);
+    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -149,7 +154,8 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::SearchLockNames
         | LegacyFormat::InferredByTheRunner
         | LegacyFormat::UnnamedBackupSecret
-        | LegacyFormat::UnpassedStepEnv => text.to_string(),
+        | LegacyFormat::UnpassedStepEnv
+        | LegacyFormat::UncheckedParams => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -182,6 +188,11 @@ pub fn convert(text: &str) -> Result<String> {
     };
     let out = if program_pass_env::is_retired(&out)? {
         program_pass_env::rewrite(&out)?
+    } else {
+        out
+    };
+    let out = if check_verb::is_retired(&out)? {
+        check_verb::rewrite(&out)?
     } else {
         out
     };
@@ -322,6 +333,17 @@ pub fn upgrade_program_pass_env(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = program_pass_env::rewrite(text)?;
+    refuse_a_loss(text, &out, str::to_string)?;
+    Ok(Some(out))
+}
+
+/// Add `check` to `datalib-step`'s verbs (`check_verb.rs`). Refused,
+/// naming the program, when its `verbs` spans lines.
+pub fn upgrade_check_verb(text: &str) -> Result<Option<String>> {
+    if !check_verb::is_retired(text).unwrap_or(false) {
+        return Ok(None);
+    }
+    let out = check_verb::rewrite(text)?;
     refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
@@ -469,7 +491,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 17] = [
+pub const UNATTENDED: [Rewrite; 18] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -580,6 +602,12 @@ pub const UNATTENDED: [Rewrite; 17] = [
                environment its steps read (`pass_env`), since the runner no longer knows \
                them itself",
         run: upgrade_program_pass_env,
+    },
+    Rewrite {
+        why: "has a datalib-step `[[programs]]` entry whose verbs leave out `check`",
+        what: "datalib-step takes the `check` verb, so a save and `datalib-pipeline check` \
+               ask each of its steps whether a sync would accept its params",
+        run: upgrade_check_verb,
     },
 ];
 

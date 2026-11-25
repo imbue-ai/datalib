@@ -1,7 +1,8 @@
-//! `datalib-step check-params`: plan every datalib-step step's params in
-//! a config the way a sync would, and run nothing. The runner links no
-//! provider and cannot read params itself, so the app asks this when a
-//! config is saved; the example configs' tests hold to the same check.
+//! Plan a step's params the way a sync would, and run nothing: the answer
+//! to `run … --check` (`step_protocol.md` § Check), which the app sends on
+//! a save and `datalib-pipeline check` sends from a terminal; and
+//! `datalib-step check-params <config>`, the same for every datalib-step
+//! step of a file, which the example configs' tests hold to.
 
 use std::path::Path;
 
@@ -42,29 +43,51 @@ fn plan_step(
     let args = args.map_err(|e| format!("its command does not parse: {e}"))?;
     let env =
         StepEnv::new(step.id.clone(), &args, step.inputs.clone()).map_err(|e| format!("{e:#}"))?;
-    let mut params = match &step.params {
+    let params = match &step.params {
         Some(p) => serde_json::to_value(p).map_err(|e| format!("params → JSON: {e}"))?,
-        None => serde_json::json!({}),
+        None => serde_json::Value::Null,
+    };
+    check(&env, params, data_root).map(|_warnings| ())
+}
+
+/// Whether this step would run `params` as written: the warnings it would
+/// run with, such as a param that does nothing, or why it would refuse.
+/// `Null` params are a step that wrote none.
+pub fn check(
+    env: &StepEnv,
+    params: serde_json::Value,
+    data_root: &Path,
+) -> Result<Vec<String>, String> {
+    let wrote_none = params.is_null();
+    let mut params = if wrote_none {
+        serde_json::json!({})
+    } else {
+        params
     };
     let phase = match env.function {
         Function::RenderOccurrences => {
             return crate::occurrences::params(env.group_type.as_deref(), params)
-                .map(|_| ())
+                .map(|_| Vec::new())
                 .map_err(|e| format!("{e:#}"));
         }
         Function::Embed => {
-            let params = match &step.params {
-                Some(_) => params,
-                None => serde_json::Value::Null,
+            let params = if wrote_none {
+                serde_json::Value::Null
+            } else {
+                params
             };
             return crate::modal::params(params)
-                .map(|_| ())
+                .map(|_| Vec::new())
                 .map_err(|e| format!("{e:#}"));
         }
         Function::Ingest => Phase::Ingest,
         Function::RenderMarkdown => Phase::Render,
-        _ => return Ok(()),
+        _ => return Ok(Vec::new()),
     };
+    let warnings: Vec<String> = crate::methods::drop_inert_params(&mut params.clone())
+        .into_iter()
+        .map(|path| format!("`{path}` no longer does anything; delete it"))
+        .collect();
     // A diff group plans as its source's renderer, once `params.diff` is
     // taken off — the same split a run makes.
     let ty = if env.is_diff_group() {
@@ -77,7 +100,7 @@ fn plan_step(
     };
     let raw_dir = datalib_etl::layout::ingest_root(data_root, &env.group);
     dispatch::plan(ty, phase, &env.group, raw_dir, params)
-        .map(|_| ())
+        .map(|_| warnings)
         .map_err(|e| format!("{e:#}"))
 }
 
@@ -157,6 +180,29 @@ mod tests {
                 "{found:?}"
             );
         }
+    }
+
+    /// A param that does nothing any more is run without, and `--check`
+    /// says it can go.
+    #[test]
+    fn a_param_that_does_nothing_is_a_warning() {
+        let args = crate::source::RunArgs {
+            function: "ingest".into(),
+            group_type: Some("slack".into()),
+            source_type: None,
+        };
+        let env = StepEnv::new("slack/ingest".into(), &args, vec![]).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let params = serde_json::json!({
+            "api": { "channels": ["bridge"] },
+            "common": { "always_clear_before_ingest": true },
+        });
+        let warnings = super::check(&env, params, root.path()).unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("common.always_clear_before_ingest"),
+            "{warnings:?}"
+        );
     }
 
     #[test]

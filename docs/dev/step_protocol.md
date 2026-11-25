@@ -595,14 +595,15 @@ the log card that reads them: [`logging.md`](logging.md).
 ## Verbs
 
 Besides an ordinary run, the runner may invoke a step with one verb
-appended: `--reset`, `--prepare`, `--compact` or `--collect`. It sends
+appended: `--reset`, `--prepare`, `--compact`, `--collect` or
+`--check`. It sends
 one only to a step whose program declares it in a `[[programs]]` entry,
 so a program that ignores its arguments is never sent one:
 
 ```toml
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 ```
 
@@ -616,6 +617,7 @@ it:
 | `--reset` | someone resets the step | the runner deletes `<data_root>/<id>/` itself |
 | `--prepare` | each time the runner starts, before the step's first run | nothing |
 | `--compact`, `--collect` | someone asks to free disk space | nothing |
+| `--check` | someone saves a config, or runs `datalib-pipeline check` | the step's params are not checked before it runs |
 
 ## Reset
 
@@ -707,6 +709,31 @@ were drawn by another version, which its keyword pass reads again.
 `embedding_map` deletes a map this build does not read and answers
 `needs_rerun`, which lays it out afresh; `embed` has nothing to answer.
 Any of them refuses a store a newer build wrote.
+
+## Check
+
+`datalib-pipeline check`, and the app each time a config is saved, ask
+every step whose program takes the verb whether it would run its params
+as written, with `--check` appended and nothing yet run. The step
+reads its params as a run would, opens and writes nothing, and answers:
+
+* **runs as written**: exit 0. A key that does nothing, or anything
+  else that runs but is probably a mistake, goes in the outcome's
+  `warnings`, one sentence each, which the app and the check show at
+  the step's line and do not refuse.
+* **would refuse**: exit non-zero and say why on stderr, as a run that
+  fails does. Name the key serde's way (``unknown field `chanels` ``)
+  and the diagnostic points at that key's line. The app does not write
+  the config, and `datalib-pipeline check` exits 2.
+
+```json
+{"event":"outcome","warnings":["`period` no longer does anything; delete it"],"outputs":[]}
+```
+
+A step has thirty seconds to answer. Up to eight are asked at once.
+`datalib-step` plans the params as a run would: its provider's config
+schema, its method tables, and the keys that no longer do anything,
+which it runs without and names as warnings.
 
 ## Compact and collect
 
@@ -852,7 +879,7 @@ the ingest step carries the provider's download config (`common`
 envelope, the method table block, …), the render step only the render
 knobs (nothing for most providers; perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`). It
-honors `DATALIB_DAG_NOW` and the four verbs, which Datalib's configs
+honors `DATALIB_DAG_NOW` and the five verbs, which Datalib's configs
 declare for it in `[[programs]]`, beside the variables it reads where
 it runs (`pass_env`: where the fingerprint cache is, a Minds
 workspace's URL prefix, the embedder's thread cap;

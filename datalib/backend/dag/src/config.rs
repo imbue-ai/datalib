@@ -1356,7 +1356,7 @@ fn accept_programs(programs: &[ProgramEntry]) -> (BTreeMap<String, Program>, Vec
                     Severity::Warning,
                     format!(
                         "[[programs]] {command:?}: {word:?} is not a verb this runner sends \
-                         (reset, prepare, compact, collect); it is ignored"
+                         (reset, prepare, compact, collect, check); it is ignored"
                     ),
                 )),
             }

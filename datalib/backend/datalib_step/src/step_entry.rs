@@ -12,7 +12,7 @@ use crate::source::RunArgs;
 pub const PROGRAM: &str = "datalib-step";
 
 /// The verbs datalib-step takes, as its `[[programs]]` entry lists them.
-pub const VERBS: &[&str] = &["reset", "prepare", "compact", "collect"];
+pub const VERBS: &[&str] = &["reset", "prepare", "compact", "collect", "check"];
 
 /// The locks datalib-step's steps hold beyond the runner's own, with
 /// their slots. `index` bounds how many index steps run at once;

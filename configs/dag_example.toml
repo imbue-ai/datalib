@@ -334,7 +334,7 @@ DATALIB_STEP_MODAL_MAX_SANDBOXES = "100"
 # The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 # One embed at a time: each loads the model and writes the search index.

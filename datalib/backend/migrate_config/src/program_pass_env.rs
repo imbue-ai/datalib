@@ -76,6 +76,14 @@ fn quote(s: &str) -> String {
 /// Just past the last `key = value` line of the `[[programs]]` entry for
 /// `command`, when the entry is written under its own header.
 fn entry_end(text: &str, command: &str) -> Option<usize> {
+    entry_lines(text, command).map(|lines| lines.end)
+}
+
+/// From the start of the first `key = value` line to just past the last
+/// one, of the `[[programs]]` entry for `command`, when the entry is
+/// written under its own header.
+pub(crate) fn entry_lines(text: &str, command: &str) -> Option<std::ops::Range<usize>> {
+    let mut start = None;
     let mut in_programs = false;
     let mut found = false;
     let mut end = None;
@@ -88,7 +96,7 @@ fn entry_end(text: &str, command: &str) -> Option<usize> {
                 break;
             }
             in_programs = trimmed == "[[programs]]";
-            end = None;
+            (start, end) = (None, None);
             continue;
         }
         if !in_programs || trimmed.starts_with('#') {
@@ -97,12 +105,13 @@ fn entry_end(text: &str, command: &str) -> Option<usize> {
         let Some((key, value)) = trimmed.split_once('=') else {
             continue;
         };
+        start.get_or_insert(at - line.len());
         end = Some(at);
         if key.trim() == "command" && string_value(value).as_deref() == Some(command) {
             found = true;
         }
     }
-    end.filter(|_| found)
+    found.then_some(start?..end?)
 }
 
 fn string_value(toml_value: &str) -> Option<String> {
