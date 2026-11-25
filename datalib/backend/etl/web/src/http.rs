@@ -88,6 +88,9 @@ pub enum HttpService {
     Carddav,
     Chatgpt,
     Claude,
+    /// Discord's API (`discord.com/api`), and, as plain requests, the
+    /// signed file links it hands out (`cdn.discordapp.com`).
+    Discord,
     /// Garmin Connect (`connectapi.garmin.com`), a latchkey service by
     /// way of its Garmin plugin.
     Garmin,

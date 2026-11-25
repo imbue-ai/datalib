@@ -188,8 +188,7 @@ const LABELS: &str = "SELECT resource_name FROM google_contact_groups ORDER BY r
 const PHOTOS: &str = "SELECT b.held_version FROM google_photos p \
      JOIN google_photos_bookkeeping b ON b.id = p.id WHERE p.blake3 IS NOT NULL ORDER BY p.id";
 const PROBLEMS: &str = "SELECT scope_key FROM problems ORDER BY scope_key";
-const TOKEN: &str =
-    "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope LIKE '%:sync_token'";
+const TOKEN: &str = "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope LIKE '%:sync_token'";
 
 fn dirs(d: &tempfile::TempDir, n: usize) -> (Vec<PathBuf>, PathBuf) {
     let tapes: Vec<PathBuf> = (0..n).map(|i| d.path().join(format!("run{i}"))).collect();

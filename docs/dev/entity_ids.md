@@ -297,6 +297,7 @@ back by render as the natural key.
 | contacts | none — keyed on `addressbook#uid` | none — a card has no creation event |
 | email | `account_id` — the JMAP account, the Gmail address, or the mbox's configured id | emails |
 | facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
+| discord | none — a snowflake is unique across the service; a channel as a place and its conversation are two kinds | messages, reactions — the instant in the message's id |
 | garmin | none — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |

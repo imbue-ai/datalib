@@ -24,7 +24,7 @@ Three things to know before the rest:
 
 ## The same move chat-common makes
 
-Fourteen chat-like sources (email, Slack, WhatsApp, Signal, Messages,
+Fifteen chat-like sources (email, Slack, Discord, WhatsApp, Signal, Messages,
 the AI chats and more) each translate their raw rows into one neutral
 shape, `NormalizedChat`, and chat-common turns that into the document
 and its grid rows. People get the same treatment. A Slack profile, an
@@ -107,6 +107,7 @@ number. What that costs:
 | `email` | the address, lowercased | `Handle::email` (takes a `mailto:` too; the domain needs a dot) | `mailto:<address>` |
 | `tel` | E.164, `+` and digits | `Handle::tel` (a number written with its `+` and country code, any separators; `Handle::whatsapp_jid` for a `<number>@s.whatsapp.net`) | `tel:<number>` |
 | `slack` | `<team_id>/<user_id>` | `Handle::slack` | `slack://user?team=<team>&id=<user>` |
+| `discord` | an account's id, the digits of a snowflake: one across every server | `Handle::discord` | `datalib:handle/discord/<id>` |
 | `signal_aci` | a Signal account id, a lowercase dashed UUID | `Handle::signal_aci` | `datalib:handle/signal_aci/<uuid>` |
 | `facebook` | `name/<the name shown>`, its whitespace collapsed; or `deleted/<conversation id>` | `Handle::facebook_name`, `Handle::facebook_deleted` | `datalib:handle/facebook/<value>`, percent-encoded but for its `/`s |
 | `google` | `name/<the name shown>`, its whitespace collapsed | `Handle::google_name` | `datalib:handle/google/<value>`, percent-encoded but for its `/`s |
@@ -210,6 +211,7 @@ What each source has today:
 |---|---|---|
 | email | the From address | To, Cc and Bcc (the sender's copy) as recipients; an `@` or `+` mention, a `mailto:` link in the fresh part of an HTML body |
 | Slack | `slack:<team>/<user>` | a `<@U…>` mention in a body; each reaction's user; the profile's email, in the source contact |
+| Discord | `discord:<user id>`; a webhook's author has none | a `<@…>` mention in a body; the account's own reactions, since Discord names nobody else's; the profile's names and avatar, in the source contact |
 | WhatsApp | the sender's number, a linked id (`…@lid`) through `jid_map`, else the linked id itself (`whatsapp:<digits>`, labelled "WhatsApp user …" and its last four digits when nothing names it) | each reaction's sender |
 | Signal | the number, else the account id (ACI); a recipient known by PNI alone has none | a mention (a `mentionAci` body range), by number else ACI, written `@Name` in place of its `U+FFFC`; number and ACI together, in the source contact; one known by ACI alone reads as the dashed ACI. The ACI is read by its one path in the stored frame, and one that will not read is a problem on the recipient (`aci`, `CoercionFailed`), not a silent loss |
 | Messages | the number or Apple ID address | each tapback's |

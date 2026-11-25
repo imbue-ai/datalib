@@ -16,8 +16,10 @@ use datalib_etl::bulk::{bulk_upsert_in_tx, BulkUpsertable, EventBatch};
 use datalib_etl::doltlite_raw::{self as dr, bulk_upsert_with_tape, bulk_upsert_with_tape_split};
 use datalib_etl::event_tape::EventTape;
 use datalib_etl::read_marks::{self, ReadMarkRow};
+use datalib_etl::sweep::Sweeps;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{Fetched, Listed, Outcome};
+use datalib_time::IsoOffsetTimestamp;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -69,30 +71,11 @@ impl RawDb {
         key: &str,
         now: &DateTime<Utc>,
     ) -> Result<Option<chrono::Duration>> {
-        let scope = format!("slack:sweep:{key}");
-        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind(&scope)
-            .fetch_optional(self.pool())
-            .await
-            .context("select manifest sweep marker")?;
-        let Some(row) = row else { return Ok(None) };
-        let s: String = row
-            .try_get("last_seen_at_utc")
-            .context("read manifest sweep timestamp")?;
-        let dt = datalib_time::parse_strict(&s)
-            .with_context(|| format!("parse manifest sweep timestamp {s:?}"))?
-            .inner()
-            .with_timezone(&Utc);
-        Ok(Some(*now - dt))
+        SWEEPS.age(self.pool(), key, &stamp(now)?).await
     }
 
     pub async fn forget_manifest_sweep(&self, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-            .bind(format!("slack:sweep:{key}"))
-            .execute(self.pool())
-            .await
-            .context("forget manifest sweep marker")?;
-        Ok(())
+        SWEEPS.forget(self.pool(), key).await
     }
 
     pub async fn record_manifest_sweep(&self, key: &str, now: &DateTime<Utc>) -> Result<()> {
@@ -1025,10 +1008,13 @@ pub async fn record_sweep<'e>(
     key: &str,
     now: &DateTime<Utc>,
 ) -> Result<()> {
-    let scope = format!("slack:sweep:{key}");
-    dr::upsert_scope_state(db, &scope, &now.to_rfc3339())
-        .await
-        .context("record manifest sweep marker")
+    SWEEPS.record(db, key, &stamp(now)?).await
+}
+
+const SWEEPS: Sweeps = Sweeps::new("slack");
+
+fn stamp(now: &DateTime<Utc>) -> Result<IsoOffsetTimestamp> {
+    IsoOffsetTimestamp::try_from(now.fixed_offset()).context("the run's now")
 }
 
 /// The `coverage` scope of one channel's history.

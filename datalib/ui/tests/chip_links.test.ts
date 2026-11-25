@@ -17,6 +17,7 @@ describe("handleFromUri / uriFromHandle", () => {
       ["email:riker@enterprise.org", "mailto:riker@enterprise.org"],
       ["tel:+15550123456", "tel:+15550123456"],
       ["slack:T01/U02", "slack://user?team=T01&id=U02"],
+      ["discord:175928847299117063", "datalib:handle/discord/175928847299117063"],
       [
         "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c",
         "datalib:handle/signal_aci/0195683a-d140-87f9-bdf6-234da6d6880c",

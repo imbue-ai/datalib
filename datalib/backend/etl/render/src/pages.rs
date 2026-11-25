@@ -25,6 +25,12 @@ impl PageSize {
     };
 }
 
+/// `f` to its end, from a render's synchronous code on the step's own
+/// runtime.
+pub fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
+}
+
 /// The raw table and text column whose values are a render's render unit keys.
 #[derive(Debug, Clone, Copy)]
 pub struct KeyColumn {

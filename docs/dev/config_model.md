@@ -213,7 +213,7 @@ its own `path`. Each type declares its own:
 
 | type | methods |
 |---|---|
-| baby_connect, garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
+| baby_connect, discord, garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
 | chatgpt, claude | `api`, `export` |
 | contacts | `google`, `fastmail`, `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox`, `apple_mail` |
@@ -267,7 +267,7 @@ naming one is refused as an unknown field.
 
 | method | keys, and unset | what the window bounds | a record the window leaves behind |
 |---|---|---|---|
-| slack `api` | `since`: everything | a message's time | stays |
+| discord `api`, slack `api` | `since`: everything | a message's time | stays |
 | claude `api`, chatgpt `api` | `since`: everything | a conversation's last update | stays |
 | email `gmail` | `since`: everything | `after:` on the listing walk | stays |
 | todoist `api` | `since`: the day the account joined | a task's completion time | stays |

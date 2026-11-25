@@ -1,0 +1,845 @@
+---
+source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
+expression: text
+---
+=== discord 00000000-0000-8024-aee0-35567749fc78 Shift rota
+--- chunk 0
+title: Shift rota | text: Worf — Wed 1 May 2024 09:23
+
+I will take every night shift.
+
+
+=== discord 00000000-0000-819f-bfc9-e60c29ea0b58 The temporal rift
+--- chunk 0
+title: The temporal rift | text: William T. Riker — Wed 1 May 2024 09:15
+
+William T. Riker started this thread from a message
+
+
+--- chunk 1
+title: The temporal rift | text: Geordi La Forge — Wed 1 May 2024 09:16
+
+Chroniton flux is climbing. Readings attached.
+
+📎 aft_array.csv — 249 B
+
+📎 phase_variance.lua — 291 B
+
+
+--- chunk 2
+title: The temporal rift | text: Data — Wed 1 May 2024 09:18
+
+```python
+flux = [r for r in readings if r > 0.1]
+```
+
+Three of twelve readings exceed the threshold.
+
+
+--- chunk 3
+title: The temporal rift | text: Jean-Luc Picard — Wed 1 May 2024 09:20
+
+Thank you. @Geordi La Forge, with me.
+
+
+=== discord 00000000-0000-82dc-95aa-b8d918b45636 @William T. Riker
+--- chunk 0
+title: @William T. Riker | text: William T. Riker — Wed 1 May 2024 08:00
+
+Ready when you are, sir.
+
+
+--- chunk 1
+title: @William T. Riker | text: Jean-Luc Picard — Wed 1 May 2024 08:01
+
+Number One, you have the bridge.
+
+
+--- chunk 2
+title: @William T. Riker | text: William T. Riker — Wed 1 May 2024 08:02
+
+William T. Riker started a call
+
+
+--- chunk 3
+title: @William T. Riker | text: Jean-Luc Picard — Wed 1 May 2024 08:30
+
+The chair suits you.
+
+earth_from_orbit.jpg
+
+
+=== discord 00000000-0000-8387-a510-ccc8e6476ff4 Barclay's project
+--- chunk 0
+title: Barclay's project | text: Broccoli — Wed 1 May 2024 12:01
+
+P-please don't tell the others yet.
+
+
+--- chunk 1
+title: Barclay's project | text: Geordi La Forge — Wed 1 May 2024 12:02
+
+Not a word, Reg. It's good work.
+
+
+=== discord 00000000-0000-83b3-8b09-3604c54dd3b3 A second litter box for Spot
+--- chunk 0
+title: A second litter box for Spot | text: Data — Wed 1 May 2024 13:00
+
+Spot's present accommodation is insufficient. Evidence attached.
+
+spot.png
+
+
+--- chunk 1
+title: A second litter box for Spot | text: Worf — Wed 1 May 2024 13:10
+
+I will not be feeding it.
+
+Sticker: Glare
+
+
+--- chunk 2
+title: A second litter box for Spot | text: Jean-Luc Picard — Wed 1 May 2024 13:12
+
+Approved. Make it so.
+
+
+=== discord 00000000-0000-8411-8428-07abf21ffdd3 Let me fly the ship
+--- chunk 0
+title: Let me fly the ship | text: Wesley Crusher — Mon 15 Apr 2024 10:00
+
+Just the once. I have a diagram.
+
+
+--- chunk 1
+title: Let me fly the ship | text: William T. Riker — Mon 15 Apr 2024 10:05
+
+No.
+
+
+=== discord 00000000-0000-841f-941a-22c8572d7a71 @Deanna Troi, Beverly Crusher
+--- chunk 0
+title: @Deanna Troi, Beverly Crusher | text: Beverly Crusher — Tue 30 Apr 2024 09:00
+
+Captain, your physical is overdue.
+
+
+--- chunk 1
+title: @Deanna Troi, Beverly Crusher | text: Deanna Troi — Tue 30 Apr 2024 09:01
+
+*Very* overdue.
+
+
+--- chunk 2
+title: @Deanna Troi, Beverly Crusher | text: Jean-Luc Picard — Tue 30 Apr 2024 09:30
+
+I find that I am needed on the bridge.
+
+
+=== discord 00000000-0000-84bc-80b9-a67d23ddcb74 @deleted_user_47988
+--- chunk 0
+title: @deleted_user_47988 | text: deleted_user_47988 — Tue 30 Apr 2024 11:00
+
+Do not go back through it.
+
+
+=== discord 00000000-0000-870e-abe4-247f6190bf94 #ten-forward
+--- chunk 0
+title: #ten-forward | text: William T. Riker — Wed 1 May 2024 19:00
+
+Poker, 2100, my quarters. Bring replicator credits.
+
+
+--- chunk 1
+title: #ten-forward | text: Data — Wed 1 May 2024 23:40
+
+A full house. I am told that I should have *concealed my satisfaction*.
+
+full_house.png
+
+
+--- chunk 2
+title: #ten-forward | text: Worf — Wed 1 May 2024 23:41
+
+> ↪ Data A full house. I am told that I should have *concealed my satisfaction*.
+
+I demand a rematch.
+
+
+--- chunk 3
+title: #ten-forward | text: Deanna Troi — Thu 2 May 2024 18:00
+
+Nobody tell @Jean-Luc Picard!
+
+SPOILER_captains_cake.png
+
+
+--- chunk 4
+title: #ten-forward | text: William T. Riker — Thu 2 May 2024 18:05
+
+🔊 voice-message.ogg — 6.7 KiB
+
+
+--- chunk 5
+title: #ten-forward | text: Beverly Crusher — Thu 2 May 2024 18:06
+
+Was that a message or a trombone?
+
+Sticker: Facepalm
+
+
+--- chunk 6
+title: #ten-forward | text: William T. Riker — Thu 2 May 2024 18:07
+
+*This* is a trombone.
+
+🔊 trombone_practice.mp3 — 16.8 KiB
+
+
+--- chunk 7
+title: #ten-forward | text: Lwaxana Troi 💐 — Thu 2 May 2024 18:10
+
+<https://example.com/gifs/dancing-valet>
+
+
+--- chunk 8
+title: #ten-forward | text: Lwaxana Troi 💐 — Thu 2 May 2024 18:12
+
+<https://example.com/mr-homn.png>
+
+
+--- chunk 9
+title: #ten-forward | text: Guinan — Thu 2 May 2024 18:15
+
+日本語 · ελληνικά · עברית · tlhIngan Hol 🖖🏽👩‍🚀
+
+
+--- chunk 10
+title: #ten-forward | text: deleted_user_47988 — Thu 2 May 2024 18:20
+
+I was never here.
+
+
+--- chunk 11
+title: #ten-forward | text: Worf — Thu 2 May 2024 18:30
+
+…
+
+
+--- chunk 12
+title: #ten-forward | text: Data — Fri 3 May 2024 08:00
+
+**Ode to Spot**  
+Felis catus is your taxonomic nomenclature,  
+an endothermic quadruped, carnivorous by nature.
+
+Sticker: Cat
+
+
+--- chunk 13
+title: #ten-forward | text: Geordi La Forge — Fri 3 May 2024 08:05
+
+> ↪ Data **Ode to Spot**
+
+It's… long, Data.
+
+
+--- chunk 14
+title: #ten-forward | text: Ship's Computer — Fri 3 May 2024 08:06
+
+> ↪ Data **Ode to Spot**
+
+Translated: *meow.*
+
+
+--- chunk 15
+title: #ten-forward | text: Wesley Crusher — Fri 3 May 2024 08:10
+
+> Forwarded:
+>
+> The local date is Wed May 1st, 2024 at 09:05, a Wednesday. The rift opened Wed May 1st, 2024 at 08:00.
+>
+> > Captain's query: can we return?
+>
+> The probability is `0.0127`.
+
+
+=== discord 00000000-0000-882f-8e1b-4f2c65dd2cfe @Ship's Computer
+--- chunk 0
+title: @Ship's Computer | text: Ship's Computer — Tue 30 Apr 2024 12:00
+
+Please state the nature of your inquiry.
+
+> **Help**
+>
+> Say `locate`, then a name.
+
+
+=== discord 00000000-0000-88dc-9673-98f058735e2a #bridge
+--- chunk 0
+title: #bridge | text: William T. Riker — Sun 28 Apr 2024 08:00
+
+William T. Riker joined the server
+
+
+--- chunk 1
+title: #bridge | text: Data — Sun 28 Apr 2024 08:01
+
+Data joined the server
+
+
+--- chunk 2
+title: #bridge | text: Worf — Sun 28 Apr 2024 08:02
+
+Worf joined the server
+
+
+--- chunk 3
+title: #bridge | text: Jean-Luc Picard — Wed 1 May 2024 09:00
+
+**Standing orders**  
+We are in orbit of Earth, in **2024**. Until the rift is understood:
+
+1. No subspace traffic. *None.*
+2. No technology leaves the ship.
+3. @Data has the calendar; @Deanna Troi has the crew.
+
+Temporal Prime Directive, section 7
+
+
+--- chunk 4
+title: #bridge | text: Jean-Luc Picard — Wed 1 May 2024 09:01
+
+Jean-Luc Picard pinned a message
+
+
+--- chunk 5
+title: #bridge | text: William T. Riker — Wed 1 May 2024 09:02
+
+> ↪ Jean-Luc Picard **Standing orders**
+
+Understood. Away teams are grounded.
+
+
+--- chunk 6
+title: #bridge | text: Data — Wed 1 May 2024 09:05
+
+The local date is Wed May 1st, 2024 at 09:05, a Wednesday. The rift opened Wed May 1st, 2024 at 08:00.
+
+> Captain's query: can we return?
+
+The probability is `0.0127`.
+
+
+--- chunk 7
+title: #bridge | text: Ship's Computer — Wed 1 May 2024 09:06
+
+> Ship's Computer · **Condition Yellow**
+>
+> All decks, stand by. Set by @Worf.
+>
+> - **Shields** **100%**
+> - **Decks sealed** 4  
+>   10  
+>   36 to 38
+> - **Cause** `temporal rift`, unexplained
+>
+> Voice authorization required
+
+
+--- chunk 8
+title: #bridge | text: Worf — Wed 1 May 2024 09:07
+
+@everyone @Away Team to #bridge. Run /condition before you leave your station.
+
+
+--- chunk 9
+title: #bridge | text: Deanna Troi — Wed 1 May 2024 09:08
+
+I sense ~~fear~~ curiosity. ||And something very old.||
+
+
+--- chunk 10
+title: #bridge | text: Data — Wed 1 May 2024 09:10
+
+Earth, from 400 kilometres. I have annotated nothing, as requested.
+
+earth_from_orbit.jpg
+
+
+--- chunk 11
+title: #bridge | text: William T. Riker — Wed 1 May 2024 09:22
+
+William T. Riker started a thread: Shift rota
+
+
+--- chunk 12
+title: #bridge | text: William T. Riker — Wed 1 May 2024 09:30
+
+Poll: Where do we land the shuttle?
+- Golden Gate Park (5)
+- Montana (2)
+- La Barre (1)
+
+
+--- chunk 13
+title: #bridge | text: William T. Riker — Thu 2 May 2024 09:30
+
+Poll closed: Where do we land the shuttle?
+- Golden Gate Park (5 of 8)
+
+
+--- chunk 14
+title: #bridge | text: Sensor Relay 7 — Thu 2 May 2024 10:00
+
+Contact bearing 047 mark 8: one (1) weather balloon.
+
+
+--- chunk 15
+title: #bridge | text: Ship's Computer — Thu 2 May 2024 10:05
+
+**Duty roster**
+
+Alpha: @William T. Riker  
+Beta: @Data
+
+
+--- chunk 16
+title: #bridge | text: Worf — Thu 2 May 2024 10:06
+
+That message is gone. I do not approve.
+
+
+--- chunk 17
+title: #bridge | text: Data — Thu 2 May 2024 10:10
+
+Escapes, for the archive: *not bold*, <script>alert('no')</script>, | a | table |, #### four, x, 5 * 4 * 3, snake_case_name and C:\holodeck\3.
+
+
+--- chunk 18
+title: #bridge | text: Guinan — Thu 2 May 2024 10:15
+
+You should read <https://example.com/rift>, @Jean-Luc Picard, or the short version, or this one>). See guide and <https://example.com/a,b>.
+
+
+--- chunk 19
+title: #bridge | text: Data — Thu 2 May 2024 10:20
+
+> Tea,  
+> Earl Grey,
+>
+> - hot
+> - in this century
+>   - or any
+
+
+--- chunk 20
+title: #bridge | text: Q *the* <b>Omnipotent</b> — Thu 2 May 2024 10:25
+
+Miss me, mon capitaine? :delta: :warp_spin:
+
+
+--- chunk 21
+title: #bridge | text: Q *the* <b>Omnipotent</b> — Thu 2 May 2024 10:26
+
+*snap*
+
+
+=== discord 00000000-0000-8907-97e7-9af627f4eb3d #bridge
+--- chunk 0
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:00
+
+Wesley Crusher joined the server
+
+
+--- chunk 1
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:01
+
+Kobayashi Maru, Tuesday. Who's in?
+
+
+--- chunk 2
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:02
+
+Wesley Crusher boosted the server
+
+
+--- chunk 3
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:03
+
+Wesley Crusher boosted the server
+
+
+--- chunk 4
+title: #bridge | text: Boothby — Wed 10 Apr 2024 09:04
+
+Boothby followed USS Enterprise #captains-log into this channel
+
+
+--- chunk 5
+title: #bridge | text: Boothby — Wed 10 Apr 2024 09:05
+
+Boothby noted a change in the server's discovery listing
+
+
+--- chunk 6
+title: #bridge | text: Ship's Computer — Wed 10 Apr 2024 09:06
+
+Ship's Computer was reminded to invite people
+
+
+--- chunk 7
+title: #bridge | text: Q *the* <b>Omnipotent</b> — Wed 10 Apr 2024 09:07
+
+> AutoMod stopped this message (No commerce: latinum)
+>
+> buy gold-pressed latinum at ferengi.example
+
+
+--- chunk 8
+title: #bridge | text: AutoMod — Wed 10 Apr 2024 09:08
+
+AutoMod noted a change in the server's safety settings
+
+
+--- chunk 9
+title: #bridge | text: AutoMod — Wed 10 Apr 2024 09:09
+
+AutoMod noted a change in the server's safety settings
+
+
+--- chunk 10
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:10
+
+Wesley Crusher noted a subscription
+
+
+--- chunk 11
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:11
+
+Wesley Crusher noted an app subscription
+
+
+--- chunk 12
+title: #bridge | text: Wesley Crusher — Wed 10 Apr 2024 09:12
+
+Wesley Crusher noted a purchase
+
+
+=== discord 00000000-0000-899d-bf1b-325112d123ec #captains-log
+--- chunk 0
+title: #captains-log | text: Jean-Luc Picard — Wed 1 May 2024 21:00
+
+**Captain's log, supplemental.** The crew has taken to this century's habits with alarming ease. Mr. La Forge has discovered podcasts.
+
+📎 captains_log.pdf — 1.5 KiB
+
+
+--- chunk 1
+title: #captains-log | text: Jean-Luc Picard — Thu 2 May 2024 21:00
+
+The rift narrows by 3% each day. We leave within the month, or not at all.
+
+
+=== discord 00000000-0000-89bb-b2a4-7601eda1cc26 #main-engineering
+--- chunk 0
+title: #main-engineering | text: Geordi La Forge — Wed 1 May 2024 11:00
+
+Core's holding. Ignore the glow, the glow is *fine*.
+
+warp_core.webp
+
+red_alert.gif
+
+
+--- chunk 1
+title: #main-engineering | text: Geordi La Forge — Wed 1 May 2024 11:05
+
+Full flux log, it was too long to paste:
+
+📎 message.txt — 2.3 KiB
+
+📎 tricorder_dump.zip — 504 B
+
+
+--- chunk 2
+title: #main-engineering | text: Data — Wed 1 May 2024 11:10
+
+The whole holodeck recording, for comparison.
+
+🎞 *[holodeck_program_9.mov (not yet fetched)]*
+
+
+--- chunk 3
+title: #main-engineering | text: Broccoli — Wed 1 May 2024 11:12
+
+I, uh, d-deleted the wrong file.
+
+🖼 *[diagnostic_scan.png (not yet fetched)]*
+
+
+--- chunk 4
+title: #main-engineering | text: Geordi La Forge — Wed 1 May 2024 11:20
+
+<https://example.com/starfleet/enterprise/pull/47>
+
+> Starfleet Forge · geordi · **Re-route the plasma conduits #47**
+>
+> Closes the loop that has been closing itself since stardate 45652.1. Reviewed by Data.
+
+
+--- chunk 5
+title: #main-engineering | text: Wesley Crusher — Wed 1 May 2024 11:25
+
+<https://example.com/watch?v=warp>
+
+> Period Video · Z. Cochrane · **Warp theory in ten minutes**
+
+
+=== discord 00000000-0000-8a10-8ec5-822eef1c98c2 #Theater
+--- chunk 0
+title: #Theater | text: Data — Fri 3 May 2024 19:00
+
+Data started a stage: An Evening of Spot
+
+
+--- chunk 1
+title: #Theater | text: Wesley Crusher — Fri 3 May 2024 19:01
+
+Wesley Crusher became a speaker
+
+
+--- chunk 2
+title: #Theater | text: Data — Fri 3 May 2024 19:10
+
+Data changed the stage's topic to An Evening of Spot, abridged
+
+
+--- chunk 3
+title: #Theater | text: William T. Riker — Fri 3 May 2024 19:12
+
+Bravo. *Is it over?*
+
+
+--- chunk 4
+title: #Theater | text: Data — Fri 3 May 2024 19:30
+
+Data ended a stage: An Evening of Spot, abridged
+
+
+=== discord 00000000-0000-8ab9-aecb-bacd8a8fb87a #grounds
+--- chunk 0
+title: #grounds | text: Boothby — Thu 11 Apr 2024 07:00
+
+The roses do not care what century it is.
+
+
+--- chunk 1
+title: #grounds | text: Jean-Luc Picard — Thu 11 Apr 2024 07:30
+
+I carved initials into an elm here, once. Or will.
+
+
+=== discord 00000000-0000-8b5c-a08d-2838d888d69e Transporter 3 calibration
+--- chunk 0
+title: Transporter 3 calibration | text: Miles O'Brien — Sat 20 Apr 2024 12:01
+
+Pattern buffer's off by a hair. A *literal* hair.
+
+
+--- chunk 1
+title: Transporter 3 calibration | text: Geordi La Forge — Sat 20 Apr 2024 12:30
+
+Whose?
+
+
+=== discord 00000000-0000-8bba-b3b7-86f74408e81f #senior-staff
+--- chunk 0
+title: #senior-staff | text: Beverly Crusher — Wed 1 May 2024 22:00
+
+Eleven crew with hay fever. *Hay fever.* I had to look it up.
+
+
+--- chunk 1
+title: #senior-staff | text: William T. Riker — Wed 1 May 2024 22:02
+
+> ↪ Beverly Crusher Eleven crew with hay fever. *Hay fever.* I had to look it up.
+
+Can you treat it?
+
+
+--- chunk 2
+title: #senior-staff | text: Beverly Crusher — Wed 1 May 2024 22:03
+
+> ↪ William T. Riker Can you treat it?
+
+With a hypospray? Yes. With anything on this planet? Not well.
+
+
+--- chunk 3
+title: #senior-staff | text: William T. Riker — Wed 1 May 2024 22:10
+
+So nobody can claim they missed it.
+
+> Forwarded:
+>
+> **Standing orders**  
+> We are in orbit of Earth, in **2024**. Until the rift is understood:
+>
+> 1. No subspace traffic. *None.*
+> 2. No technology leaves the ship.
+> 3. @Data has the calendar; @Deanna Troi has the crew.
+>
+> Temporal Prime Directive, section 7
+
+
+--- chunk 4
+title: #senior-staff | text: Deanna Troi — Wed 1 May 2024 22:12
+
+> Forwarded:
+>
+> Earth, from 400 kilometres. I have annotated nothing, as requested.
+
+earth_from_orbit.jpg
+
+
+=== discord 00000000-0000-8c9b-8eba-a14693148f5b #Holodeck 3
+--- chunk 0
+title: #Holodeck 3 | text: Broccoli — Fri 3 May 2024 20:00
+
+Is anyone u-using the holodeck?
+
+
+--- chunk 1
+title: #Holodeck 3 | text: Geordi La Forge — Fri 3 May 2024 20:01
+
+All yours, Reg. **Safeties on.**
+
+
+=== discord 00000000-0000-8db4-be4b-b499290baa11 Log: discussion
+--- chunk 0
+title: Log: discussion | text: Deanna Troi — Wed 1 May 2024 21:05
+
+Deanna Troi started this thread from a message
+
+
+--- chunk 1
+title: Log: discussion | text: Deanna Troi — Wed 1 May 2024 21:06
+
+Shall we talk about the podcasts?
+
+
+=== discord 00000000-0000-8dd8-a539-f770864341aa Three Musketeers, with fewer Musketeers
+--- chunk 0
+title: Three Musketeers, with fewer Musketeers | text: Broccoli — Wed 1 May 2024 14:00
+
+A holodeck program in which nobody is d-demoted.
+
+
+--- chunk 1
+title: Three Musketeers, with fewer Musketeers | text: Deanna Troi — Wed 1 May 2024 14:20
+
+Reg, shall we discuss this on Thursday?
+
+
+=== discord 00000000-0000-8e45-b7d4-aad6c3661846 discord storage
+--- chunk 0
+title: discord storage | text: Source: discord
+
+# discord — storage
+
+Measured Tue Apr 15th, 2369 at 00:00.
+
+| Kind | Step | What | Size | Count | Id |
+| Source Size | ingest | `discord/ingest` | <size> | 3 files | `00000000` |
+| Store | ingest | `discord/ingest/blobs.sqlite` | <size> |  | `00000000` |
+| Table | ingest | `discord/ingest/blobs.sqlite#cas_objects` |  | 14 rows | `00000000` |
+| Store | ingest | `discord/ingest/entities.doltlite_db` | <size> |  | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#account` |  | 1 row | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#channels` |  | 32 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#coverage` |  | 29 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#discord_attachments` |  | 18 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#guilds` |  | 2 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#members` |  | 2 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#messages` |  | 112 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#roles` |  | 5 rows | `00000000` |
+| Table | ingest | `discord/ingest/entities.doltlite_db#users` |  | 17 rows | `00000000` |
+
+=== discord 00000000-0000-8e94-9c06-b7dad21b31e7 The nebula, on approach
+--- chunk 0
+title: The nebula, on approach | text: Data — Thu 2 May 2024 15:00
+
+Two seconds of it, at twelve frames.
+
+🎞 nebula_approach.mp4 — 25.0 KiB
+
+
+--- chunk 1
+title: The nebula, on approach | text: Guinan — Thu 2 May 2024 15:04
+
+Prettier from the window.
+
+
+=== discord 00000000-0000-8ea0-b5c0-7f964ea8cc6c @Guinan
+--- chunk 0
+title: @Guinan | text: Guinan — Thu 2 May 2024 23:00
+
+Trust the rift, Picard. It's been here before.
+
+
+--- chunk 1
+title: @Guinan | text: Jean-Luc Picard — Thu 2 May 2024 23:05
+
+Have you?
+
+
+=== discord 00000000-0000-8ee0-a1e7-353c20e683a0 Poker Night
+--- chunk 0
+title: Poker Night | text: William T. Riker — Mon 29 Apr 2024 20:00
+
+William T. Riker added Worf
+
+
+--- chunk 1
+title: Poker Night | text: William T. Riker — Mon 29 Apr 2024 20:01
+
+William T. Riker renamed the conversation to Poker Night
+
+
+--- chunk 2
+title: Poker Night | text: Data — Mon 29 Apr 2024 20:02
+
+Data changed the conversation's icon
+
+
+--- chunk 3
+title: Poker Night | text: Geordi La Forge — Mon 29 Apr 2024 20:05
+
+Deal me out, shift until 0300.
+
+
+--- chunk 4
+title: Poker Night | text: Geordi La Forge — Mon 29 Apr 2024 20:06
+
+Geordi La Forge left
+
+
+--- chunk 5
+title: Poker Night | text: William T. Riker — Mon 29 Apr 2024 20:07
+
+William T. Riker removed Q *the* <b>Omnipotent</b>
+
+
+--- chunk 6
+title: Poker Night | text: Worf — Mon 29 Apr 2024 20:10
+
+Deuces are for children. And *no* Q.
+
+
+--- chunk 7
+title: Poker Night | text: William T. Riker — Mon 29 Apr 2024 20:30
+
+Poll: Stakes?
+- Chips
+- Shifts (3)

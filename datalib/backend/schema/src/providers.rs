@@ -53,6 +53,8 @@ pub enum Provider {
     /// the same render unit as the data it measures.
     /// See `datalib_step::introspect`.
     Datalib,
+    /// Discord: the channels, threads and direct messages an account reads.
+    Discord,
     /// All three download modes — JMAP, Gmail API, mbox — write this
     /// one tag. Named for the thing, not for whichever protocol a
     /// particular mirror happens to use.
@@ -113,6 +115,7 @@ impl Provider {
             Provider::Codex => "Codex",
             Provider::Contacts => "Contacts",
             Provider::Datalib => "datalib",
+            Provider::Discord => "Discord",
             Provider::Email => "Email",
             Provider::Facebook => "Facebook",
             Provider::Garmin => "Garmin",

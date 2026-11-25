@@ -48,6 +48,7 @@ pub enum ProbeList {
     Addressbooks,
     Teams,
     Projects,
+    Servers,
 }
 
 impl ProbeList {
@@ -159,6 +160,8 @@ pub enum ProbeItemKind {
     /// A Linear project. `path` is its name, which a `projects` filter
     /// matches exactly.
     Project,
+    /// A Discord server. `path` is its id; its name rides in `title`.
+    Server,
 }
 
 impl ProbeItemKind {

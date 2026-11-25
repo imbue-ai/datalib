@@ -1425,6 +1425,7 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   addressbooks: ["address_book"],
   teams: ["team"],
   projects: ["project"],
+  servers: ["server"],
 };
 
 /// What a `probe:` field should offer, given what its list loaded.

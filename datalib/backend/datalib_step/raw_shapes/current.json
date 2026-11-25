@@ -227,6 +227,40 @@
       "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
     ]
   },
+  "discord": {
+    "schema_hash": "6dfd90833b98c4ede6ecc518db699eb0b6a266206d0ee7f8273083a0625711e9",
+    "schema_version": 0,
+    "shared_schema_version": 1,
+    "sql": [
+      "CREATE TABLE account( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE account_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE channels( id TEXT PRIMARY KEY, payload TEXT NULL, guild_id TEXT NULL, parent_id TEXT NULL, kind INTEGER NULL)",
+      "CREATE TABLE channels_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX channels_by_parent ON channels(parent_id)",
+      "CREATE TABLE coverage(scope TEXT NOT NULL, lo TEXT NOT NULL, hi TEXT NOT NULL, PRIMARY KEY(scope, lo))",
+      "CREATE TABLE discord_attachments( id TEXT PRIMARY KEY, message_key TEXT NOT NULL, attachment_id TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
+      "CREATE TABLE discord_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX discord_attachments_by_attachment_id ON discord_attachments(attachment_id, blake3)",
+      "CREATE INDEX discord_attachments_by_message_key ON discord_attachments(message_key)",
+      "CREATE INDEX discord_attachments_owed ON discord_attachments(message_key) WHERE blake3 IS NULL",
+      "CREATE TABLE guilds( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE guilds_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE members( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE members_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE TABLE messages( id TEXT PRIMARY KEY, payload TEXT NULL, channel_id TEXT NOT NULL)",
+      "CREATE TABLE messages_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX messages_by_channel ON messages(channel_id, id)",
+      "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
+      "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
+      "CREATE TABLE roles( id TEXT PRIMARY KEY, payload TEXT NULL, guild_id TEXT NOT NULL)",
+      "CREATE TABLE roles_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
+      "CREATE INDEX roles_by_guild ON roles(guild_id)",
+      "CREATE TABLE sync_runs( run_id INTEGER PRIMARY KEY AUTOINCREMENT, started_at_utc TEXT NOT NULL, finished_at_utc TEXT NULL, tz_offset TEXT NULL, config TEXT NOT NULL, status TEXT NOT NULL, summary TEXT NULL)",
+      "CREATE TABLE sync_scope_state( scope TEXT PRIMARY KEY, last_seen_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+      "CREATE TABLE users( id TEXT PRIMARY KEY, payload TEXT NULL)",
+      "CREATE TABLE users_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)"
+    ]
+  },
   "email": {
     "schema_hash": "ed3595e34b0583507363ed83279e459e883dd5eda28bc6b32765064c830a5de0",
     "schema_version": 9,

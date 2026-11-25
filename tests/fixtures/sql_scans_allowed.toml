@@ -1341,3 +1341,58 @@ why = "Reads every row by design: the statement has no WHERE."
 statement = "SELECT uri AS ref_id, blake3 FROM media_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
+
+[[scan]]
+statement = "SELECT DISTINCT channel_id FROM messages WHERE channel_id IS NOT NULL ORDER BY channel_id LIMIT ?1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "A full render pages through every conversation, by design; a narrowed pass names its conversations."
+
+[[scan]]
+statement = "SELECT attachment_id, MAX(blake3) FROM discord_attachments WHERE blake3 IS NOT NULL GROUP BY attachment_id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
+
+[[scan]]
+statement = "SELECT a.id, a.message_key, a.attachment_id, json(m.payload) AS payload, json(b.volatile_payload) AS volatile FROM discord_attachments a INDEXED BY discord_attachments_owed LEFT JOIN messages m ON m.id = a.message_key LEFT JOIN messages_bookkeeping b ON b.id = a.message_key WHERE a.blake3 IS NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Once per run: it walks a partial index holding the owed edges alone, and it wants every one of them."
+
+[[scan]]
+statement = "SELECT id, json(payload) FROM account WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "One row."
+
+[[scan]]
+statement = "SELECT id, json(payload) FROM channels WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "A render reads this lookup table whole on every pass to name what it draws: one row per channel, thread and direct message, few beside the messages."
+
+[[scan]]
+statement = "SELECT id, json(payload) FROM guilds WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "A render reads this lookup table whole on every pass to name what it draws: one row per server copied, few beside the messages."
+
+[[scan]]
+statement = "SELECT id, json(payload) FROM roles WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "A render reads this lookup table whole on every pass to name what it draws: one row per role of a server copied, few beside the messages."
+
+[[scan]]
+statement = "SELECT id, json(payload) FROM users WHERE payload IS NOT NULL ORDER BY id"
+files = ["*/ingest/entities.doltlite_db"]
+why = "A render reads this lookup table whole on every pass to name what it draws: one row per person a message names, few beside the messages."
+
+[[scan]]
+statement = "DELETE FROM account WHERE id <> ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "One row, or two as another account signs in."
+
+[[scan]]
+statement = "DELETE FROM account_bookkeeping WHERE id <> ?"
+files = ["*/ingest/entities.doltlite_db"]
+why = "One row, or two as another account signs in."
+
+[[scan]]
+statement = "WITH RECURSIVE c(id) AS ( SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel UNION ALL SELECT (SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel WHERE channel_id > c.id) FROM c WHERE c.id IS NOT NULL) SELECT id FROM c WHERE id IS NOT NULL"
+files = ["*/ingest/entities.doltlite_db"]
+why = "What is walked is the recursion's own rows, one per conversation; each is found by a seek past the one before it."

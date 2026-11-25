@@ -112,7 +112,8 @@ export type ProbeNoun =
   | "calendars"
   | "addressbooks"
   | "teams"
-  | "projects";
+  | "projects"
+  | "servers";
 
 /// One answer to a section's question. Choosing it writes `sets` and
 /// shows `fields` under it; the fields of the answers not chosen are
@@ -468,6 +469,158 @@ export const CATALOG: CatalogEntry[] = [
         help:
           "An offset such as +1d: copy only this long after each message that involves you. " +
           "Empty copies up to now.",
+      },
+    ],
+  },
+  {
+    type: "discord",
+    method: "api",
+    label: "Discord",
+    blurb: "Copy your direct messages and the servers you choose.",
+    keywords: ["discord", "chat", "server", "channels", "threads", "dms", "messages"],
+    kind: "api",
+    icon: "discord",
+    defaultName: "discord",
+    nameHint: "Personal Discord",
+    wizard: true,
+    intro:
+      "Datalib reads Discord as you, through your own sign-in. Discord forbids automating a " +
+      "personal account and may close one it catches, so decide whether that risk is worth it. " +
+      "A sync only reads, one request at a time.",
+    credentialService: "discord",
+    credentialConnectWarning: "Discord may close an account it catches being automated.",
+    // latchkey's own example is a bot's, which sees no direct messages
+    // and may not list threads.
+    credentialPaste: {
+      headers: ["Authorization: {secret}"],
+      help:
+        "Your own account's token: the Authorization header of any request a signed-in " +
+        "discord.com tab makes. A bot's token does not work here.",
+    },
+    canProbe: true,
+    sections: [
+      {
+        heading: "Which servers?",
+        answers: [
+          { label: "None, only my direct messages", sets: { "api.all_servers": false } },
+          {
+            label: "Only the servers I choose",
+            sets: { "api.all_servers": false },
+            fields: ["api.servers", "api.channels"],
+          },
+          {
+            label: "Every server I'm in",
+            help: "A first sync of a big public server takes hours.",
+            sets: { "api.all_servers": true },
+          },
+        ],
+      },
+      { heading: "Threads and forum posts", fields: ["api.threads"] },
+      {
+        heading: "Direct messages?",
+        answers: [
+          { label: "All my direct messages", sets: { "api.dms": true } },
+          {
+            label: "Only the conversations I choose",
+            sets: { "api.dms": true },
+            fields: ["api.dm_conversations"],
+          },
+          { label: "Leave them out", sets: { "api.dms": false } },
+        ],
+      },
+      {
+        heading: "How far back?",
+        answers: [
+          { label: "Everything", help: "Discord hands over 100 messages at a time." },
+          { label: "Only messages since a date I choose", fields: ["api.since"] },
+        ],
+      },
+      { heading: "Files people shared", fields: ["api.media", "common.blob_size_limit_bytes"] },
+    ],
+    fields: [
+      {
+        kind: "string_list",
+        probe: "servers",
+        target: "api.servers",
+        label: "Servers",
+      },
+      {
+        kind: "string_list",
+        probe: "channels",
+        target: "api.channels",
+        label: "Only these channels",
+        help: "Empty copies every channel you can read. A category copies the channels in it.",
+      },
+      {
+        kind: "bool",
+        target: "api.all_servers",
+        label: "Copy every server",
+        default: false,
+      },
+      {
+        kind: "bool",
+        target: "api.threads",
+        label: "Copy them",
+        default: true,
+      },
+      {
+        kind: "bool",
+        target: "api.dms",
+        label: "Copy direct messages",
+        default: true,
+      },
+      {
+        kind: "string_list",
+        probe: "conversations",
+        target: "api.dm_conversations",
+        requires: "api.dms",
+        label: "Conversations",
+        help: "A link to a conversation works too.",
+      },
+      {
+        kind: "date",
+        target: "api.since",
+        label: "Start date",
+        help: "Choosing an earlier date later brings in the older messages on the next sync.",
+      },
+      {
+        kind: "bool",
+        target: "api.media",
+        label: "Download them",
+        default: true,
+        help: "Off keeps each file's name and details, without the file.",
+      },
+      {
+        kind: "bytes",
+        target: "common.blob_size_limit_bytes",
+        requires: "api.media",
+        label: "Skip files bigger than",
+        default: 5_000_000,
+        help: "Clear the number for no limit; raising it later brings in the files it skipped.",
+      },
+      {
+        kind: "int",
+        target: "api.refresh_window_days",
+        label: "Edit-catcher window (days)",
+        help:
+          "Re-reads the trailing N days of conversations that already have history, for edits, " +
+          "reactions and deletions. Not a range bound. Empty is 7; 0 turns it off.",
+      },
+      {
+        kind: "int",
+        target: "api.refresh_every_minutes",
+        label: "Re-read that window every (minutes)",
+        help:
+          "How long after the last re-read a sync re-reads a conversation's window again. New " +
+          "messages are fetched on every sync either way. Empty is 360; 0 re-reads every sync.",
+      },
+      {
+        kind: "int",
+        target: "api.list_every_hours",
+        label: "List roles and threads every (hours)",
+        help:
+          "How long after the last listing a sync lists a server's roles and a channel's threads " +
+          "again. Empty is 6; 0 lists them every sync.",
       },
     ],
   },

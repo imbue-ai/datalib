@@ -11,6 +11,36 @@ ai_model:gpt-5	gpt-5
 ai_model:gpt-5.2-codex	gpt-5.2-codex
 ai_model:gpt-5.3-codex	gpt-5.3-codex
 ai_model:gpt-5.6-terra	gpt-5.6-terra
+discord:170100000000000001	Jean-Luc Picard
+discord:170100000000000001	jlpicard
+discord:170100000000000002	William T. Riker
+discord:170100000000000002	wtriker
+discord:170100000000000003	Data
+discord:170100000000000003	soong_type
+discord:170100000000000004	Deanna Troi
+discord:170100000000000004	dtroi
+discord:170100000000000005	Worf
+discord:170100000000000005	worf.of.mogh
+discord:170100000000000006	Geordi La Forge
+discord:170100000000000006	geordi
+discord:170100000000000007	Beverly Crusher
+discord:170100000000000007	bevcrusher
+discord:170100000000000008	Guinan
+discord:170100000000000008	guinan
+discord:170100000000000009	Wesley Crusher
+discord:170100000000000009	wesley_c
+discord:170100000000000010	Broccoli
+discord:170100000000000011	Miles O'Brien
+discord:170100000000000011	transporter3
+discord:170100000000000012	Ship's Computer
+discord:170100000000000013	Q *the* <b>Omnipotent</b>
+discord:170100000000000013	q
+discord:170100000000000014	Lwaxana Troi 💐
+discord:170100000000000014	lwaxana_troi
+discord:170100000000000015	deleted_user_47988
+discord:170100000000000016	Boothby
+discord:170100000000000016	boothby
+discord:170100000000000017	AutoMod
 email:annika.hansen@raven.fed	Seven of Nine
 email:beverly.crusher@enterprise.starfleet.invalid	Beverly Crusher
 email:brand@starfleet.test	Admiral Brand
@@ -38,6 +68,7 @@ email:locutus@unicomplex.borg	Locutus of Borg
 email:picard@enterprise.starfleet	Captain Picard
 email:picard@enterprise.starfleet	Jean-Luc Picard
 email:picard@enterprise.starfleet	Jean-Luc Picard <picard@enterprise.starfleet>
+email:picard@enterprise.starfleet	jlpicard
 email:picard@enterprise.starfleet	picard
 email:picard@enterprise.test	Jean-Luc Picard
 email:prizes@quarks.example	Quark's Bar
@@ -135,6 +166,8 @@ chatgpt-api	email:data@enterprise.starfleet.test
 chatgpt-api	me:self
 claude-api	email:jlpicard@enterprise.starfleet.test
 claude-api	me:self
+discord	discord:170100000000000001
+discord	email:picard@enterprise.starfleet
 facebook	email:picard@enterprise.starfleet
 facebook	facebook:name/Jean-Luc Picard
 github	github:jlpicard
