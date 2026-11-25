@@ -1,6 +1,6 @@
 # Contacts: a simpler UI
 
-*Proposal (2026-11-24, revised 2026-11-25 after Thad's notes on it);
+*Proposal (2026-11-24, revised 2026-11-25 after Thad's notes and answers);
 nothing here is built. What the screens do was seen by using the TNG
 demo. The numbers are counts from copies of real libraries and from one
 real address book. If this is agreed, it replaces
@@ -99,10 +99,10 @@ is still blue and everyone else grey.
    keeps its own tabs is given the new pin once, as the first three
    were.
 2. **Everyone else**, a tab beside it: the people the sources know whom
-   you have not added, with the same columns and sorts. Select rows,
-   *Add to contacts*. Nothing on it is a contact until you say so.
-   Senders you or an agent marked *not real* are left out, with a switch
-   to show them.
+   you have not added, with the same columns and sorts, the most frequent
+   first. Select rows, *Add to contacts*. Nothing on it is a contact until
+   you say so. Senders you or an agent marked *not real* are left out,
+   with a switch to show them.
 3. **A person's page**, one page whether or not they are a contact:
 
    ```
@@ -113,6 +113,7 @@ is still blue and everyone else grey.
       ☑ U_PICARD                        slack
       ☑ Jean-Luc Picard                 facebook
       [ Add to contacts ]   or add to… ▾        Everything with them
+        ↑ focused: double-click, then Enter, adds them
 
    ▸ tng_contacts (seen here)   Captain, Starfleet
    ▸ slack                      also called Captain Picard · 4 items
@@ -126,10 +127,31 @@ is still blue and everyone else grey.
    its heading for the person's page, with every handle on the card
    ticked. In the address book's list, select rows and *Add to contacts*
    to bring over many at once.
-5. **Suggestions** replace Review: a banner on Contacts, there only when
-   an agent's suggestions wait. "12 suggestions" opens them as cards
-   ("These two are Will Riker, because …"), each with *Yes* and *No*,
-   and *Yes to all* for one run of an agent.
+5. **Suggestions** replace Review (§"Agents suggest"): a banner on
+   Contacts, there only when an agent's suggestions wait. "12
+   suggestions" opens them as cards ("These two are Will Riker, because
+   …"), each with *Yes* and *No*, and *Yes to all* for one run of an
+   agent.
+
+## Agents suggest
+
+**What an agent proposed is never drawn as what you said.** Today an
+agent's contact is in your list, and blue on every chip, before you have
+looked at it. Instead:
+
+- **Until you say Yes it is a suggestion.** It is not in Contacts and not
+  in `with:contact:<id>`. Its chips stay grey, and the person's page says
+  "claude suggests these 3 are one person, because …", with *Yes* and
+  *No*.
+- **Once you say Yes it is yours**, and the page can still say who
+  suggested it. The rows already hold this: `agent`, `reason`, and
+  `reviewed_at_utc`, empty until a person looks. No shape changes.
+- **No is remembered**, as *Not theirs* is.
+- **A suggestion holds nothing.** Adding a handle an agent only suggested
+  for someone else asks nothing, and takes it out of that suggestion.
+
+In the library below, 202 of 210 contacts become suggestions, and their
+chips go grey, until *Yes to all*.
 
 ## Shared handles
 
@@ -160,17 +182,26 @@ Picards.
 
 ## Numbers without a country code
 
-Today `(202) 555-0101` is kept as text and reaches nobody, rather than
-being given a country by guess. Instead, a source that holds numbers
-typed by hand (an address book, an SMS backup) gets one setting: **the
-country its numbers are in when they do not say**. Set, its render reads
-them as that country's, so the card joins the same handle as the texts.
-Unset, nothing changes. A number that is not valid there stays text.
+Today `(202) 555-0101` on a card is kept as text and reaches nobody,
+rather than being given a country by guess. Nothing is set anywhere to
+change that; **the library says which number it is.** When you add
+someone, a number like that is compared with every full number a source
+knows, by its digits less any leading zero. `+1 202 555 0101` ends in
+the same digits, so it is offered as theirs, ticked, with the card's
+spelling beside it. With two matches, in two countries, both are
+offered unticked. With none, the number stays text: no source has a
+message from it, so a handle would reach nothing.
 
-That needs each country's rules for dialling prefixes (a leading 0 is
-dropped in France and kept in Italy), which is a library's job: a port
-of Google's libphonenumber, if its license passes `deny.toml`. Setting
-it renders that one source again.
+In the real address book, each of the 7 numbers matched exactly one of
+the 19 full numbers two real libraries know, and no two of the 19 could
+be confused. That is a small sample.
+
+The match also runs the other way: the page for `+1 202 555 0101` shows
+the card under "same digits", so a card with nothing but that number is
+found at all. For that the index keeps such a number's digits beside the
+handles, which is a rebuild of the index and no render; and a card with
+no handle gets a chip naming the card itself, where its heading is plain
+text today.
 
 ## What goes, what stays
 
@@ -193,13 +224,14 @@ An agent made the rest, and nobody has reviewed any of it.
 | `real` | stays, shown as *Hide this sender*; other labels go |
 | *This is me* | stays, on the page's menu |
 | merging | stays, from the list and now from the page |
-| fields, drafts, copying from a source | go: the page shows what each source says, and the name and note save as you type |
+| details you type in, and their drafts | to decide (below) |
 | "no longer works" dates | go |
 | group contacts and members | go: a shared handle needs no group |
-| a photo of your own | goes; a source's photo is drawn |
+| a photo of your own | to decide (below) |
 
-A table goes only where its root has no rows in it, and the rung that
-drops one refuses otherwise and says how to export it.
+A table that goes (`members`) goes only where its root has no rows in
+it, and the rung that drops one refuses otherwise and says how to export
+it.
 
 ## How many, and when last
 
@@ -222,31 +254,37 @@ Each step stands alone; the first two change no stored data.
 1. **Clicks, place and words.** A click does nothing but select, the box
    and the "+" go, Contacts is pinned, the page loses its data-model
    sentences.
-2. **Adding the whole person**: the ticked handles, adding many rows from
-   an address book, a page for a contact with no handle.
+2. **Adding the whole person**: the ticked handles, numbers without a
+   country code, adding many rows from an address book, a page for a
+   contact with no handle.
 3. **Shared handles**, with the store's rung.
 4. **The list**: the three sorts, and *Everyone else*.
-5. **Numbers without a country code.**
-6. **Suggestions.**
-7. **What goes, goes**, with the store's rung, the routes and
+5. **Suggestions.**
+6. **What goes, goes**, with the store's rung, the routes and
    [`contacts_app.md`](../../user/contacts_app.md).
+
+## Decided
+
+- A double-click on someone not in your contacts opens their page with
+  *Add to contacts* focused; it adds nobody.
+- What an agent proposed is kept apart from what a person said, and is
+  not a contact until a Yes.
+- *Everyone else* is wanted, sorted by frequency and recency.
+- No country is set anywhere for phone numbers.
 
 ## To decide
 
-1. **Does a double-click on someone not in your contacts add them?**
-   Proposed: no. It opens their page with *Add to contacts* focused, so
-   double-click then Enter adds them. A double-click that added would
-   put a spammer you only wanted to look at in your contacts, and
-   opening a card never writes (`AGENTS.md`, "Card source is data").
-2. **Is an agent's contact yours before you say Yes?** Today it is listed
-   and draws on chips at once. Proposed: no, since that fills your
-   contacts for you. The cost: 202 of the 210 contacts above turn into
-   suggestions, and their chips go grey, until *Yes to all*.
-3. **Is *Everyone else* wanted**, or is adding from chips and address
-   books enough? Proposed: wanted; sorted by frequency it is where the
-   fifty people you hear from most get added.
-4. **Do fields and photos of your own go?** Proposed: yes, as nobody has
-   used either, knowing that writing contacts back to CardDAV
-   ([`contact_editing.md`](contact_editing.md)) would need fields again.
-5. **One country for the library, or one per source?** Proposed: per
-   source, so that changing it renders only that source.
+**Does a contact hold anything besides a name, a note and handles?**
+Today it can, and nobody has used it. Under *Your contact*, *Edit* opens
+a form where you type details of your own: a phone, an address, a
+birthday, a title, each with a label. They are lines of text on the
+contact, apart from its handles: typing a number there does not make its
+texts theirs. Beside each source, *Copy to …* copies what that source
+says into the same form. *Set photo…* puts a picture of your own on the
+contact.
+
+Proposed: take the form, *Copy to …* and *Set photo…* off the page. What
+a source says is already on it, a photo comes from a source, and
+anything else goes in the note. Their tables stay in the store, empty,
+so either can come back; writing contacts to a CardDAV address book
+([`contact_editing.md`](contact_editing.md)) would need the details.
