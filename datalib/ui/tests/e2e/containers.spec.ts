@@ -97,6 +97,13 @@ test("an open of a pinned tab's card shows that tab", async ({ page }) => {
   await expect(tabs(page)).toHaveCount(4);
 });
 
+test("Contacts, in a library with no contacts app, says how to add one", async ({ page }) => {
+  await page.goto("/");
+  await tabs(page).filter({ hasText: "Contacts" }).click();
+  await expect(mainCards(page).locator(".contacts-absent")).toContainText("has no contacts app");
+  await expect(mainCards(page).locator(".contacts-error")).toHaveCount(0);
+});
+
 test("a tab is pinned from its menu and unpinned by its pin", async ({ page }) => {
   await page.goto("/");
   await expect(mainCards(page)).toHaveCount(5);
