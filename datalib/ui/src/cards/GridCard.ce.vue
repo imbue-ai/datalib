@@ -155,7 +155,8 @@ import { pushToast } from "@/toasts";
 import type { CardCtx } from "./types";
 import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
-const { fetchGroups, fetchIndexState, fetchRows, muteProblems } = useApi();
+const api = useApi();
+const { fetchIndexState, muteProblems } = api;
 
 /// A row of whichever table the card pages: a search row's fields where
 /// it is one, and nothing is assumed of any of them.
@@ -189,7 +190,20 @@ const props = defineProps<{
   // The search is one source's, drawn in that source's card: no row of
   // every source's chips to narrow it by.
   oneSource?: boolean;
+  // Terms every search here is held to, kept out of the box: the place of
+  // the library's tree this card shows (`library.ts::scopeOf`).
+  scope?: string;
+  // The document that place is, when it is one.
+  lead?: string;
 }>();
+
+/// `q` as it is asked: held to the card's scope.
+const inScope = (q: string) => (props.scope ? `${props.scope} ${q}`.trim() : q);
+type AfterQuery<F> = F extends (url: string, q: string, ...rest: infer R) => unknown ? R : never;
+const fetchRows = <R,>(of: string, q: string, ...rest: AfterQuery<typeof api.fetchRows>) =>
+  api.fetchRows<R>(of, inScope(q), ...rest);
+const fetchGroups = <R,>(q: string, by: string, signal: AbortSignal, of: string) =>
+  api.fetchGroups<R>(inScope(q), by, signal, of);
 
 const url = props.url ?? SEARCH;
 // The search itself, not another table that pages the way it does.
@@ -225,7 +239,12 @@ let tableBehind = false;
 
 props.ctx.setHelp(
   isSearch
-    ? `
+    ? `${
+        props.scope
+          ? `<p>What is directly in this part of your library, newest first. What you type
+searches within it.</p>`
+          : ""
+      }
 <p>Type what you are looking for. Plain words find the ids, people, titles and names a row
 answers to, the words anywhere in a document, and documents about the same thing whatever
 words they use, all merged into one list, best match first. Add <code>semantic:off</code> to
@@ -2535,7 +2554,7 @@ onBeforeUnmount(() => {
           class="search-input"
           testid="grid-search-input"
           :open-card="(source: string) => props.ctx.host.openCards(source)"
-          autofocus
+          :autofocus="!scope"
         />
         <button
           v-if="query.length > 0"
@@ -2597,9 +2616,12 @@ onBeforeUnmount(() => {
       v-if="listSeen"
       v-show="view === 'list'"
       :ctx="ctx"
-      :query="settledQuery"
+      :query="inScope(settledQuery)"
       :active="view === 'list'"
       :sort="sortOrder"
+      :within="scope ? name : null"
+      :lead="lead ?? null"
+      :nothing="scope && 'Nothing is directly in here. Look in the places below it.'"
       @answered="searchEcho = $event"
     />
 

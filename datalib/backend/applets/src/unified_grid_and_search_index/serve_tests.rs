@@ -436,6 +436,56 @@ fn children_list_a_sources_places() {
         "without places=true the account lists its threads too: {body}"
     );
     assert!(body["children"][0].get("places_below").is_none(), "{body}");
+
+    let (status, body) = get(port, "/sources_with_places", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let sources: Vec<&str> = body["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert!(sources.contains(&"tng_email"), "{body}");
+    for source in &sources {
+        let (_, body) = get(
+            port,
+            &format!("/children/source:{source}?places=true"),
+            Some(SECRET),
+        );
+        assert_ne!(body["children"][0], serde_json::Value::Null, "{source}");
+    }
+
+    // A label's list is the threads filed under it, each once.
+    let inbox = places.iter().find(|p| p["name"] == "Inbox").unwrap();
+    let at = format!(
+        "/search?q=at:{}%20is:document",
+        inbox["uuid"].as_str().unwrap()
+    );
+    let (status, body) = get(port, &at, Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let mut listed: Vec<&str> = body["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["uuid"].as_str().unwrap())
+        .collect();
+    let (_, filed) = get(
+        port,
+        &format!("/children/{}?limit=1000", inbox["uuid"].as_str().unwrap()),
+        Some(SECRET),
+    );
+    let mut filed: Vec<&str> = filed["children"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["uuid"].as_str().unwrap())
+        .collect();
+    listed.sort();
+    filed.sort();
+    assert!(
+        !listed.is_empty() && listed == filed,
+        "{listed:?} {filed:?}"
+    );
     child.kill().ok();
 }
 

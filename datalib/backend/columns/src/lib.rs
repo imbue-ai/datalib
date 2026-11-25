@@ -198,6 +198,8 @@ pub enum KeyValues {
     /// A person: a handle, drawn as the person's chip, or text that
     /// matches part of a handle or a name.
     Person,
+    /// A node of the library's tree, by its uuid or the link to it.
+    Node,
     /// A date or a moment, `before:` and `after:`.
     Stamp,
 }
