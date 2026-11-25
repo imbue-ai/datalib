@@ -140,13 +140,20 @@ runner's crate (`datalib/backend/dag/src/config.rs:357`). Either the
 runner treats `[[applets]]` as a section that belongs to another
 program and only skips it, or applets move to a file of their own.
 
-Two helpers for applets also still live in the runner's crate, though
-the runner no longer uses them: `write_params_file` and
-`PARAMS_FILE_FLAG` (`datalib/backend/dag/src/subprocess.rs`), which the
-gateway and the probe use to hand a program its params in a file, and
+The two helpers the gateway and the probe use to hand a program its
+params in a file, `write_params_file` and `PARAMS_FILE_FLAG`, have moved
+out of the runner's crate to `datalib/backend/http/src/params_file.rs`.
 `applet_type` (`datalib/backend/dag/src/written.rs`), which knows that
-`datalib-applet <type>` names an applet's type. They move with the
-applets.
+`datalib-applet <type>` names an applet's type, stays with the rest of
+the config file's lenient reading until applets move.
+
+`datalib_dag::config` is more than the runner's: it is the model of the
+config file every program reads. `datalib-step` links it
+(`datalib/backend/datalib_step/src/append.rs`, `check_params.rs`), so do
+`datalib-migrate-config` and the server. So a third way to settle this
+item is to split that model (`config`, `diagnostics`, `written`,
+`config_order`) into a crate of its own, which the runner, the server
+and `datalib-step` link, and leave `[[applets]]` in it.
 
 ## When the decoupling is done
 

@@ -720,13 +720,13 @@ impl Supervisor {
             Some(params) => {
                 let json = serde_json::to_string(&params)
                     .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?;
-                let file = datalib_dag::subprocess::write_params_file(
+                let file = crate::params_file::write_params_file(
                     data_root,
                     &format!("applet_{}", entry.id),
                     &json,
                 )
                 .map_err(|e| format!("applet {:?}: params file: {e:#}", entry.id))?;
-                cmd.arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
+                cmd.arg(crate::params_file::PARAMS_FILE_FLAG)
                     .arg(file.path());
                 Some(file)
             }

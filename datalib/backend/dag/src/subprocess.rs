@@ -63,47 +63,6 @@ impl Shrink {
     }
 }
 
-/// The flag a step's params arrive on: the path of a JSON file holding
-/// the entry's `params` subtree. A file rather than an argument because
-/// params carry tokens, and argv is readable by every user on the
-/// machine; the file is created `0600` and removed when the step exits.
-pub const PARAMS_FILE_FLAG: &str = "--params-file";
-
-/// Where the runner puts those files, under the data root.
-pub const PARAMS_DIR_REL_PATH: &str = "system/params";
-
-/// Write `json` to a fresh owner-only file under `<data_root>/system/params`.
-/// The file lives as long as the returned handle.
-pub fn write_params_file(
-    data_root: &std::path::Path,
-    step_id: &str,
-    json: &str,
-) -> anyhow::Result<tempfile::NamedTempFile> {
-    use std::io::Write;
-    let dir = data_root.join(PARAMS_DIR_REL_PATH);
-    let mut builder = std::fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder
-        .create(&dir)
-        .with_context(|| format!("create {}", dir.display()))?;
-    // `tempfile` creates with `O_EXCL` and mode 0600, so the file is
-    // never readable by anyone else, not even between create and write.
-    let mut file = tempfile::Builder::new()
-        .prefix(&format!("{}.", step_id.replace('/', "_")))
-        .suffix(".json")
-        .tempfile_in(&dir)
-        .with_context(|| format!("create a params file in {}", dir.display()))?;
-    file.write_all(json.as_bytes())
-        .and_then(|()| file.flush())
-        .with_context(|| format!("write {}", file.path().display()))?;
-    Ok(file)
-}
-
 /// The final stdout line a subprocess step may emit.
 #[derive(Debug, Default, Deserialize)]
 struct WireOutcome {

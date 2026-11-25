@@ -57,6 +57,7 @@ rust_library(
         "src/manage/summary.rs",
         "src/oauth_client.rs",
         "src/packages.rs",
+        "src/params_file.rs",
         "src/plugins.rs",
         "src/probe.rs",
         "src/prometheus.rs",
