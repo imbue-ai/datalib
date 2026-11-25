@@ -1076,8 +1076,7 @@ are read whole, up front. Email and Slack render this way, and so do
 Claude Code and Codex (`datalib_etl_agent_sessions_render::render_paged`),
 which size a page by how many records it holds, counted from the index
 without reading one. The other renders still read their rows whole
-([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
-lists them).
+([#1959](https://github.com/imbue-ai/datalib/issues/1959) lists them).
 
 Blob bytes are the larger part of most stores, and a render that still
 reads its rows whole can at least leave them where they are until they
@@ -1113,7 +1112,9 @@ mostly the writer: doltlite holds each table's pending edits in memory
 until they reach 64 MB or the SQL transaction commits, and each
 connection keeps a 64 MiB page cache. Committing the SQL transaction
 more often trims the peak but leaves more pages that later checkpoints
-pin on disk; the audit has the numbers.
+pin on disk, so the writer does not: committing every 32 MB of documents
+took that store's peak from 949 MB to 835 MB and its file from 6.9 GB to
+10.4 GB, and a 16 MiB page cache as well took it to 726 MB.
 
 ### Rendering the delta itself
 

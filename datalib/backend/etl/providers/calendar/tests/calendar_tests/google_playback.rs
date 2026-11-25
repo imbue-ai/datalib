@@ -483,7 +483,7 @@ async fn an_event_with_no_id_is_asked_for_again() {
 /// A whole listing may delete what it does not name only if it named
 /// everything it listed. An event it could not identify (no `id`) used to
 /// be skipped and the stored copy deleted, and a reply with no `items`
-/// read as an empty calendar (audit 2026-10-02 §4). Google sends `items`
+/// read as an empty calendar. Google sends `items`
 /// on every reply, `[]` when empty — measured live across 7 calendars,
 /// incremental replies included — so its absence is not a listing.
 /// Either now deletes nothing and says why on the calendar's row; the
