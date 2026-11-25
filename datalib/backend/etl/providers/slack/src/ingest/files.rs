@@ -5,7 +5,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -13,13 +12,14 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 use tracing::debug;
 
-use datalib_etl::blob_cas::CasInsert;
 use datalib_etl::progress::RunBar;
 use datalib_etl_web::http::{latchkey_curl, HttpError, HttpRequest, HttpService, LatchkeySettings};
 use datalib_etl_web::owed::{BatchError, Fetched, Fetcher, Listed, Outcome};
+use datalib_etl_web::owed_files::{self, File, Got, HeldFiles};
 
 use super::api::{served, LATCHKEY_FILE_TIMEOUT};
 use super::db::{OwedFile, RawDb};
+use super::schema_raw::SlackAttachmentRow;
 
 /// Files per request: how many a batch holds in memory before its bytes
 /// are written.
@@ -33,31 +33,11 @@ pub struct FileFetcher<'a> {
     /// any message: a file's bytes never change, so one already hashed
     /// under one message is not fetched for another. Loaded once per
     /// run, grown as files land.
-    pub blake3_by_file: &'a Mutex<HashMap<String, String>>,
+    pub blake3_by_file: &'a HeldFiles,
     pub bar: &'a RunBar,
     /// Files whose bytes this run fetched and stored, as against found
     /// in the CAS.
     pub downloaded: AtomicUsize,
-}
-
-/// What one edge's fetch came to, for the file it names.
-pub struct File {
-    file_id: String,
-    got: Got,
-}
-
-enum Got {
-    /// The CAS holds the bytes already, by this hash.
-    Held(String),
-    /// Bytes this run fetched. The CAS names them.
-    Fetched(Bytes),
-    /// The same file, fetched for an earlier edge in this batch.
-    FetchedAbove,
-}
-
-struct Bytes {
-    bytes: Vec<u8>,
-    mime: Option<String>,
 }
 
 #[async_trait]
@@ -79,50 +59,10 @@ impl Fetcher<File> for FileFetcher<'_> {
         tx: &mut Transaction<'static, Sqlite>,
         batch: &[Fetched<File>],
     ) -> Result<()> {
-        let files = batch.iter().filter_map(|f| match &f.outcome {
-            Outcome::Got(file) | Outcome::Unusable(file, ..) => Some(file),
-            _ => None,
-        });
-        let inserts: Vec<CasInsert<'_, &str>> = files
-            .clone()
-            .filter_map(|file| match &file.got {
-                Got::Fetched(fetched) => Some(CasInsert {
-                    id: file.file_id.as_str(),
-                    bytes: &fetched.bytes,
-                    content_type: fetched.mime.as_deref(),
-                }),
-                Got::Held(_) | Got::FetchedAbove => None,
-            })
-            .collect();
-        let downloaded = inserts.len();
-        let stored = self.db.cas().put_many(inserts).await?;
-        self.downloaded.fetch_add(downloaded, Ordering::Relaxed);
-        let blake3_of = |file: &File| match &file.got {
-            Got::Held(held) => held.clone(),
-            Got::Fetched(_) | Got::FetchedAbove => stored[file.file_id.as_str()].clone(),
-        };
-        for f in batch {
-            match &f.outcome {
-                Outcome::Got(file) | Outcome::Unusable(file, ..) => {
-                    sqlx::query("UPDATE slack_attachments SET blake3 = ? WHERE id = ?")
-                        .bind(blake3_of(file))
-                        .bind(&f.listed.key)
-                        .execute(&mut **tx)
-                        .await?;
-                }
-                Outcome::Gone => {
-                    sqlx::query("DELETE FROM slack_attachments WHERE id = ?")
-                        .bind(&f.listed.key)
-                        .execute(&mut **tx)
-                        .await?;
-                }
-                Outcome::Failed(_) | Outcome::Skipped(..) => {}
-            }
-        }
-        self.blake3_by_file
-            .lock()
-            .unwrap()
-            .extend(files.map(|file| (file.file_id.clone(), blake3_of(file))));
+        let landed =
+            owed_files::store::<SlackAttachmentRow>(self.db.cas(), tx, batch, self.blake3_by_file)
+                .await?;
+        self.downloaded.fetch_add(landed, Ordering::Relaxed);
         Ok(())
     }
 }
@@ -180,33 +120,19 @@ impl FileFetcher<'_> {
         let known = self.blake3_by_file.lock().unwrap().get(file_id).cloned();
         if let Some(blake3) = known {
             return Ok(Outcome::Got(File {
-                file_id: file_id.to_string(),
+                ref_id: file_id.to_string(),
                 got: Got::Held(blake3),
             }));
         }
         if fresh.contains(file_id) {
             return Ok(Outcome::Got(File {
-                file_id: file_id.to_string(),
+                ref_id: file_id.to_string(),
                 got: Got::FetchedAbove,
             }));
         }
-        if let (Some(limit), Some(size)) = (
-            self.blob_size_limit_bytes,
-            owed.file.get("size").and_then(Value::as_u64),
-        ) {
-            if size > limit {
-                debug!(
-                    event = "slack_media_too_large",
-                    file_id = file_id,
-                    size = size,
-                    limit = limit,
-                    "a file is over the size limit; skipped it"
-                );
-                return Ok(Outcome::Skipped(
-                    datalib_problems::Reason::OverSizeLimit,
-                    format!("size {size} > limit {limit}"),
-                ));
-            }
+        let size = owed.file.get("size").and_then(Value::as_u64);
+        if let Some(skipped) = owed_files::over_limit(size, self.blob_size_limit_bytes) {
+            return Ok(skipped);
         }
         let req = HttpRequest::get(HttpService::Slack, url)
             .latchkey(self.latchkey.clone())
@@ -237,15 +163,15 @@ impl FileFetcher<'_> {
         );
         fresh.insert(file_id.to_string());
         Ok(Outcome::Got(File {
-            file_id: file_id.to_string(),
-            got: Got::Fetched(Bytes {
+            ref_id: file_id.to_string(),
+            got: Got::Fetched {
                 bytes,
-                mime: owed
+                content_type: owed
                     .file
                     .get("mimetype")
                     .and_then(Value::as_str)
                     .map(String::from),
-            }),
+            },
         }))
     }
 }

@@ -22,6 +22,7 @@ struct Entry {
 // (`scripts/lint_repo.py`, check 13).
 const CATALOG: &[Entry] = &[
     e("slack", None, "Slack", Some("slack")),
+    e("discord", None, "Discord", Some("discord")),
     e("claude", Some("api"), "Claude", Some("claude")),
     e("claude", Some("export"), "Claude (export)", Some("claude")),
     e(

@@ -112,6 +112,7 @@ table is in `:ingested_tng`.
 | `notion` | `P/notion/tests/fixtures/notion_web/` | recorded API answers |
 | `garmin` | `P/garmin/tests/fixtures/garmin_tng/tng.json` | spec → recorded API answers |
 | `google_drive` | `P/google_drive/tests/fixtures/google_drive_tng/tng.json` | spec → recorded API answers |
+| `discord` | `P/discord/tests/fixtures/discord_tng/`, written by [`make_discord_fixtures.py`](make_discord_fixtures.py) and [`draw_discord_files.py`](draw_discord_files.py) | recorded API answers, from what the account can see; the crew are in 2024, the latest century a Discord id can name |
 | `contacts` | `P/contacts/tests/fixtures/carddav_tng/`, then `carddav_tng_v2/` | files; `v2` is the address books one sync later |
 | `email` | `P/email/tests/fixtures/mbox/star_trek.mbox` | files (a Google Takeout mbox) |
 | `google_takeout` | `P/google_takeout/tests/fixtures/Takeout/` | files |

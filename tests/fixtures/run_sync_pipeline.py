@@ -102,7 +102,11 @@ Args (positional):
                       path is to the .json file itself; the images it
                       names sit beside it). `datalib-step synthesize
                       google_drive` expands it into playback fixtures.
-    31: datalib-http binary, optional. Given, every sync goes through a
+    31: discord_tng   What a Discord account can be answered
+                      (`world.json`) and its messages' files.
+                      `datalib-step synthesize discord` expands it into
+                      playback fixtures.
+    32: datalib-http binary, optional. Given, every sync goes through a
                       server on the root, driven over its API the way
                       the web client drives it (`sync_drivers.py`);
                       absent, through `datalib-pipeline`.
@@ -266,7 +270,8 @@ def prepare(argv: list[str]) -> Prepared:
     codex_fx = Path(argv[28]).resolve()
     calendar_fx = Path(argv[29]).resolve()
     google_drive_spec = Path(argv[30]).resolve()
-    http_bin = Path(argv[31]).resolve() if len(argv) > 31 else None
+    discord_fx = Path(argv[31]).resolve()
+    http_bin = Path(argv[32]).resolve() if len(argv) > 32 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -439,6 +444,8 @@ def prepare(argv: list[str]) -> Prepared:
         # The synth input is the spec file; the ingest replays the tapes
         # it wrote. The path is unused (the method is `api`).
         "google-drive": ("google_drive", google_drive_spec, google_drive_spec),
+        # The same: replayed, its path unused.
+        "discord": ("discord", discord_fx, discord_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -1086,6 +1093,11 @@ def _source_config(
         # The spec holds the native JSON and nothing converted, so no
         # export is asked for.
         source["api"] = {"exports": []}
+    elif type_str == "discord":
+        # Two of the account's three servers. The limit is under the size
+        # of one file, which is left out and said to be.
+        source["api"] = {"servers": ["USS Enterprise", "Starfleet Academy"]}
+        source["common"] = {"blob_size_limit_bytes": 1_000_000}
     else:
         source["api"] = {}
     return source

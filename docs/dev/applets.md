@@ -66,6 +66,11 @@ other language it is one line:
 secret = open(os.environ["DATALIB_APPLET_SECRET_FILE"]).read().strip()
 ```
 
+An answer may carry an `X-Datalib-Rows-Read: <n>` header, how many rows
+the applet read to give it. The gateway takes it off and writes it as
+`rows_read` on the request's log line ([`logging.md`](logging.md)); the
+built-in applets all send it.
+
 `id` must be a valid JavaScript identifier. It is both the mount
 prefix (`/applet/<id>/`) and a namespace in card source
 (`comp.<id>.<name>`), whose grammar only reads identifiers, so a dotted

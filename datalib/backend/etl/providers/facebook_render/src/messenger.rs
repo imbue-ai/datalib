@@ -470,6 +470,7 @@ fn reaction(
     let id = ids::message_reaction(&owner.source_id, message_row_id, actor, emoji, date_ms);
     let (reactor_display, reactor_handle, reactor_kind) = people.who(actor);
     Some(NormalizedReaction {
+        count: 1,
         reaction_uuid: id.uuid,
         reactor_handle,
         reactor_kind,

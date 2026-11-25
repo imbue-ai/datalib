@@ -1,0 +1,19 @@
+# Discord as your own account, signed in through latchkey. An empty `api`
+# table copies your direct messages and no server. Discord forbids
+# automating a user account and may close one it catches; this only reads.
+[[groups]]
+id = "discord"
+name = "Discord"
+type = "discord"
+
+[[steps]]
+id = "discord/ingest"
+command = "datalib-step run ingest discord"
+
+[steps.params.api]
+
+[[steps]]
+id = "discord/render_markdown"
+command = "datalib-step run render_markdown discord"
+inputs = ["discord/ingest"]
+reads = "pinned"

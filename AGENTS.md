@@ -312,6 +312,8 @@ datalib/
     uuid_text/     a uuid read however it is written (dashed or not,
                    either case, at the end of a slug or a link) and
                    written lowercase with dashes; the one reader. No deps.
+    store_dump/    a store's tables as the text of a golden, one row a
+                   line; only tests link it.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source

@@ -392,6 +392,7 @@ async fn load(
                     .unwrap_or_default(),
                 removal: tapback >= 3000,
                 reaction: NormalizedReaction {
+                    count: 1,
                     reaction_uuid: uuid(source_id, KIND_REACTION, &guid, date_ms),
                     reactor_handle: author_handle,
                     reactor_kind: author_kind,
