@@ -89,7 +89,7 @@ has the parameters.
 | `GET /search/keys`, `GET /search/values?key=&typed=&q=` | every key the search takes, and the values one takes |
 | `GET /docs` | the documents |
 | `GET /chat/{markdown_uuid}` | one document: its markdown as `body`, or with `?pieces=true` as `pieces`, each message its own, and what the index knows of it; with `&limit=N` too, a page of it, as [rendered documents](rendered_documents.md) says |
-| `GET /children/{parent}?at=&limit=&places=` | a container's children in order, a page each way around an anchor; `source:<id>` for a source's top, `places=true` for only the places (below) |
+| `GET /places/{parent}?after=&limit=` | the places directly in a place, a page at a time; `source:<id>` for those at a source's top ([below](#places)) |
 | `GET /sources_with_places` | the sources that hold places, by id: the ones a library's tree opens |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
 | `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
@@ -125,41 +125,27 @@ language](searching.md#sorting-and-grouping) says. Each row carries:
 and `errors` say what it could not do ([when the search says
 no](searching.md#when-the-search-says-no)).
 
-### A container's children
+### Places
 
-Everything in the index sits in a container: a message in its thread, a
-thread in its channel, a channel in its workspace, an email thread in
-its account and under each of its labels. `GET /children/{uuid}` lists
-what one holds, oldest first: the rows it holds, containers among them,
-and whatever is filed under it, each once.
-`GET /children/source:<id>` lists what a source holds at its top, the
-rows and containers that sit in no container: an email account, a
-Slack workspace, a ChatGPT conversation.
+A **place** is what you browse or filter by: an account, a label, a
+channel, a folder, a page with pages in it, never a thread or a message.
+Places sit in places: a channel in its workspace, a label in its account.
+`GET /places/{parent}` lists the places directly in one, by its uuid;
+`GET /places/source:<id>` those at a source's top, which are in no other.
+That is a library's tree, a level at a time. What else is directly in a
+place, its threads and its documents, is a search: `at:<uuid>` in
+[the query language](searching.md#keys), with `is:document` for a row a
+document.
 
-- `places=true` lists only the **places** that live there: the
-  containers you browse or filter by, such as an account, a label, a
-  channel or a folder, never a thread or a message, nor what is filed
-  there. Each says in `places_below` whether more places lie under it.
-  That is a library's tree, a level at a time. `at:<uuid>` in
-  [the query language](searching.md#keys) searches what is directly in
-  one.
-
-- `at=` is where to open: a child's uuid (that child, `limit` before it
-  and `limit` after), a moment such as `2026-11-02T09:00:00Z` (`limit`
-  before it and `limit` from it on), or `now`. With none it opens at
-  the first child. A uuid that is not one of its children is a 404
-  saying so.
-- The answer is `{"children": […], "before": …, "after": …, "at": …}`.
-  `before` and `after` are cursors, null at the end of the list; send
-  one back as `?after=<cursor>` or `?before=<cursor>` for the next page
-  that way. A cursor is the edge row's place, not a count, so a message
-  that arrives while you page lands in its place and shifts nothing.
-  `at` is the commit the page was read at.
-- Each child has its `uuid`, its `sort_key`, whether it is a
-  `container` with children of its own, its `kind` and `name`, and,
-  where its row has them, its `author` and the `author_handle` that names
-  them (`email:…`, `slack:…`), its `created_at`, `preview`, the
-  `markdown_uuid` of its document and the `link` that opens it.
+- The answer is `{"places": […], "after": …, "at": …}`. `after` is a
+  cursor, null at the end of the level; send it back as
+  `?after=<cursor>` for the next page. `at` is the commit the page was
+  read at.
+- Each place has its `uuid`, its `kind` and `name`, its `sort_key` (its
+  level is in that order, then by uuid), and `places_below`: whether more
+  places lie under it. One that is a document, such as a Notion page, has
+  its `markdown_uuid`, the `link` that opens it and its `preview`, the
+  start of its text; the first two are null for any other.
 - `limit=` is 1 to 1000, 50 by default. A malformed request is a 400,
   and every error is `{"error": "…"}`.
 

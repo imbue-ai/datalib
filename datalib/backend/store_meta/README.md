@@ -42,6 +42,11 @@ creating it rather than rebuilding the store. The prepare pass creates
 it, by opening the store as its owner, when a store's tables are this
 build's and only its indexes are not. Because the shape includes the
 indexes, a statement can name the index it relies on (`INDEXED BY`).
+Opening the grid index as its owner also drops each index this build
+does not make, or makes over other columns
+(`grid_index::drop_other_indexes`). No other store does: there,
+`CREATE INDEX IF NOT EXISTS` leaves an index as it was under a shape that
+says it is new, so one whose columns change takes a new name.
 
 ## The check
 

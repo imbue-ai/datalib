@@ -282,117 +282,12 @@ fn sql_reads_a_store_it_lists() {
     child.kill().ok();
 }
 
-/// `/children` over the TNG fixture's index: a Slack channel's threads,
-/// paged on from the start to the end in order, a window around one of
-/// them and around now, and a refusal for an anchor elsewhere or a cursor
-/// it never gave.
-#[test]
-fn children_page_through_a_channel() {
-    let root = tempfile::tempdir().unwrap();
-    datalib_search_fixture::copy_grid_index(root.path());
-    let mut child = applet()
-        .env(super::DATA_ROOT_ENV, root.path())
-        // The fixture is dated in the 2360s.
-        .env(super::SEARCH_NOW_ENV, "2400-01-01T00:00:00Z")
-        .current_dir(root.path())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("start the applet");
-    let port = announced_port(&mut child);
-    let (status, body) = post(
-        port,
-        "/sql",
-        &serde_json::json!({
-            "store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
-            "sql": "SELECT uuid FROM nodes WHERE kind = 'Slack Channel' AND name = '#bridge'",
-        })
-        .to_string(),
-    );
-    assert_eq!(status, 200, "{body}");
-    let bridge = body["rows"][0][0].as_str().expect("#bridge").to_string();
-
-    let mut threads: Vec<serde_json::Value> = Vec::new();
-    let mut path = format!("/children/{bridge}?limit=2");
-    loop {
-        let (status, body) = get(port, &path, Some(SECRET));
-        assert_eq!(status, 200, "{body}");
-        threads.extend(body["children"].as_array().unwrap().iter().cloned());
-        let Some(after) = body["after"].as_str() else {
-            break;
-        };
-        path = format!("/children/{bridge}?after={after}&limit=2");
-    }
-    let keys: Vec<&str> = threads
-        .iter()
-        .map(|t| t["sort_key"].as_str().unwrap())
-        .collect();
-    assert!(threads.len() > 2, "{threads:?}");
-    assert!(keys.windows(2).all(|w| w[0] < w[1]), "{keys:?}");
-    for t in &threads {
-        assert_eq!(t["container"], true, "{t}");
-        assert_eq!(t["kind"], "Slack Thread", "{t}");
-        assert!(
-            t["link"]
-                .as_str()
-                .is_some_and(|l| l.starts_with("datalib:doc/")),
-            "{t}"
-        );
-    }
-
-    let third = threads[2]["uuid"].as_str().unwrap();
-    let (status, body) = get(
-        port,
-        &format!("/children/{bridge}?at={third}&limit=1"),
-        Some(SECRET),
-    );
-    assert_eq!(status, 200, "{body}");
-    let around: Vec<&serde_json::Value> = body["children"].as_array().unwrap().iter().collect();
-    assert_eq!(around, threads[1..4].iter().collect::<Vec<_>>(), "{body}");
-
-    let (status, body) = get(
-        port,
-        &format!("/children/{bridge}?at=now&limit=1"),
-        Some(SECRET),
-    );
-    assert_eq!(status, 200, "{body}");
-    assert_eq!(body["children"][0], threads[threads.len() - 1], "{body}");
-    assert_eq!(body["after"], serde_json::Value::Null, "{body}");
-
-    let (status, body) = get(
-        port,
-        &format!("/children/{third}?at={bridge}"),
-        Some(SECRET),
-    );
-    assert_eq!(status, 404, "{body}");
-    assert!(
-        body["error"]
-            .as_str()
-            .unwrap()
-            .contains("is not a child of"),
-        "{body}"
-    );
-    let (status, body) = get(port, &format!("/children/{bridge}?after=40"), Some(SECRET));
-    assert_eq!(status, 400, "{body}");
-
-    // A thread's messages name their authors by handle, which a person
-    // chip is drawn from.
-    let first = threads[0]["uuid"].as_str().unwrap();
-    let (status, body) = get(port, &format!("/children/{first}"), Some(SECRET));
-    assert_eq!(status, 200, "{body}");
-    let messages = body["children"].as_array().unwrap();
-    assert!(!messages.is_empty(), "{body}");
-    for m in messages {
-        let handle = m["author_handle"].as_str().unwrap_or_default();
-        assert!(handle.starts_with("slack:"), "{m}");
-    }
-    child.kill().ok();
-}
-
 /// A library's tree over the TNG fixture, a level at a time: the email
 /// source's top is its account, a place with places below it, and the
-/// account's places are its labels, with no thread or message among them.
+/// account's places are its labels, with no thread or message among them,
+/// the same whether paged or read whole. A cursor it never gave is refused.
 #[test]
-fn children_list_a_sources_places() {
+fn places_list_a_library_a_level_at_a_time() {
     let root = tempfile::tempdir().unwrap();
     datalib_search_fixture::copy_grid_index(root.path());
     let mut child = applet()
@@ -403,39 +298,47 @@ fn children_list_a_sources_places() {
         .expect("start the applet");
     let port = announced_port(&mut child);
 
-    let (status, body) = get(port, "/children/source:tng_email?places=true", Some(SECRET));
+    let (status, body) = get(port, "/places/source:tng_email", Some(SECRET));
     assert_eq!(status, 200, "{body}");
-    let top = body["children"].as_array().unwrap();
+    let top = body["places"].as_array().unwrap();
     assert_eq!(top.len(), 1, "{body}");
     assert_eq!(top[0]["kind"], "Email Account", "{body}");
     assert_eq!(top[0]["places_below"], true, "{body}");
     let account = top[0]["uuid"].as_str().unwrap();
 
-    let (status, body) = get(
-        port,
-        &format!("/children/{account}?places=true&limit=1000"),
-        Some(SECRET),
-    );
+    let (status, body) = get(port, &format!("/places/{account}?limit=1000"), Some(SECRET));
     assert_eq!(status, 200, "{body}");
-    let places = body["children"].as_array().unwrap();
-    assert!(!places.is_empty(), "{body}");
-    for p in places {
-        assert_eq!(p["kind"], "Email Label", "{p}");
-        assert_eq!(p["container"], true, "{p}");
-        assert_eq!(p["places_below"], false, "{p}");
+    let labels = body["places"].as_array().unwrap();
+    assert!(labels.len() > 2, "{body}");
+    assert_eq!(body["after"], serde_json::Value::Null, "{body}");
+    for label in labels {
+        assert_eq!(label["kind"], "Email Label", "{label}");
+        assert_eq!(label["places_below"], false, "{label}");
     }
+    let mut paged: Vec<serde_json::Value> = Vec::new();
+    let mut path = format!("/places/{account}?limit=2");
+    loop {
+        let (status, body) = get(port, &path, Some(SECRET));
+        assert_eq!(status, 200, "{body}");
+        paged.extend(body["places"].as_array().unwrap().iter().cloned());
+        let Some(after) = body["after"].as_str() else {
+            break;
+        };
+        path = format!("/places/{account}?after={after}&limit=2");
+    }
+    assert_eq!(&paged, labels);
+    let (status, body) = get(port, &format!("/places/{account}?after=40"), Some(SECRET));
+    assert_eq!(status, 400, "{body}");
 
-    let (status, body) = get(port, &format!("/children/{account}"), Some(SECRET));
+    // A Notion page is a place and a document, and its link opens it.
+    let (status, body) = get(port, "/places/source:notion", Some(SECRET));
     assert_eq!(status, 200, "{body}");
     assert!(
-        body["children"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|c| c["kind"] == "Email Thread"),
-        "without places=true the account lists its threads too: {body}"
+        body["places"].as_array().unwrap().iter().any(|p| p["link"]
+            .as_str()
+            .is_some_and(|l| l.starts_with("datalib:doc/"))),
+        "{body}"
     );
-    assert!(body["children"][0].get("places_below").is_none(), "{body}");
 
     let (status, body) = get(port, "/sources_with_places", Some(SECRET));
     assert_eq!(status, 200, "{body}");
@@ -447,21 +350,18 @@ fn children_list_a_sources_places() {
         .collect();
     assert!(sources.contains(&"tng_email"), "{body}");
     for source in &sources {
-        let (_, body) = get(
-            port,
-            &format!("/children/source:{source}?places=true"),
-            Some(SECRET),
-        );
-        assert_ne!(body["children"][0], serde_json::Value::Null, "{source}");
+        let (_, body) = get(port, &format!("/places/source:{source}"), Some(SECRET));
+        assert_ne!(body["places"][0], serde_json::Value::Null, "{source}");
     }
 
     // A label's list is the threads filed under it, each once.
-    let inbox = places.iter().find(|p| p["name"] == "Inbox").unwrap();
-    let at = format!(
-        "/search?q=at:{}%20is:document",
-        inbox["uuid"].as_str().unwrap()
+    let inbox = labels.iter().find(|p| p["name"] == "Inbox").unwrap();
+    let inbox = inbox["uuid"].as_str().unwrap();
+    let (status, body) = get(
+        port,
+        &format!("/search?q=at:{inbox}%20is:document"),
+        Some(SECRET),
     );
-    let (status, body) = get(port, &at, Some(SECRET));
     assert_eq!(status, 200, "{body}");
     let mut listed: Vec<&str> = body["rows"]
         .as_array()
@@ -469,19 +369,25 @@ fn children_list_a_sources_places() {
         .iter()
         .map(|r| r["uuid"].as_str().unwrap())
         .collect();
-    let (_, filed) = get(
+    listed.sort();
+    let (status, filed) = post(
         port,
-        &format!("/children/{}?limit=1000", inbox["uuid"].as_str().unwrap()),
-        Some(SECRET),
+        "/sql",
+        &serde_json::json!({
+            "store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
+            "sql": format!(
+                "SELECT DISTINCT node_uuid FROM filings WHERE under_uuid = '{inbox}' ORDER BY 1"
+            ),
+        })
+        .to_string(),
     );
-    let mut filed: Vec<&str> = filed["children"]
+    assert_eq!(status, 200, "{filed}");
+    let filed: Vec<&str> = filed["rows"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|c| c["uuid"].as_str().unwrap())
+        .map(|r| r[0].as_str().unwrap())
         .collect();
-    listed.sort();
-    filed.sort();
     assert!(
         !listed.is_empty() && listed == filed,
         "{listed:?} {filed:?}"
@@ -551,58 +457,66 @@ fn a_drive_opens_onto_its_folders() {
             .unwrap()
             .to_string()
     };
-    // Each child as (kind, its name for a folder or its uuid for a Doc).
-    let children = |uuid: &str| {
-        let (status, body) = get(port, &format!("/children/{uuid}"), Some(SECRET));
+    let rows = |path: &str, key: &str| {
+        let (status, body) = get(port, path, Some(SECRET));
         assert_eq!(status, 200, "{body}");
-        let mut out: Vec<(String, String)> = body["children"]
-            .as_array()
-            .unwrap()
+        body[key].as_array().unwrap().clone()
+    };
+    // The folders in a folder, by name, and the Docs at it, by uuid.
+    let holds = |uuid: &str| {
+        let folders = rows(&format!("/places/{uuid}"), "places")
             .iter()
-            .map(|c| {
-                let kind = c["kind"].as_str().unwrap().to_string();
-                let said = match kind.as_str() {
-                    "Google Doc" => c["uuid"].as_str(),
-                    _ => c["name"].as_str(),
-                };
-                (kind, said.unwrap_or_default().to_string())
+            .map(|p| {
+                (
+                    "Folder".to_string(),
+                    p["name"].as_str().unwrap().to_string(),
+                )
             })
-            .collect();
-        out.sort();
-        out
+            .collect::<Vec<_>>();
+        let docs = rows(
+            &format!("/search?q=at:{uuid}%20kind:%22Google%20Doc%22"),
+            "rows",
+        );
+        let docs = docs.iter().map(|d| {
+            (
+                "Google Doc".to_string(),
+                d["uuid"].as_str().unwrap().to_string(),
+            )
+        });
+        folders.into_iter().chain(docs).collect::<Vec<_>>()
     };
     let folder = |name: &str| ("Folder".to_string(), name.to_string());
     let a_doc = |title: &str| ("Google Doc".to_string(), doc(title));
 
     let my_drive = place("Folder", "My Drive");
     assert_eq!(
-        children(&my_drive),
+        holds(&my_drive),
         vec![folder("Captain's logs"), folder("Ready room")]
     );
     assert_eq!(
-        children(&place("Folder", "Captain's logs")),
+        holds(&place("Folder", "Captain's logs")),
         vec![folder("Stardate 41000s")]
     );
     let log = a_doc("Captain's log, stardate 41153.7");
     assert_eq!(
-        children(&place("Folder", "Stardate 41000s")),
+        holds(&place("Folder", "Stardate 41000s")),
         vec![log.clone()]
     );
-    assert_eq!(children(&place("Folder", "Ready room")), vec![log]);
+    assert_eq!(holds(&place("Folder", "Ready room")), vec![log]);
     assert_eq!(
-        children(&place("Shared drive", "Enterprise-D Engineering")),
+        holds(&place("Shared drive", "Enterprise-D Engineering")),
         vec![folder("Engineering")]
     );
     assert_eq!(
-        children(&place("Folder", "Engineering")),
+        holds(&place("Folder", "Engineering")),
         vec![folder("Warp core")]
     );
     assert_eq!(
-        children(&place("Folder", "Warp core")),
+        holds(&place("Folder", "Warp core")),
         vec![a_doc("Warp core maintenance schedule")]
     );
     assert_eq!(
-        children(&place("Folder", "Geordi's notes")),
+        holds(&place("Folder", "Geordi's notes")),
         vec![a_doc("Engineering notes")]
     );
     child.kill().ok();
