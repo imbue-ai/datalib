@@ -2,11 +2,11 @@
 //! WHERE-builder and the [`ChatMeta`] row shape the impl returns. All SQL goes through `sqlx` against
 //! [`crate::dolt_repo::DoltRepo`].
 
-use crate::group::{like_pattern, Within};
+use crate::group::like_pattern;
 use crate::query::{Field, FilterTerm, ParsedQuery};
 use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
-use datalib_schema::grid_rows::{GridRow, GridRowColumn};
+use datalib_schema::grid_rows::{GridRowColumn, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTermKind, FROM_THE_DOCUMENT};
 
@@ -43,37 +43,13 @@ pub struct ChatMeta {
 /// A term's value that stands for any value at all: `author:*`.
 pub const ANY_VALUE: &str = "*";
 
-/// Build the SQL `WHERE` clause (with a leading space) and the matching
-/// parameter list for a parsed query's terms, and for its free text when
-/// the table matches free text with `LIKE`; a ranked table's free text is
-/// the search index's.
-pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
-    build_where_beside(q, &[])
-}
-
-/// What one source is guessed to be of the library: less than the half a
-/// flag keeps, so a source's documents are read by source, and more than
-/// SQLite's ten rows for a key.
-const SOURCE_SHARE: &str = "0.1";
-
-/// `column = ?`, as a planner with no statistics should weigh it. It would
-/// rate one source as narrow as one channel, and read every row of the
-/// source to find none in the channel. Alone, or beside what has no index
-/// of its own, a source is left to its index.
-pub(crate) fn column_equals<C: Column>(column: C, beside_a_key: bool) -> String {
-    let col = column.as_str();
-    if beside_a_key && is_source(column) {
-        format!("likelihood({col} = ?, {SOURCE_SHARE})")
-    } else {
-        format!("{col} = ?")
-    }
-}
-
-/// Whether `q`, or the group it is read within, holds a column other than
-/// the source to one value.
-pub(crate) fn holds_a_key<C: Column>(q: &ParsedQuery<C>, within: &[Within<C>]) -> bool {
-    let typed = q.terms.iter().any(|t| match t.field {
-        Field::Column(key) => !t.negate && t.value != ANY_VALUE && !is_source(key.column),
+/// How a set of rows a term keeps enters the `WHERE`. SQLite takes any set
+/// to be 25 rows and reads the table for each, where a key's index holds
+/// what a search reads: beside a key an index starts with, a set is tested
+/// (`+`), and only without one does a search start from it.
+fn set_of<C: Column>(q: &ParsedQuery<C>) -> &'static str {
+    let starts_at_a_key = q.terms.iter().any(|t| match t.field {
+        Field::Column(key) => !t.negate && t.value != ANY_VALUE && starts_an_index(key.column),
         Field::At => !t.negate,
         Field::Before
         | Field::After
@@ -82,38 +58,35 @@ pub(crate) fn holds_a_key<C: Column>(q: &ParsedQuery<C>, within: &[Within<C>]) -
         | Field::Text
         | Field::Names => false,
     });
-    typed
-        || within
-            .iter()
-            .any(|w| w.value.is_some() && !is_source(w.column))
+    if starts_at_a_key {
+        "+"
+    } else {
+        ""
+    }
 }
 
-fn is_source<C: Column>(column: C) -> bool {
-    <C::Table as SearchTable>::TABLE == <GridRow as SearchTable>::TABLE
-        && column.as_str() == GridRowColumn::SourceId.as_str()
+fn starts_an_index<C: Column>(column: C) -> bool {
+    GRID_ROWS_INDEXES.iter().any(|(table, ddl)| {
+        *table == <C::Table as SearchTable>::TABLE
+            && ddl
+                .rsplit('(')
+                .next()
+                .and_then(|columns| columns.split([',', ')']).next())
+                == Some(column.as_str())
+    })
 }
 
-/// [`build_where`] for a query read `within` a group, whose own clauses
-/// follow these.
-pub(crate) fn build_where_beside<C: Column>(
-    q: &ParsedQuery<C>,
-    within: &[Within<C>],
-) -> (String, Vec<String>) {
-    let beside_a_key = holds_a_key(q, within);
+/// Build the SQL `WHERE` clause (with a leading space) and the matching
+/// parameter list for a parsed query's terms, and for its free text when
+/// the table matches free text with `LIKE`; a ranked table's free text is
+/// the search index's.
+pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
-    // A store has no planner statistics, so SQLite guesses that `is_document
-    // = 1` narrows as hard as `source_id = ?`, and on a tie takes the flag's
-    // index: every document in the library, each looked up for its source.
-    // A flag halves a table at best; `likelihood` says so.
     for (_, column) in <C::Table as SearchTable>::FLAGS {
         if let Some(on) = q.flag(*column) {
-            clauses.push(format!(
-                "likelihood({} = {}, 0.5)",
-                column.as_str(),
-                i32::from(on)
-            ));
+            clauses.push(format!("{} = {}", column.as_str(), i32::from(on)));
         }
     }
 
@@ -122,11 +95,12 @@ pub(crate) fn build_where_beside<C: Column>(
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
+    let set = set_of(q);
     for term in &q.terms {
         let (clause, bound) = match term.field {
-            Field::Terms(key) => terms_clause(key, term),
-            Field::Names => names_clause(term),
-            Field::Text => text_clause(pk, term),
+            Field::Terms(key) => terms_clause(set, key, term),
+            Field::Names => names_clause(set, term),
+            Field::Text => text_clause(set, pk, term),
             Field::At => crate::at_node::clause(&term.value, term.arms, term.negate),
             Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
                 (String::new(), Vec::new())
@@ -179,7 +153,7 @@ pub(crate) fn build_where_beside<C: Column>(
             // exclude unset values. Explicitly keep nulls.
             clauses.push(format!("({col} IS NULL OR {col} != ?)"));
         } else {
-            clauses.push(column_equals(key.column, beside_a_key));
+            clauses.push(format!("{col} = ?"));
         }
         params.push(value);
     }
@@ -285,12 +259,12 @@ pub fn fts5_phrase(text: &str) -> String {
 /// not: a row a message is when its message holds them, a document's own
 /// row (whose uuid is its document's) when any piece of it does. A row
 /// the search index does not hold holds no words.
-fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn text_clause<C>(set: &str, pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
     let phrase = fts5_phrase(&term.value);
     (
         format!(
-            "{pk} {not}IN (SELECT s.uuid FROM search_fts f \
+            "{set}{pk} {not}IN (SELECT s.uuid FROM search_fts f \
              JOIN search_sections s ON s.section_id = f.rowid \
              WHERE search_fts MATCH ? AND s.uuid IS NOT NULL \
              UNION SELECT d.markdown_uuid FROM search_fts f \
@@ -306,7 +280,7 @@ fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
 /// document's; or with `-`, do not.
 /// Both spellings are asked for, as a person key asks: the handle, and the
 /// address as typed, which an author with no handle is filed under.
-fn names_clause<C>(term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn names_clause<C>(set: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
     let mut values = vec![term.value.clone()];
     if let Some(id) = crate::query::identifier(&term.value).filter(|id| *id != term.value) {
@@ -316,7 +290,7 @@ fn names_clause<C>(term: &FilterTerm<C>) -> (String, Vec<String>) {
     let named = format!("t.val_id IN (SELECT val_id FROM vals WHERE {any})");
     (
         format!(
-            "rowid {not}IN (SELECT t.row_id FROM terms t WHERE {named} \
+            "{set}rowid {not}IN (SELECT t.row_id FROM terms t WHERE {named} \
              UNION SELECT r.row_id FROM terms t JOIN rows r ON r.doc_row_id = t.row_id \
              WHERE t.kind IN ({}) AND {named})",
             codes(FROM_THE_DOCUMENT)
@@ -338,7 +312,7 @@ fn codes(kinds: &[SearchTermKind]) -> String {
 /// The rows whose search terms of `key`'s kinds hold `value`, as one
 /// clause over `pk` and the values it binds. The kinds are the enum's own
 /// codes, so they are written in; the value is bound.
-fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn terms_clause<C>(set: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
     if let Some(clause) = cell_clause(key, term) {
         return (clause, Vec::new());
     }
@@ -426,7 +400,7 @@ fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>
     let not = if term.negate { "NOT " } else { "" };
     (
         format!(
-            "rowid {not}IN (SELECT t.row_id FROM terms t WHERE t.kind IN ({}){matched})",
+            "{set}rowid {not}IN (SELECT t.row_id FROM terms t WHERE t.kind IN ({}){matched})",
             codes(&key.kinds())
         ),
         bound,
@@ -466,11 +440,11 @@ fn cell_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> Option<String> {
         .map(|r| format!("{col} BETWEEN {} AND {}", r.start(), r.end()))
         .collect::<Vec<_>>()
         .join(" OR ");
-    // With no statistics SQLite guesses seven ORed ranges keep most rows,
-    // and walks the newest-first index instead; they keep very few.
     Some(if term.negate {
         format!("({col} IS NULL OR NOT ({any}))")
     } else {
+        // Seven ORed ranges, which nothing tells SQLite keep very few rows:
+        // it would walk the newest-first index instead.
         format!("likelihood(({any}), 0.001)")
     })
 }
@@ -550,10 +524,10 @@ mod tests {
     #[test]
     fn is_document_is_a_column_test_not_a_kind_list() {
         let (sql, params) = build_where(&parse_query("is:document"));
-        assert_eq!(sql, " WHERE likelihood(is_document = 1, 0.5)");
+        assert_eq!(sql, " WHERE is_document = 1");
         assert!(params.is_empty());
         let (sql, _) = build_where(&parse_query("-is:document"));
-        assert_eq!(sql, " WHERE likelihood(is_document = 0, 0.5)");
+        assert_eq!(sql, " WHERE is_document = 0");
     }
 
     /// `author:*` keeps the rows with an author and `-author:*` the rows
@@ -649,60 +623,6 @@ mod tests {
         let (sql, params) = build_where(&parse_query("rating:>5"));
         assert!(sql.contains("FROM vals WHERE 0)"), "{sql}");
         assert!(params.is_empty());
-    }
-
-    /// A source beside another key is weighed as a share of the library,
-    /// the group it was opened from included; alone, beside a filter with
-    /// no index of its own, or on another table, it is not.
-    #[test]
-    fn a_source_beside_a_key_is_weighed() {
-        use crate::group::where_within;
-        use crate::problems::ProblemsQuery;
-
-        let weighed = "likelihood(source_id = ?, 0.1)";
-        for q in [
-            "source:slack channel:ops",
-            "channel:ops source:slack is:document",
-            "source:slack source:mail kind:Email",
-            "source:slack id:1701d000-abcd-4e00-a000-0000000000ef",
-        ] {
-            let (sql, _) = build_where(&parse_query(q));
-            assert!(sql.contains(weighed), "{q}: {sql}");
-        }
-        for q in [
-            "source:slack is:document after:2025-01-01",
-            "source:slack from:riker",
-            "source:slack -channel:ops",
-            "source:slack channel:*",
-            "source:slack -source:mail",
-        ] {
-            let (sql, _) = build_where(&parse_query(q));
-            assert!(sql.contains("source_id = ?"), "{q}: {sql}");
-            assert!(!sql.contains("likelihood(source_id"), "{q}: {sql}");
-        }
-        let held = |column, value: Option<&str>| Within {
-            column,
-            value: value.map(String::from),
-        };
-        let source = held(GridRowColumn::SourceId, Some("slack"));
-        let channel = held(GridRowColumn::Channel, Some("ops"));
-        for (q, within) in [
-            ("source:slack", vec![channel.clone()]),
-            ("channel:ops", vec![source.clone()]),
-            ("", vec![source.clone(), channel]),
-        ] {
-            let (sql, params) = where_within(&parse_query(q), &within);
-            assert!(sql.contains(weighed), "{q:?}: {sql}");
-            assert_eq!(params.len(), 2, "{q:?}");
-        }
-        let (sql, _) = where_within(
-            &parse_query("is:document"),
-            &[source, held(GridRowColumn::Channel, None)],
-        );
-        assert!(!sql.contains(weighed), "{sql}");
-
-        let (sql, _) = build_where(&ProblemsQuery::parse("source:slack stage:parse"));
-        assert_eq!(sql, " WHERE source_id = ? AND stage = ?");
     }
 
     #[test]

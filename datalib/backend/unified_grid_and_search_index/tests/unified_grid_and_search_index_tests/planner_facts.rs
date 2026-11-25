@@ -26,6 +26,14 @@ async fn table(indexes: &[&str]) -> SqlitePool {
     db
 }
 
+/// The grid's own tables as SQLite plans them with nothing said of them.
+async fn unranked() -> SqlitePool {
+    let db = table(&[]).await;
+    run(&db, "DELETE FROM sqlite_stat1").await;
+    run(&db, "ANALYZE sqlite_schema").await;
+    db
+}
+
 async fn run(db: &SqlitePool, sql: &str) {
     sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
         .execute(db)
@@ -139,8 +147,7 @@ async fn declared_statistics_are_believed_whatever_the_table_holds() {
 
 #[tokio::test]
 async fn an_or_of_two_keys_beside_a_flag_reads_the_flags_index() {
-    let root = unique_db_path().parent().unwrap().to_path_buf();
-    let db = writer(&root).await;
+    let db = unranked().await;
     let or = "SELECT uuid FROM grid_rows WHERE likelihood(is_document = 1, 0.5) \
          AND (place_uuid = 'a' OR conversation_uuid IN \
               (SELECT uuid FROM grid_rows WHERE uuid = 'a' AND is_document = 1)) \
@@ -162,8 +169,7 @@ async fn an_or_of_two_keys_beside_a_flag_reads_the_flags_index() {
 /// column away from the index, and leaves its set to test.
 #[tokio::test]
 async fn two_sets_one_index_covers_are_tried_in_pairs() {
-    let root = unique_db_path().parent().unwrap().to_path_buf();
-    let db = writer(&root).await;
+    let db = unranked().await;
     let pairs = "SELECT markdown_uuid FROM grid_rows INDEXED BY grid_rows_by_markdown_source \
          WHERE source_id = 'x' AND rowid IN (SELECT row_id FROM terms WHERE val_id = 1) \
          AND markdown_uuid IN (SELECT markdown_uuid FROM markdowns)";

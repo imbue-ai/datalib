@@ -814,7 +814,7 @@ const BESIDE: &[&str] = &[
 ];
 
 /// Each way a node has rows, and the index a search at it reads: `None`
-/// where it has two ways, whose rows are found first and then fetched.
+/// where it has two ways, each read off its own.
 const AT_ARMS: &[(Arms, Option<&str>)] = {
     const fn arms(held: bool, filed: bool, own: bool) -> Arms {
         Arms { held, filed, own }
@@ -872,7 +872,7 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
     for reversed in [false, true] {
         let db_path = unique_db_path();
         let root = Arc::new(db_path.parent().unwrap().to_path_buf());
-        let writer = writer(&root).await;
+        let writer = self::writer(&root).await;
         // Two indexes SQLite rates the same are a tie it breaks by the
         // order they were made in: no plan here may rest on that order.
         if reversed {
@@ -886,6 +886,12 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                 sqlx::query(ddl).execute(&writer).await.expect("create");
             }
         }
+        // Dropping an index drops what the planner was told of it; the
+        // step's open tells it again.
+        datalib_etl_render::grid_index::close_index(writer)
+            .await
+            .expect("close");
+        let writer = self::writer(&root).await;
         let mut wrong: Vec<String> = Vec::new();
         for key in GridRow::KEYS {
             if key.column == GridRowColumn::SourceId || SCANS.contains(&key.key) {
@@ -950,16 +956,12 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                         let reads_the_index_alone = what != "groups" && !beside.contains("email");
                         let first = plan.iter().find(|d| d.contains(" grid_rows"));
                         let starts = |with: &str| first.is_some_and(|d| d.starts_with(with));
-                        let by_row_id = starts("SEARCH grid_rows USING INTEGER PRIMARY KEY ");
                         let right = match index {
-                            // A label's threads and a person's rows are two
-                            // sets, and it may start from either.
-                            Some(_) if arms.filed && beside.contains("from:") && by_row_id => true,
                             Some(index) if reads_the_index_alone => {
                                 starts(&format!("SEARCH grid_rows USING COVERING INDEX {index} "))
                             }
                             Some(index) => searched_index(&plan) == Some(*index),
-                            None => by_row_id,
+                            None => plan.iter().any(|d| d == "MULTI-INDEX OR"),
                         };
                         // However many ways it holds rows, no one is read
                         // off what is wider than the node.

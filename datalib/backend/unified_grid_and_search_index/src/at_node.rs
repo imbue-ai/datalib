@@ -2,8 +2,8 @@
 //! nearest place it is, and the document the node is, when it is one. Not
 //! what is in the places below it. Three things put a row there, each read
 //! off one covering index, and [`Arms`] says which of them this node has:
-//! a search asks for the ones it has, and only where a node has two are
-//! their rows found first and then fetched from the table.
+//! a search `OR`s the ones it has, and only an `OR` of two makes SQLite
+//! read each row's table page.
 
 /// What puts a row directly under a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,37 +34,25 @@ pub const FACTS_SQL: &str = "SELECT \
 /// The rows at `node`, as one clause over `grid_rows` and the values it
 /// binds.
 pub fn clause(node: &str, arms: Arms, negate: bool) -> (String, Vec<String>) {
-    let any: Vec<(&str, &str)> = [
-        (arms.held, "grid_rows_by_place", "place_uuid = ?"),
+    let any: Vec<&str> = [
+        (arms.held, "place_uuid = ?"),
         (
             arms.filed,
-            "grid_rows_by_conversation",
             "conversation_uuid IN (SELECT node_uuid FROM filings INDEXED BY filings_by_under \
              WHERE under_uuid = ?)",
         ),
         (
             arms.own,
-            "grid_rows_by_conversation",
-            "conversation_uuid = (SELECT uuid FROM grid_rows WHERE uuid = ? AND is_document = 1)",
+            "conversation_uuid IN (SELECT uuid FROM grid_rows WHERE uuid = ? AND is_document = 1)",
         ),
     ]
     .into_iter()
-    .filter_map(|(has, index, sql)| has.then_some((index, sql)))
+    .filter_map(|(has, sql)| has.then_some(sql))
     .collect();
     let clause = match any.as_slice() {
         [] => "0".to_string(),
-        [(_, one)] => (*one).to_string(),
-        // Not an `OR`: beside `is:document` or a source, SQLite serves one
-        // side of it from that one's index, and reads all of it.
-        _ => {
-            let sets: Vec<String> = any
-                .iter()
-                .map(|(index, sql)| {
-                    format!("SELECT rowid FROM grid_rows INDEXED BY {index} WHERE {sql}")
-                })
-                .collect();
-            format!("rowid IN ({})", sets.join(" UNION "))
-        }
+        [one] => (*one).to_string(),
+        _ => format!("({})", any.join(" OR ")),
     };
     // A row in no place compares as null, which is not at the node.
     let clause = if negate {
@@ -94,11 +82,7 @@ mod tests {
             ("place_uuid = ?".to_string(), vec!["n".to_string()])
         );
         let (sql, bound) = clause("n", Arms::UNREAD, true);
-        assert!(
-            sql.starts_with("NOT COALESCE(rowid IN (SELECT rowid "),
-            "{sql}"
-        );
-        assert_eq!(sql.matches(" UNION ").count(), 2, "{sql}");
+        assert!(sql.starts_with("NOT COALESCE((place_uuid = ? OR "), "{sql}");
         assert_eq!(sql.matches('?').count(), bound.len());
         assert_eq!(bound.len(), 3);
     }
