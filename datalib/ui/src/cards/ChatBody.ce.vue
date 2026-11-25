@@ -29,6 +29,7 @@ import {
   people,
   NOBODY,
 } from "./contacts";
+import { contactPages, decorateContactPages } from "./contactPages";
 import ChipMenu from "./ChipMenu.ce.vue";
 import {
   chipDragQuery,
@@ -173,6 +174,10 @@ async function redrawHandles() {
   await decorateHandles(body.value);
 }
 
+async function redrawContactPages() {
+  if (body.value) await decorateContactPages(body.value);
+}
+
 // An answer changed somewhere — a link made in another document, or in
 // this one — so draw again if any chip here shows one of those handles.
 const stopPeople = people.subscribe((handles) => {
@@ -182,6 +187,9 @@ const stopPeople = people.subscribe((handles) => {
   if (shown.some((a) => handles.has(a.dataset.handle ?? ""))) void redrawHandles();
 });
 onBeforeUnmount(stopPeople);
+
+const stopPages = contactPages.subscribe(() => void redrawContactPages());
+onBeforeUnmount(stopPages);
 
 // The same for the group and step chips, answered by `entities`.
 const stopEntities = entities.subscribe((uris) => {
@@ -204,11 +212,14 @@ function chipAt(ev: MouseEvent): HTMLElement | null {
 }
 
 function entityChipAt(ev: MouseEvent): HTMLElement | null {
-  return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-entity]") ?? null;
+  return (
+    asElement(ev.target)?.closest<HTMLElement>("a.chip[data-entity], a.chip[data-contact-page]") ??
+    null
+  );
 }
 
-/// A group or step chip's href names something in this app, not a page:
-/// no click on it, plain or modified, leaves for the browser or the OS.
+/// A `datalib:` chip's href names something in this app, not a page: no
+/// click on it, plain or modified, leaves for the browser or the OS.
 function onEntityChipClick(ev: MouseEvent) {
   if (!entityChipAt(ev)) return;
   ev.preventDefault();
@@ -477,6 +488,7 @@ function paint() {
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();
+  void redrawContactPages();
   void decorateEntities(el);
   decorateDates(el);
   decorateChatDays(el);

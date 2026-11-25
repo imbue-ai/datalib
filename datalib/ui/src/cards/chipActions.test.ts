@@ -43,6 +43,8 @@ const RIKER: Chip = {
   shownAs: "Will Riker",
 };
 const CONTACT: Chip = { ref: { kind: "contact", id: "c1" }, shownAs: "Will Riker" };
+/** A card with no handle, named by its page. */
+const CARD: Chip = { ref: { kind: "page", page: "p-1" }, shownAs: "Sonya Gomez" };
 const LOG_PAGE = "6c8f2f43-1d3c-4a5e-9b5e-0d3f6a1b2c3d";
 const LOG: Chip = {
   ref: { kind: "document", uri: `datalib:doc/${LOG_PAGE}` },
@@ -68,7 +70,7 @@ describe("chipMenuOf", () => {
   /** The grid draws a chip's entries in fixed slots of `CHIP_ACTIONS`, so
    *  a menu out of that order would lose entries there. */
   it("lists every kind's entries in the one order", () => {
-    for (const chip of [SLACK, INGEST, RIKER, CONTACT, LOG, AWAY, BRIDGE]) {
+    for (const chip of [SLACK, INGEST, RIKER, CONTACT, CARD, LOG, AWAY, BRIDGE]) {
       const ids = chipMenuOf(chip).map((e) => e.id);
       const order = ids.map((id) => CHIP_ACTIONS.indexOf(id as ChipAction));
       expect(order).toEqual([...order].sort((a, b) => a - b));
@@ -156,7 +158,8 @@ describe("runChipAction", () => {
       [sourceSource({ group: "slack", step: "slack/ingest" })],
       [logSource({ step: "slack/ingest", jumpToEnd: true })],
     ]);
-    expect(chipCardSource(CONTACT.ref, null)).toBeNull();
+    expect(chipCardSource(CONTACT.ref, null)).toBe('personView("contact:c1", {"seenIn":null})');
+    expect(chipCardSource(CARD.ref, "book")).toBe('personView("page:p-1", {"seenIn":"book"})');
     const doc = host();
     await runChipAction("open", LOG, doc);
     expect(doc.openCard.mock.calls).toEqual([[documentSource(LOG_PAGE)]]);
@@ -225,7 +228,7 @@ describe("runChipAction", () => {
     expect(h.openCard.mock.calls).toEqual([
       [personSource("email:riker@enterprise.org", { seenIn: null })],
     ]);
-    expect(justOpened.value).toEqual({ handle: "email:riker@enterprise.org" });
+    expect(justOpened.value).toEqual({ subject: "email:riker@enterprise.org" });
     await runChipAction("open", SLACK, host());
     expect(justOpened.value).toBeNull();
   });

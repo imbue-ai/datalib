@@ -47,10 +47,13 @@ import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import type { Identity } from "@/api";
 import { handleFromUri } from "./chipLinks";
 import { entities, entityCopyText } from "./entities";
+import { addContactPages, contactPages } from "./contactPages";
 import {
+  addedSummary,
   chipCell,
   contactsById,
   handleKind,
+  hasContactsApp,
   copyText as copyHandleText,
   nameOf,
   people,
@@ -385,6 +388,7 @@ function refreshIndexState() {
 const PERSON_COLUMNS = ["author_ref", "contact_ref", "subject_ref"];
 const SOURCE_COLUMN = "source_ref";
 const stopPeople = people.subscribe(() => PERSON_COLUMNS.forEach(refreshCells));
+const stopPages = contactPages.subscribe(() => PERSON_COLUMNS.forEach(refreshCells));
 const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
 
 function refreshCells(columnId: string) {
@@ -1498,6 +1502,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => unsubscribeLive?.());
 onBeforeUnmount(stopPeople);
+onBeforeUnmount(stopPages);
 onBeforeUnmount(stopEntities);
 
 function docSource(doc: { md: string; anchor: string | null }): string {
@@ -1683,6 +1688,7 @@ watch(
       chips: {
         who: (h) => people.lookup(h),
         entity: (uri) => entities.lookup(uri),
+        page: (p) => contactPages.lookup(p),
       },
     });
     const descendingFirst = new Set(
@@ -1824,6 +1830,21 @@ const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
 const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
 
 /// The rows a right-click aims at that are muted, or that are not.
+/// The contacts' pages a right-click aims at: rows that are each one card
+/// of an address book.
+const cardsAmong = (m: MenuScope) =>
+  hasContactsApp()
+    ? m.targets.filter((r) => r.contact_ref && rowKey(r) === r.markdown_uuid).map(rowKey)
+    : [];
+
+async function addCards(m: MenuScope) {
+  try {
+    pushToast(addedSummary(await addContactPages(cardsAmong(m))), "info");
+  } catch (e) {
+    pushToast((e as Error).message);
+  }
+}
+
 const mutedAmong = (m: MenuScope, muted: boolean) =>
   mutable ? m.targets.filter((r) => (r.muted === "yes") === muted) : [];
 
@@ -1894,7 +1915,16 @@ const menuItems: (MenuCommandItem | "divider")[] = [
   ),
   dividerAfter((m) => mutedAmong(m, true).length + mutedAmong(m, false).length > 0),
   ...chipSlots.commandItems,
-  dividerAfter((m) => m.chip !== null),
+  // One row's chip offers it already.
+  entry(
+    "add-people",
+    (m) => {
+      const n = cardsAmong(m).length;
+      return n > 1 || (n === 1 && !m.chip) ? `Add to contacts${countSuffix(n)}` : null;
+    },
+    (m) => void addCards(m),
+  ),
+  dividerAfter((m) => m.chip !== null || cardsAmong(m).length > 0),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,

@@ -16,7 +16,7 @@ import type { MenuEntry } from "@/grid/menu";
 import { filterToken } from "@/grid/query";
 import { pushToast } from "@/toasts";
 import { menuTarget, rowActions, withBrowse } from "./rowActions";
-import { personSource, searchSource } from "./cardSources";
+import { contactSubject, pageSubject, personSource, searchSource } from "./cardSources";
 import {
   chipLook,
   chipMenu,
@@ -32,6 +32,7 @@ import {
   type NormalizedContact,
 } from "./contacts";
 import { entityFromUri } from "./chipLinks";
+import { contactPageLook, contactPages } from "./contactPages";
 import {
   browseQuery,
   entities,
@@ -53,12 +54,13 @@ import { CONTACT, type ChipRef } from "@/search/queryText";
 import { dateCopyText, dateMenu, dateWallText, dayQuery, parseStamp, sideQuery } from "./dates";
 import { labelMenu, labelQuery } from "./labelChip";
 
-/** What a chip names: what the search field can name, a date or a
- *  label, which only a document draws, a document, which a grid draws, or
- *  a node of a source's tree, with the name and the document its card
- *  opens on. */
+/** What a chip names: what the search field can name, whoever a contact's
+ *  page is about, a date or a label, which only a document draws, a
+ *  document, which a grid draws, or a node of a source's tree, with the
+ *  name and the document its card opens on. */
 export type AnyChipRef =
   | ChipRef
+  | { kind: "page"; page: string }
   | { kind: "date"; datetime: string }
   | { kind: "label"; name: string }
   | { kind: "document"; uri: string }
@@ -177,7 +179,7 @@ export function asMenuEntries(entries: ChipEntry[], run: (id: ChipEntryId) => vo
 }
 
 export const CHIP_SELECTOR =
-  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], a.chip[data-doc], a.chip[data-node], time.chip[datetime], span.chip[data-label]";
+  "a.chip[data-handle], a.chip[data-entity], a.chip[data-contact], a.chip[data-contact-page], a.chip[data-doc], a.chip[data-node], time.chip[datetime], span.chip[data-label]";
 
 /** The chip element `target` is in, of any kind; null off a chip. */
 export function chipElAt(target: EventTarget | null | undefined): HTMLElement | null {
@@ -190,6 +192,9 @@ export function chipOf(el: HTMLElement): Chip | null {
   const shownAs = el.dataset.shownAs ?? "";
   if (el.dataset.entity) return { ref: { kind: "entity", uri: el.dataset.entity }, shownAs };
   if (el.dataset.handle) return { ref: { kind: "person", handle: el.dataset.handle }, shownAs };
+  if (el.dataset.contactPage) {
+    return { ref: { kind: "page", page: el.dataset.contactPage }, shownAs };
+  }
   if (el.dataset.contact) return { ref: { kind: "contact", id: el.dataset.contact }, shownAs };
   if (el.dataset.doc) return { ref: { kind: "document", uri: el.dataset.doc }, shownAs };
   if (el.dataset.node) {
@@ -215,6 +220,8 @@ export function chipName(chip: Chip): string {
       return chipLook(ref.handle, shownAs, people.get(ref.handle) ?? NOBODY).text;
     case "contact":
       return contactLook(shownAs || "a contact", contactsById.get(ref.id)).text;
+    case "page":
+      return contactPageLook(shownAs, contactPages.get(ref.page)).text;
     case "document":
     case "node":
       return shownAs || ref.uri;
@@ -249,8 +256,19 @@ export function chipMenuOf(chip: Chip): ChipEntry[] {
     case "contact": {
       const name = chipName(chip);
       return [
-        { id: "copy-name", label: `Copy “${name}”` },
+        { id: "open", label: "Open contact" },
+        { id: "copy-name", label: `Copy “${name}”`, separator: true },
         { id: "search", label: `Everything with ${name}`, separator: true },
+      ];
+    }
+    case "page": {
+      const add: ChipEntry[] = hasContactsApp()
+        ? [{ id: "add", label: "Add to contacts…", separator: true }]
+        : [];
+      return [
+        { id: "open", label: "Open" },
+        { id: "copy-name", label: `Copy “${chipName(chip)}”`, separator: true },
+        ...add,
       ];
     }
     case "document":
@@ -277,6 +295,7 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
       return everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null);
     case "contact":
       return contactQuery(ref.id);
+    case "page":
     case "document":
     case "node":
       return null;
@@ -291,8 +310,7 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
 
 /** What double-clicking a chip opens: a person's card, led by the
  *  source the chip was seen in; a group's sync dashboard; a step's log;
- *  a document's card; a date's or a label's search. Null for a contact,
- *  which has no card of its own yet. */
+ *  a document's card; a date's or a label's search. */
 export function chipCardSource(
   ref: AnyChipRef,
   seenIn: string | null,
@@ -302,9 +320,9 @@ export function chipCardSource(
     case "entity":
       return entityCardSource(ref.uri);
     case "person":
-      return personSource(ref.handle, { seenIn });
     case "contact":
-      return null;
+    case "page":
+      return personSource(subjectOf(ref), { seenIn });
     case "document":
       return documentCardSource(ref.uri);
     case "node":
@@ -317,9 +335,24 @@ export function chipCardSource(
   }
 }
 
-/** The person a chip just opened. Their page takes the keyboard from it,
- *  so Enter adds them; a page opened any other way leaves it alone. */
-export const justOpened = shallowRef<{ handle: string } | null>(null);
+type PersonRef = Extract<AnyChipRef, { kind: "person" | "contact" | "page" }>;
+
+/** What a person's page opened from this chip is about. */
+function subjectOf(ref: PersonRef): string {
+  switch (ref.kind) {
+    case "person":
+      return ref.handle;
+    case "contact":
+      return contactSubject(ref.id);
+    case "page":
+      return pageSubject(ref.page);
+  }
+}
+
+/** The person a chip just opened, as their page's source names them. Their
+ *  page takes the keyboard from it, so Enter adds them; a page opened any
+ *  other way leaves it alone. */
+export const justOpened = shallowRef<{ subject: string } | null>(null);
 
 /** Open what a chip names; false for one that names nothing to open. */
 export function openChip(
@@ -330,7 +363,8 @@ export function openChip(
 ): boolean {
   const source = chipCardSource(ref, seenIn, shownAs);
   if (!source) return false;
-  justOpened.value = ref.kind === "person" ? { handle: ref.handle } : null;
+  const person = ref.kind === "person" || ref.kind === "contact" || ref.kind === "page";
+  justOpened.value = person ? { subject: subjectOf(ref) } : null;
   openCard(source);
   return true;
 }
