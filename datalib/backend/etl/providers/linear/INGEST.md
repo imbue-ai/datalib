@@ -170,7 +170,7 @@ Each table's list is beside it in `ingest/schema_raw.rs`:
   derived counts (`issueCount`, `customerTicketCount`, `resourceCount`,
   `commentCount`).
 - A person's status and `lastSeen`; a project update's `isStale`, which
-  turns true with time alone; a comment's AI `threadSummary`.
+  turns true with time alone.
 
 Id lists Linear returns in no promised order (`labelIds`, and any
 `{ nodes: [{ id }] }` connection) are sorted before storing

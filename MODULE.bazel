@@ -72,6 +72,18 @@ http_archive(
     build_file = "//third-party/doltlite:amalgamation.BUILD",
 )
 
+# The fake Slack, Linear and Google the downloader tests run against, at one
+# commit of github.com/imbue-ai/fake-services; its npm packages are
+# //third-party/fake-services/runtime. Bump both together
+# (third-party/fake-services/README.md).
+http_archive(
+    name = "fake_services",
+    urls = ["https://github.com/imbue-ai/fake-services/archive/c8f29daabe3553ced5226dc056003552dfab8ae4.tar.gz"],
+    sha256 = "5376149b2d67937546f7cb1c7043e5b7b232fa4cc24d5fe6ff610779b4fa5734",
+    strip_prefix = "fake-services-c8f29daabe3553ced5226dc056003552dfab8ae4",
+    build_file = "//third-party/fake-services:fake_services.BUILD.bazel",
+)
+
 # BLAKE3's source, at the version the amalgamation embeds, for its header
 # and test vectors alone: `//third-party/doltlite:blake3_kernels_test`
 # checks doltlite's hashing against them, and fails if this and the
@@ -719,6 +731,16 @@ npm.npm_translate_lock(
     verify_node_modules_ignored = "//:.bazelignore",
 )
 use_repo(npm, "npm_modal")
+
+# The packages the fake-services launcher imports, which the downloader
+# tests run against (third-party/fake-services/README.md): the same
+# lockfile discipline as latchkey's.
+npm.npm_translate_lock(
+    name = "npm_fake_services",
+    pnpm_lock = "//third-party/fake-services/runtime:pnpm-lock.yaml",
+    verify_node_modules_ignored = "//:.bazelignore",
+)
+use_repo(npm, "npm_fake_services")
 
 # The build tools for VS Code's tree widget (third-party/vscode-tree/
 # README.md): esbuild, and the Playwright its facts test drives.
