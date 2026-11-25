@@ -451,7 +451,6 @@ google_people
     addressbook_id
     resource_name
     display_name
-    photo_url
 google_people_bookkeeping
     id
     fetched_at_utc
@@ -464,7 +463,7 @@ google_people_bookkeeping
 google_photos
     id
     person_id
-    photo_url
+    photo_source
     blake3
 google_photos_bookkeeping
     id

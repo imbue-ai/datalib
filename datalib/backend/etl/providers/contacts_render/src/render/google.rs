@@ -239,7 +239,7 @@ fn location(l: &Value) -> Option<String> {
     let floor = str_of(l, "floor").map(|f| format!("floor {f}"));
     let parts = [
         str_of(l, "value"),
-        str_of(l, "buildingId"),
+        str_of(l, "buildingId").filter(|b| b != "$$NO_BUILDING$$"),
         floor,
         str_of(l, "floorSection"),
         str_of(l, "deskCode"),
@@ -457,7 +457,8 @@ mod tests {
                 "events": [{"date": {"year": 2379, "month": 4, "day": 1}, "type": "anniversary", "formattedType": "Anniversary"}],
                 "relations": [{"person": "Deanna Troi", "type": "spouse", "formattedType": "Spouse"}],
                 "urls": [{"value": "https://titan.test", "type": "work", "formattedType": "Work"}],
-                "locations": [{"value": "desk", "type": "desk", "buildingId": "NCC-1701-D", "floor": "8"}],
+                "locations": [{"value": "desk", "type": "desk", "buildingId": "NCC-1701-D", "floor": "8"},
+                    {"value": "Ten Forward", "buildingId": "$$NO_BUILDING$$"}],
                 "userDefined": [{"key": "Instrument", "value": "Trombone"}],
                 "biographies": [{"value": "Plays jazz.\nBeard since 2365.", "contentType": "TEXT_PLAIN"}],
                 "memberships": filed(&["5ea9", "myContacts", "starred"])
@@ -514,6 +515,7 @@ mod tests {
                 ("Relation (spouse)", "Deanna Troi"),
                 ("Website (work)", "https://titan.test"),
                 ("Location", "desk, NCC-1701-D, floor 8"),
+                ("Location", "Ten Forward"),
                 ("Instrument", "Trombone"),
             ]
         );

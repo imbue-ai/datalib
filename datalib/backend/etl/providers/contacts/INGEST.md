@@ -118,7 +118,7 @@ none.
 - `canonicalForm` came only with a number already written with its `+`
   and country code.
 - A `DOMAIN_PROFILE` location's `value` is the word `desk`; `buildingId`
-  and `floor` say where.
+  and `floor` say where, `$$NO_BUILDING$$` standing for no building.
 - Two listings in a row agree but for the photo links: same order, same
   `etag`s and `updateTime`s. The sync token differs every time.
 
