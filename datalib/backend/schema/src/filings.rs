@@ -1,12 +1,14 @@
-// What a row or a container is filed under besides the container that
-// holds it: an email thread under each of its labels, a photo under its
-// keywords. Carried by the document that names it, like `data_nodes`.
+// What a document or a container read together is filed under besides the
+// container that holds it: an email thread under each of its labels, a
+// photo under its keywords. A place is never filed: it lives in one place.
+// Carried by the document that names it, like `data_nodes`.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// A row or a container filed under a container that does not hold it:
-/// an email thread under each of its labels, a photo under a keyword.
+/// What is read together, filed under a container that does not hold it:
+/// an email thread under each of its labels, a photo under a keyword. The
+/// rows under it are those whose `conversation_uuid` it is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(
     table = "filings",

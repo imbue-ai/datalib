@@ -2,9 +2,11 @@
 
 use datalib_query::table::SearchTable;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn, INDEXES as GRID_INDEXES};
+use datalib_schema::nodes::PLACE_INDEX;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
 use datalib_table::BulkUpsertable;
+use datalib_unified_grid_and_search_index::at_node::Arms;
 use datalib_unified_grid_and_search_index::db::{
     matching_sql, DOCUMENTS_INDEX, KEPT_DOCUMENTS, KEPT_ROWS,
 };
@@ -14,7 +16,7 @@ use datalib_unified_grid_and_search_index::dolt_repo::{
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::{group_sql, where_within, Within};
 use datalib_unified_grid_and_search_index::problems::{Ids, ProblemsQuery};
-use datalib_unified_grid_and_search_index::query::parse_query;
+use datalib_unified_grid_and_search_index::query::{parse_query, ParsedQuery};
 use datalib_unified_grid_and_search_index::repo::{DocumentStore, IndexRepo, LocatedProblem};
 use datalib_unified_grid_and_search_index::sort::Sort;
 use datalib_unified_grid_and_search_index::view;
@@ -799,7 +801,63 @@ async fn every_filter_key_is_served_by_an_index() {
 
 /// Keys whose one value names one thing, so few rows: their index needs no
 /// `source_id`, because the rows read for it are few.
-const NAMES_ONE_THING: &[&str] = &["id", "datalib_document_id", "notion_page"];
+const NAMES_ONE_THING: &[&str] = &["id", "notion_page"];
+
+/// What may stand beside a source and one other key.
+const BESIDE: &[&str] = &[
+    "",
+    " is:document",
+    " after:2025-01-01",
+    " is:document after:2025-01-01",
+    " from:riker",
+    " email:x",
+];
+
+/// Each way a node has rows, and the index a search at it reads: `None`
+/// where it has two ways, whose rows are found first and then fetched.
+const AT_ARMS: &[(Arms, Option<&str>)] = {
+    const fn arms(held: bool, filed: bool, own: bool) -> Arms {
+        Arms { held, filed, own }
+    }
+    &[
+        (arms(true, false, false), Some("grid_rows_by_place")),
+        (arms(false, true, false), Some("grid_rows_by_conversation")),
+        (arms(false, false, true), Some("grid_rows_by_conversation")),
+        (arms(true, true, false), None),
+        (arms(true, false, true), None),
+        (arms(false, true, true), None),
+        (arms(true, true, true), None),
+    ]
+};
+
+/// Each statement a search of `parsed` runs, by what it is for.
+fn statements_of(
+    parsed: &ParsedQuery,
+    within: &[Within],
+) -> Vec<(&'static str, (String, Vec<String>))> {
+    let (where_sql, params) = where_within(parsed, within);
+    let mut statements = vec![
+        ("listing", listing_sql(parsed, &[], within)),
+        (
+            "groups",
+            (
+                group_sql("grid_rows", &where_sql, &[GridRowColumn::Author]),
+                params.clone(),
+            ),
+        ),
+        (
+            "pages",
+            (
+                documents_with_pages_sql("grid_rows", "markdowns", &where_sql, " AND"),
+                params,
+            ),
+        ),
+    ];
+    if within.is_empty() {
+        statements.push(("matching", matching_sql("grid_rows", KEPT_ROWS, parsed)));
+    }
+    statements
+}
 
 /// A source can be half the library, and SQLite, which has no statistics,
 /// guesses that its index narrows as hard as any other: `source:x
@@ -818,13 +876,14 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
         // Two indexes SQLite rates the same are a tie it breaks by the
         // order they were made in: no plan here may rest on that order.
         if reversed {
-            for (_t, ddl) in GRID_INDEXES.iter().rev() {
+            let made = GRID_INDEXES.iter().map(|(_t, ddl)| *ddl);
+            for ddl in made.chain([PLACE_INDEX]).rev() {
                 let name = ddl.split_whitespace().nth(5).expect("an index name");
                 sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX {name}")))
                     .execute(&writer)
                     .await
                     .expect("drop");
-                sqlx::query(*ddl).execute(&writer).await.expect("create");
+                sqlx::query(ddl).execute(&writer).await.expect("create");
             }
         }
         let mut wrong: Vec<String> = Vec::new();
@@ -839,14 +898,7 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                 column,
                 value: Some("x".to_string()),
             };
-            for beside in [
-                "",
-                " is:document",
-                " after:2025-01-01",
-                " is:document after:2025-01-01",
-                " from:riker",
-                " email:x",
-            ] {
+            for beside in BESIDE {
                 // The source and the key as typed, and as the groups of a
                 // grouped grid that have been opened.
                 for (q, within) in [
@@ -858,34 +910,7 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                     (format!("source:x{beside}"), vec![held(key.column)]),
                 ] {
                     let parsed = parse_query(&q);
-                    let (where_sql, params) = where_within(&parsed, &within);
-                    let mut statements = vec![
-                        ("listing", listing_sql(&parsed, &[], &within)),
-                        (
-                            "groups",
-                            (
-                                group_sql("grid_rows", &where_sql, &[GridRowColumn::Author]),
-                                params.clone(),
-                            ),
-                        ),
-                        (
-                            "pages",
-                            (
-                                documents_with_pages_sql(
-                                    "grid_rows",
-                                    "markdowns",
-                                    &where_sql,
-                                    " AND",
-                                ),
-                                params,
-                            ),
-                        ),
-                    ];
-                    if within.is_empty() {
-                        statements
-                            .push(("matching", matching_sql("grid_rows", KEPT_ROWS, &parsed)));
-                    }
-                    for (what, (sql, params)) in statements {
+                    for (what, (sql, params)) in statements_of(&parsed, &within) {
                         let plan = explain(&writer, &sql, &params).await;
                         // `email:` is in no index, so its row is read.
                         let reads_the_index_alone = covered
@@ -905,6 +930,60 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                 }
             }
         }
+        for (arms, index) in AT_ARMS {
+            let node = "00000000-0000-8000-a000-000000000002";
+            for beside in BESIDE {
+                for (q, within) in [
+                    (format!("source:x at:{node}{beside}"), vec![]),
+                    (format!("at:{node}{beside}"), vec![]),
+                    (
+                        format!("at:{node}{beside}"),
+                        vec![Within {
+                            column: GridRowColumn::SourceId,
+                            value: Some("x".to_string()),
+                        }],
+                    ),
+                ] {
+                    let read = std::collections::HashMap::from([(node.to_string(), *arms)]);
+                    let parsed = parse_query(&q).with_arms(&read);
+                    for (what, (sql, params)) in statements_of(&parsed, &within) {
+                        let plan = explain(&writer, &sql, &params).await;
+                        let reads_the_index_alone =
+                            matches!(what, "listing" | "matching") && !beside.contains("email");
+                        let first = plan.iter().find(|d| d.contains(" grid_rows"));
+                        let starts = |with: &str| first.is_some_and(|d| d.starts_with(with));
+                        let by_row_id = starts("SEARCH grid_rows USING INTEGER PRIMARY KEY ");
+                        let right = match index {
+                            // A label's threads and a person's rows are two
+                            // sets, and it may start from either.
+                            Some(_) if arms.filed && beside.contains("from:") && by_row_id => true,
+                            Some(index) if reads_the_index_alone => {
+                                starts(&format!("SEARCH grid_rows USING COVERING INDEX {index} "))
+                            }
+                            Some(index) => searched_index(&plan) == Some(*index),
+                            None => by_row_id,
+                        };
+                        // However many ways it holds rows, no one is read
+                        // off what is wider than the node.
+                        let wide = plan.iter().any(|d| {
+                            d.starts_with("SCAN grid_rows")
+                                || [
+                                    "grid_rows_by_source_id",
+                                    "grid_rows_by_is_document",
+                                    "grid_rows_by_touched",
+                                ]
+                                .iter()
+                                .any(|index| d.contains(index))
+                        });
+                        if !right || wide {
+                            wrong.push(format!(
+                                "{what} of {q:?} ({arms:?}) within {within:?}: {plan:?}"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         for q in [
             "source:x",
             "source:x is:document",
@@ -919,6 +998,24 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
             let plan = plan_of(&writer, q).await;
             if searched_index(&plan) != Some("grid_rows_by_source_id") {
                 wrong.push(format!("{q:?} (not by its source): {plan:?}"));
+            }
+        }
+        // The documents a search by meaning can reach are most of the
+        // library: beside a person in a source it tried each one with each
+        // of the person's rows, and had not finished in a minute.
+        for q in [
+            "from:riker",
+            "source:x",
+            "source:x from:riker",
+            "source:x is:document",
+        ] {
+            let (_, (sql, params)) = statements_of(&parse_query(q), &[])
+                .into_iter()
+                .find(|(what, _)| *what == "pages")
+                .expect("the statement");
+            let plan = explain(&writer, &sql, &params).await;
+            if plan.iter().any(|d| d.contains("(markdown_uuid=?")) {
+                wrong.push(format!("pages of {q:?}: {plan:?}"));
             }
         }
         assert!(

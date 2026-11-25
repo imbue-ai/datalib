@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
+use crate::at_node::Arms;
 use crate::children::{
     self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, Only, RowFacts, Scope, Side,
     Split, Via,
@@ -295,7 +296,9 @@ fn search_row_select() -> String {
 /// row: a correlated look-up read each row's whole `markdowns` row, seconds
 /// on a large library. `INDEXED BY` refuses rather than fall back to that.
 /// The grid side is left to the planner, since the search's filters decide
-/// which of its indexes fits.
+/// which of its indexes fits; the `+` keeps it from starting at the
+/// searchable documents, which are most of the library, and which beside a
+/// person in a source it tried one by one with each of the person's rows.
 pub fn documents_with_pages_sql(
     grid_rows: &str,
     markdowns: &str,
@@ -304,8 +307,8 @@ pub fn documents_with_pages_sql(
 ) -> String {
     format!(
         "SELECT DISTINCT markdown_uuid, source_id FROM {grid_rows}{where_sql}{joiner} \
-         markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
-                           INDEXED BY markdowns_searchable WHERE searchable = 1)"
+         +markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
+                            INDEXED BY markdowns_searchable WHERE searchable = 1)"
     )
 }
 
@@ -443,7 +446,8 @@ impl DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let (sql, params) = matching_sql(at.grid_rows, columns, q);
+        let q = at.read_at(q).await?;
+        let (sql, params) = matching_sql(at.grid_rows, columns, &q);
         // Audited: as `search` — a literal table name, literal columns, a
         // literal index name and `build_where`'s static column names;
         // every value is bound.
@@ -640,6 +644,31 @@ fn grouping<R>(
 }
 
 impl At {
+    /// `q` with each `at:` told what puts a row there, read at this commit.
+    async fn read_at<'q>(
+        &mut self,
+        q: &'q ParsedQuery,
+    ) -> Result<std::borrow::Cow<'q, ParsedQuery>, RepoError> {
+        let nodes = q.nodes();
+        if nodes.is_empty() {
+            return Ok(std::borrow::Cow::Borrowed(q));
+        }
+        let mut read = std::collections::HashMap::new();
+        for node in nodes {
+            let facts: Result<(bool, bool, bool), _> = sqlx::query_as(crate::at_node::FACTS_SQL)
+                .bind(&node)
+                .fetch_one(&mut *self.tx)
+                .await;
+            match facts {
+                Ok((held, filed, own)) => {
+                    read.insert(node, Arms { held, filed, own });
+                }
+                Err(e) => return Err(RepoError::Internal(format!("look at {node}: {e}"))),
+            }
+        }
+        Ok(std::borrow::Cow::Owned(q.clone().with_arms(&read)))
+    }
+
     async fn child_key(&mut self, scope: &Scope, uuid: &str) -> Result<Option<String>, RepoError> {
         let parent = scope.parent.spelled();
         // Audited: `child_key_sql` is built from literals alone; every
@@ -1051,6 +1080,21 @@ impl IndexRepo for DoltRepo {
         })
     }
 
+    async fn sources_with_places(&self) -> Result<Vec<String>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        match sqlx::query_scalar(children::SOURCES_WITH_PLACES_SQL)
+            .fetch_all(&mut *at.tx)
+            .await
+        {
+            Ok(sources) => Ok(sources),
+            Err(e) => Err(RepoError::Internal(format!(
+                "list the sources that hold places: {e}"
+            ))),
+        }
+    }
+
     async fn source_ids(&self) -> Result<Vec<String>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
@@ -1075,7 +1119,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        let uuids = at.ordered_keys("grid_rows", q, sort, within).await?;
+        let q = at.read_at(q).await?;
+        let uuids = at.ordered_keys("grid_rows", &q, sort, within).await?;
         Ok(Listing {
             uuids,
             at: Some(at.commit),
@@ -1092,7 +1137,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(0);
         };
-        let (where_sql, mut params) = where_within(q, within);
+        let q = at.read_at(q).await?;
+        let (where_sql, mut params) = where_within(&q, within);
         let joiner = if where_sql.is_empty() {
             " WHERE"
         } else {
@@ -1126,7 +1172,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        let (where_sql, params) = where_within(q, within);
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = where_within(&q, within);
         let order = order_by(sort);
         let wanted = serde_json::to_string(uuids)
             .map_err(|e| RepoError::Internal(format!("encode uuids: {e}")))?;
@@ -1183,7 +1230,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Grouping::default());
         };
-        let (mut where_sql, mut params) = where_within(q, &[]);
+        let q = at.read_at(q).await?;
+        let (mut where_sql, mut params) = where_within(&q, &[]);
         if let Some(uuids) = among {
             let joiner = if where_sql.is_empty() {
                 " WHERE"
@@ -1213,7 +1261,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let (where_sql, params) = where_within(q, &[]);
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = where_within(&q, &[]);
         at.value_counts(at.grid_rows, &where_sql, &params, column, typed)
             .await
     }
@@ -1231,7 +1280,8 @@ impl IndexRepo for DoltRepo {
         if kinds.is_empty() {
             return Ok(Vec::new());
         }
-        let (where_sql, params) = where_within(q, &[]);
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = where_within(&q, &[]);
         let (held, needle) = vals_holding("v.val_id", typed);
         let sql = term_values_sql(at.grid_rows, &where_sql, kinds, &held, by_name);
         // Audited: the kinds are the enum's codes, the table names are
@@ -1496,10 +1546,11 @@ impl IndexRepo for DoltRepo {
         &self,
         q: &ParsedQuery,
     ) -> Result<Vec<(String, String)>, RepoError> {
-        let (where_sql, params) = build_where(q);
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = build_where(&q);
         let joiner = if where_sql.is_empty() {
             " WHERE"
         } else {
@@ -1524,10 +1575,11 @@ impl IndexRepo for DoltRepo {
         q: &ParsedQuery,
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let (where_sql, params) = build_where(q);
         let Some(mut at) = self.pinned().await? else {
             return Ok(Default::default());
         };
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = build_where(&q);
         let wanted = serde_json::to_string(markdown_uuids)
             .map_err(|e| RepoError::Internal(format!("encode document ids: {e}")))?;
         let among = "markdown_uuid IN (SELECT value FROM json_each(?))";

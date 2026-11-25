@@ -74,6 +74,7 @@ pub(crate) fn column_equals<C: Column>(column: C, beside_a_key: bool) -> String 
 pub(crate) fn holds_a_key<C: Column>(q: &ParsedQuery<C>, within: &[Within<C>]) -> bool {
     let typed = q.terms.iter().any(|t| match t.field {
         Field::Column(key) => !t.negate && t.value != ANY_VALUE && !is_source(key.column),
+        Field::At => !t.negate,
         Field::Before
         | Field::After
         | Field::Is(_)
@@ -126,6 +127,7 @@ pub(crate) fn build_where_beside<C: Column>(
             Field::Terms(key) => terms_clause(key, term),
             Field::Names => names_clause(term),
             Field::Text => text_clause(pk, term),
+            Field::At => crate::at_node::clause(&term.value, term.arms, term.negate),
             Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
                 (String::new(), Vec::new())
             }
@@ -264,7 +266,12 @@ fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
         && q.terms.iter().all(|t| match t.field {
             Field::Is(column) => column == GridRowColumn::IsDocument,
             Field::Column(key) => key.column == GridRowColumn::SourceId,
-            Field::Before | Field::After | Field::Terms(_) | Field::Text | Field::Names => false,
+            Field::Before
+            | Field::After
+            | Field::Terms(_)
+            | Field::Text
+            | Field::Names
+            | Field::At => false,
         })
 }
 

@@ -95,9 +95,10 @@ key the search bar filters on, each `(key, touched_at_utc, is_document,
 uuid)`; a filter on a key without one reads and sorts the whole table
 ([query plans](doltlite.md#query-plans-and-indexes)). A key whose one
 value many rows share (`kind`, `channel`, `subject`, `account`,
-`project`, `change`) has `source_id` after those, so the key beside
-`source:` is answered from its index alone; a key whose value names one
-thing (`id`, `datalib_document_id`, `notion_page`) has few rows to read.
+`project`, `change`, and the place and the conversation `at:` reads) has
+`source_id` after those, so the key beside `source:` is answered from its
+index alone; a key whose value names one thing (`id`, `notion_page`) has
+few rows to read.
 Beside either, `build_where` tells the planner a source is a share of
 the library (`likelihood`), or it would walk the source's index and read
 each row; `beside_a_key_a_source_is_tested_never_walked` checks every
@@ -329,9 +330,17 @@ on `(parent_uuid, sort_key, uuid)` that only the grid index has
 search groups by and the viewer opens: a thread, a chat, a page) or a
 **place** (what a person browses: a channel, a mailbox, a calendar), or
 both; `read_uuid` and `place_uuid` are the nearest container above the
-row of each kind, so grouping by either is one column. Besides its
-parent a row or container may be filed under others, an email thread
-under each of its labels: those are `filings` rows.
+row of each kind, so grouping by either is one column. A place lives in a
+place, and in one only. Besides its parent, a document or a container
+read together may be filed under others, an email thread under each of
+its labels: those are `filings` rows, and a place has none.
+
+The search's `at:<node>` (`unified_grid_and_search_index/src/at_node.rs`)
+reads these: the rows whose `place_uuid` the node is, those in what is
+filed under it, and its own document when it is one, off
+`grid_rows_by_place` and `grid_rows_by_conversation` alone. A node with
+two of these is read as one set of row ids, since SQLite serves an `OR`
+of them beside a source or `is:document` from that one's index, whole.
 
 **Every container is a row.** Most are already a document's row: a
 thread or a chat is the document that holds its messages, under the

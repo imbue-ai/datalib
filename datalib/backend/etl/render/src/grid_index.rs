@@ -34,7 +34,7 @@ use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
-use datalib_schema::nodes::{CHILDREN_INDEXES, DDL as NODES_DDL};
+use datalib_schema::nodes::{CHILDREN_INDEXES, DDL as NODES_DDL, PLACE_INDEX};
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
@@ -622,12 +622,13 @@ async fn drop_changed_indexes(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-/// The search bar's indexes, and those that list a container's children.
+/// The search bar's indexes, and those that read the tree.
 fn read_indexes() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_INDEXES
         .iter()
         .map(|(_table, ddl)| *ddl)
         .chain(CHILDREN_INDEXES.iter().copied())
+        .chain([PLACE_INDEX])
 }
 
 /// The read indexes, which no write looks anything up by, are left out of

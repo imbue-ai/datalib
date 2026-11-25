@@ -17,6 +17,12 @@ pub const CHILDREN_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS filings_by_under ON filings (under_uuid, node_uuid)",
 ];
 
+/// What `at:<node>` reads a place's rows off, newest first and from the
+/// index alone, as the indexes of the search's own keys are. In the grid
+/// index alone.
+pub const PLACE_INDEX: &str = "CREATE INDEX IF NOT EXISTS grid_rows_by_place \
+     ON grid_rows (place_uuid, touched_at_utc, is_document, uuid, source_id)";
+
 /// A data node, its columns as on [`super::data_nodes::DataNodeRow`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "nodes", primary_key = "uuid")]

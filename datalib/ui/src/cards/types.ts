@@ -234,7 +234,6 @@ export type ViewLibs = {
   // The library as a tree, its sources and their places; the node
   // opened in it shown beside. See cards/LibraryCard.ce.vue.
   libraryTreeView: () => CardRender;
-  // One node of that tree: what it holds, beside a preview. See
-  // cards/NodeCard.ce.vue.
-  nodeView: (opts?: { node?: string; name?: string | null }) => CardRender;
+  // One node of that tree: the search held to it. See libs/nodeView.ts.
+  nodeView: (opts?: { node?: string; name?: string | null; doc?: string | null }) => CardRender;
 };
