@@ -293,7 +293,7 @@ fn reaction_pills(reactions: &[Reaction]) -> Option<String> {
             format!(
                 "<span class=\"msg-reaction\">{emoji} {n}<span class=\"msg-reactors\"> {who}</span></span>",
                 emoji = escape_md_inline(emoji),
-                n = rs.len(),
+                n = rs.iter().map(|r| r.count).sum::<u32>(),
                 who = who.join(", "),
             )
         })
@@ -349,6 +349,7 @@ mod tests {
             tags: vec!["reply".into()],
             link: Some("https://example.invalid/m/1".into()),
             reactions: vec![Reaction {
+                count: 1,
                 uuid: "r1".into(),
                 emoji: "🖖".into(),
                 name: "Spock".into(),
@@ -401,6 +402,7 @@ mod tests {
     #[test]
     fn a_chat_message_continues_a_run_and_counts_its_reactions() {
         let spock = |uuid: &str, emoji: &str, name: &str| Reaction {
+            count: 1,
             uuid: uuid.into(),
             emoji: emoji.into(),
             name: name.into(),

@@ -342,8 +342,8 @@ service API through `latchkey` (`git grep -n 'name = ".*_live"' --
 `gitlab_live` and `notion_live` each download a small known fixture
 (e.g. one conversation), then assert a curated stable view against
 committed [insta](https://insta.rs) snapshots. The others
-(`email:gmail_live`, `calendar_live`, `google_drive_live`,
-`todoist_live`) check what they downloaded with no golden.
+(`email:gmail_live`, `calendar_live`, `discord_live`,
+`google_drive_live`, `todoist_live`) check what they downloaded with no golden.
 They are `bazel run` targets, not tests, so `bazel test //...` never
 runs them. They need `latchkey` creds for the service and
 `LATCHKEY_CURL` pointing at the router curl (which hands

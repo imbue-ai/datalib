@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
+use datalib_etl::blob_cas::BlobBundle;
 use datalib_etl::progress::Progress;
 use datalib_etl_chat_common::render::{ChatRenderer, RenderProfile, RenderUnits};
 use datalib_etl_chat_common::types::{
@@ -14,7 +15,7 @@ use datalib_etl_chat_common::types::{
     NormalizedDoc, NormalizedReaction, Replies, UpstreamRef,
 };
 use datalib_etl_chat_common::unread::{is_unread, Marks};
-use datalib_etl_chat_common::TextFormat;
+use datalib_etl_chat_common::{render_paged, Page, PageEnd, PagedChats, TextFormat};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_handle::Handle;
 
@@ -23,8 +24,7 @@ use super::parse::{ParsedSlack, Shared, SlackStore, SlackThreadRenderUnit};
 use super::{cards, emoji};
 use super::{ids, slack_link, ts_to_ms, Message};
 use datalib_etl_render::inputs::Lookup;
-use datalib_etl_render::pages::{batches, PageSize};
-use datalib_etl_render::processor::Unparsed;
+use datalib_etl_render::pages::{PageSize, RenderUnitPages};
 use datalib_etl_slack::ingest::schema_raw::split_key;
 use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason, Severity};
@@ -89,17 +89,6 @@ pub struct RenderSummary {
     /// Every thread rendered, by uuid — what the processor declares
     /// through `RenderCtx::declare_render_unit`.
     pub render_units: RenderUnits,
-}
-
-/// How one page of a store's render ended, for the processor to declare
-/// before the next page is read.
-pub struct PageEnd {
-    /// The stale threads this page looked at, by render unit key: declared
-    /// with nothing first, so one with no message left goes.
-    pub looked_at: Vec<String>,
-    pub render_units: RenderUnits,
-    /// `messages` rows of the page that would not read as JSON.
-    pub unparsed: Vec<Unparsed>,
 }
 
 fn profile() -> RenderProfile {
@@ -180,31 +169,57 @@ pub fn render_store(
         progress,
         on_doc_complete,
     );
-    let mut pages = store.pages(size.render_units);
-    while let Some(page) = store.next_page(&mut pages)? {
-        render_threads(
-            &lookups,
-            &page.threads,
-            Some(store),
-            size.bytes,
-            source_id,
-            &mut renderer,
-        )?;
-        let looked_at = page
-            .looked_at
-            .iter()
-            .filter_map(|key| {
-                let (team, channel, ts) = split_key(key)?;
-                Some(ids::thread(source_id, team, channel, ts).uuid)
-            })
-            .collect();
-        on_page(PageEnd {
-            looked_at,
-            render_units: renderer.take_render_units(),
-            unparsed: page.unparsed,
-        })?;
+    let pages = store.pages(size.render_units);
+    let chats = Chats {
+        store,
+        lookups,
+        source_id,
+    };
+    render_paged(&chats, pages, size.bytes, &mut renderer, on_page)
+}
+
+struct Chats<'a> {
+    store: &'a SlackStore,
+    lookups: Lookups<'a>,
+    source_id: &'a str,
+}
+
+impl PagedChats for Chats<'_> {
+    type Conversation = SlackThreadRenderUnit;
+
+    fn next_page(
+        &self,
+        pages: &mut RenderUnitPages,
+    ) -> Result<Option<Page<SlackThreadRenderUnit>>> {
+        let page = self.store.next_page(pages)?;
+        Ok(page.map(|page| Page {
+            looked_at: page
+                .looked_at
+                .iter()
+                .filter_map(|key| {
+                    let (team, channel, ts) = split_key(key)?;
+                    Some(ids::thread(self.source_id, team, channel, ts).uuid)
+                })
+                .collect(),
+            ..page
+        }))
     }
-    Ok(())
+
+    fn attachment_bytes(&self, thread: &SlackThreadRenderUnit) -> u64 {
+        thread.attachment_bytes()
+    }
+
+    fn load_blobs(&self, batch: &[&SlackThreadRenderUnit]) -> Result<Vec<SlackThreadRenderUnit>> {
+        self.store.load_blobs(batch)
+    }
+
+    fn chat(&self, thread: &SlackThreadRenderUnit) -> NormalizedChat {
+        build_chat(&self.lookups, thread, self.source_id)
+    }
+
+    fn blobs<'c>(&self, thread: &'c SlackThreadRenderUnit) -> &'c BlobBundle {
+        &thread.blobs
+    }
 }
 
 /// Renders every thread in `parsed`, its attachments already loaded.
@@ -223,52 +238,17 @@ pub fn render_all(
         progress,
         on_doc_complete,
     );
-    render_threads(
-        &lookups,
-        &parsed.threads,
-        None,
-        u64::MAX,
-        source_id,
-        &mut renderer,
-    )?;
+    for thread in &parsed.threads {
+        renderer
+            .render_chat(&build_chat(&lookups, thread, source_id), &thread.blobs)
+            .context("slack chat-common render")?;
+    }
     let cc = renderer.finish();
     Ok(RenderSummary {
         threads_total: parsed.threads.len(),
         threads_rendered: cc.docs_rendered,
         render_units: cc.render_units,
     })
-}
-
-/// One document per thread, each built just before it renders. Its
-/// attachments are read from `blobs` a batch of at most `blob_bytes`
-/// ahead.
-fn render_threads(
-    lookups: &Lookups<'_>,
-    threads: &[SlackThreadRenderUnit],
-    blobs: Option<&SlackStore>,
-    blob_bytes: u64,
-    source_id: &str,
-    renderer: &mut ChatRenderer<'_>,
-) -> Result<()> {
-    let weights: Vec<u64> = threads.iter().map(|t| t.attachment_bytes()).collect();
-    for range in batches(&weights, blob_bytes) {
-        let batch: Vec<&SlackThreadRenderUnit> = threads[range].iter().collect();
-        let loaded;
-        let batch: Vec<&SlackThreadRenderUnit> = match blobs {
-            Some(store) => {
-                loaded = store.load_blobs(&batch)?;
-                loaded.iter().collect()
-            }
-            None => batch,
-        };
-        for render_unit in batch {
-            let chat = build_chat(lookups, render_unit, source_id);
-            renderer
-                .render_chat(&chat, &render_unit.blobs)
-                .context("slack chat-common render")?;
-        }
-    }
-    Ok(())
 }
 
 fn build_chat(
@@ -737,6 +717,7 @@ fn build_reactions(
             // empty user component.
             let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, "");
             out.push(NormalizedReaction {
+                count: 1,
                 reaction_uuid: id.uuid.clone(),
                 reactor_handle: None,
                 // A count, not a person.
@@ -750,6 +731,7 @@ fn build_reactions(
             for u in users {
                 let id = ids::reaction(source_id, &m.team_id, &m.channel_id, &m.ts, name, u);
                 out.push(NormalizedReaction {
+                    count: 1,
                     reaction_uuid: id.uuid.clone(),
                     reactor_handle: Handle::slack(&m.team_id, u),
                     reactor_kind: AuthorKind::Named,

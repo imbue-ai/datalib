@@ -216,6 +216,7 @@ impl Medium {
             HandleKind::Email => Medium::Email,
             HandleKind::Tel => Medium::Phone,
             HandleKind::Slack
+            | HandleKind::Discord
             | HandleKind::SignalAci
             | HandleKind::Facebook
             | HandleKind::Linkedin

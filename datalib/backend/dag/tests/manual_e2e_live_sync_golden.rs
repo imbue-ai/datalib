@@ -299,6 +299,8 @@ const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
 ///   out of the golden as files; the tables must not let them back in.
 ///   Linear's lists of people, teams, states, labels, statuses and
 ///   initiatives are the same: read whole whatever projects are chosen.
+///   So are Discord's channels, threads and roles of a server, whatever
+///   channels are chosen.
 /// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
@@ -333,6 +335,10 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("linear", "project_statuses_bookkeeping"),
     ("linear", "initiatives"),
     ("linear", "initiatives_bookkeeping"),
+    ("discord", "channels"),
+    ("discord", "channels_bookkeeping"),
+    ("discord", "roles"),
+    ("discord", "roles_bookkeeping"),
     ("airvisual", "airvisual_samples"),
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),

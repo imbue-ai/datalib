@@ -12,6 +12,7 @@ const KINDS = new Set([
   "email",
   "tel",
   "slack",
+  "discord",
   "signal_aci",
   "facebook",
   "linkedin",
@@ -95,6 +96,10 @@ function readHandle(href) {
       // A model's id (`Handle::ai_model`): no whitespace, lowercase.
       return value !== "" && !/\s/.test(value) ? `ai_model:${value.toLowerCase()}` : null;
     }
+    if (kind === "discord") {
+      // A snowflake's digits (`Handle::discord`).
+      return /^\d{1,20}$/.test(value) ? `discord:${value}` : null;
+    }
     if (kind === "whatsapp") {
       // A linked id's digits (`Handle::whatsapp_lid`).
       return /^\d+$/.test(value) ? `whatsapp:${value}` : null;
@@ -137,6 +142,7 @@ export function uriFromHandle(handle) {
   if (kind === "facebook") return `datalib:handle/facebook/${percentEncode(value)}`;
   if (kind === "linkedin") return `https://www.linkedin.com/in/${percentEncode(value)}`;
   if (
+    kind === "discord" ||
     kind === "google" ||
     kind === "github" ||
     kind === "gitlab" ||

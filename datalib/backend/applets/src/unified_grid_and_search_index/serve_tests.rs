@@ -237,6 +237,7 @@ fn people_by_handle_gives_each_sources_account() {
     assert_eq!(
         sources,
         [
+            "discord",
             "facebook",
             "google-drive",
             "google-takeout",

@@ -27,6 +27,7 @@ pub fn ingest_methods(source_type: SourceType) -> &'static [IngestMethod] {
             datalib_etl_file_inventory_config::FileInventoryConfig::METHODS
         }
         SourceType::Garmin => datalib_etl_garmin_config::GarminConfig::METHODS,
+        SourceType::Discord => datalib_etl_discord_config::DiscordConfig::METHODS,
         SourceType::Github => datalib_etl_github_config::GithubConfig::METHODS,
         SourceType::Gitlab => datalib_etl_gitlab_config::GitlabConfig::METHODS,
         SourceType::GoogleTakeout => {

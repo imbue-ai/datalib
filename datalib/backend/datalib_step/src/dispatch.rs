@@ -219,6 +219,12 @@ pub fn plan(
             datalib_etl_slack,
             datalib_etl_slack_render
         ),
+        SourceType::Discord => arm!(
+            datalib_etl_discord_config::DiscordConfig,
+            datalib_etl_discord_config::DiscordRenderConfig,
+            datalib_etl_discord,
+            datalib_etl_discord_render
+        ),
         SourceType::Github => arm!(
             datalib_etl_github_config::GithubConfig,
             datalib_etl_github_config::GithubRenderConfig,
@@ -408,6 +414,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
         SourceType::Claude => datalib_etl_claude::processor::migrate(raw_dir).await,
         SourceType::Chatgpt => datalib_etl_chatgpt::processor::migrate(raw_dir).await,
         SourceType::Slack => datalib_etl_slack::processor::migrate(raw_dir).await,
+        SourceType::Discord => datalib_etl_discord::processor::migrate(raw_dir).await,
         SourceType::Github => datalib_etl_github::processor::migrate(raw_dir).await,
         SourceType::Gitlab => datalib_etl_gitlab::processor::migrate(raw_dir).await,
         SourceType::Notion => datalib_etl_notion::processor::migrate(raw_dir).await,
