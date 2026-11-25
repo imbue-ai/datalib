@@ -10,9 +10,7 @@ use datalib_unified_grid_and_search_index::at_node::Arms;
 use datalib_unified_grid_and_search_index::db::{
     matching_sql, DOCUMENTS_INDEX, KEPT_DOCUMENTS, KEPT_ROWS,
 };
-use datalib_unified_grid_and_search_index::dolt_repo::{
-    listing_sql, DoltRepo,
-};
+use datalib_unified_grid_and_search_index::dolt_repo::{listing_sql, DoltRepo};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::{group_sql, where_within, Within};
 use datalib_unified_grid_and_search_index::problems::{Ids, ProblemsQuery};
