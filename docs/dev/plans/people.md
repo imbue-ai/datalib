@@ -4,8 +4,10 @@
 nothing here is built. What the screens do was seen by using the TNG
 demo. The numbers are counts from copies of real libraries and from one
 real address book. If this is agreed, it replaces
-[`contact_linking.md`](contact_linking.md)'s "Where links are made" and
-most of [`contact_editing.md`](contact_editing.md).*
+[`contact_linking.md`](contact_linking.md)'s "Where links are made".
+[`contact_editing.md`](contact_editing.md) (editing a contact, and later
+publishing it) still stands, but for "Fields and links are separate"
+(§"Editing a contact").*
 
 ## The problem
 
@@ -58,6 +60,8 @@ them, and that taking something back is remembered:
   again. Adding it back clears the record. "Merge into…" joins two
   contacts that are one person. Today's `not_linked` rows already hold
   the first; it would now cover a handle you added yourself too.
+- **A contact is yours to edit**, and the edits are meant to be published
+  back to an address book one day (§"Editing a contact").
 - **Nothing re-renders.** Contacts still sit over the view.
 
 How good are the offers? In the one real library with many contacts, 145
@@ -75,6 +79,8 @@ so the two rules agree.) A handle already on another contact is offered
 | **contact** | a person (or an organization) you added | contact, "your contact" |
 | **handle** | an address, a number, a Slack account: anything a source knows someone by | handle |
 | **add**, **not theirs** | put a handle on a contact, take it off | link, unlink |
+| **detail** | a line you can edit: a title, a birthday, a street address | field |
+| **unfiled** | someone the sources know who is not in your contacts | unlinked |
 | **what Slack says** | a source's own record of them | source's record, "source holds its handles" |
 
 "Link" and "field" are not on any screen. `link` stays in the code.
@@ -98,7 +104,7 @@ is still blue and everyone else grey.
    handle or note. Empty, it says how to add one. A window that already
    keeps its own tabs is given the new pin once, as the first three
    were.
-2. **Everyone else**, a tab beside it: the people the sources know whom
+2. **Unfiled**, a tab beside it: the people the sources know whom
    you have not added, with the same columns and sorts, the most frequent
    first. Select rows, *Add to contacts*. Nothing on it is a contact until
    you say so. Senders you or an agent marked *not real* are left out,
@@ -106,7 +112,7 @@ is still blue and everyone else grey.
 3. **A person's page**, one page whether or not they are a contact:
 
    ```
-   ◯  Jean-Luc Picard                        not in your contacts
+   ◯  Jean-Luc Picard                                     unfiled
       ☑ picard@enterprise.starfleet     tng_contacts, slack, 4 more
       ☑ jlpicard@enterprise.starfleet   tng_contacts
       ☑ +1 202 555 0101                 tng_contacts, 2 more
@@ -119,8 +125,8 @@ is still blue and everyone else grey.
    ▸ slack                      also called Captain Picard · 4 items
    ```
 
-   Once added, the ticks go, and each handle's menu has *Not theirs* and
-   *Copy*; a pencil edits the name and the note. A contact with no
+   Once added, the ticks go, and each handle's menu has *Not theirs*,
+   *No longer works* and *Copy*; *Edit* opens the form. A contact with no
    handle has a page too, which it does not today. If you already have a
    contact of that name, *Add to Jean-Luc Picard* comes first.
 4. **An address book's own page** is that source's record. Double-click
@@ -152,6 +158,37 @@ looked at it. Instead:
 
 In the library below, 202 of 210 contacts become suggestions, and their
 chips go grey, until *Yes to all*.
+
+## Editing a contact
+
+The editor stays as it is built: *Edit* opens a form for the name, the
+note, and details each with a label; it saves itself as a draft until
+*Save* or *Discard*; *Set photo…* sets a picture. Two things on it
+change, because it shows the person one thing as two:
+
+- **An address or a number is one line.** Today it is two: a *field*,
+  which is a line of text, and a *link*, which makes its messages
+  theirs. So the page says "Linked, not a field: … Add as a field" and,
+  of the other kind, "Link it". They were kept apart so that a
+  household's number could be on two contacts; a shared handle does that
+  now. So a handle on the contact is a line in the form, with a label,
+  and an address or number typed into the form is added as a handle on
+  *Save*, asking if another contact has it. One that is no handle (no
+  country code, no match) stays text.
+- **Copying is one button per value**, *Use*, beside what each source
+  says, in place of a *Copy to Jean-Luc Picard* section under each.
+
+Adding someone brings over the name and the handles with their labels
+("work", "cell"). It leaves a card's other details on the card, until you
+*Use* or change one.
+
+**Publishing back** stays later, and what it needs is kept: which source
+and which of its records a value came from (`copied_from_source` and
+`copied_from_key`) is now also written for the handles added from a
+card, so a contact knows its card. It publishes a contact's name, note,
+photo, details, and those handles a card can hold: an address or a
+number, not a Slack account. An agent's suggestion is never published,
+since it is not a contact.
 
 ## Shared handles
 
@@ -224,10 +261,10 @@ An agent made the rest, and nobody has reviewed any of it.
 | `real` | stays, shown as *Hide this sender*; other labels go |
 | *This is me* | stays, on the page's menu |
 | merging | stays, from the list and now from the page |
-| details you type in, and their drafts | to decide (below) |
-| "no longer works" dates | go |
+| details, drafts, copying from a source | stay (§"Editing a contact") |
+| "no longer works" dates | stay, in a handle's menu: publishing leaves out an old number |
 | group contacts and members | go: a shared handle needs no group |
-| a photo of your own | to decide (below) |
+| a photo of your own | stays |
 
 A table that goes (`members`) goes only where its root has no rows in
 it, and the rung that drops one refuses otherwise and says how to export
@@ -257,8 +294,9 @@ Each step stands alone; the first two change no stored data.
 2. **Adding the whole person**: the ticked handles, numbers without a
    country code, adding many rows from an address book, a page for a
    contact with no handle.
-3. **Shared handles**, with the store's rung.
-4. **The list**: the three sorts, and *Everyone else*.
+3. **Shared handles**, with the store's rung, then **one line per
+   address** in the editor, which needs them.
+4. **The list**: the three sorts, and *Unfiled*.
 5. **Suggestions.**
 6. **What goes, goes**, with the store's rung, the routes and
    [`contacts_app.md`](../../user/contacts_app.md).
@@ -269,22 +307,14 @@ Each step stands alone; the first two change no stored data.
   *Add to contacts* focused; it adds nobody.
 - What an agent proposed is kept apart from what a person said, and is
   not a contact until a Yes.
-- *Everyone else* is wanted, sorted by frequency and recency.
+- *Unfiled* is wanted, sorted by frequency and recency.
 - No country is set anywhere for phone numbers.
+- Editing a contact by hand stays, toward publishing it back to a source.
 
 ## To decide
 
-**Does a contact hold anything besides a name, a note and handles?**
-Today it can, and nobody has used it. Under *Your contact*, *Edit* opens
-a form where you type details of your own: a phone, an address, a
-birthday, a title, each with a label. They are lines of text on the
-contact, apart from its handles: typing a number there does not make its
-texts theirs. Beside each source, *Copy to …* copies what that source
-says into the same form. *Set photo…* puts a picture of your own on the
-contact.
-
-Proposed: take the form, *Copy to …* and *Set photo…* off the page. What
-a source says is already on it, a photo comes from a source, and
-anything else goes in the note. Their tables stay in the store, empty,
-so either can come back; writing contacts to a CardDAV address book
-([`contact_editing.md`](contact_editing.md)) would need the details.
+**Is an address one line?** (§"Editing a contact".) That fields and links
+are separate was decided in October, so this reverses it. Proposed: yes;
+its reason was a shared number, and a handle can now be shared. What is
+lost: an address on a contact's card, published with it, whose messages
+are not theirs.
