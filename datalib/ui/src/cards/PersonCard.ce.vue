@@ -1,13 +1,14 @@
 <script setup lang="ts">
-// A person: your contact, when the handle is linked to one (edited in
-// `ContactEditor`), and what each source says about them, each source in
-// a section of its own. Opened by
+// A person: your contact, when the handle is on one (edited in
+// `ContactEditor`), else the way to add them; and what each source says
+// about them, each source in a section of its own. Opened by
 // double-clicking a person chip. What it shows is `person.ts`; who a
 // handle is comes from `people`, the resolver every chip shares. Every
-// handle on the card is a chip, pale blue where it is linked to a
-// contact and grey where not, with the same click, double-click and
-// right-click as a chip in a document (docs/dev/chips.md § Clicks).
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+// handle on the card is a chip, pale blue where it is on a contact and
+// grey where not, with the double-click and right-click of a chip in a
+// document (docs/dev/chips.md § Clicks); its menu also puts the handle on
+// your contact or takes it off.
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { formatStamp } from "@/config/timeFormat";
 import { personSource, searchSource } from "./cardSources";
 import { isBrowserClick } from "./chatLink";
@@ -17,17 +18,22 @@ import ContactEditor from "./ContactEditor.ce.vue";
 import { holds, sourceValues, valueText, type SourceValue } from "./contactFields";
 import EntityChip from "./EntityChip.ce.vue";
 import {
-  canLinkHandles,
   chipCell,
   createContact,
   handleValue,
+  hasContactsApp,
   identifierCell,
   linkHandle,
   nameOf,
   NOBODY,
   people,
+  searchContacts,
   setMe,
+  setStoppedWorking,
   suggestedName,
+  todayPartialDate,
+  unlinkHandle,
+  type ContactSummary,
   type NormalizedContact,
 } from "./contacts";
 import {
@@ -35,15 +41,17 @@ import {
   chipMenuOf,
   chipOf,
   everythingWith,
+  justOpened,
   runChipAction,
   type Chip,
   type ChipEntryId,
-  type ChipEntry,
   type ChipHost,
+  type MenuItem,
 } from "./chipActions";
 import { entities } from "./entities";
-import HandlePopover from "./HandlePopover.ce.vue";
 import {
+  handleMenu,
+  isHandleAction,
   linkableHandles,
   linkState,
   personHandles,
@@ -77,6 +85,7 @@ async function ask() {
     error.value = (e as Error).message;
   }
   version.value++;
+  await takeKeyboard();
 }
 
 const stopPeople = people.subscribe((changed) => {
@@ -98,34 +107,33 @@ watch(
 );
 props.ctx.setHelp(`
 <p>Everything this library knows about one person. <em>Your contact</em>,
-when you have linked this handle to one, is what you wrote; every other
-section is one source's record of them, as that source has it, shown
-because it holds one of your contact's handles (its "via" line says
-which). Sources are never merged: one phone number can carry a WhatsApp
-account, a name in a text-message backup and a Signal profile, and they
-need not agree. The source of the chip you opened this from comes
-first.</p>
+when they are in your contacts, is what you wrote; every other section is
+one source's record of them, as that source has it, shown because it
+holds one of your contact's handles (its "via" line says which). Sources
+are never merged: one phone number can carry a WhatsApp account, a name
+in a text-message backup and a Signal profile, and they need not agree.
+The source of the chip you opened this from comes first.</p>
+<p>When they are not in your contacts, <em>Add to contacts</em> adds them.
+Nothing else does: opening this page adds nobody.</p>
 <p>Under <em>Your contact</em>, <em>Edit</em> changes its name, note and
-fields. What you type is kept as a draft that only you see, even after a
+details. What you type is kept as a draft that only you see, even after a
 reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
 the contact was changed somewhere else meanwhile, Save says so and marks
 what changed rather than overwriting it. A photo is set or removed at
 once.</p>
 <p><em>This is me</em> says your contact is you: <code>from:me</code>,
-<code>to:me</code> and <code>with:me</code> then find every handle linked
-to it, an old address or a second number included. More than one
+<code>to:me</code> and <code>with:me</code> then find every handle
+on it, an old address or a second number included. More than one
 contact can be you, such as a duplicate not merged yet.</p>
-<p>Each source's <em>Copy to …</em> copies what that source says (a number, a
-title, an address) into your contact's draft, one value at a time or all at
-once; you pick where sources disagree. A copied value does not follow its
-source afterwards: the card says when the source now says something else.
-An address or number field says whether it is linked: <em>Link it</em>
-links it to this contact, and one linked to someone else shows whose it
-is.</p>
-<p>Every handle is a chip: pale blue when it is linked to a contact,
-grey when not. Click one to link it, right-click for its menu, or use a
-section's <em>Link</em> button to link all of that source's unlinked
-handles to your contact at once.</p>
+<p>Under each source, <em>Use what it says</em> lists what that source
+says (a number, a title, an address), and <em>Use</em> puts one in your
+contact's draft; you pick where sources disagree. A value you use does
+not follow its source afterwards: the card says when the source now says
+something else.</p>
+<p>Every handle is a chip: pale blue when it is on a contact, grey when
+not. Right-click one to add it to your contact, to say it is <em>not
+theirs</em>, or that it no longer works. <em>Not theirs</em> is
+remembered, so no agent suggests it again.</p>
 `);
 
 function sourceUri(sourceId: string): string {
@@ -160,11 +168,8 @@ function drawInto(
 ) {
   if (!(el instanceof HTMLElement)) return;
   const who = people.get(handle) ?? NOBODY;
-  const canLink = canLinkHandles();
   el.replaceChildren(
-    as === "person"
-      ? chipCell(handle, shown, who, canLink)
-      : identifierCell(handle, shown, who, canLink),
+    as === "person" ? chipCell(handle, shown, who) : identifierCell(handle, shown, who),
   );
 }
 
@@ -173,59 +178,29 @@ function chipAt(ev: Event): HTMLElement | null {
   return t instanceof Element ? t.closest<HTMLElement>("a.chip[data-handle]") : null;
 }
 
-type Popover = {
-  handle: string;
-  shownAs: string;
-  resolved: NormalizedContact | null;
-  x: number;
-  y: number;
-};
-const popover = ref<Popover | null>(null);
-const menu = ref<{
-  el: HTMLElement;
-  chip: Chip;
-  entries: ChipEntry[];
-  x: number;
-  y: number;
-} | null>(null);
+const menu = ref<{ chip: Chip; entries: MenuItem[]; x: number; y: number } | null>(null);
 
-function openPopover(chip: HTMLElement, x: number, y: number) {
-  const handle = chip.dataset.handle ?? "";
-  popover.value = {
-    handle,
-    shownAs: chip.dataset.shownAs ?? "",
-    resolved: people.get(handle)?.mine ?? null,
-    x,
-    y,
-  };
-}
-
-/// A click links (the popover), where a contacts app is there to; a
-/// click with a modifier is the browser's, as on any link.
+/// A click on a person does nothing, and above all does not open the mail
+/// client its href names; a click with a modifier is the browser's, as on
+/// any link.
 function onClick(ev: MouseEvent) {
-  const chip = chipAt(ev);
-  if (!chip || isBrowserClick(ev)) return;
-  ev.preventDefault();
-  if (canLinkHandles()) openPopover(chip, ev.clientX, ev.clientY);
+  if (chipAt(ev) && !isBrowserClick(ev)) ev.preventDefault();
 }
 
 /// What a chip's entries do on this card: open a card beside it, but not
-/// this person's own again, and link a handle where the chip was pressed.
-function chipHost(el: HTMLElement, x: number, y: number): ChipHost {
-  return {
-    openCard: (source) => {
-      if (source !== personSource(props.handle, { seenIn: null })) props.ctx.host.openCards(source);
-    },
-    editLink: () => openPopover(el, x, y),
-  };
-}
+/// this person's own again.
+const chipHost: ChipHost = {
+  openCard: (source) => {
+    if (source !== personSource(props.handle, { seenIn: null })) props.ctx.host.openCards(source);
+  },
+};
 
 function onDblClick(ev: MouseEvent) {
   const el = chipElAt(ev.target);
   const chip = el ? chipOf(el) : null;
   if (!el || !chip) return;
   ev.preventDefault();
-  void runChipAction("open", chip, chipHost(el, ev.clientX, ev.clientY));
+  void runChipAction("open", chip, chipHost);
 }
 
 function onContextMenu(ev: MouseEvent) {
@@ -233,22 +208,54 @@ function onContextMenu(ev: MouseEvent) {
   const chip = el ? chipOf(el) : null;
   if (!el || !chip) return;
   ev.preventDefault();
-  menu.value = {
-    el,
-    chip,
-    entries: chipMenuOf(chip, canLinkHandles()),
-    x: ev.clientX,
-    y: ev.clientY,
-  };
+  const handle = chip.ref.kind === "person" ? chip.ref.handle : null;
+  const entries = [...chipMenuOf(chip), ...(handle ? handleMenu(handle, model.value, whoOf) : [])];
+  menu.value = { chip, entries, x: ev.clientX, y: ev.clientY };
 }
 
 async function onMenuPick(id: string) {
   const m = menu.value;
   menu.value = null;
-  if (m) await runChipAction(id as ChipEntryId, m.chip, chipHost(m.el, m.x, m.y));
+  if (!m) return;
+  const handle = m.chip.ref.kind === "person" ? m.chip.ref.handle : null;
+  const mine = model.value.mine;
+  if (!handle || !mine || !isHandleAction(id)) {
+    await runChipAction(id as ChipEntryId, m.chip, chipHost);
+    return;
+  }
+  await act(() => {
+    switch (id) {
+      case "handle-add":
+        return linkHandle(handle, mine.key);
+      case "handle-remove":
+        return unlinkHandle(handle);
+      case "handle-stopped":
+        return setStoppedWorking(handle, todayPartialDate());
+      case "handle-works":
+        return setStoppedWorking(handle, null);
+    }
+  });
 }
 
-// ── Linking a source's handles to your contact ────────────────────────
+function stoppedBy(handle: string, ev: Event) {
+  const by = (ev.target as HTMLInputElement).value.trim();
+  void act(() => setStoppedWorking(handle, by || null));
+}
+
+const busy = ref(false);
+async function act(f: () => Promise<void>) {
+  busy.value = true;
+  error.value = null;
+  try {
+    await f();
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
+
+// ── A source's handles, against your contact ──────────────────────────
 
 function whoOf(h: string) {
   void version.value;
@@ -268,49 +275,32 @@ function ownerName(h: string | null): string {
   return owner ? nameOf(owner) : "";
 }
 
-const linking = ref(false);
-async function linkAll(s: PersonSection) {
+async function addAll(s: PersonSection) {
   const mine = model.value.mine;
   if (!mine) return;
-  linking.value = true;
-  error.value = null;
-  try {
+  await act(async () => {
     for (const h of linkable(s)) await linkHandle(h, mine.key);
-  } catch (e) {
-    error.value = (e as Error).message;
-  } finally {
-    linking.value = false;
-  }
+  });
 }
 
-const marking = ref(false);
 async function toggleMe(ev: Event) {
   const mine = model.value.mine;
-  if (!mine) return;
-  marking.value = true;
-  error.value = null;
-  try {
-    await setMe(mine.key, (ev.target as HTMLInputElement).checked);
-  } catch (e) {
-    error.value = (e as Error).message;
-  } finally {
-    marking.value = false;
-  }
+  const me = (ev.target as HTMLInputElement).checked;
+  if (mine) await act(() => setMe(mine.key, me));
 }
 
-function linkLabel(s: PersonSection): string {
+function addLabel(s: PersonSection): string {
   const n = linkable(s).length;
-  return `Link ${n === 1 ? "its other handle" : `its ${n} other handles`} to ${model.value.title}`;
+  return `Add ${n === 1 ? "its other handle" : `its ${n} other handles`} to ${model.value.title}`;
 }
 
-// ── Create a contact, for a handle not linked to one ──────────────────
+// ── Adding them, when they are not in your contacts ───────────────────
 
-const canCreate = computed(() => {
+const canAdd = computed(() => {
   void version.value;
-  return !model.value.mine && canLinkHandles();
+  return !model.value.mine && hasContactsApp();
 });
 const newName = ref("");
-const creating = ref(false);
 watch(
   () => model.value.sections[0]?.contact,
   (first) => {
@@ -319,19 +309,46 @@ watch(
   { immediate: true },
 );
 
-async function create() {
+/// Your contacts the name finds, the one of exactly that name first: the
+/// handle may belong on one of them.
+const found = ref<ContactSummary[]>([]);
+let asked = 0;
+async function findContacts() {
+  const mine = ++asked;
   const name = newName.value.trim();
-  if (!name) return;
-  creating.value = true;
-  error.value = null;
+  let hits: ContactSummary[] = [];
   try {
-    await createContact(name, [props.handle]);
+    if (canAdd.value && name) hits = await searchContacts(name);
   } catch (e) {
     error.value = (e as Error).message;
-  } finally {
-    creating.value = false;
   }
+  if (mine !== asked) return;
+  found.value = [...hits.filter(named), ...hits.filter((c) => !named(c))].slice(0, 5);
 }
+const named = (c: ContactSummary) => c.name.toLowerCase() === newName.value.trim().toLowerCase();
+watch([canAdd, newName], findContacts);
+
+const addTo = (c: ContactSummary) => act(() => linkHandle(props.handle, c.contact_id));
+const add = () =>
+  act(async () => {
+    await createContact(newName.value.trim(), [props.handle]);
+  });
+
+const addForm = ref<HTMLElement | null>(null);
+/// Opened from a chip, the page takes the keyboard, so that Enter adds.
+async function takeKeyboard() {
+  if (justOpened.value?.handle !== props.handle) return;
+  await findContacts();
+  await nextTick();
+  if (justOpened.value?.handle !== props.handle) return;
+  justOpened.value = null;
+  const first = found.value[0];
+  const button = first && named(first) ? ".person-found button" : "button[type=submit]";
+  addForm.value?.querySelector<HTMLButtonElement>(button)?.focus();
+}
+watch(justOpened, () => {
+  if (people.get(props.handle)) void takeKeyboard();
+});
 
 // ── Copying what a source says into your contact ─────────────────────
 
@@ -367,29 +384,38 @@ const headPhoto = computed(() => {
           class="person-name"
           :ref="(el) => drawInto(el, props.handle, model.title, 'person', version)"
         ></h1>
-        <p class="person-about">
+        <p v-if="model.mine || canAdd" class="person-about">
           <template v-if="model.mine">
-            Your contact · {{ model.sections.length }}
-            {{ model.sections.length === 1 ? "source holds" : "sources hold" }} its handles
+            In your contacts · known to {{ model.sections.length }}
+            {{ model.sections.length === 1 ? "source" : "sources" }}
           </template>
-          <template v-else>Not linked to a contact</template>
+          <template v-else>Not in your contacts</template>
         </p>
         <div class="person-actions">
           <button type="button" class="person-button" @click.stop="everything">
             Everything with them
           </button>
         </div>
-        <form v-if="canCreate" class="person-create" @submit.prevent="create">
-          <input
-            v-model="newName"
-            class="person-input"
-            aria-label="Name for a new contact"
-            placeholder="Name"
-          />
-          <button type="submit" class="person-button" :disabled="creating || !newName.trim()">
-            Create contact
-          </button>
-        </form>
+        <div v-if="canAdd" ref="addForm" class="person-add">
+          <ul v-if="found.length" class="person-found">
+            <li v-for="c in found" :key="c.contact_id">
+              <button type="button" class="person-button" :disabled="busy" @click="addTo(c)">
+                Add to <b>{{ c.name }}</b>
+              </button>
+            </li>
+          </ul>
+          <form class="person-create" @submit.prevent="add">
+            <input
+              v-model="newName"
+              class="person-input"
+              aria-label="Name for a new contact"
+              placeholder="Name"
+            />
+            <button type="submit" class="person-button" :disabled="busy || !newName.trim()">
+              Add to contacts
+            </button>
+          </form>
+        </div>
         <p v-if="error" class="person-error">{{ error }}</p>
       </div>
     </header>
@@ -399,13 +425,13 @@ const headPhoto = computed(() => {
       <label
         v-if="model.mine.kind === 'person'"
         class="person-me"
-        title="from:me, to:me and with:me find every handle linked to this contact"
+        title="from:me, to:me and with:me find every handle on this contact"
       >
         <input
           type="checkbox"
           data-testid="contact-is-me"
           :checked="!!model.mine.account"
-          :disabled="marking"
+          :disabled="busy"
           @change="toggleMe"
         />
         This is me
@@ -418,9 +444,16 @@ const headPhoto = computed(() => {
             :ref="(el) => drawInto(el, h.handle!, shownValue(h), 'identifier', version)"
           ></span>
           <span v-else>{{ h.value }}</span>
-          <span v-if="h.stopped_working_by" class="person-muted">
-            stopped working by {{ h.stopped_working_by }}
-          </span>
+          <label v-if="h.handle && h.stopped_working_by" class="person-muted">
+            stopped working by
+            <input
+              class="person-input person-date"
+              :value="h.stopped_working_by"
+              :disabled="busy"
+              title="2019, 2019-06 or 2019-06-14; empty when it works again"
+              @change="stoppedBy(h.handle, $event)"
+            />
+          </label>
         </li>
       </ul>
       <ContactEditor
@@ -472,7 +505,7 @@ const headPhoto = computed(() => {
               <span v-else>{{ h.value }}</span>
               <span v-if="h.label" class="person-muted">{{ h.label }}</span>
               <span v-if="stateOf(h.handle) === 'other'" class="person-muted">
-                linked to {{ ownerName(h.handle) }}
+                on {{ ownerName(h.handle) }}
               </span>
             </li>
           </ul>
@@ -480,10 +513,10 @@ const headPhoto = computed(() => {
             v-if="linkable(s).length"
             type="button"
             class="person-button person-link"
-            :disabled="linking"
-            @click.stop="linkAll(s)"
+            :disabled="busy"
+            @click.stop="addAll(s)"
           >
-            {{ linkLabel(s) }}
+            {{ addLabel(s) }}
           </button>
         </div>
       </div>
@@ -497,7 +530,7 @@ const headPhoto = computed(() => {
         </template>
       </dl>
       <details v-if="model.mine && sourceValues(s.contact).length" class="person-copy">
-        <summary>Copy to {{ model.title }}</summary>
+        <summary>Use what it says</summary>
         <ul class="person-copy-values">
           <li v-for="(v, i) in sourceValues(s.contact)" :key="i">
             <span>{{ valueText(v) }}</span>
@@ -506,10 +539,10 @@ const headPhoto = computed(() => {
               v-else
               type="button"
               class="person-button"
-              :aria-label="`${v.part === 'name' ? 'Use' : 'Copy'} ${valueText(v)}`"
+              :aria-label="`Use ${valueText(v)}`"
               @click.stop="copyFrom(s, [v])"
             >
-              {{ v.part === "name" ? "Use" : "Copy" }}
+              Use
             </button>
           </li>
         </ul>
@@ -519,7 +552,7 @@ const headPhoto = computed(() => {
           :disabled="sourceValues(s.contact).every((v) => v.part === 'name' || held(v))"
           @click.stop="copyFrom(s, sourceValues(s.contact), true)"
         >
-          Copy all
+          Use all
         </button>
       </details>
     </section>
@@ -534,13 +567,6 @@ const headPhoto = computed(() => {
       :y="menu.y"
       @pick="onMenuPick"
       @close="menu = null"
-    />
-    <HandlePopover
-      v-if="popover"
-      :key="popover.handle"
-      v-bind="popover"
-      @close="popover = null"
-      @changed="ask"
     />
   </div>
 </template>
@@ -592,6 +618,17 @@ const headPhoto = computed(() => {
   flex-wrap: wrap;
   gap: 0.5rem;
   margin-top: 0.5rem;
+}
+.person-found {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+.person-date {
+  width: 7.5em;
 }
 .person-button {
   font: inherit;

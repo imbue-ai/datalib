@@ -16,7 +16,7 @@ import {
 // playwright.config.ts). Riker appears under two handles from two
 // sources in the TNG fixture: a Slack user in the Slack source, an email
 // address in the Google Takeout chats. A person makes a contact from one
-// chip in a document, links the other handle to it from a chip in
+// chip in a document, adds the other handle to it from a chip in
 // another source's document, and from then on both chips, in documents
 // and in the grid's Author column, show the contact rather than what
 // either source called him (docs/dev/chips.md). An edit made outside
@@ -59,46 +59,56 @@ const gridChip = (page: Page, handle: string) =>
   page.locator(`.grid-box .slick-cell a.chip[data-handle="${handle}"]`).first();
 
 /// The chip for `handle` in the open document, once the document has
-/// asked the contacts app about it: linkable when no contact holds it.
+/// asked the contacts app about it: unresolved when no contact holds it.
 async function chipIn(page: Page, handle: string) {
   return (await inDocFrame(page, `a.chip[data-handle="${handle}"]`)).first();
 }
 
-test("two handles from two sources linked to one contact show it in documents and the grid", async ({
+test("two handles from two sources on one contact show it in documents and the grid", async ({
   page,
   request,
 }) => {
   test.setTimeout(120_000);
-  const popover = page.locator(".handle-popover");
+  const card = page.locator(".person");
+  const noContact = async (handle: string) => {
+    const r = await request.post("/applet/datalib_contacts/resolve", {
+      data: { handles: [handle] },
+    });
+    return (await r.json()) as { resolved: Record<string, unknown> };
+  };
 
-  // 1. Riker's Slack message: the chip offers a link, and a new contact
-  //    takes the Slack handle. The grid beside the document, open the
-  //    whole time, draws the link without being reloaded.
+  // 1. Riker's Slack message: a click on his chip does nothing, and a
+  //    double-click opens his page, where Enter adds him under the name
+  //    typed. Opening adds nobody. The grid beside the document, open the
+  //    whole time, draws the change without being reloaded.
   await openMessageBy(page, request, SLACK);
   await expect(gridChip(page, SLACK)).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
   const slackChip = await chipIn(page, SLACK);
-  await expect(slackChip).toHaveClass(/handle-linkable/, { timeout: 15_000 });
-  await slackChip.click();
-  await expect(popover).toBeVisible();
-  await popover.getByLabel("Contact name").fill(CONTACT);
-  await popover.getByRole("button", { name: `New contact “${CONTACT}”` }).click();
-  await expect(popover).toBeHidden();
+  await expect(slackChip).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
+  await slackChip.dblclick();
+  const add = card.getByRole("button", { name: "Add to contacts" });
+  await expect(add).toBeFocused({ timeout: 15_000 });
+  expect((await noContact(SLACK)).resolved, "opening the page adds nobody").toEqual({});
+  await card.getByLabel("Name for a new contact").fill(CONTACT);
+  await page.keyboard.press("Enter");
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
   await expect(slackChip).toHaveClass(/handle-resolved/);
   await expect(slackChip).toHaveText(new RegExp(`${CONTACT}$`));
   await expect(gridChip(page, SLACK)).toHaveClass(/handle-resolved/);
   await expect(gridChip(page, SLACK)).toHaveText(new RegExp(`${CONTACT}$`));
 
   // 2. Riker's Google Chat message, in another source: the email handle
-  //    is not anyone's yet, and the popover finds the contact to link it to.
+  //    is not anyone's yet, and its page finds the contact to add it to,
+  //    reached this time from the chip's menu.
   await openMessageBy(page, request, EMAIL);
   await expect(gridChip(page, EMAIL)).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
   const emailChip = await chipIn(page, EMAIL);
-  await expect(emailChip).toHaveClass(/handle-linkable/, { timeout: 15_000 });
-  await emailChip.click();
-  await expect(popover).toBeVisible();
-  await popover.getByLabel("Contact name").fill("Number");
-  await popover.getByRole("button", { name: `Link to ${CONTACT}` }).click();
-  await expect(popover).toBeHidden();
+  await expect(emailChip).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
+  await emailChip.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Add to contacts…" }).click();
+  await card.getByLabel("Name for a new contact").fill("Number");
+  await card.getByRole("button", { name: `Add to ${CONTACT}` }).click();
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
   await expect(emailChip).toHaveClass(/handle-resolved/);
   await expect(emailChip).toHaveText(new RegExp(`${CONTACT}$`));
   await expect(gridChip(page, EMAIL)).toHaveClass(/handle-resolved/);
@@ -132,6 +142,54 @@ test("two handles from two sources linked to one contact show it in documents an
   expect(renamed.ok()).toBeTruthy();
   await expect(gridChip(page, EMAIL)).toHaveText(/Will Riker$/, { timeout: 15_000 });
   await expect(await chipIn(page, EMAIL)).toHaveText(/Will Riker$/);
+});
+
+/// A handle taken off a contact from its menu, and one marked as no longer
+/// working, whose date is then typed over. A click on the chip does
+/// neither. Made-up handles, which no other test touches.
+test("a handle's menu on its contact's page takes it off and marks it as old", async ({
+  page,
+  request,
+}) => {
+  const n = Date.now();
+  const home = `email:wesley.${n}@earth.test`;
+  const school = `email:crusher.${n}@academy.test`;
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Wesley", handles: [home, school] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const holders = async () => {
+    const r = await request.post("/applet/datalib_contacts/resolve", {
+      data: { handles: [home, school] },
+    });
+    type Who = { handles: { handle: string; stopped_working_by: string | null }[] };
+    return ((await r.json()) as { resolved: Record<string, Who> }).resolved;
+  };
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(home)}, {})`)}`);
+  const card = page.locator(".person");
+  const chip = (h: string) => card.locator(`.person-mine a.chip[data-handle="${h}"]`);
+  await expect(chip(school)).toHaveClass(/handle-resolved/, { timeout: 15_000 });
+
+  await chip(school).click();
+  await chip(school).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "No longer works" }).click();
+  const by = card.getByTitle("2019, 2019-06 or 2019-06-14; empty when it works again");
+  await expect(by).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+  await by.fill("2364");
+  await by.press("Enter");
+  await expect
+    .poll(async () => (await holders())[home]?.handles.find((h) => h.handle === school))
+    .toMatchObject({ stopped_working_by: "2364" });
+
+  await chip(school).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Not theirs" }).click();
+  await expect(chip(school)).toHaveCount(0);
+  await expect.poll(async () => Object.keys(await holders())).toEqual([home]);
+  const down = (await (await request.get("/applet/datalib_contacts/not_linked")).json()) as {
+    not_linked: { handle: string; agent: string | null }[];
+  };
+  expect(down.not_linked).toContainEqual(expect.objectContaining({ handle: school, agent: null }));
 });
 
 /// One of your contacts in the search bar: `@` and a few letters of its
@@ -292,7 +350,7 @@ test("the person card edits a contact through a draft and refuses a stale save",
   // 1. The edit autosaves to the draft, and nothing is published.
   await card.getByRole("button", { name: "Edit", exact: true }).click();
   await card.getByLabel("Name", { exact: true }).fill("Counselor Troi");
-  await card.getByLabel("Add a field").selectOption("title");
+  await card.getByLabel("Add a detail").selectOption("title");
   await card.getByLabel("Title", { exact: true }).fill("Ship's counselor");
   await card.getByLabel("Note", { exact: true }).fill("Chocolate.");
   await expect
@@ -386,8 +444,8 @@ const PNG_1PX =
 
 /// Copying what a source says into your contact: the address book's
 /// record of Geordi offers each value, a copied address that nobody holds
-/// offers to be linked, and the saved field remembers where it came from.
-test("a source's values copy into the contact, and a copied address links in one click", async ({
+/// offers to be added, and the saved field remembers where it came from.
+test("a source's values copy into the contact, and a copied address is added in one click", async ({
   page,
   request,
 }) => {
@@ -416,9 +474,9 @@ test("a source's values copy into the contact, and a copied address links in one
   // The address book's record holds his second address too.
   const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
   await book.locator(".person-copy summary").click();
-  await book.getByRole("button", { name: "Copy Title “Chief Engineer”" }).click();
+  await book.getByRole("button", { name: "Use Title “Chief Engineer”" }).click();
   await book
-    .getByRole("button", { name: "Copy Email (work) “laforge@enterprise.starfleet”" })
+    .getByRole("button", { name: "Use Email (work) “laforge@enterprise.starfleet”" })
     .click();
   letDraftOpen();
   await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
@@ -426,8 +484,8 @@ test("a source's values copy into the contact, and a copied address links in one
     "Title “Chief Engineer”in your contact",
   );
 
-  // The copied address is linked to nobody; one click links it here.
-  await card.getByRole("button", { name: "Link it" }).click();
+  // The copied address is on nobody; one click adds it here.
+  await card.getByRole("button", { name: "Add it", exact: true }).click();
   await expect
     .poll(async () => {
       const r = await request.post("/applet/datalib_contacts/resolve", {
@@ -437,7 +495,7 @@ test("a source's values copy into the contact, and a copied address links in one
         ?.key;
     })
     .toBe(id);
-  await expect(card.getByRole("button", { name: "Link it" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Add it", exact: true })).toHaveCount(0);
 
   await card.getByRole("button", { name: "Save", exact: true }).click();
   await expect(card.getByRole("button", { name: "Edit", exact: true })).toBeVisible();

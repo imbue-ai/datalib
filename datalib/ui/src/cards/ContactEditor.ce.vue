@@ -39,7 +39,6 @@ import {
 } from "./contactFields";
 import {
   autosaveDraft,
-  canLinkHandles,
   chipCell,
   discardDraft,
   draftOf,
@@ -363,7 +362,7 @@ async function linkIt(handle: string) {
 /// every render.
 function drawOwner(el: unknown, handle: string, shown: string, _version: number) {
   if (!(el instanceof HTMLElement)) return;
-  el.replaceChildren(chipCell(handle, shown, people.get(handle) ?? NOBODY, canLinkHandles()));
+  el.replaceChildren(chipCell(handle, shown, people.get(handle) ?? NOBODY));
 }
 
 const missingFields = computed(() =>
@@ -563,13 +562,13 @@ onUnmounted(() => {
             <template v-if="viewFields[i]">
               <template v-for="m in [marksOf(viewFields[i]!)]" :key="0">
                 <span v-if="m.unlinked" class="contact-edit-mark">
-                  not linked
+                  messages from it are not theirs yet
                   <button type="button" class="person-button" @click.stop="linkIt(m.unlinked)">
-                    Link it
+                    Add it
                   </button>
                 </span>
                 <span v-else-if="m.owner" class="contact-edit-mark">
-                  linked to
+                  on
                   <span :ref="(el) => drawOwner(el, m.owner!, line.value, whoVersion)"></span>
                 </span>
                 <span v-if="m.drift" class="contact-edit-mark contact-edit-drift">
@@ -654,13 +653,13 @@ onUnmounted(() => {
           <template v-for="m in [marksOf(f)]" :key="0">
             <p v-if="m.unlinked || m.owner || m.drift" class="contact-edit-marks">
               <span v-if="m.unlinked" class="contact-edit-mark">
-                not linked
+                messages from it are not theirs yet
                 <button type="button" class="person-button" @click.stop="linkIt(m.unlinked)">
-                  Link it
+                  Add it
                 </button>
               </span>
               <span v-else-if="m.owner" class="contact-edit-mark">
-                linked to
+                on
                 <span :ref="(el) => drawOwner(el, m.owner!, f.value, whoVersion)"></span>
               </span>
               <span v-if="m.drift" class="contact-edit-mark contact-edit-drift">
@@ -701,8 +700,8 @@ onUnmounted(() => {
           <button type="button" class="person-button" @click.stop="useTheirs(c)">Use theirs</button>
           <button type="button" class="person-button" @click.stop="keepMine(c)">Keep mine</button>
         </p>
-        <select v-model="adding" class="person-input" aria-label="Add a field" @change="addField">
-          <option value="" disabled>Add a field…</option>
+        <select v-model="adding" class="person-input" aria-label="Add a detail" @change="addField">
+          <option value="" disabled>Add a detail…</option>
           <option v-for="k in FIELD_KINDS" :key="k.kind" :value="k.kind">{{ k.label }}</option>
         </select>
       </div>
@@ -738,8 +737,8 @@ onUnmounted(() => {
       </div>
     </form>
     <p v-for="m in missingFields" :key="m.handle" class="contact-edit-marks">
-      <span class="contact-edit-mark">Linked, not a field: {{ m.value }}</span>
-      <button type="button" class="person-button" @click.stop="addLinked(m)">Add as a field</button>
+      <span class="contact-edit-mark">{{ m.value }} is not in their details</span>
+      <button type="button" class="person-button" @click.stop="addLinked(m)">Add it there</button>
     </p>
     <p v-if="error" class="person-error">{{ error }}</p>
   </div>

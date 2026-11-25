@@ -70,7 +70,7 @@ pub(super) fn add_routes(api: Api) -> Api {
         Get,
         "/not_linked",
         Read,
-        "every link a person turned down, newest first",
+        "every handle a person took off a contact, newest first",
         not_linked,
     )
 }
