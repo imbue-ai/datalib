@@ -434,9 +434,9 @@ it came from, so it gets its own section.
   source; no test greps the log for prompt text.
 - **What is stored of the remote work is how much of it there was**: the
   vectors, the step's log, and the run's counts as metrics (chunks sent,
-  Sandboxes and their seconds by GPU, an estimated cost). No prompt, no
-  Sandbox's id and no job to resume, so a stopped run leaves no record
-  of what went where.
+  Sandboxes and their seconds by GPU, an estimated cost). The log names
+  each Sandbox by its id, so a run can be held against Modal's own list;
+  no prompt and no job to resume are kept.
 - **The SDK is pinned** by a lockfile with integrity hashes and no
   install scripts (`third-party/modal/runtime/`), like latchkey's.
 

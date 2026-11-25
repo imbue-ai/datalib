@@ -1572,6 +1572,10 @@ mod tests {
             ];
             options.slice = 2;
             options.sandboxes = sandboxes;
+            // Pauses of 1, 2, 4 ms and so on, six of them.
+            options.pause_ms = 1;
+            options.reach_ms = 40;
+            options.offline_ms = 40;
             let root = self.root.clone();
             let mut env: Vec<(String, String)> = env
                 .iter()
@@ -1738,10 +1742,10 @@ mod tests {
             // stdout is what lost answers on a GPU.
             assert_eq!(s["command"][0], "sleep", "{s}");
             let execs = s["execs"].as_array().unwrap();
-            assert_eq!(execs.len(), 1, "{s}");
-            let script = execs[0][2].as_str().unwrap();
+            assert_eq!(execs.len(), 2, "does it answer, then the work: {s}");
+            let script = execs[1][2].as_str().unwrap();
             assert!(
-                script.contains("< /tmp/datalib-embed/in.jsonl > /tmp/datalib-embed/out.jsonl"),
+                script.contains("< /tmp/datalib-embed/in.jsonl > /tmp/datalib-embed/out-1.jsonl"),
                 "{s}"
             );
         }
@@ -1937,6 +1941,140 @@ mod tests {
             sent,
             [2, 1, 2, 1, 1],
             "each slice of two, then its one missing prompt"
+        );
+    }
+
+    /// Runs five chunks, a slice of two at a time, over the stand-in with
+    /// `env` set.
+    async fn embed_five(fake: &FakeModal, env: &[(&str, &str)]) -> Result<Done> {
+        let td = tempfile::tempdir().unwrap();
+        five_docs(td.path()).await;
+        embed_with(
+            td.path(),
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(fake.modal_with(0, true, env, 1)),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+    }
+
+    /// A Sandbox Modal has placed but that does not answer yet is asked
+    /// again, not ended and replaced: on Modal 34 running Sandboxes were
+    /// ended that way, each the moment the SDK's ten seconds of retries ran
+    /// out.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_still_starting_is_waited_for() {
+        let fake = FakeModal::new();
+        let done = embed_five(&fake, &[("FAKE_MODAL_SILENT", "3")])
+            .await
+            .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(fake.sandboxes().len(), 3, "one Sandbox a slice, no more");
+    }
+
+    /// One that never answers is given up on in bounded time, a second is
+    /// tried, and the error says which Sandbox, that it was running, and
+    /// what the call failed with.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_that_never_answers_is_given_up_on() {
+        let fake = FakeModal::new();
+        let err = embed_five(&fake, &[("FAKE_MODAL_SILENT", "1000000")])
+            .await
+            .unwrap_err();
+        let err = format!("{err:#}");
+        for want in [
+            "5 of 5 chunks could not be embedded on Modal",
+            "sb-fake-2 is running and does not answer",
+            "UNAVAILABLE: not answering",
+        ] {
+            assert!(err.contains(want), "{want}: {err}");
+        }
+        assert_eq!(fake.sandboxes().len(), 6, "two a slice");
+    }
+
+    /// One that really ended is replaced at once, and its end is known from
+    /// Modal, not guessed from the call that failed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_that_ended_is_replaced() {
+        let fake = FakeModal::new();
+        let done = embed_five(&fake, &[("FAKE_MODAL_GONE", "1")])
+            .await
+            .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(fake.sandboxes().len(), 4);
+        let err = embed_five(&FakeModal::new(), &[("FAKE_MODAL_GONE", "9")])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("sb-fake-2 ended with 1"),
+            "{err:#}"
+        );
+    }
+
+    /// A laptop that wakes with no network: nothing reaches Modal for a
+    /// while, whatever the slice was doing when it went. It is waited out,
+    /// and no attempt is spent on it. A network that stays gone ends the
+    /// run, in bounded time.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_network_that_is_gone_is_waited_out() {
+        // Every call a slice makes: create, exec, writeText, exec, readText,
+        // terminate.
+        for from in ["0", "1", "2", "3", "4", "5"] {
+            let fake = FakeModal::new();
+            let done = embed_five(
+                &fake,
+                &[
+                    ("FAKE_MODAL_OFFLINE_FROM", from),
+                    ("FAKE_MODAL_OFFLINE", "4"),
+                ],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("gone from call {from}: {e:#}"));
+            assert_eq!(done.embedded, 5, "gone from call {from}");
+            assert_eq!(fake.sandboxes().len(), 3, "gone from call {from}");
+        }
+
+        let err = embed_five(&FakeModal::new(), &[("FAKE_MODAL_OFFLINE", "1000000")])
+            .await
+            .unwrap_err();
+        let err = format!("{err:#}");
+        for want in ["5 of 5 chunks could not be embedded", "ENETUNREACH"] {
+            assert!(err.contains(want), "{want}: {err}");
+        }
+    }
+
+    /// A process nobody hears from again is given up on at the Sandbox's
+    /// limit, and the driver exits though the SDK still waits: the SDK
+    /// retries that wait for ever.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_wait_that_never_ends_is_given_up_at_the_sandboxs_limit() {
+        let td = tempfile::tempdir().unwrap();
+        five_docs(td.path()).await;
+        let fake = FakeModal::new();
+        let mut modal = fake.modal_with(0, true, &[("FAKE_MODAL_HANG", "1")], 3);
+        let driver = modal.driver;
+        modal.driver = Box::new(move || {
+            let mut driver = driver()?;
+            driver.options.timeout_ms = 1000;
+            Ok(driver)
+        });
+        let err = embed_with(
+            td.path(),
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(modal),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("is past its limit of 1 s"),
+            "{err:#}"
         );
     }
 
