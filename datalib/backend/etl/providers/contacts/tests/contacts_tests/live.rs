@@ -25,6 +25,7 @@ async fn run(store: &std::path::Path) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
     let r = google::fetch(google::FetchOptions {
         db: db.clone(),
+        labels: Vec::new(),
         blob_size_limit_bytes: None,
         latchkey: LatchkeySettings {
             account: std::env::var("GOOGLE_PEOPLE_TEST_ACCOUNT").ok(),

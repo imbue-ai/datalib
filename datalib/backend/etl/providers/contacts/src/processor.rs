@@ -49,7 +49,8 @@ pub fn plan_ingest(
         .method()
         .with_context(|| format!("contacts source {name}"))?
     {
-        ContactsMethod::Google => DownloadMode::Google {
+        ContactsMethod::Google { labels } => DownloadMode::Google {
+            labels: labels.to_vec(),
             blob_size_limit_bytes: config.common.blob_size_limit_bytes,
         },
         ContactsMethod::Carddav {
@@ -75,7 +76,10 @@ pub fn plan_ingest(
 /// Which download path contacts takes for this source.
 enum DownloadMode {
     /// Google's People API.
-    Google { blob_size_limit_bytes: Option<u64> },
+    Google {
+        labels: Vec<String>,
+        blob_size_limit_bytes: Option<u64>,
+    },
     /// Live CardDAV server sync.
     Server {
         server_url: String,
@@ -111,10 +115,12 @@ impl DataProcessor for ContactsIngest {
         ctx.run_store(pool, None, |sealer| async {
             Ok(match &self.mode {
                 DownloadMode::Google {
+                    labels,
                     blob_size_limit_bytes,
                 } => {
                     let s = ingest::google::fetch(ingest::google::FetchOptions {
                         db,
+                        labels: labels.clone(),
                         blob_size_limit_bytes: *blob_size_limit_bytes,
                         latchkey: self.latchkey.clone(),
                         progress: ctx.progress.clone(),

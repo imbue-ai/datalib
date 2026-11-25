@@ -2,12 +2,14 @@
 //! reach the account? — and the address books `addressbooks` can name.
 //! On CardDAV, finding the account is the address-book listing, so a
 //! check runs it too and keeps only the account; on Google it is the
-//! signed-in user, whose contacts are one list. No card is fetched.
+//! signed-in user, and the labels `google.labels` can name are a list of
+//! their own. No card is fetched.
 
 use anyhow::{anyhow, bail, Result};
 use datalib_etl_contacts_config::{ContactsConfig, ContactsMethod};
 use datalib_probe::{ProbeAccount, ProbeAsk, ProbeItem, ProbeItemKind, ProbeList, ProbeReport};
 
+use crate::ingest::google::selection;
 use crate::ingest::{self, google, FetchSummary};
 
 pub async fn probe(config: &ContactsConfig, ask: ProbeAsk) -> Result<ProbeReport> {
@@ -17,7 +19,10 @@ pub async fn probe(config: &ContactsConfig, ask: ProbeAsk) -> Result<ProbeReport
             report.items.clear();
             report.notes.clear();
         }
-        ProbeAsk::List(ProbeList::Addressbooks) => {}
+        ProbeAsk::List(ProbeList::Addressbooks) if config.google.is_none() => {}
+        ProbeAsk::List(ProbeList::Labels) if config.google.is_some() => {
+            report.items = labels(config).await?;
+        }
         ProbeAsk::List(other) => bail!("a contacts source has no `{}` list", other.as_str()),
     }
     Ok(report)
@@ -27,11 +32,10 @@ async fn reach(config: &ContactsConfig) -> Result<ProbeReport> {
     config.validate()?;
     let mut summary = FetchSummary::default();
     match config.method()? {
-        ContactsMethod::Google => {
+        ContactsMethod::Google { .. } => {
             let me = google::me(&config.latchkey_settings, &mut summary).await?;
             let login = me.email.or(Some(me.resource_name));
-            let book = Some(google::ADDRESSBOOK_NAME.to_string());
-            let mut r = report("google", login, std::iter::once(book));
+            let mut r = report("google", login, std::iter::empty());
             r.account.display_name = me.name;
             Ok(r)
         }
@@ -54,6 +58,20 @@ async fn reach(config: &ContactsConfig) -> Result<ProbeReport> {
             "a `vcf` source reads files on disk, so there is no connection to test"
         )),
     }
+}
+
+/// The labels `google.labels` can name, sorted.
+async fn labels(config: &ContactsConfig) -> Result<Vec<ProbeItem>> {
+    let mut summary = FetchSummary::default();
+    let groups = google::list_groups(&config.latchkey_settings, &mut summary).await?;
+    let mut items: Vec<ProbeItem> = groups
+        .iter()
+        .filter(|g| selection::is_label(g))
+        .filter_map(selection::name)
+        .map(|n| ProbeItem::new(n, ProbeItemKind::Label))
+        .collect();
+    items.sort_by_key(|i| i.path.to_lowercase());
+    Ok(items)
 }
 
 /// The principal's last path segment, which is the login on the

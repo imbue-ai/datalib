@@ -136,11 +136,13 @@ pub(crate) fn link(who: &str) -> String {
 
 pub(crate) async fn download(
     db: &RawDb,
+    labels: &[&str],
     playback: impl Into<Playback>,
     control: datalib_etl::control::DownloadControl,
 ) -> anyhow::Result<FetchSummary> {
     let download = google::fetch(google::FetchOptions {
         db: db.clone(),
+        labels: labels.iter().map(|l| l.to_string()).collect(),
         blob_size_limit_bytes: None,
         latchkey: LatchkeySettings::default(),
         progress: Default::default(),
@@ -151,8 +153,16 @@ pub(crate) async fn download(
 }
 
 async fn try_run(playback: impl Into<Playback>, store: &Path) -> anyhow::Result<FetchSummary> {
+    try_run_for(&[], playback, store).await
+}
+
+async fn try_run_for(
+    labels: &[&str],
+    playback: impl Into<Playback>,
+    store: &Path,
+) -> anyhow::Result<FetchSummary> {
     let db = RawDb::open(&db_path_for(store)).await.expect("open store");
-    let summary = download(&db, playback, Default::default()).await;
+    let summary = download(&db, labels, playback, Default::default()).await;
     if summary.is_ok() {
         db.commit_all("test").await.expect("commit");
     }
@@ -347,6 +357,197 @@ async fn a_first_listing_then_only_what_changed() {
     );
     assert_eq!(strings(&store, TOKEN).await, ["s3"]);
     assert_eq!(strings(&store, PROBLEMS).await, Vec::<String>::new());
+}
+
+/// With `labels`, only the contacts with one of them are stored, with
+/// their photos; one that gains the label arrives in the delta, and one
+/// that loses it goes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chosen_labels_mirror_only_the_contacts_with_one() {
+    let d = tempfile::tempdir().unwrap();
+    let (tapes, store) = dirs(&d, 2);
+    let labels = json!([
+        group("bridge", "Bridge crew", true),
+        group("old", "Old crew", true)
+    ]);
+    let riker = |labels| person("c1", "William Riker", Some(&link("riker-1")), labels);
+    let yar = |labels| person("c3", "Tasha Yar", Some(&link("yar-1")), labels);
+    groups(&tapes[0], labels.clone());
+    fixture(
+        &tapes[0],
+        &connections_url(None, None),
+        page(
+            vec![
+                riker(&["bridge", "old", "starred"]),
+                person("c2", "Data", None, &["myContacts"]),
+                yar(&["old"]),
+            ],
+            None,
+            Some("s1"),
+        ),
+    );
+    photo(&tapes[0], &link("riker-1"), 200, "image/png");
+    groups(&tapes[1], labels);
+    fixture(
+        &tapes[1],
+        &connections_url(Some("s1"), None),
+        page(
+            vec![riker(&["old", "starred"]), yar(&["old", "bridge"])],
+            None,
+            Some("s2"),
+        ),
+    );
+    photo(&tapes[1], &link("yar-1"), 200, "image/png");
+
+    let first = try_run_for(&["Bridge crew"], tapes[0].as_path(), &store)
+        .await
+        .unwrap();
+    assert_eq!((first.contacts_new, first.photos), (1, 1), "{first:?}");
+    assert_eq!(strings(&store, PEOPLE).await, ["people/c1"]);
+    assert_eq!(
+        strings(&store, LABELS).await,
+        [
+            "contactGroups/bridge",
+            "contactGroups/myContacts",
+            "contactGroups/starred"
+        ],
+        "the other label is not mirrored"
+    );
+
+    let second = try_run_for(&["Bridge crew"], tapes[1].as_path(), &store)
+        .await
+        .unwrap();
+    assert_eq!(
+        (second.contacts_new, second.contacts_deleted, second.photos),
+        (1, 1, 1),
+        "{second:?}"
+    );
+    assert_eq!(strings(&store, PEOPLE).await, ["people/c3"]);
+    assert_eq!(strings(&store, PHOTOS).await, [link("yar-1")]);
+    assert_eq!(strings(&store, TOKEN).await, ["s2"]);
+}
+
+/// A token vouches for the choice it was listed under: a delta does not
+/// name the contacts a new choice takes in, so a changed choice lists
+/// everyone, and drops what it leaves out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_choice_of_labels_lists_everyone_again() {
+    let d = tempfile::tempdir().unwrap();
+    let (tapes, store) = dirs(&d, 1);
+    groups(
+        &tapes[0],
+        json!([
+            group("bridge", "Bridge crew", true),
+            group("away", "Away team", true)
+        ]),
+    );
+    let everyone = vec![
+        person("c1", "William Riker", None, &["bridge"]),
+        person("c2", "Data", None, &["away"]),
+        person("c3", "Tasha Yar", None, &["myContacts"]),
+    ];
+    fixture(
+        &tapes[0],
+        &connections_url(None, None),
+        page(everyone, None, Some("s1")),
+    );
+    fixture(
+        &tapes[0],
+        &connections_url(Some("s1"), None),
+        page(vec![], None, Some("s1")),
+    );
+    for (labels, want) in [
+        (&["Bridge crew"][..], &["people/c1"][..]),
+        (&["Bridge crew", "Away team"], &["people/c1", "people/c2"]),
+        (&["Away team"], &["people/c2"]),
+        (&[], &["people/c1", "people/c2", "people/c3"]),
+        (&["Bridge crew"], &["people/c1"]),
+    ] {
+        for again in [false, true] {
+            let asked = playback::Asked::default();
+            let playback = Playback::at(&tapes[0]).asked(asked.clone());
+            try_run_for(labels, playback, &store).await.unwrap();
+            assert_eq!(strings(&store, PEOPLE).await, want, "{labels:?}");
+            let delta = asked.count("syncToken=s1") == 1;
+            assert_eq!(delta, again, "{labels:?}: listed whole once");
+        }
+    }
+}
+
+/// A label renamed or deleted in Google is a name the config gives that
+/// nothing matches: a problem, and no contact is deleted for it. When no
+/// name matches, the run fails and stores nothing, rather than copying
+/// everyone.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_label_that_is_gone_deletes_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    let (tapes, store) = dirs(&d, 3);
+    let both = &["Bridge crew", "Away team"][..];
+    let bridge = group("bridge", "Bridge crew", true);
+    groups(&tapes[0], json!([bridge, group("away", "Away team", true)]));
+    let (riker, data) = (
+        person("c1", "William Riker", None, &["bridge"]),
+        person("c2", "Data", None, &["away"]),
+    );
+    fixture(
+        &tapes[0],
+        &connections_url(None, None),
+        page(vec![riker.clone(), data], None, Some("s1")),
+    );
+    groups(&tapes[1], json!([bridge]));
+    let unlabelled = person("c2", "Data", None, &["myContacts"]);
+    fixture(
+        &tapes[1],
+        &connections_url(None, None),
+        page(vec![riker.clone(), unlabelled], None, Some("s2")),
+    );
+
+    try_run_for(both, tapes[0].as_path(), &store).await.unwrap();
+    let second = try_run_for(both, tapes[1].as_path(), &store).await.unwrap();
+    assert_eq!(second.contacts_deleted, 0, "{second:?}");
+    assert_eq!(strings(&store, PEOPLE).await, ["people/c1", "people/c2"]);
+    assert!(strings(&store, LABELS)
+        .await
+        .contains(&"contactGroups/away".to_string()));
+    assert_eq!(strings(&store, PROBLEMS).await, ["config:labels:Away team"]);
+
+    // With the name out of the config, the choice is whole again and what
+    // it leaves out goes.
+    let third = try_run_for(&["Bridge crew"], tapes[1].as_path(), &store)
+        .await
+        .unwrap();
+    assert_eq!(third.contacts_deleted, 1, "{third:?}");
+    assert_eq!(strings(&store, PEOPLE).await, ["people/c1"]);
+
+    let none = try_run_for(&["Bridge crew"], tapes[2].as_path(), &store).await;
+    let why = format!("{:#}", none.unwrap_err());
+    assert!(why.contains("none of the configured labels"), "{why}");
+    assert_eq!(strings(&store, PEOPLE).await, ["people/c1"]);
+}
+
+/// Without the labels, which contacts have a chosen one is not known, so
+/// the contacts are not asked for.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn chosen_labels_that_cannot_be_listed_leave_the_contacts_alone() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    let tape = d.path().join("tape");
+    account(&tape, ME);
+    let mut refused =
+        json_response(&json!({"error": {"code": 403, "status": "PERMISSION_DENIED"}}));
+    refused.status = 403;
+    fixture(&tape, &groups_url(None), refused);
+    let asked = playback::Asked::default();
+    let playback = Playback::at(&tape).asked(asked.clone());
+    let summary = try_run_for(&["Bridge crew"], playback, &store)
+        .await
+        .unwrap();
+    assert_eq!(summary.errors, 1, "{summary:?}");
+    assert_eq!(asked.count("connections"), 0);
+    assert_eq!(
+        strings(&store, PROBLEMS).await,
+        ["listing:contacts", "listing:labels"]
+    );
 }
 
 /// An expired token is listed whole, and what the listing no longer names

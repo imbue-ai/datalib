@@ -87,8 +87,11 @@ pub struct ContactsConfig {
 /// Which download path a source selected.
 #[derive(Debug, Clone)]
 pub enum ContactsMethod<'a> {
-    /// The signed-in Google account's contacts, labels and photos.
-    Google,
+    /// The signed-in Google account's contacts, labels and photos. An
+    /// empty `labels` mirrors every contact.
+    Google {
+        labels: &'a [String],
+    },
     /// CardDAV, with the server it starts discovery from. An empty
     /// `addressbooks` mirrors every address book.
     Carddav {
@@ -102,8 +105,13 @@ impl ContactsConfig {
     /// The one method this source holds, or why there is not exactly one.
     pub fn method(&self) -> anyhow::Result<ContactsMethod<'_>> {
         let mut held: Vec<(&str, ContactsMethod<'_>)> = Vec::new();
-        if self.google.is_some() {
-            held.push(("google", ContactsMethod::Google));
+        if let Some(g) = &self.google {
+            held.push((
+                "google",
+                ContactsMethod::Google {
+                    labels: g.labels.as_deref().unwrap_or_default(),
+                },
+            ));
         }
         if let Some(s) = &self.fastmail {
             held.push((
@@ -156,11 +164,17 @@ impl ContactsConfig {
     }
 }
 
-/// The `google` table. It has no settings: every contact on the account is
-/// mirrored, with its labels and photo.
+/// The `google` table. Empty, it mirrors every contact on the account, with
+/// its labels and photo.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct GoogleContacts {}
+pub struct GoogleContacts {
+    /// Labels you made in Google Contacts, by name, matched exactly: only
+    /// the contacts with one of them are mirrored. Missing or empty mirrors
+    /// every contact.
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+}
 
 /// Which of an account's address books to mirror.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
@@ -234,10 +248,18 @@ mod tests {
     }
 
     #[test]
-    fn google_takes_an_empty_table() {
-        let cfg = parse(serde_json::json!({"google": {}}));
-        cfg.validate().unwrap();
-        assert!(matches!(cfg.method().unwrap(), ContactsMethod::Google));
+    fn google_takes_an_empty_table_or_labels() {
+        let labels = |v| {
+            let cfg = parse(v);
+            cfg.validate().unwrap();
+            let ContactsMethod::Google { labels } = cfg.method().unwrap() else {
+                panic!("google");
+            };
+            labels.to_vec()
+        };
+        assert!(labels(serde_json::json!({"google": {}})).is_empty());
+        let crew = labels(serde_json::json!({"google": {"labels": ["Crew"]}}));
+        assert_eq!(crew, ["Crew"]);
         let odd = serde_json::json!({"google": {"addressbooks": ["Crew"]}});
         assert!(serde_json::from_value::<ContactsConfig>(odd).is_err());
     }

@@ -185,6 +185,33 @@ impl RawDb {
         Ok(())
     }
 
+    /// The choice of labels the sync token was listed under
+    /// ([`super::selection::Selection::key`]).
+    pub async fn google_listed_under(&self, book: &str) -> Result<Option<String>> {
+        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
+            .bind(listed_under(book))
+            .fetch_optional(self.pool())
+            .await
+            .context("select what the contacts were listed under")
+    }
+
+    pub async fn set_google_listed_under(
+        tx: &mut Transaction<'_, Sqlite>,
+        book: &str,
+        key: Option<&str>,
+    ) -> Result<()> {
+        let scope = listed_under(book);
+        if let Some(key) = key {
+            return dr::upsert_scope_state(&mut **tx, &scope, key).await;
+        }
+        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
+            .bind(scope)
+            .execute(&mut **tx)
+            .await
+            .context("clear what the contacts were listed under")?;
+        Ok(())
+    }
+
     /// The signed-in account's address.
     pub async fn google_login(&self) -> Result<Option<String>> {
         Ok(
@@ -303,6 +330,10 @@ async fn payloads(
             Ok((id, payload))
         })
         .collect()
+}
+
+fn listed_under(book: &str) -> String {
+    format!("{book}:labels")
 }
 
 fn is_held(held: &HashMap<String, Value>, row: &dr::WirePayload) -> bool {

@@ -6,6 +6,7 @@
 
 pub mod db;
 pub mod photos;
+pub mod selection;
 
 use std::collections::HashSet;
 
@@ -23,6 +24,7 @@ use super::db::{addressbook_pk, contact_pk, AccountRow, RawDb};
 use super::schema_raw::{GoogleContactGroupRow, GooglePersonRow, GooglePhotoRow};
 use super::FetchSummary;
 use datalib_etl::doltlite_raw::WirePayload;
+use selection::Selection;
 
 pub const API: GoogleApi = GoogleApi {
     service: HttpService::GooglePeople,
@@ -43,6 +45,8 @@ pub const PERSON_FIELDS: &str = "addresses,ageRanges,biographies,birthdays,calen
 
 pub struct FetchOptions {
     pub db: RawDb,
+    /// Labels, by name; empty means every contact.
+    pub labels: Vec<String>,
     pub blob_size_limit_bytes: Option<u64>,
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
@@ -69,13 +73,27 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     summary.addressbooks = 1;
 
     opts.progress.set_message("listing labels");
-    match list_groups(lk, &mut summary).await {
-        Ok(groups) => store_groups(db, &book, groups, &found).await?,
+    let selection = match list_groups(lk, &mut summary).await {
+        Ok(groups) => {
+            let (selection, problems) = Selection::resolve(&opts.labels, &groups)?;
+            found.config(problems);
+            store_groups(db, &book, groups, &selection, &found).await?;
+            selection
+        }
         Err(e) => {
             summary.errors += 1;
             found.listing("labels", format!("{e:#}"));
+            if !opts.labels.is_empty() {
+                found.listing(
+                    "contacts",
+                    "the labels could not be listed, so which contacts have the chosen ones is \
+                     not known; the next run asks again",
+                );
+                return Ok(summary);
+            }
+            Selection::default()
         }
-    }
+    };
     if opts.control.stop.requested() {
         return Ok(summary);
     }
@@ -84,6 +102,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let listing = Listing {
         db,
         book: &book,
+        selection: &selection,
         lk,
         sealer: opts.sealer.as_ref(),
     };
@@ -157,7 +176,10 @@ pub fn groups_url(page: Option<&str>) -> String {
 
 /// Every label, Google's own included. It is listed whole each run: one
 /// request, and what it leaves out is gone.
-async fn list_groups(lk: &LatchkeySettings, summary: &mut FetchSummary) -> Result<Vec<Value>> {
+pub(crate) async fn list_groups(
+    lk: &LatchkeySettings,
+    summary: &mut FetchSummary,
+) -> Result<Vec<Value>> {
     let mut out = Vec::new();
     let mut page: Option<String> = None;
     loop {
@@ -181,13 +203,24 @@ async fn store_groups(
     db: &RawDb,
     book: &str,
     groups: Vec<Value>,
+    selection: &Selection,
     found: &RunProblems,
 ) -> Result<()> {
     let rows: Vec<(GoogleContactGroupRow, Option<Value>)> =
         groups.iter().filter_map(|g| group_row(book, g)).collect();
     let unidentified = groups.len() - rows.len();
-    db.store_google_groups(book, rows, unidentified == 0)
-        .await?;
+    let chosen = rows
+        .into_iter()
+        .zip(
+            groups
+                .iter()
+                .filter(|g| str_of(g, "resourceName").is_some()),
+        )
+        .filter(|(_, g)| selection.keeps_group(g))
+        .map(|(row, _)| row)
+        .collect();
+    let whole = unidentified == 0 && selection.drops_the_rest();
+    db.store_google_groups(book, chosen, whole).await?;
     if unidentified > 0 {
         found.listing(
             "labels",
@@ -216,16 +249,22 @@ pub fn connections_url(sync_token: Option<&str>, page: Option<&str>) -> String {
 struct Listing<'a> {
     db: &'a RawDb,
     book: &'a str,
+    selection: &'a Selection,
     lk: &'a LatchkeySettings,
     sealer: Option<&'a Sealer>,
 }
 
 impl Listing<'_> {
     /// The changes since the sync token, or every contact when there is
-    /// none. The reason nothing was deleted and the token was left, when
+    /// none, or it was listed under another choice of labels: a delta
+    /// would not name the contacts the new choice takes in. The reason nothing was deleted and the token was left, when
     /// something was listed that could be any stored contact.
     async fn sync(&self, summary: &mut FetchSummary) -> Result<Option<String>> {
-        let token = self.db.sync_token(self.book).await?;
+        let listed_under = self.db.google_listed_under(self.book).await?;
+        let token = match listed_under == self.selection.key() {
+            true => self.db.sync_token(self.book).await?,
+            false => None,
+        };
         match self.list(token.as_deref(), summary).await {
             Err(e) if token.is_some() && is_expired(&e) => {
                 warn!(
@@ -261,7 +300,7 @@ impl Listing<'_> {
                 anyhow::bail!("the contacts reply carried neither a next page nor a sync token");
             }
             let connections = v.get("connections").and_then(Value::as_array);
-            let answer = read_page(self.book, connections.into_iter().flatten());
+            let answer = read_page(self.book, self.selection, connections.into_iter().flatten());
             unidentified += answer.unidentified;
             summary.errors += answer.unidentified;
             listed.extend(answer.rows.iter().map(|(r, _)| r.id_and_payload.id.clone()));
@@ -270,13 +309,15 @@ impl Listing<'_> {
             let mut wrote = RawDb::store_google_page(&mut tx, &answer, summary).await?;
             let held_back = held_back(unidentified);
             if let Some(next_token) = next_token.filter(|_| page.is_none()) {
-                if token.is_none() && held_back.is_none() {
+                if token.is_none() && held_back.is_none() && self.selection.drops_the_rest() {
                     let gone = RawDb::prune_google_people(&mut tx, self.book, &listed).await?;
                     summary.contacts_deleted += gone;
                     wrote += gone as u64;
                 }
                 if held_back.is_none() {
                     RawDb::set_sync_token(&mut tx, self.book, Some(&next_token)).await?;
+                    let key = self.selection.key();
+                    RawDb::set_google_listed_under(&mut tx, self.book, key.as_deref()).await?;
                 }
             }
             tx.commit().await.context("commit a page")?;
@@ -306,13 +347,18 @@ pub struct Page {
     pub rows: Vec<(GooglePersonRow, Option<Value>)>,
     /// The photo of each contact that has one.
     pub photos: Vec<GooglePhotoRow>,
-    /// Keys of contacts deleted, and the former names of ones renamed.
+    /// Keys of contacts deleted or without a chosen label any more, and the
+    /// former names of ones renamed.
     pub gone: Vec<String>,
     /// Contacts with no resource name, which no stored row can be matched to.
     pub unidentified: usize,
 }
 
-fn read_page<'a>(book: &str, people: impl Iterator<Item = &'a Value>) -> Page {
+fn read_page<'a>(
+    book: &str,
+    selection: &Selection,
+    people: impl Iterator<Item = &'a Value>,
+) -> Page {
     let mut page = Page::default();
     for person in people {
         let Some(name) = str_of(person, "resourceName") else {
@@ -337,6 +383,12 @@ fn read_page<'a>(book: &str, people: impl Iterator<Item = &'a Value>) -> Page {
                 .filter(|former| *former != name)
                 .map(|former| contact_pk(book, former)),
         );
+        if !selection.chooses(person) {
+            if selection.drops_the_rest() {
+                page.gone.push(contact_pk(book, &name));
+            }
+            continue;
+        }
         page.photos
             .extend(photos::row(&contact_pk(book, &name), person));
         page.rows.push(person_row(book, &name, person));
@@ -383,7 +435,7 @@ fn group_row(book: &str, group: &Value) -> Option<(GoogleContactGroupRow, Option
         },
         addressbook_id: book.to_string(),
         resource_name: name,
-        name: str_of(&content, "formattedName").or_else(|| str_of(&content, "name")),
+        name: selection::name(&content),
     };
     Some((row, volatile))
 }

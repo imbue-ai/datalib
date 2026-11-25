@@ -51,6 +51,7 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
                     vec![
                         person("c1", "William Riker", Some(&link("riker-1")), &["bridge"]),
                         person("c2", "Data", None, &["bridge"]),
+                        person("c9", "Q", None, &["myContacts"]),
                     ],
                     Some("p2"),
                     None,
@@ -109,6 +110,7 @@ fn tape(dir: &Path, edition: Edition) -> PathBuf {
 }
 
 struct Google {
+    labels: Vec<&'static str>,
     playback: PathBuf,
     earlier: Option<PathBuf>,
 }
@@ -136,7 +138,9 @@ impl Rig for Google {
             stop,
             ..Default::default()
         };
-        download(db, &self.playback, control).await.map(|_| ())
+        download(db, &self.labels, &self.playback, control)
+            .await
+            .map(|_| ())
     }
 
     async fn seal(&self, db: RawDb) -> Result<()> {
@@ -157,6 +161,16 @@ fn every(n: u64) -> Vec<u64> {
     (1..=n).collect()
 }
 
+/// A store `rig` filled.
+async fn ran(rig: &Google, scratch: &Path) -> PathBuf {
+    let store = scratch.join("earlier");
+    std::fs::create_dir_all(&store).unwrap();
+    let db = rig.open(&store).await.unwrap();
+    rig.download(&db, StopFlag::new()).await.unwrap();
+    rig.seal(db).await.unwrap();
+    store
+}
+
 async fn resumes_from_every_cut(rig: &Google, scratch: &Path) {
     for how in [How::Kill, How::Stop] {
         let scratch = scratch.join(format!("cuts-{how:?}"));
@@ -170,6 +184,7 @@ async fn resumes_from_every_cut(rig: &Google, scratch: &Path) {
 async fn a_first_google_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();
     let rig = Google {
+        labels: Vec::new(),
         playback: tape(d.path(), Edition::Before),
         earlier: None,
     };
@@ -180,18 +195,38 @@ async fn a_first_google_sync_cut_off_at_any_request_resumes_to_the_same_store() 
 async fn a_later_google_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     let d = tempfile::tempdir().unwrap();
     let first = Google {
+        labels: Vec::new(),
         playback: tape(d.path(), Edition::Before),
         earlier: None,
     };
-    let earlier = d.path().join("earlier");
-    std::fs::create_dir_all(&earlier).unwrap();
-    let db = first.open(&earlier).await.unwrap();
-    first.download(&db, StopFlag::new()).await.unwrap();
-    first.seal(db).await.unwrap();
+    let earlier = ran(&first, d.path()).await;
 
     let rig = Google {
+        labels: Vec::new(),
         playback: tape(d.path(), Edition::After),
         earlier: Some(earlier),
     };
     resumes_from_every_cut(&rig, d.path()).await;
+}
+
+/// A run under a new choice of labels lists everyone; cut off, it lists
+/// them again rather than resuming from the token of the old choice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_changed_choice_of_labels_cut_off_at_any_request_resumes_to_the_same_store() {
+    let bridge = || vec!["Bridge crew"];
+    for (before, after) in [(vec![], bridge()), (bridge(), vec![])] {
+        let d = tempfile::tempdir().unwrap();
+        let playback = tape(d.path(), Edition::Before);
+        let first = Google {
+            labels: before,
+            playback: playback.clone(),
+            earlier: None,
+        };
+        let rig = Google {
+            labels: after,
+            playback,
+            earlier: Some(ran(&first, d.path()).await),
+        };
+        resumes_from_every_cut(&rig, d.path()).await;
+    }
 }

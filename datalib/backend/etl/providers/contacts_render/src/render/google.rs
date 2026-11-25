@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use datalib_contact_schema::{ContactHandle, Detail};
 use datalib_etl_contacts::ingest::google::db::{LoadedGoogleGroup, LoadedGooglePerson, PHOTOS};
+use datalib_etl_contacts::ingest::google::selection::{is_label, memberships, name as group_name};
 use datalib_etl_contacts::ingest::google::ADDRESSBOOK_NAME;
 use datalib_etl_contacts::ingest::google::{label_page, person_page, primary, str_of, ACCOUNT_ID};
 use datalib_etl_render::inputs::Input;
@@ -144,22 +145,6 @@ fn label(g: &LoadedGoogleGroup, members: Vec<String>, login: Option<&str>) -> Pa
             Input::new("accounts", ACCOUNT_ID),
         ],
     }
-}
-
-/// A label someone made, as against one of Google's own groups.
-fn is_label(group: &Value) -> bool {
-    group.get("groupType").and_then(Value::as_str) == Some("USER_CONTACT_GROUP")
-}
-
-fn group_name(group: &Value) -> Option<String> {
-    str_of(group, "formattedName").or_else(|| str_of(group, "name"))
-}
-
-fn memberships(person: &Value) -> impl Iterator<Item = &str> {
-    items(person, "memberships").filter_map(|m| {
-        m.pointer("/contactGroupMembership/contactGroupResourceName")
-            .and_then(Value::as_str)
-    })
 }
 
 /// When the contact itself was last changed: Google stamps each place it
