@@ -127,6 +127,11 @@ const CHANGED_SQL: &str = "
          WHERE d.from_ref = ?1 AND d.to_ref = ?2 AND d.diff_type != 'unchanged')
      WHERE channel_id IS NOT NULL";
 
+/// Every document names the account it was copied as.
+const ACCOUNT_CHANGED_SQL: &str = "
+    SELECT 1 FROM dolt_diff_account
+     WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged' LIMIT 1";
+
 async fn open_async(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Result<Option<Store>> {
     let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, range.pin)
         .await
@@ -141,21 +146,28 @@ async fn open_async(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Res
         range.cursor,
         &pin,
         &datalib_etl::doltlite_raw::DiffScanSpec {
-            fanout_query: None,
+            fanout_query: Some(ACCOUNT_CHANGED_SQL),
             render_unit_query: CHANGED_SQL,
         },
     )
     .await?;
     let all = conversation_ids(&pool).await?;
+    // Every one there is, and those there no longer are: each has to be
+    // looked at for its document to go.
+    let forward = match (scan.render, scan.changed_render_units) {
+        (Some(render), _) => Some(render),
+        (None, Some(changed)) => Some(all.iter().cloned().chain(changed).collect()),
+        (None, None) => None,
+    };
     // The driver names a stale conversation by its document's id.
-    let by_uuid: BTreeMap<String, String> = match (&range.stale, &scan.render) {
+    let by_uuid: BTreeMap<String, String> = match (&range.stale, &forward) {
         (Some(_), Some(_)) => all
             .iter()
             .map(|id| (ids::conversation(source_id, id).uuid, id.clone()))
             .collect(),
         _ => BTreeMap::new(),
     };
-    let narrowed = range.narrow_by(scan.render.as_ref(), |uuid| by_uuid.get(uuid).cloned());
+    let narrowed = range.narrow_by(forward.as_ref(), |uuid| by_uuid.get(uuid).cloned());
     let mut unparsed = Vec::new();
     let shared = shared(&pool, &mut unparsed).await?;
     let cas = blob_cas::open_cas_for_render(db_path)
@@ -173,8 +185,19 @@ async fn open_async(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Res
     }))
 }
 
+/// Each conversation, found by a seek past the one before it: there are few
+/// beside the messages, and this is asked on every render.
+const CONVERSATIONS_SQL: &str = "
+    WITH RECURSIVE c(id) AS (
+        SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel
+        UNION ALL
+        SELECT (SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel
+                 WHERE channel_id > c.id)
+          FROM c WHERE c.id IS NOT NULL)
+    SELECT id FROM c WHERE id IS NOT NULL";
+
 async fn conversation_ids(pool: &SqlitePool) -> Result<Vec<String>> {
-    sqlx::query_scalar("SELECT DISTINCT channel_id FROM messages ORDER BY channel_id")
+    sqlx::query_scalar(CONVERSATIONS_SQL)
         .fetch_all(pool)
         .await
         .context("list conversations")

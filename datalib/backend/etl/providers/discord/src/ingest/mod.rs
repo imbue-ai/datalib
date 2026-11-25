@@ -196,6 +196,7 @@ impl Ctx<'_> {
         let now = IsoOffsetTimestamp::now_local();
         let tx = self.writes.tx().await?;
         db::write_account(tx, &[(&id, &me)], &now).await?;
+        db::forget_other_accounts(tx, &id).await?;
         db::write_users(tx, &[(&id, &me)], &now).await?;
         self.writes.wrote(2).await?;
         Ok(Some(id))

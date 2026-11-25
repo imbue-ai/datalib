@@ -334,3 +334,18 @@ async fn a_refused_credential_fails_the_run_and_says_how_to_sign_in() {
     let e = format!("{:#}", run(&store, &tape).await.unwrap_err());
     assert!(e.contains("latchkey auth browser discord"), "{e}");
 }
+
+/// A source signed in as someone else is that account's copy from then on.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signing_in_as_another_account_leaves_one() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    let mut w = World::before();
+    run(&store, &w.tape(d.path(), "picard")).await.unwrap();
+    w.value["me"]["id"] = json!(RIKER);
+    run(&store, &w.tape(d.path(), "riker")).await.unwrap();
+    let accounts = count(&store, "SELECT count(*) FROM account").await;
+    let sidecars = count(&store, "SELECT count(*) FROM account_bookkeeping").await;
+    assert_eq!((accounts, sidecars), (1, 1));
+    assert!(payload(&store, "account", RIKER).await.is_some());
+}

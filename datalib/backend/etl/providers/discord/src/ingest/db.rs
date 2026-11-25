@@ -357,24 +357,43 @@ struct OwedRow {
     volatile: Option<String>,
 }
 
+/// Forgets who the store was signed in as before: the account is one row.
+pub async fn forget_other_accounts(tx: &mut Tx<'_>, id: &str) -> Result<()> {
+    for sql in [
+        "DELETE FROM account_bookkeeping WHERE id <> ?",
+        "DELETE FROM account WHERE id <> ?",
+    ] {
+        sqlx::query(sql)
+            .bind(id)
+            .execute(&mut **tx)
+            .await
+            .context("forget the account signed in before")?;
+    }
+    Ok(())
+}
+
 /// The edges with no bytes: those of `message_keys`, or every one.
 pub async fn owed_files(
     tx: &mut Tx<'_>,
     message_keys: Option<&[String]>,
 ) -> Result<BTreeMap<String, OwedFile>> {
-    let keys = message_keys.map(serde_json::to_string).transpose()?;
-    let rows: Vec<OwedRow> = sqlx::query_as(
-        "SELECT a.id, a.message_key, a.attachment_id, json(m.payload) AS payload, \
-                json(b.volatile_payload) AS volatile \
-         FROM discord_attachments a \
+    const OWED: &str = "SELECT a.id, a.message_key, a.attachment_id, \
+                json(m.payload) AS payload, json(b.volatile_payload) AS volatile \
+         FROM discord_attachments a INDEXED BY discord_attachments_owed \
          LEFT JOIN messages m ON m.id = a.message_key \
          LEFT JOIN messages_bookkeeping b ON b.id = a.message_key \
-         WHERE a.blake3 IS NULL \
-           AND (?1 IS NULL OR a.message_key IN (SELECT value FROM json_each(?1)))",
-    )
-    .bind(keys)
-    .fetch_all(&mut **tx)
-    .await
+         WHERE a.blake3 IS NULL";
+    // Audited: `OWED` is the constant above, and what it is asked for is bound.
+    let rows: Vec<OwedRow> = match message_keys {
+        None => sqlx::query_as(OWED).fetch_all(&mut **tx).await,
+        Some(keys) => {
+            let sql = format!("{OWED} AND a.message_key IN (SELECT value FROM json_each(?1))");
+            sqlx::query_as(sqlx::AssertSqlSafe(sql))
+                .bind(serde_json::to_string(keys)?)
+                .fetch_all(&mut **tx)
+                .await
+        }
+    }
     .context("list the files with no bytes")?;
     let mut out = BTreeMap::new();
     for row in rows {

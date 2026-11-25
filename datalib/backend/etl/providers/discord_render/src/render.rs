@@ -442,7 +442,12 @@ impl Building<'_> {
         inputs: &datalib_etl_render::inputs::Inputs,
     ) -> Vec<NormalizedContact> {
         let users = inputs.lookup(USERS, &self.shared.users);
-        let me = self.shared.account.as_ref().map(|(id, _)| id.as_str());
+        let account = self.shared.account.as_ref();
+        let me = account.map(|(id, _)| id.as_str());
+        // Discord tells an account its own address, and nobody else's.
+        let my_address = account
+            .and_then(|(_, label)| label.as_deref())
+            .and_then(Handle::email);
         let mut seen: HashSet<&str> = HashSet::new();
         messages
             .iter()
@@ -466,6 +471,11 @@ impl Building<'_> {
                     ))
                 });
                 contact.account = Some(id) == me;
+                if contact.account {
+                    contact
+                        .handles
+                        .extend(my_address.clone().map(ContactHandle::of));
+                }
                 Some(contact)
             })
             .collect()
@@ -723,6 +733,36 @@ mod tests {
         assert_eq!(item.author_display, "Ship's computer");
         assert_eq!(item.author_handle, None);
         assert!(c.contacts.is_empty());
+    }
+
+    /// The account's Discord user is tied to its address; nobody else's is.
+    #[test]
+    fn the_accounts_own_contact_has_its_address() {
+        let c = chat(
+            "71",
+            vec![message("1", RIKER, "Sir?"), message("2", PICARD, "Yes.")],
+        );
+        let handles: Vec<(bool, Vec<String>)> = c
+            .contacts
+            .iter()
+            .map(|c| {
+                let of = |h: &ContactHandle| h.handle.as_ref().unwrap().as_str().to_string();
+                (c.account, c.handles.iter().map(of).collect())
+            })
+            .collect();
+        assert_eq!(
+            handles,
+            [
+                (false, vec!["discord:1702".to_string()]),
+                (
+                    true,
+                    vec![
+                        "discord:1701".to_string(),
+                        "email:picard@enterprise.starfleet".to_string()
+                    ]
+                )
+            ]
+        );
     }
 
     #[test]

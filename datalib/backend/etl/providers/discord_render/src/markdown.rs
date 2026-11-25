@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 
 use datalib_etl_render::html::{
     code_span_parts, escape_md_block, escape_md_inline, md_code_block, md_code_span, md_link_dest,
+    md_quote,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::{chip_link, timestamp_html};
@@ -35,7 +36,7 @@ static CONSTRUCT: LazyLock<Regex> = LazyLock::new(|| {
         r"|<t:(?P<time>-?\d{1,13})(?::[a-zA-Z])?>",
         r"|</(?P<command>[^:<>\n]+):\d+>",
         r"|<id:(?P<guide>\w+)>",
-        r"|\[(?P<label>[^\[\]\n]+)\]\(<?(?P<dest>https?://[^\s<>()]*(?:\([^\s<>()]*\)[^\s<>()]*)*)>?\)",
+        r"|(?P<image>!?)\[(?P<label>[^\[\]\n]+)\]\(<?(?P<dest>https?://[^\s<>()]*(?:\([^\s<>()]*\)[^\s<>()]*)*)>?\)",
         r"|<(?P<angle>https?://[^\s<>]+)>",
         r"|(?P<url>https?://[^\s<>]+)",
         r"|\\(?P<escaped>[[:punct:]])",
@@ -112,11 +113,29 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
             masked.push_str(&hold_constructs(part, labels, &mut holder));
         }
     }
-    let mut out = String::with_capacity(text.len() + 16);
+    let lines: Vec<&str> = masked.split('\n').collect();
+    let md = blocks(&lines, true, &mut holder);
+    holder.release(&md)
+}
+
+/// `lines` as blocks, a quote being blocks of its own.
+fn blocks(lines: &[&str], quotes: bool, holder: &mut Holder) -> String {
+    let mut out = String::new();
     let mut before: Option<Line> = None;
-    let mut quoting = false;
-    for line in masked.split('\n') {
-        let (kind, md) = one_line(line, &mut quoting, &mut holder);
+    let mut at = 0;
+    while let Some(line) = lines.get(at) {
+        let quote = quotes.then(|| quoted(&lines[at..])).flatten();
+        let (kind, md) = match &quote {
+            Some(inner) => {
+                let inner = blocks(inner, false, holder);
+                match inner.is_empty() {
+                    true => (Line::Blank, inner),
+                    false => (Line::Quote, md_quote(&holder.release(&inner))),
+                }
+            }
+            None => one_line(line, holder),
+        };
+        at += quote.map_or(1, |inner| inner.len());
         if kind == Line::Blank {
             before = Some(Line::Blank);
             continue;
@@ -125,30 +144,28 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
             None => {}
             Some(b) if b == kind && kind == Line::List => out.push('\n'),
             // A line break is one in Discord; markdown needs telling.
-            Some(b) if b == kind && kind != Line::Block => out.push_str("  \n"),
+            Some(b) if b == kind && kind == Line::Plain => out.push_str("  \n"),
             Some(_) if out.is_empty() => {}
             Some(_) => out.push_str("\n\n"),
         }
         out.push_str(&md);
         before = Some(kind);
     }
-    holder.release(&out)
+    out
 }
 
-fn one_line(line: &str, quoting: &mut bool, holder: &mut Holder) -> (Line, String) {
-    if !*quoting && line.starts_with(">>> ") {
-        *quoting = true;
-        return (Line::Quote, format!("> {}", typed(&line[4..], holder)));
+/// What the quote `lines` open with quotes: `> ` a line, `>>> ` the rest
+/// of the message.
+fn quoted<'a>(lines: &[&'a str]) -> Option<Vec<&'a str>> {
+    let (first, rest) = lines.split_first()?;
+    if let Some(first) = first.strip_prefix(">>> ") {
+        return Some(std::iter::once(first).chain(rest.iter().copied()).collect());
     }
-    if *quoting {
-        return (
-            Line::Quote,
-            format!("> {}", typed(line, holder)).trim_end().to_string(),
-        );
-    }
-    if let Some(quoted) = line.strip_prefix("> ") {
-        return (Line::Quote, format!("> {}", typed(quoted, holder)));
-    }
+    let inner: Vec<&str> = lines.iter().map_while(|l| l.strip_prefix("> ")).collect();
+    (!inner.is_empty()).then_some(inner)
+}
+
+fn one_line(line: &str, holder: &mut Holder) -> (Line, String) {
     if line.trim().is_empty() {
         return (Line::Blank, String::new());
     }
@@ -240,7 +257,10 @@ fn hold_constructs(text: &str, labels: Labels<'_>, holder: &mut Holder) -> Strin
                 return holder.hold(escape_md_inline(guide), false);
             }
             if let (Some(label), Some(dest)) = (get("label"), get("dest")) {
-                let link = format!("[{}]({})", escape_md_inline(label), md_link_dest(dest));
+                // Discord draws no picture from a link, and shows its `!`.
+                let bang = get("image").map_or("", |i| if i.is_empty() { "" } else { "\\!" });
+                let label = escape_md_inline(label);
+                let link = format!("{bang}[{label}]({})", md_link_dest(dest));
                 return holder.hold(link, false);
             }
             if let Some(url) = get("angle") {
@@ -363,6 +383,16 @@ mod tests {
         assert_eq!(convert("> one\n> two\nthree"), "> one  \n> two\n\nthree");
         assert_eq!(convert(">>> one\ntwo"), "> one  \n> two");
         assert_eq!(convert("- a\n- b\nc"), "- a\n- b\n\nc");
+        assert_eq!(
+            convert(">>> # Tea\n- hot\n  - very"),
+            "> **Tea**\n>\n> - hot\n>   - very"
+        );
+        assert_eq!(convert("> - hot\nnow"), "> - hot\n\nnow");
+        // A block inside a quote stays in it.
+        assert_eq!(
+            convert(">>> so\n```\na\nb\n```"),
+            "> so\n>\n> ```\n> a\n> b\n> ```"
+        );
     }
 
     #[test]
@@ -401,6 +431,12 @@ mod tests {
         assert_eq!(convert("<b>x</b> & y"), "&lt;b&gt;x&lt;/b&gt; &amp; y");
         assert_eq!(convert("a | b"), "a \\| b");
         assert_eq!(convert("![x](y)"), "!\\[x\\](y)");
+        // Discord draws no picture here; a page that did would tell its
+        // host that the message was read.
+        assert_eq!(
+            convert("![x](https://a.test/x.png)"),
+            "\\![x](https://a.test/x.png)"
+        );
         assert_eq!(convert("\u{E000}0\u{E001}"), "0");
     }
 

@@ -736,8 +736,11 @@ fn render_item(
 
     let mut reactions: Vec<&crate::types::NormalizedReaction> = item.reactions.iter().collect();
     reactions.sort_by(|a, b| {
+        // Those counted and not named come after those who are.
+        let unnamed = |r: &crate::types::NormalizedReaction| r.reactor_kind == AuthorKind::Unknown;
         a.emoji
             .cmp(&b.emoji)
+            .then(unnamed(a).cmp(&unnamed(b)))
             .then(a.reactor_display.cmp(&b.reactor_display))
     });
     let message = Item {

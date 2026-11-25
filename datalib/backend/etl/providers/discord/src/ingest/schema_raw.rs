@@ -133,6 +133,10 @@ pub const CHANNELS_BY_PARENT_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS channels_by_parent ON channels(parent_id)";
 pub const ROLES_BY_GUILD_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS roles_by_guild ON roles(guild_id)";
+/// The edges with no bytes, and no others: a page's are found by its
+/// messages, and every one is a walk of what is owed alone.
+pub const ATTACHMENTS_OWED_INDEX_DDL: &str = "CREATE INDEX IF NOT EXISTS discord_attachments_owed \
+     ON discord_attachments(message_key) WHERE blake3 IS NULL";
 
 /// `{channel}#{message}`, the message's id at a fixed width, so a
 /// channel's messages are one range of the table in the order they were
@@ -395,6 +399,7 @@ pub fn full_ddl() -> Vec<String> {
         datalib_etl_web::coverage::DDL.to_string(),
     ];
     out.extend(DiscordAttachmentRow::all_ddl());
+    out.push(ATTACHMENTS_OWED_INDEX_DDL.to_string());
     out.extend(DATA_TABLES.iter().map(|t| dr::bookkeeping_ddl_for(t)));
     out
 }

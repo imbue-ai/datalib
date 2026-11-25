@@ -218,7 +218,7 @@
     ]
   },
   "discord": {
-    "schema_hash": "e0bbbeb1cb79db36e042bac6bea8c3677915ae7eda24f51b77b2d81ced7e2182",
+    "schema_hash": "6dfd90833b98c4ede6ecc518db699eb0b6a266206d0ee7f8273083a0625711e9",
     "schema_version": 0,
     "shared_schema_version": 1,
     "sql": [
@@ -232,6 +232,7 @@
       "CREATE TABLE discord_attachments_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX discord_attachments_by_attachment_id ON discord_attachments(attachment_id, blake3)",
       "CREATE INDEX discord_attachments_by_message_key ON discord_attachments(message_key)",
+      "CREATE INDEX discord_attachments_owed ON discord_attachments(message_key) WHERE blake3 IS NULL",
       "CREATE TABLE guilds( id TEXT PRIMARY KEY, payload TEXT NULL)",
       "CREATE TABLE guilds_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE TABLE members( id TEXT PRIMARY KEY, payload TEXT NULL)",

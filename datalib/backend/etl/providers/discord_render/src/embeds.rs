@@ -77,9 +77,46 @@ fn forward(message: &Value, labels: Labels<'_>) -> String {
     md_quote(&parts.join("\n\n"))
 }
 
+fn field<'a>(e: &'a Value, name: &str) -> Option<&'a str> {
+    let named = list(e, "fields").find(|f| text(f, "name") == Some(name))?;
+    text(named, "value")
+}
+
+fn poll_result(e: &Value) -> String {
+    let question = escape_md_inline(field(e, "poll_question_text").unwrap_or(""));
+    let total = field(e, "total_votes").unwrap_or("0");
+    let won = match field(e, "victor_answer_text") {
+        Some(answer) => {
+            let votes = field(e, "victor_answer_votes").unwrap_or("0");
+            format!("{} ({votes} of {total})", escape_md_inline(answer))
+        }
+        None => format!("no answer won ({total} votes)"),
+    };
+    format!("Poll closed: {question}\n- {won}")
+}
+
+fn stopped_message(e: &Value, labels: Labels<'_>) -> String {
+    let why: Vec<String> = ["rule_name", "keyword_matched_content"]
+        .iter()
+        .filter_map(|name| field(e, name))
+        .map(escape_md_inline)
+        .collect();
+    let mut parts = vec![match why.is_empty() {
+        true => "AutoMod stopped this message".to_string(),
+        false => format!("AutoMod stopped this message ({})", why.join(": ")),
+    }];
+    parts.extend(text(e, "description").map(|d| to_commonmark(d, labels)));
+    md_quote(&parts.join("\n\n"))
+}
+
 /// One embed, set off as a quote. `None` for one that says no more than
 /// the link in the message's text does.
 fn embed(e: &Value, content: &str, labels: Labels<'_>) -> Option<String> {
+    match text(e, "type") {
+        Some("poll_result") => return Some(poll_result(e)),
+        Some("auto_moderation_message") => return Some(stopped_message(e, labels)),
+        _ => {}
+    }
     let url = text(e, "url").and_then(safe_url);
     let rich = text(e, "type") == Some("rich");
     let mut head: Vec<String> = Vec::new();
@@ -103,9 +140,6 @@ fn embed(e: &Value, content: &str, labels: Labels<'_>) -> Option<String> {
         head.push(format!("<{}>", url.replace('<', "%3C").replace('>', "%3E")));
     }
     let mut parts: Vec<String> = Vec::new();
-    if !head.is_empty() {
-        parts.push(head.join(" · "));
-    }
     let description =
         text(e, "description").filter(|d| rich || d.chars().count() <= PREVIEW_TEXT_MAX);
     parts.extend(description.map(|d| to_commonmark(d, labels)));
@@ -125,7 +159,15 @@ fn embed(e: &Value, content: &str, labels: Labels<'_>) -> Option<String> {
             .and_then(|f| text(f, "text"))
             .map(escape_md_inline),
     );
-    (!parts.is_empty()).then(|| md_quote(&parts.join("\n\n")))
+    // The site's name alone is no more than its link.
+    let site = usize::from(e.get("provider").is_some_and(|p| text(p, "name").is_some()));
+    if parts.is_empty() && head.len() <= site {
+        return None;
+    }
+    if !head.is_empty() {
+        parts.insert(0, head.join(" · "));
+    }
+    Some(md_quote(&parts.join("\n\n")))
 }
 
 fn poll_of(poll: &Value) -> String {
@@ -188,6 +230,43 @@ mod tests {
         let got = drawn(json!({"content": "see https://a.test/x.png", "embeds": [
             {"type": "image", "url": "https://a.test/x.png"}]}));
         assert!(got.is_empty(), "{got:?}");
+        let got = drawn(json!({"content": "https://a.test/dance", "embeds": [
+            {"type": "gifv", "url": "https://a.test/dance", "provider": {"name": "Gifs"},
+             "video": {"url": "https://a.test/v.mp4"}}]}));
+        assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// Discord says these two in fields named for its own app to read.
+    #[test]
+    fn a_polls_result_and_a_blocked_message_are_sentences() {
+        let field = |name: &str, value: &str| json!({"name": name, "value": value});
+        let mut fields = vec![
+            field("poll_question_text", "Where *to*?"),
+            field("victor_answer_votes", "5"),
+            field("total_votes", "8"),
+            field("victor_answer_id", "1"),
+            field("victor_answer_text", "Earth"),
+        ];
+        let result = |fields: &[Value]| {
+            drawn(json!({"content": "", "embeds": [{"type": "poll_result", "fields": fields}]}))
+        };
+        assert_eq!(
+            result(&fields),
+            ["Poll closed: Where \\*to\\*?\n- Earth (5 of 8)"]
+        );
+        fields.truncate(3);
+        assert_eq!(
+            result(&fields),
+            ["Poll closed: Where \\*to\\*?\n- no answer won (8 votes)"]
+        );
+        let blocked = drawn(json!({"content": "", "embeds": [{
+            "type": "auto_moderation_message", "description": "buy **latinum**",
+            "fields": [field("rule_name", "No commerce"), field("channel_id", "7001"),
+                       field("keyword_matched_content", "latinum")]}]}));
+        assert_eq!(
+            blocked,
+            ["> AutoMod stopped this message (No commerce: latinum)\n>\n> buy **latinum**"]
+        );
     }
 
     #[test]
