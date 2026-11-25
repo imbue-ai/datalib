@@ -31,13 +31,14 @@ differs and escapes what Discord shows as typed:
 | `__x__`, `~~x~~` | `<u>x</u>`, struck; CommonMark reads the first as bold |
 | `# x`, `## x`, `### x` | `**x**`: a `##` in a body would be styled as a message's header |
 | `-# x` | `<small>x</small>` |
-| `> x`, `>>> x` | a quote, the second to the end of the message |
+| `> x`, `>>> x` | a quote, the second to the end of the message; a list or a code block in it stays in it |
 | `<@id>` | a chip link naming the person |
 | `<#id>`, `<@&id>`, `</cmd:id>`, `<:name:id>` | `#name`, `@name`, `/cmd`, `:name:` |
 | `<t:…>` | a `<time>`, as every stamp is |
 | a bare link | `<link>`, without the punctuation typed after it |
 | `\|\|x\|\|` (a spoiler) | as typed, bars and all |
-| raw HTML, a table, `![…]`, `####` | as typed, escaped |
+| `![x](link)` | `!` and the link: Discord draws no picture there |
+| raw HTML, a table, `####` | as typed, escaped |
 
 Only a web address becomes a link.
 
@@ -49,10 +50,11 @@ Only a web address becomes a link.
 - **Embeds** (a link preview, a bot's card) are quoted: who, title,
   description, fields, footer. A preview's description over 300
   characters is left out, and so is an embed that says no more than the
-  link in the text. No remote picture is drawn.
+  link in the text or no more than its site's name. No remote picture is
+  drawn. A message AutoMod stopped says the rule and what matched it.
 - **A bot's laid-out text** is its words; its buttons are not shown.
-- **A poll** is its question and answers with their counts, a sticker
-  its name.
+- **A poll** is its question and answers with their counts, its result
+  the answer that won, a sticker its name.
 - **What happened** (someone joined, a thread was started, a pin) is a
   system line. A message type this build does not know shows its text
   and is an `uncovered_type` problem at `info`.
@@ -74,7 +76,8 @@ A message's time is the one in its id, an instant with no clock (`Z`).
 The forward scan is the conversations with a message or a file edge that
 changed. Everything else reaches a conversation through what it declared
 reading: each user, channel, role and server it looked up, its files'
-edges, and the account.
+edges, and the account. A change to the account renders every
+conversation again, since each names it.
 
 Conversations are read 20 at a time, fewer than the shared page: a busy
 channel is a great many messages.

@@ -52,7 +52,7 @@ every key is Discord's own id, a *snowflake*: a 64-bit number whose top
 
 | table | key | holds |
 |---|---|---|
-| `account` | user id | the signed-in account, without its phone number |
+| `account` | user id | the signed-in account, one row, without its phone number |
 | `users` | user id | everyone a stored message or direct message names |
 | `guilds` | server id | the servers copied |
 | `members` | server id | the account's own membership: its roles |
@@ -213,6 +213,11 @@ datalib-doltlite -readonly <root>/discord/ingest/entities.doltlite_db \
 
 ## Sample data
 
-`tests/discord_tests/world.rs` builds a TNG account and turns it into
-playback tapes (`src/synthesize.rs`). A snowflake cannot say a date after
-2154, so the crew chat in 2024.
+`tests/fixtures/discord_tng/` is Picard's account in the
+[TNG corpus](/tests/fixtures/README.md): `world.json`, everything it can
+be answered, and the files its messages carry.
+`tests/fixtures/make_discord_fixtures.py` writes it, and its header lists
+the cases it covers. `src/synthesize.rs` turns it into playback tapes.
+`tests/discord_tests/world.rs` builds smaller accounts for the walk's own
+tests. A snowflake cannot say a date after 2154, so the crew chat in
+2024.
