@@ -4,9 +4,9 @@
 //! `kind: "Source Size"`). Its body deliberately carries no byte
 //! figure: a store's size is not reproducible — it drifts
 //! between rebuilds on one machine and differs outright between
-//! machines — so nothing hashed may contain it. That is enforced at
-//! the producer (`datalib_step::introspect`), not scrubbed here, which
-//! is why this file needs no special case for those rows.
+//! machines — so no row's hash may contain it. That is enforced at
+//! the producer (`datalib_step::introspect`), not scrubbed here. The
+//! report as a whole does show the sizes, so its hash is left out.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -133,9 +133,18 @@ async fn snapshot_grid_rows_and_documents() {
     let datalib = datalib_schema::providers::Provider::Datalib.as_str();
     let (storage, grid_rows): (Vec<_>, Vec<_>) =
         rows("grid_rows").partition(|r| r["provider"] == datalib);
+    let documents = rows("markdowns").map(|r| {
+        let mut document = shown(r);
+        // A storage report's own text has the stores' sizes in it, and
+        // those differ from one machine to the next.
+        if let (true, Some(cells)) = (r["provider"] == datalib, document.as_object_mut()) {
+            cells.remove("content_hash");
+        }
+        document
+    });
     let snapshot = json!({
         "grid_rows": grid_rows.into_iter().map(shown).collect::<Vec<_>>(),
-        "markdowns": rows("markdowns").map(shown).collect::<Vec<_>>(),
+        "markdowns": documents.collect::<Vec<_>>(),
         "storage_rows": storage_digests(&storage),
     });
     insta::assert_snapshot!("fixture_backend_index", store_as_jsonl(&snapshot));
