@@ -501,6 +501,18 @@ wrote it.
 The terms live on the row so that they go wherever the row goes: a row
 that moves to another document takes its terms with it, in one write.
 
+What may be a term:
+
+- **A mention only where the source marks it up**: Slack's `<@U02>`, a
+  GitHub `@login`, each an exact id. Never an address found in running
+  text: quoted replies repeat every earlier message, and signatures add
+  noise.
+- **Every recipient, with no cap.** Dropping some would make the record
+  lie. If the size of long reply-all threads ever matters, store each
+  distinct recipient list once and point the emails at it.
+- **Never a message's text, nor its preview.** Words in the body are the
+  keyword index's.
+
 ## Storage rows: what a source weighs
 
 Every source's render ends by measuring its own raw store and emitting

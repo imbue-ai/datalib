@@ -1,6 +1,6 @@
 //! The search bar's keys that read the search terms rather than a
 //! `grid_rows` column: a person in one role or in any, and a label
-//! (docs/dev/plans/search_autocomplete.md § "The keys"). The terms are
+//! (docs/user/searching.md § "Keys"). The terms are
 //! tables of the grid index, so a term on one of these keys is one more
 //! clause of the grid's own query.
 

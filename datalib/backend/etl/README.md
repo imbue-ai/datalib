@@ -638,8 +638,7 @@ reader-open that checks it). Nothing probes for a table or a column:
 `IndexedMarkdownStore::open_for_reading`, which refuses one in another
 shape, and leaves that source as the index had it, with a warning
 naming the step to run; a render refuses a raw store the launch's
-prepare pass could not migrate. `docs/dev/plans/completed/schema_migrations.md`
-is the record of the program this was the first step of.
+prepare pass could not migrate.
 
 ## Writes: one UPSERT shape, everywhere
 

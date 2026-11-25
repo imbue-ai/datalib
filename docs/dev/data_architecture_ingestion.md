@@ -230,7 +230,16 @@ Different upstreams expose different surfaces for "what changed since X": a delt
 
 That is what makes [`AGENTS.md`'s "give a bag an order before storing it"](/AGENTS.md) an architectural rule rather than a tidiness one: an API that returns a set in a different order each time will, left alone, manufacture a diff out of nothing — and the symptom is not an error but a pipeline that quietly stops being incremental. The same reasoning covers volatile paths (`VolatilePath`, which drops a per-fetch stamp that carries no information into the sidecar) and any future rule of that shape: canonical field order, stable number formatting, excluded bookkeeping. When you add one, say which of the two it is — **sorting keeps the signal and removes the noise; declaring a field volatile throws the signal away too** — because the two look interchangeable and are not.
 
-The property this protects is what a consumer actually buys with a cursor; [`toolchain_for_agents.md`](plans/data_lib_as_a_library/toolchain_for_agents.md#the-incremental-contract-is-a-capability-not-a-protocol) makes the case for it as the thing Datalib offers anyone building on it.
+### What a commit hash buys a reader
+
+Every raw store and render store answers one question by itself: **what changed since this commit?** A reader its producer never heard of keeps one hash and gets correct incremental reads, with no registration, no change feed and no schema for one. Two properties make that work:
+
+- **The diff costs what changed, not what is there.** Two commits share their unchanged subtrees by identity, so `dolt_diff` descends only where hashes differ. A `WHERE updated_at > ?` scan or a hash tree computed in Rust costs the whole table every time.
+- **The rows and the change feed are one object.** With a table and a separate log of changes, a reader can see an event whose row is not there yet, or a row no event announced. `dolt_diff` and `SELECT` read one structure, so neither can happen.
+
+The contract is not new: Hudi's incremental queries, Iceberg's snapshots and Delta Lake's change feed make the same one, Datomic had it in 2012, and the prolly tree comes from Noms. Those assume a cluster and a catalog; here it is one file and a library linked into the binary.
+
+What it costs is that a commit keeps every row it ever reached. On a raw store that is the point ([below](#noticing-when-the-upstream-loses-data)). On a derived store it is growth, which `--compact` gives back ([`step_protocol.md`](step_protocol.md)).
 
 ## Wire-fidelity of the raw store
 The raw store preserves the **semantic content** of upstream responses verbatim — every field, every value, with no loss and no pre-shaping into our internal model. The on-disk *encoding* of that content is a separate question; we pick whichever encoding is human-readable and inspectable. Concretely:
@@ -306,8 +315,7 @@ provider's copy is not under your control.
 It is also the good side of a property we criticize elsewhere.
 That a commit keeps every row it ever reached
 ([disk space](/docs/dev/doltlite.md#disk-space-and-dolt_gc)) is a real cost for
-[derived intermediates](plans/data_lib_as_a_library/toolchain_for_agents.md),
-which we could always rebuild. On the raw store it is the feature.
+derived stores, which we could always rebuild. On the raw store it is the feature.
 
 ### What is on disk
 

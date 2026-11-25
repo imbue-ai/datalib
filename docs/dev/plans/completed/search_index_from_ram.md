@@ -204,8 +204,8 @@ text already is; a re-render fills it.
 
 **Writes are one transaction per batch of documents**, and there is no
 shared `content` table for one source's write to orphan another's, so
-qmd findings 12 and 14 (`qmd_behaviour.md`: a lost body; a small update
-scanning the whole index) do not carry over and the runner's
+qmd's two failures there (a lost body; a small update scanning the
+whole index) do not carry over and the runner's
 `qmd_keyword` lock can go. `qmd_embed` stays, as a memory lock: one
 loaded model at a time.
 
