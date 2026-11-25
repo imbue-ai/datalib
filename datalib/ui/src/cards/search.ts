@@ -98,6 +98,25 @@ export function setOneRowPerDocument(query: string, on: boolean): string {
   return kept.join(" ");
 }
 
+/// A result's title and the text under it, in a list of what `within`
+/// holds: a name that only repeats `within` (a channel's threads, each
+/// named for the channel) says nothing, so its author leads instead, else
+/// the first line of its text, which the text under it then leaves out.
+export function titleWithin(
+  row: { name: string | null; author: string | null; snippet: string; kind: string },
+  within: string | null,
+): { title: string; snippet: string; repeats: boolean } {
+  const name = row.name?.trim() || null;
+  const repeats = name !== null && name === within?.trim();
+  if (!repeats) return { title: name ?? (row.kind || "Untitled"), snippet: row.snippet, repeats };
+  const [first, ...rest] = row.snippet.trim().split("\n");
+  const author = row.author?.trim();
+  if (author) return { title: author, snippet: row.snippet, repeats };
+  return first?.trim()
+    ? { title: first.trim(), snippet: rest.join("\n").trim(), repeats }
+    : { title: name, snippet: "", repeats };
+}
+
 export type Part = { text: string; hit: boolean };
 
 /// `snippet` split so the words of `query` stand out. Matching is on

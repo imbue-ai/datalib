@@ -1,5 +1,5 @@
-//! [`AppRepo`] — the seam to the stores this server owns: filed
-//! feedback, disk usage and remote media.
+//! [`AppRepo`] — the seam to the stores this server owns: disk usage
+//! and remote media.
 
 use std::sync::Arc;
 
@@ -7,7 +7,6 @@ use async_trait::async_trait;
 
 use app_schema::disk_free::DiskFreeRow;
 use app_schema::disk_usage::DiskUsageRow;
-use app_schema::feedback::FeedbackRow;
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::AllowScope;
@@ -20,18 +19,24 @@ pub enum RepoError {
     ReadOnly,
     #[error("internal: {0}")]
     Internal(String),
+    /// The store is not in the shape this build reads; it says what to run.
+    #[error(transparent)]
+    OtherShape(Box<datalib_store_meta::OtherShape>),
+}
+
+impl RepoError {
+    /// `e` as the refusal it carries, or as an internal error.
+    pub fn from_anyhow(e: anyhow::Error) -> Self {
+        match datalib_store_meta::other_shape(&e) {
+            Some(refused) => RepoError::OtherShape(Box::new(refused.clone())),
+            None => RepoError::Internal(format!("{e:#}")),
+        }
+    }
 }
 
 /// Writes and reads of the application stores.
 #[async_trait]
 pub trait AppRepo: Send + Sync {
-    /// Append a feedback row. The default impl returns
-    /// [`RepoError::ReadOnly`]; only [`crate::dolt_repo::AppStore`]
-    /// overrides it.
-    async fn insert_feedback(&self, _row: FeedbackRow) -> Result<(), RepoError> {
-        Err(RepoError::ReadOnly)
-    }
-
     // --- The disk-usage timeseries ------------------------------------
 
     /// Append disk-usage samples. The caller has already applied the

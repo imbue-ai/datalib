@@ -1,7 +1,6 @@
 //! Every launch on a root: the server asks every step whose program takes
-//! the verb to `--prepare` before its loop takes any request, and offers
-//! to run the ones that answer `needs_rerun` (`dag/README.md` §"Upgrading
-//! a root").
+//! the verb to `--prepare` before its loop takes any request, and runs the
+//! ones that answer `needs_rerun` (`dag/README.md` §"Upgrading a root").
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -73,17 +72,18 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
     .expect("the server boots")
 }
 
-/// A sync of `a`, opened before the server is up, and how long to wait
-/// for its render to have run.
-async fn sync_a_and_wait(root: &Path) {
+/// A sync of `groups`' downloads, opened before the server is up.
+async fn sync_before_boot(root: &Path, groups: &[&str]) {
     let mailbox = datalib_dag::supervisor::store::Store::open(root)
         .await
         .unwrap();
-    mailbox
-        .open_request(&["a/ingest".to_string()], "ui")
-        .await
-        .unwrap();
+    let roots: Vec<String> = groups.iter().map(|g| format!("{g}/ingest")).collect();
+    mailbox.open_request(&roots, "ui").await.unwrap();
     mailbox.close().await;
+}
+
+async fn sync_a_and_wait(root: &Path) {
+    sync_before_boot(root, &["a"]).await;
 }
 
 async fn until_invoked(root: &Path, line: &str) {
@@ -116,9 +116,11 @@ async fn get(state: &AppState, uri: &str) -> serde_json::Value {
 }
 
 /// Every step is asked, producers first, before the sync opened at boot
-/// runs. `b`'s render, which said it needs to run again, is left alone by
-/// `a`'s sync and offered; the next launch asks every step again, since
-/// the runner cannot tell whether a program changed in between.
+/// runs, and the next launch asks every step again, since the runner
+/// cannot tell whether a program changed in between. `b`'s render, which
+/// says it needs to run again, is run on that launch without anyone
+/// asking — only `a` is synced — and leaves the list of what is behind
+/// once it has.
 #[tokio::test]
 async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
     let td = tempfile::tempdir().unwrap();
@@ -131,9 +133,10 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
     )
     .unwrap();
 
-    sync_a_and_wait(&root).await;
+    sync_before_boot(&root, &["a", "b"]).await;
     let state = boot(&root, &bin).await;
     until_invoked(&root, "sync a/render_markdown").await;
+    until_invoked(&root, "sync b/render_markdown").await;
     let lines = invoked(&root);
     let at = |line: &str| {
         lines
@@ -141,7 +144,7 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
             .position(|l| l == line)
             .unwrap_or_else(|| panic!("no {line:?} in {lines:?}"))
     };
-    let (asked, ran) = lines.split_at(4);
+    let (asked, _ran) = lines.split_at(4);
     let mut asked = asked.to_vec();
     asked.sort();
     assert_eq!(
@@ -154,7 +157,6 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
         ],
         "every step is asked before anything syncs: {lines:?}"
     );
-    assert_eq!(ran, ["sync a/ingest", "sync a/render_markdown"]);
     for group in ["a", "b"] {
         assert!(
             at(&format!("prepare {group}/ingest"))
@@ -162,7 +164,7 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
             "a render is asked after its raw store: {lines:?}"
         );
     }
-    let upgrade = &config(&state).await["upgrade"];
+    let upgrade = until_caught_up(&state).await;
     assert_eq!(upgrade["migrating"], false, "{upgrade}");
     assert_eq!(upgrade["settled"], true, "{upgrade}");
     assert!(
@@ -173,16 +175,13 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
             .all(|s| s["state"] == "done"),
         "{upgrade}"
     );
-    assert_eq!(
-        upgrade["rerender"],
-        serde_json::json!(["b/render_markdown"])
-    );
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 
     std::fs::remove_file(root.join("invoked")).unwrap();
     sync_a_and_wait(&root).await;
     let state = boot(&root, &bin).await;
     until_invoked(&root, "sync a/render_markdown").await;
+    until_invoked(&root, "sync b/render_markdown").await;
     let mut asked: Vec<String> = invoked(&root)
         .into_iter()
         .filter(|l| l.starts_with("prepare"))
@@ -198,11 +197,21 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
         ],
         "the next start asks every step again"
     );
-    assert_eq!(
-        config(&state).await["upgrade"]["rerender"],
-        serde_json::json!(["b/render_markdown"])
-    );
+    until_caught_up(&state).await;
     state.sync.shutdown(Duration::from_secs(10)).await;
+}
+
+/// The upgrade once nothing is left to re-run, waiting for it.
+async fn until_caught_up(state: &AppState) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let upgrade = config(state).await["upgrade"].clone();
+        if upgrade["rerender"] == serde_json::json!([]) && upgrade["settled"] == true {
+            return upgrade;
+        }
+        assert!(Instant::now() < deadline, "never caught up: {upgrade}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// While the first step is still preparing, the run's record already lists
@@ -244,7 +253,7 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
         })
         .collect();
     loop {
-        let snap = datalib_runs::snapshot(&root).await;
+        let snap = datalib_runs::snapshot(&root).await.unwrap();
         let mut got: Vec<(String, &str)> = snap
             .steps
             .iter()

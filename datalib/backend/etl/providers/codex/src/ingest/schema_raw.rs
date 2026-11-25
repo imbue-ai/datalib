@@ -57,7 +57,11 @@ pub struct RecordRow {
 }
 
 pub fn full_ddl() -> Vec<String> {
-    datalib_etl_agent_sessions::raw_ddl(TranscriptRow::ddl(), RecordRow::ddl())
+    datalib_etl_agent_sessions::raw_ddl(
+        TranscriptRow::ddl(),
+        RecordRow::ddl(),
+        vec![datalib_etl_agent_sessions::RECORDS_BY_TRANSCRIPT.to_string()],
+    )
 }
 
 #[cfg(test)]

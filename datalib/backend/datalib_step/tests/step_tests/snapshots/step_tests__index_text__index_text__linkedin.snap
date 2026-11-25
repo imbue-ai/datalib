@@ -11,9 +11,7 @@ title: linkedin storage | text: Source: linkedin
 Measured Tue Apr 15th, 2369 at 00:00.
 
 | Kind | Step | What | Size | Count | Id |
-| Source Size | ingest | `linkedin/ingest` | <size> | 3 files | `00000000` |
-| Store | ingest | `linkedin/ingest/blobs.sqlite` | <size> |  | `00000000` |
-| Table | ingest | `linkedin/ingest/blobs.sqlite#cas_objects` |  | 0 rows | `00000000` |
+| Source Size | ingest | `linkedin/ingest` | <size> | 2 files | `00000000` |
 | Store | ingest | `linkedin/ingest/entities.doltlite_db` | <size> |  | `00000000` |
 | Table | ingest | `linkedin/ingest/entities.doltlite_db#comments` |  | 3 rows | `00000000` |
 | Table | ingest | `linkedin/ingest/entities.doltlite_db#connections` |  | 3 rows | `00000000` |

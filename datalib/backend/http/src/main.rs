@@ -209,7 +209,7 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Everything root-derived (the feedback and job stores, the config
+    // Everything root-derived (the app stores, the config
     // path, the supervisor loop) is assembled by the bootstrap shared with
     // the Tauri shell — see `datalib_http::boot`.
     let state = datalib_http::build_state(

@@ -67,7 +67,7 @@ that set `embed_on_modal_from_n_chunks` and on a run that owes at least
 that many, and nothing else**: no file, no path, no title but the
 one inside each chunk's prompt, no store. What comes back is one vector
 per chunk. The vectors go into the inference cache under each prompt's
-hash (`docs/dev/plans/search_index_from_ram.md` § "The inference cache"),
+hash (`docs/dev/plans/completed/search_index_from_ram.md` § "The inference cache"),
 so a vector made on Modal is the same entry a local embed would have made,
 and the next local `embed` finds it there and skips the chunk.
 

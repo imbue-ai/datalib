@@ -25,14 +25,18 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 /// `records.transcript_id`.
 pub const DATA_TABLES: &[&str] = &["transcripts", "records"];
 
-/// An agent-session raw store's DDL, given its two tables' own.
-pub fn raw_ddl(transcripts: String, records: String) -> Vec<String> {
-    vec![
-        transcripts,
-        records,
-        "CREATE INDEX IF NOT EXISTS records_transcript ON records(transcript_id)".to_string(),
-        file_checkpoint::INGESTED_FILES_DDL.to_string(),
-    ]
+/// What a store whose record ids do not start with their transcript's
+/// reads a transcript's records by.
+pub const RECORDS_BY_TRANSCRIPT: &str =
+    "CREATE INDEX IF NOT EXISTS records_transcript ON records(transcript_id)";
+
+/// An agent-session raw store's DDL, given its two tables' own and the
+/// indexes its records are read by.
+pub fn raw_ddl(transcripts: String, records: String, records_indexes: Vec<String>) -> Vec<String> {
+    let mut ddl = vec![transcripts, records];
+    ddl.extend(records_indexes);
+    ddl.push(file_checkpoint::INGESTED_FILES_DDL.to_string());
+    ddl
 }
 
 /// One directory of session files, and the checkpoint scope its reads

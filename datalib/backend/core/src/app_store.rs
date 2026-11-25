@@ -1,15 +1,11 @@
-//! `AppStore` — the three stores this server owns: filed feedback and
-//! remote media (the allow-list and the download CAS's index), one
-//! doltlite file each, and the disk timeseries, one plain SQLite file.
+//! `AppStore` — the two stores this server owns: remote media (the
+//! allow-list and the download CAS's index), doltlite, and the disk
+//! timeseries, plain SQLite.
 
-use crate::app_store_migrate::{
-    carry_legacy_usage, DISK_STATS_LADDER, FEEDBACK_LADDER, REMOTE_MEDIA_LADDER,
-};
 use crate::repo::{AppRepo, RepoError};
 use crate::store::{open_plain_pool, open_pool};
 use app_schema::disk_free::DiskFreeRow;
 use app_schema::disk_usage::DiskUsageRow;
-use app_schema::feedback::{FeedbackRow, DDL as FEEDBACK_DDL};
 use app_schema::remote_media::allow::RemoteMediaAllowRow;
 use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::{AllowScope, DDL as REMOTE_MEDIA_DDL};
@@ -19,19 +15,15 @@ use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-/// The three application stores: filed feedback, the disk timeseries,
-/// and remote media.
+/// The two application stores: the disk timeseries and remote media.
 pub struct AppStore {
-    /// Filed feedback. Outside the cache-tagged index tree, because
-    /// nothing regenerates it.
-    feedback_pool: SqlitePool,
     /// The disk timeseries (`disk_usage`, `disk_free`): plain SQLite,
     /// written every few seconds while the server is up. The rows are the
     /// history; there is nothing to commit.
     disk_stats_pool: SqlitePool,
     /// What remote media a person let a document load, and the URLs
-    /// fetched into the download CAS. Committed per write, like
-    /// feedback, so the decisions have a history.
+    /// fetched into the download CAS. Committed per write, so the
+    /// decisions have a history.
     remote_media_pool: SqlitePool,
     /// Whether the linked libsqlite3 is doltlite (exposes `dolt_commit`).
     /// Probed once at connect time via `pragma_function_list`. When
@@ -45,131 +37,61 @@ pub struct AppStore {
 impl AppStore {
     /// Open (or create) the stores for a data root and ensure their
     /// tables exist. DDL is `CREATE TABLE IF NOT EXISTS`, so a populated
-    /// file is untouched — which is why each store's ladder runs first
-    /// (`app_store_migrate`).
+    /// file is untouched. Neither store has a migration yet: one a later
+    /// build migrated is refused, as is one a newer line of Datalib wrote.
     pub async fn open(root: &std::path::Path) -> Result<Self, sqlx::Error> {
-        let feedback_pool = open_pool(&crate::layout::feedback_db(root)).await?;
         let disk_stats_pool = open_plain_pool(&crate::layout::disk_stats_db(root)).await?;
         let remote_media_pool = open_pool(&crate::layout::remote_media_db(root)).await?;
-        let has_dolt = probe_dolt_extensions(&feedback_pool).await;
+        let has_dolt = probe_dolt_extensions(&remote_media_pool).await;
         let internal = |e: anyhow::Error| sqlx::Error::Protocol(format!("{e:#}"));
-        // Before the ladder and the DDL: a store a newer line of datalib
-        // wrote is refused whole (`datalib_store_meta::guard`). Then the
-        // rungs above the store's version. Feedback is committed per row
-        // with `-Am`, so each rung is sealed as its own commit; disk stats
-        // is plain SQLite, with nothing to commit.
-        for (pool, path, ladder, commits) in [
-            (
-                &feedback_pool,
-                crate::layout::feedback_db(root),
-                FEEDBACK_LADDER,
-                has_dolt,
-            ),
-            (
-                &disk_stats_pool,
-                crate::layout::disk_stats_db(root),
-                DISK_STATS_LADDER,
-                false,
-            ),
-            (
-                &remote_media_pool,
-                crate::layout::remote_media_db(root),
-                REMOTE_MEDIA_LADDER,
-                has_dolt,
-            ),
+        for (pool, path) in [
+            (&disk_stats_pool, crate::layout::disk_stats_db(root)),
+            (&remote_media_pool, crate::layout::remote_media_db(root)),
         ] {
             let written_by = datalib_store_meta::read(pool).await.map_err(internal)?;
-            if let Err(newer) = datalib_store_meta::refuse_if_newer(&path, written_by.as_ref()) {
-                for p in [&feedback_pool, &disk_stats_pool, &remote_media_pool] {
-                    p.close().await;
-                }
-                return Err(sqlx::Error::Configuration(Box::new(newer)));
-            }
-            let stored = written_by.map_or(0, |m| m.schema_version);
-            let top = datalib_store_meta::ladder::top(ladder);
-            if stored > top {
-                for p in [&feedback_pool, &disk_stats_pool, &remote_media_pool] {
-                    p.close().await;
-                }
-                return Err(sqlx::Error::Configuration(Box::new(
-                    datalib_store_meta::ladder::AheadOfLadder { stored, top },
-                )));
-            }
-            for rung in datalib_store_meta::ladder::pending(ladder, stored).map_err(internal)? {
-                sqlx::query(datalib_store_meta::DDL).execute(pool).await?;
-                let climb = datalib_store_meta::ladder::Climb {
-                    ladder: datalib_store_meta::Ladder::Own,
-                    from: stored,
-                    top,
-                    store_bytes: std::fs::metadata(&path).ok().map(|m| m.len()),
+            let refused: Option<Box<dyn std::error::Error + Send + Sync>> =
+                match datalib_store_meta::refuse_if_newer(&path, written_by.as_ref()) {
+                    Err(newer) => Some(Box::new(newer)),
+                    Ok(()) => written_by.filter(|m| m.schema_version > 0).map(|m| {
+                        Box::new(datalib_store_meta::ladder::AheadOfLadder {
+                            stored: m.schema_version,
+                            top: 0,
+                        }) as _
+                    }),
                 };
-                datalib_store_meta::ladder::apply(pool, rung, &climb)
-                    .await
-                    .map_err(internal)?;
-                if commits {
-                    sqlx::query("SELECT dolt_commit('-Am', ?)")
-                        .bind(format!("migrate v{}: {}", rung.version, rung.name))
-                        .execute(pool)
-                        .await?;
+            if let Some(refused) = refused {
+                for p in [&disk_stats_pool, &remote_media_pool] {
+                    p.close().await;
                 }
+                return Err(sqlx::Error::Configuration(refused));
             }
         }
         let store = Self {
-            feedback_pool,
             disk_stats_pool,
             remote_media_pool,
             has_dolt,
         };
-        store.init_feedback_table().await?;
         store.init_disk_stats_tables().await?;
         store.init_remote_media_tables().await?;
-        // A root from before `disk_stats` keeps its timeseries in the
-        // doltlite `usage` store. Losing it costs a sparkline's history,
-        // not the app, so a copy that fails is logged and tried again on
-        // the next open rather than refusing to start.
-        match carry_legacy_usage(root, &store.disk_stats_pool).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(rows = n, "disk stats: carried over the old usage store"),
-            Err(e) => tracing::error!(
-                "disk stats: could not carry over the old usage store, left in place for \
-                 the next open: {e}"
-            ),
-        }
-        // Which build wrote each store, beside its tables. Feedback and
-        // remote media are committed per row with `-Am`, so a changed
-        // meta row is sealed here rather than left to ride into the next
-        // commit; disk stats is plain SQLite and its rows just land.
-        for (pool, kind, ddl, ladder) in [
-            (
-                &store.feedback_pool,
-                StoreKind::Feedback,
-                FEEDBACK_DDL,
-                FEEDBACK_LADDER,
-            ),
-            (
-                &store.disk_stats_pool,
-                StoreKind::DiskStats,
-                DISK_STATS_DDL,
-                DISK_STATS_LADDER,
-            ),
+        // Which build wrote each store, beside its tables. Remote media
+        // is committed per row with `-Am`, so a changed meta row is
+        // sealed here rather than left to ride into the next commit; disk
+        // stats is plain SQLite and its rows just land.
+        for (pool, kind, ddl) in [
+            (&store.disk_stats_pool, StoreKind::DiskStats, DISK_STATS_DDL),
             (
                 &store.remote_media_pool,
                 StoreKind::RemoteMedia,
                 REMOTE_MEDIA_DDL,
-                REMOTE_MEDIA_LADDER,
             ),
         ] {
-            let hash = datalib_store_meta::schema_hash(ddl.iter().map(|(_t, d)| *d));
-            let top = datalib_store_meta::ladder::top(ladder);
-            let versions = datalib_store_meta::Versions {
-                schema: top,
-                shared: 0,
-            };
-            let changed = datalib_store_meta::write(pool, kind, &hash, versions)
+            let shape = datalib_store_meta::Shape::of_tables(datalib_store_meta::schema_hash(
+                ddl.iter().map(|(_t, d)| *d),
+            ));
+            let changed = datalib_store_meta::write(pool, kind, &shape)
                 .await
                 .map_err(internal)?;
-            let committed = matches!(kind, StoreKind::Feedback | StoreKind::RemoteMedia);
-            if changed && has_dolt && committed {
+            if changed && has_dolt && kind == StoreKind::RemoteMedia {
                 sqlx::query("SELECT dolt_commit('-Am', ?)")
                     .bind(format!(
                         "meta: written by Datalib {}",
@@ -201,12 +123,6 @@ impl AppStore {
             .map_err(|e| RepoError::Internal(format!("dolt_commit: {e}")))?;
         Ok(())
     }
-    async fn init_feedback_table(&self) -> Result<(), sqlx::Error> {
-        for (_table, ddl) in FEEDBACK_DDL {
-            sqlx::query(*ddl).execute(&self.feedback_pool).await?;
-        }
-        Ok(())
-    }
     async fn init_disk_stats_tables(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in DISK_STATS_DDL {
             sqlx::query(*ddl).execute(&self.disk_stats_pool).await?;
@@ -219,45 +135,10 @@ impl AppStore {
         }
         Ok(())
     }
-    pub fn feedback_pool(&self) -> &SqlitePool {
-        &self.feedback_pool
-    }
 }
 
 #[async_trait]
 impl AppRepo for AppStore {
-    async fn insert_feedback(&self, row: FeedbackRow) -> Result<(), RepoError> {
-        // The INSERT and the `dolt_commit` ride one acquired connection,
-        // the pool's only one, so no sibling task's INSERT can land
-        // between them: doltlite's working set belongs to the branch,
-        // not the connection, and `-Am` would sweep it into this commit
-        // (docs/dev/doltlite.md#branches-head-and-the-working-set).
-        let mut conn = self
-            .feedback_pool
-            .acquire()
-            .await
-            .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
-            "INSERT INTO feedback \
-             (feedback_uuid, created_at_utc, tz_offset, sentiment, comment, app_version, \
-              git_hash, context_json) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&row.feedback_uuid)
-        .bind(&row.created_at_utc)
-        .bind(&row.tz_offset)
-        .bind(&row.sentiment)
-        .bind(&row.comment)
-        .bind(&row.app_version)
-        .bind(&row.git_hash)
-        .bind(&row.context_json)
-        .execute(&mut *conn)
-        .await
-        .map_err(|e| RepoError::Internal(format!("insert: {e}")))?;
-        let msg = format!("feedback: {}", row.feedback_uuid);
-        self.commit_version(&mut conn, &msg).await?;
-        Ok(())
-    }
     async fn record_disk_usage(&self, rows: &[DiskUsageRow]) -> Result<(), RepoError> {
         if rows.is_empty() {
             return Ok(());
@@ -820,117 +701,15 @@ mod tests {
         assert_eq!(between[0].tz_offset, None);
     }
 
-    /// A data root from before the stamps moved to `<x>_at_utc` +
-    /// `tz_offset` (#427) still has the old column names, and
-    /// `CREATE TABLE IF NOT EXISTS` leaves them. Opening such a root
-    /// has to rename the columns and rewrite the stamps — every read of
-    /// a store returned 500 on a real root before it did — and must
-    /// keep the rows: feedback is filed by a person and nothing
-    /// regenerates it.
-    #[tokio::test]
-    async fn a_store_from_before_the_utc_columns_is_migrated_on_open() {
-        let td = tempfile::tempdir().unwrap();
-        // The old shape, by hand, in both stores.
-        {
-            let feedback = open_pool(&crate::layout::feedback_db(td.path()))
-                .await
-                .unwrap();
-            sqlx::query(
-                "CREATE TABLE feedback (feedback_uuid VARCHAR(36) NOT NULL, \
-                 created_at VARCHAR(40) NOT NULL, sentiment VARCHAR(8), comment TEXT NOT NULL, \
-                 app_version VARCHAR(32) NOT NULL, git_hash VARCHAR(40) NOT NULL, \
-                 context_json JSON NOT NULL, fixed_in_git_hash VARCHAR(40), notes TEXT, \
-                 PRIMARY KEY (feedback_uuid))",
-            )
-            .execute(&feedback)
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO feedback (feedback_uuid, created_at, comment, app_version, git_hash, \
-                 context_json) VALUES ('fb-1', '2026-09-01T08:30:00-07:00', 'the bar is bizarre', \
-                 '0.1', 'abc', '{}')",
-            )
-            .execute(&feedback)
-            .await
-            .unwrap();
-            feedback.close().await;
-
-            let usage = open_pool(&crate::layout::legacy_usage_db(td.path()))
-                .await
-                .unwrap();
-            sqlx::query(
-                "CREATE TABLE disk_usage (path VARCHAR(512) NOT NULL, \
-                 measured_at VARCHAR(40) NOT NULL, bytes BIGINT NOT NULL, \
-                 PRIMARY KEY (path, measured_at))",
-            )
-            .execute(&usage)
-            .await
-            .unwrap();
-            sqlx::query(
-                "INSERT INTO disk_usage (path, measured_at, bytes) \
-                 VALUES ('.', '2026-09-10T10:00:00+02:00', 100)",
-            )
-            .execute(&usage)
-            .await
-            .unwrap();
-            usage.close().await;
-        }
-
-        let store = AppStore::open(td.path()).await.expect("open migrates");
-
-        // The feedback row is still there, and still readable by the
-        // current queries.
-        let n: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM feedback WHERE created_at_utc = '2026-09-01T15:30:00.000000+00:00' \
-             AND tz_offset = '-07:00'",
-        )
-        .fetch_one(store.feedback_pool())
-        .await
-        .unwrap();
-        assert_eq!(n, 1);
-
-        // The old usage store's row climbed the stamp rung on its way
-        // into disk stats.
-        let usage = store.recent_disk_usage(10).await.unwrap();
-        assert_eq!(usage.len(), 1);
-        assert_eq!(usage[0].measured_at_utc, "2026-09-10T08:00:00.000000+00:00");
-
-        // The rung is recorded: feedback is at its ladder's top, and its
-        // rung is its own commit. Disk stats was born past the rung.
-        let meta = datalib_store_meta::read(&store.feedback_pool)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(meta.schema_version, 1);
-        if store.has_dolt {
-            let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
-                .fetch_all(store.feedback_pool())
-                .await
-                .unwrap();
-            assert!(
-                messages
-                    .iter()
-                    .any(|m| m.starts_with("migrate v1: stamps to utc")),
-                "{messages:?}"
-            );
-        }
-
-        // Opening again is a no-op: nothing to rename, nothing rewritten.
-        drop(store);
-        let again = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(again.recent_disk_usage(10).await.unwrap().len(), 1);
-    }
-
     /// Each of the stores says which build wrote it, with its own
-    /// kind; feedback's rows are committed on the spot rather than left
-    /// to ride into the next filed feedback, and a second open by the
+    /// kind; remote media's rows are committed on the spot rather than
+    /// left to ride into the next decision, and a second open by the
     /// same build commits nothing more.
     #[tokio::test]
     async fn every_app_store_names_the_build_that_wrote_it() {
         let td = tempfile::tempdir().unwrap();
         let store = AppStore::open(td.path()).await.unwrap();
         for (pool, kind) in [
-            (&store.feedback_pool, StoreKind::Feedback),
             (&store.disk_stats_pool, StoreKind::DiskStats),
             (&store.remote_media_pool, StoreKind::RemoteMedia),
         ] {
@@ -956,28 +735,28 @@ mod tests {
                     .unwrap()
             }
         };
-        let first = commits(&store.feedback_pool).await;
+        let first = commits(&store.remote_media_pool).await;
         // Newest first without an ORDER BY: `date` is whole seconds and
         // this test fits inside one.
         let message: String = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 1")
-            .fetch_one(&store.feedback_pool)
+            .fetch_one(&store.remote_media_pool)
             .await
             .unwrap();
         assert!(
             message.starts_with("meta: written by Datalib "),
-            "feedback commits its meta rows on open, got {message:?}"
+            "remote media commits its meta rows on open, got {message:?}"
         );
         drop(store);
         let again = AppStore::open(td.path()).await.unwrap();
         assert_eq!(
-            commits(&again.feedback_pool).await,
+            commits(&again.remote_media_pool).await,
             first,
             "the same build opening again has nothing to commit"
         );
     }
 
     /// A root whose app stores a newer line of datalib wrote is refused
-    /// before the migration or the DDL runs, naming both versions.
+    /// before the DDL runs, naming both versions.
     #[tokio::test]
     async fn app_stores_a_newer_build_wrote_are_refused() {
         let td = tempfile::tempdir().unwrap();
@@ -995,90 +774,6 @@ mod tests {
             Err(e) => e.to_string(),
         };
         assert!(err.contains("was written by Datalib 99.0.0"), "{err}");
-    }
-
-    /// A root from before `disk_stats` keeps both series in the doltlite
-    /// `usage` store. Opening it copies every row into the plain-SQLite
-    /// file and removes the old one with what the engine kept beside it;
-    /// opening again adds nothing.
-    #[tokio::test]
-    async fn the_old_usage_store_is_carried_into_disk_stats_and_removed() {
-        let td = tempfile::tempdir().unwrap();
-        let legacy = crate::layout::legacy_usage_db(td.path());
-        {
-            let usage = open_pool(&legacy).await.unwrap();
-            for (_, ddl) in DISK_STATS_DDL {
-                sqlx::query(*ddl).execute(&usage).await.unwrap();
-            }
-            for (path, at, bytes) in [
-                (".", "2026-10-01T10:00:00.000000Z", 100),
-                (".", "2026-10-01T10:00:05.000000Z", 120),
-                ("slack/ingest", "2026-10-01T10:00:05.000000Z", 80),
-            ] {
-                sqlx::query(
-                    "INSERT INTO disk_usage (path, measured_at_utc, tz_offset, bytes) \
-                     VALUES (?, ?, '-07:00', ?)",
-                )
-                .bind(path)
-                .bind(at)
-                .bind(bytes)
-                .execute(&usage)
-                .await
-                .unwrap();
-            }
-            sqlx::query(
-                "INSERT INTO disk_free (measured_at_utc, tz_offset, available_bytes, total_bytes) \
-                 VALUES ('2026-10-01T10:00:00.000000Z', '-07:00', 40, 100)",
-            )
-            .execute(&usage)
-            .await
-            .unwrap();
-            usage.close().await;
-        }
-        let magic = std::fs::read(&legacy).unwrap();
-        assert!(
-            magic.starts_with(b"CTLD"),
-            "a real doltlite store: {:?}",
-            &magic[..8]
-        );
-        std::fs::write(legacy.with_extension("doltlite_db.lock"), b"").unwrap();
-
-        let store = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(store.recent_disk_usage(10).await.unwrap().len(), 3);
-        assert_eq!(
-            store.recent_disk_free(10).await.unwrap()[0].available_bytes,
-            40
-        );
-        let left: Vec<String> = std::fs::read_dir(crate::layout::system_dir(td.path()))
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("usage"))
-            .collect();
-        assert!(
-            left.is_empty(),
-            "the old store and its sidecars stay: {left:?}"
-        );
-        // What a stock `sqlite3` opens, not doltlite's own format.
-        let head = std::fs::read(crate::layout::disk_stats_db(td.path())).unwrap();
-        assert!(head.starts_with(b"SQLite format 3\0"), "{:?}", &head[..16]);
-
-        drop(store);
-        let again = AppStore::open(td.path()).await.unwrap();
-        assert_eq!(again.recent_disk_usage(10).await.unwrap().len(), 3);
-    }
-
-    /// An old store the copy cannot read costs its history, never the
-    /// app: the stores open, and the file is left for a later open.
-    #[tokio::test]
-    async fn an_unreadable_old_usage_store_is_left_and_the_app_opens() {
-        let td = tempfile::tempdir().unwrap();
-        let legacy = crate::layout::legacy_usage_db(td.path());
-        std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        std::fs::write(&legacy, b"not a database at all, not even close").unwrap();
-        let store = AppStore::open(td.path()).await.expect("opens all the same");
-        assert!(store.recent_disk_usage(10).await.unwrap().is_empty());
-        assert!(legacy.is_file(), "left for the next open to try again");
     }
 
     /// Re-recording the same (series, instant) overwrites rather than

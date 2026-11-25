@@ -36,6 +36,7 @@ async fn state(root: &Path, root_tx: broadcast::Sender<RootFrame>) -> AppState {
         sync: datalib_http::supervisor::SyncControl::new(root.clone()),
         app: Arc::new(app),
         root_tx,
+        echoes: Default::default(),
         usage: Default::default(),
         newer_root: Vec::new(),
         shutting_down: Default::default(),
@@ -156,7 +157,12 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     let log = datalib_http::logging::init(root).expect("the store opens in a temp dir");
     let (tx, mut rx) = broadcast::channel(256);
     let state = state(root, tx.clone()).await;
-    let (ready, feed) = datalib_http::watch::spawn_fed(root.to_path_buf(), tx, Timing::default());
+    let (ready, feed) = datalib_http::watch::spawn_fed(
+        root.to_path_buf(),
+        tx,
+        Timing::default(),
+        state.echoes.clone(),
+    );
     tokio::time::timeout(HEARD_WITHIN, ready.wait())
         .await
         .expect("the watch never reported ready");

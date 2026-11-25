@@ -73,8 +73,9 @@ pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 /// Handed to every child, so one switch reaches every step and applet.
 pub const DATALIB_SQL_VALUES: &str = "DATALIB_SQL_VALUES";
 
-/// A folder `datalib_sql_work` records every statement that walked a whole
-/// table or index in, for the fixture sync's check. Handed to every child.
+/// A folder `datalib_sql_work` records every statement a process runs in,
+/// with the file it ran on, for the fixture sync's scan check. Handed to
+/// every child.
 pub const DATALIB_SQL_CENSUS: &str = "DATALIB_SQL_CENSUS";
 
 /// How many threads the embedder computes on where its caller leaves that

@@ -858,7 +858,7 @@ async fn status_lines(store: &Store, data_root: &Path) -> Result<Vec<String>> {
     }
     // A running step's own queue says what is ahead of it now.
     let at_rest = |step: &str| running.iter().all(|inv| inv.step != step);
-    for owed in datalib_runs::latest_metric(data_root, datalib_metrics::OWED).await {
+    for owed in datalib_runs::latest_metric(data_root, datalib_metrics::OWED).await? {
         if owed.value > 0 && at_rest(&owed.step) {
             lines.push(format!(
                 "owed {}  {}  as of run {}",

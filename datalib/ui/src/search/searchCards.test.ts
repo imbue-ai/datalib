@@ -7,7 +7,6 @@ const card = (id: string): SearchCard => ({
   query: ref(""),
   settled: ref(""),
   run: () => {},
-  openFeedback: () => {},
 });
 const entry = (id: string, shown: boolean, usedAt: number): CardEntry => ({
   card: card(id),

@@ -102,6 +102,7 @@ filegroup(
         "//datalib/backend/etl/providers/codex:tng_fixture",
         "//datalib/backend/etl/providers/calendar:tng_fixture",
         "//datalib/backend/etl/providers/google_drive:tng_fixture",
+        "//datalib/backend/etl/providers/discord:tng_fixture",
     ],
     visibility = ["//visibility:public"],
 )
@@ -239,7 +240,10 @@ genrule(
             # Google Drive: the JSON spec the synthesizer expands (arg 30,
             # appended likewise).
             "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
-            # The server every sync goes through (arg 31).
+            # Discord: the account's `world.json` and its files (arg 31,
+            # appended likewise).
+            "datalib/backend/etl/providers/discord/tests/fixtures/discord_tng",
+            # The server every sync goes through (arg 32).
             "$(execpath //datalib/backend/http:datalib_http_bin)",
         ]),
         # Copy the grid index store out of the workspace.
@@ -252,7 +256,7 @@ genrule(
         # The sources as render-only groups, for materialize_tng_root.sh
         # to splice into the root's config.toml.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
-        "python3 $(execpath sql_scans.py) $(RULEDIR)/sync_workspace/sql_census $(RULEDIR)/sync_workspace $(execpath ingested/sql_scans.jsonl)",
+        "python3 $(execpath sql_scans.py) $(execpath //third-party/doltlite:doltlite) $(RULEDIR)/sync_workspace/sql_census $(RULEDIR)/sync_workspace $(execpath ingested/sql_scans.jsonl)",
         # A sync can end without error and leave a source out of the
         # index; such a fixture must not build, or it is cached.
         " ".join([
@@ -286,7 +290,7 @@ genrule(
     visibility = ["//visibility:public"],
 )
 
-# `run_sync_pipeline.py`'s arguments 7–30, as a test passes them: the
+# `run_sync_pipeline.py`'s arguments 7–31, as a test passes them: the
 # fixture trees, and the YoLink maker among them (see its docstring for
 # why the numbering runs as it does).
 _TNG_FIXTURE_ARGS = [
@@ -323,6 +327,8 @@ _TNG_FIXTURE_ARGS = [
     "datalib/backend/etl/providers/calendar/tests/fixtures/calendar_tng",
     # Google Drive: the JSON spec the synthesizer expands (arg 30).
     "datalib/backend/etl/providers/google_drive/tests/fixtures/google_drive_tng/tng.json",
+    # Discord: the account's `world.json` and its files (arg 31).
+    "datalib/backend/etl/providers/discord/tests/fixtures/discord_tng",
 ]
 
 # Sources synced on their own rather than in `:ingested_tng`
@@ -337,8 +343,8 @@ tng_source(
     visibility = ["//visibility:public"],
 )
 
-# Every statement the fixture sync runs that walks a whole table or index
-# is in sql_scans_allowed.toml with a reason (docs/dev/testing.md).
+# Every statement the fixture sync runs whose plan walks a whole table or
+# index is in sql_scans_allowed.toml with a reason (docs/dev/testing.md).
 py_test(
     name = "sql_scans_test",
     size = "small",
@@ -351,6 +357,32 @@ py_test(
         "ingested/sql_scans.jsonl",
         "sql_scans_allowed.toml",
     ],
+)
+
+# The allowlist check refuses an unlisted scan and an entry that no longer scans.
+py_test(
+    name = "sql_scans_check_test",
+    size = "small",
+    srcs = [
+        "sql_scans_check_test.py",
+        "sql_scans_test.py",
+    ],
+    imports = ["."],
+    main = "sql_scans_check_test.py",
+)
+
+# sql_scans.py reads a statement's plan, not the rows it walked.
+py_test(
+    name = "sql_scans_plan_test",
+    size = "small",
+    srcs = [
+        "sql_scans.py",
+        "sql_scans_plan_test.py",
+    ],
+    args = ["$(rootpath //third-party/doltlite:doltlite)"],
+    data = ["//third-party/doltlite:doltlite"],
+    imports = ["."],
+    main = "sql_scans_plan_test.py",
 )
 
 # The check `:ingested_tng` makes before it succeeds, against the fixture

@@ -177,9 +177,22 @@ closed_vocabulary! {
     }
 }
 
+/// The index every per-record lookup (`scope_kind = ? AND scope_key = ?`)
+/// names with `INDEXED BY`. A store creates it as it opens and keeps it
+/// out of its recorded shape, so adding it re-renders nothing.
+pub const BY_SCOPE_INDEX: &str = "problems_by_scope";
+pub const BY_SCOPE_INDEX_DDL: &str =
+    "CREATE INDEX IF NOT EXISTS problems_by_scope ON problems (scope_kind, scope_key)";
+
 /// The scope key of a row the grid index records itself: a source's
 /// render store it could not read. Every other row in the index is a copy.
 pub const INDEX_OWN_SCOPE_KEY: &str = "render_store";
+
+/// The `problems` table's shape: the top of the framework's shared ladder
+/// (`datalib_etl::doltlite_raw::SHARED_LADDER`), which every store holding
+/// the table records as its `shared_schema_version`. A reader of a store's
+/// problems reads them only from a store at this version.
+pub const SHAPE_VERSION: u32 = 1;
 
 /// Which step's Manage count a row in the grid index is in: each step
 /// counts only the rows it found itself (`problem_mutes/README.md`).

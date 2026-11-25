@@ -14,7 +14,6 @@ rust_library(
         # impl itself binds through sqlx.
         "//datalib/backend/table:datalib_table",
         "@datalib_crates//:serde",
-        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
     ],

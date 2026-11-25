@@ -603,6 +603,7 @@ fn message_items(
         for email in reactors.into_iter().flatten().filter_map(Value::as_str) {
             let rid = ids::message_reaction(ctx.source_id, ctx.message_id, email, unicode);
             item.reactions.push(NormalizedReaction {
+                count: 1,
                 reaction_uuid: rid.uuid,
                 reactor_handle: Handle::email(email),
                 reactor_display: ctx.name_of(email),

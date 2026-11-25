@@ -54,15 +54,17 @@ pub trait IndexRepo: Send + Sync {
     /// Every source holding a row.
     async fn source_ids(&self) -> Result<Vec<String>, RepoError>;
 
-    /// A page of `scope`'s children in `(sort_key, uuid)` order, as `ask`
-    /// asks for it, `limit` a side ([`crate::children`]). Empty for a root
-    /// with no index yet.
-    async fn children(
+    /// The first `limit` places of `parent`'s level past `after`
+    /// ([`crate::places`]). Empty for a root with no index yet.
+    async fn places(
         &self,
-        scope: &crate::children::Scope,
-        ask: &crate::children::Ask,
+        parent: &crate::places::Parent,
+        after: &crate::places::Key,
         limit: usize,
-    ) -> Result<crate::children::ChildrenPage, crate::children::ChildrenFailure>;
+    ) -> Result<crate::places::PlacesPage, RepoError>;
+
+    /// The sources that hold places at their top, by id.
+    async fn sources_with_places(&self) -> Result<Vec<String>, RepoError>;
 
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
@@ -213,16 +215,15 @@ pub trait IndexRepo: Send + Sync {
     /// returned [`EdgeRowOut`] pairs the raw edge with whatever
     /// destination metadata the UI needs to render an "outgoing
     /// destinations" list (today: the destination markdown's title).
-    /// Returns an empty Vec when the doc has no outgoing edges, when
-    /// the edges table is missing (old data root), or — by default —
-    /// when the impl doesn't support edges at all.
+    /// Returns an empty Vec when the doc has no outgoing edges, or — by
+    /// default — when the impl doesn't support edges at all.
     async fn outgoing_edges(&self, _markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
         Ok(Vec::new())
     }
 
     /// Every source's account of whoever holds each of `handles`, one
-    /// row per document that mentioned them; `people::merge_and_rank`
-    /// makes them one account per source.
+    /// row per distinct record of them; `people::merge_and_rank` makes
+    /// them one account per source.
     async fn people_for_handles(
         &self,
         _handles: &[String],

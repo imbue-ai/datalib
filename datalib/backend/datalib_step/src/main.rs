@@ -26,7 +26,6 @@ mod markdown;
 mod methods;
 mod modal;
 mod occurrences;
-mod old_markdown;
 mod prepare;
 mod probe;
 mod published;

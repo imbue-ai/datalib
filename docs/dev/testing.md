@@ -370,7 +370,10 @@ page plus whatever has arrived since. Two counts taken either side of a
 reload therefore compared how long each had been open, and failed as
 538 < 569 once the log outgrew a page (#835). Before comparing a reading
 from before an action with one from after it, check that both measure
-the same thing.
+the same thing. A store's size on disk is not what it holds: a doltlite
+store can carry up to 1 MiB of zeros that a later sync gives back, so
+"a document more" is a row count, not a bigger file
+([`doltlite.md`](doltlite.md) § "Disk space and `dolt_gc`").
 
 **Unroute a response rewrite before the page closes.** A `page.route`
 handler that calls `route.fetch()` to edit the real answer is waiting on
@@ -737,21 +740,43 @@ costs little", not as a hit rate.
 ## A statement that walks a whole table needs a reason
 
 `//tests/fixtures:sql_scans_test` checks every statement the TNG fixture
-sync runs that walks a whole table or index (SQLite's full-scan count
-above zero) against `tests/fixtures/sql_scans_allowed.toml`. Every
-process of the sync records them (`DATALIB_SQL_CENSUS`,
-`datalib_sql_work`), and `:ingested_tng` lists them in
-`ingested/sql_scans.jsonl`. A fixture's tables hold a few rows, so the
-scan costs nothing here; on a library it costs the whole table on every
-call. When the test fails on a new statement, give the statement an
-index, or paste the stanza it prints into the allowlist with a reason:
-it reads every row anyway, or the table stays small. A statement that
-reads only the catalog (`sqlite_master`, `pragma_*`) is allowed by rule.
-A scan of an empty table counts nothing, so a statement can show in one
-run and not the next, by the order the steps ran; an entry missing from
-a run is printed as a note, not a failure, and is worth removing when
-its statement is gone from the tree. The test sees only what the fixture sync runs: the server's
-routes and the applets' searches are not in it.
+sync runs whose plan walks a whole table or index against
+`tests/fixtures/sql_scans_allowed.toml`. Every process of the sync
+records each statement it runs and the file it ran on
+(`DATALIB_SQL_CENSUS`, `datalib_sql_work`). Once the sync is done,
+`tests/fixtures/sql_scans.py` reads each statement's plan from that
+file through the doltlite shell, and `:ingested_tng` lists every
+statement with whether it scans in `ingested/sql_scans.jsonl`. The
+plan, not the rows a run walked, decides, because a scan of an empty
+table walks nothing and whether a table is empty depends on the order
+the steps ran in. The few statements whose plan cannot be read
+afterwards (a temporary table, a table since dropped) count as scans
+when they walked rows as they ran, and the list says `judged_by: ran`.
+
+The test also fails on an allowlist entry nothing needs: one whose
+statement the sync no longer runs, or whose plan no longer scans. Left
+in, such an entry would wave through the scan if the statement grew
+it back. The one exception is a `judged_by: ran` statement that walked
+no rows this run, which is a note. Two entries for one statement fail
+too: only one reason can be the one that holds.
+
+A fixture's tables hold a few rows, so the scan costs nothing here; on a
+library it costs the whole table on every call. When the test fails on
+a new statement, give the statement an index, or paste the stanza it
+prints into the allowlist with a reason: it reads every row anyway, or
+the table stays small. A statement that reads only the catalog
+(`sqlite_master`, `pragma_*`) is allowed by rule. The test sees only
+what the fixture sync runs: the server's routes and the applets'
+searches are not in it.
+
+The plan is read with no values bound, and that makes it wrong two
+ways. A `LIKE` or `GLOB` whose pattern is a parameter reads as a scan,
+though once a pattern is bound SQLite seeks its literal prefix: write
+the prefix as a range (`key >= ? AND key < ?`,
+`datalib_etl::key_range::prefix_end`) and the plan says what runs. And
+a walk that starts at one end of an index (`ORDER BY … LIMIT`, `max()`)
+carries SQLite's full-scan mark however few rows it reads before it
+stops; such a statement gets an entry saying so.
 
 ## A statement's work does not grow with the rest of the store
 
@@ -803,6 +828,7 @@ ids are in `runs`. What to look at, and where:
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
 | which statements walk many rows for few | `msg LIKE '%heavy statement%did%'`, one line per attempt (`top_statement`, `top_file`, `top_params`), and `target = 'datalib::sql_work'` for each (`statement`, `file`, `params`, `vm_steps`, `rows`, `fullscan_steps`). Steps count work, not time, so a cold disk does not move them. |
+| which requests read far more than they answer with | `target = 'http.request'` (debug): `rows_read` beside `bytes`. A high count is right for a cache loaded whole; the ones to look at answer with little ([`logging.md`](logging.md) has the query). |
 | what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)

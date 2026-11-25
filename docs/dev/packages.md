@@ -176,12 +176,14 @@ the indexes asks a store which type or provider wrote it.
 These stores are Datalib's own formats, not a published interface. A
 writer has to match them exactly:
 
-1. **The tables, byte for byte.** `unified_grid_and_search_index` reads a render store only
-   when its `_datalib_meta.schema_hash` (blake3 over the `CREATE`
-   statements) equals the one this build computes
-   (`datalib/backend/etl/render/src/indexed_markdown.rs`, `schema_hash`). A release
-   that changes a render table therefore hides every package's
-   documents until the package ships a build with the new tables.
+1. **The tables and indexes, byte for byte.** `unified_grid_and_search_index` reads a
+   render store only when the shape its `_datalib_meta` records
+   (`schema_hash`, blake3 over the `CREATE TABLE` statements;
+   `index_hash`, over its lookup indexes; and its ladder positions)
+   equals the one this build computes
+   (`datalib/backend/etl/render/src/indexed_markdown.rs`, `shape`). A release
+   that changes a render table or index therefore hides every package's
+   documents until the package ships a build with the new shape.
 2. **The doltlite writer rules.** Write on the `datalib_writer` branch
    and move `main` to it when a run ends; readers only look at `main`
    (`datalib/backend/etl/src/doltlite_raw.rs`, `commit_run`).

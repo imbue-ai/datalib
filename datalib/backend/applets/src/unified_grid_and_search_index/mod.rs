@@ -16,13 +16,13 @@ use axum::{
     Router,
 };
 mod body_pieces;
-mod children;
 pub(crate) mod columns;
 mod grouping;
 mod local_embedder;
 mod map;
 mod models;
 mod mutes;
+mod places;
 mod problems;
 mod results;
 #[cfg(test)]
@@ -46,7 +46,6 @@ use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::Within;
 use datalib_unified_grid_and_search_index::hits::index_state::{DocReport, IndexStamp};
-use datalib_unified_grid_and_search_index::hits::vectors::Freshness;
 use datalib_unified_grid_and_search_index::hits::{display_snippet, GridIndex, IndexSummary};
 use datalib_unified_grid_and_search_index::query::{parse_query, ParsedQuery, Semantic};
 use datalib_unified_grid_and_search_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
@@ -219,7 +218,8 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/values", get(problems::values_handler))
             .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
-            .route("/children/{uuid}", get(children::handler))
+            .route("/places/{parent}", get(places::handler))
+            .route("/sources_with_places", get(places::sources_handler))
             .route("/sql", post(sql::handler))
             .route("/sql/stores", get(sql::stores_handler))
             .route(
@@ -248,7 +248,12 @@ pub(crate) async fn require_gateway(
         gate.admits(header("host"), header(crate::gate::SECRET_HEADER))
     };
     if admitted {
-        return next.run(req).await;
+        let (mut resp, rows_read) = datalib_sql_work::counted(next.run(req)).await;
+        if let Some(n) = rows_read {
+            resp.headers_mut()
+                .insert(datalib_sql_work::ROWS_READ_HEADER, n.into());
+        }
+        return resp;
     }
     Response::builder()
         .status(StatusCode::UNAUTHORIZED)
@@ -521,7 +526,7 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
     // On the first page, for the line above the results: a later page and a
     // group's rows have nothing to add to it.
     let without_vectors = if read && offset == 0 && within.is_empty() {
-        match without_vectors(s, &q, &parsed).await {
+        match without_vectors(s, &parsed).await {
             Ok(counted) => counted,
             Err(e) => {
                 errors.push(format!("count the documents without vectors: {e}"));
@@ -818,7 +823,6 @@ async fn page_rows(
 /// been built.
 async fn without_vectors(
     s: &Index,
-    q: &str,
     parsed: &ParsedQuery,
 ) -> Result<Option<results::WithoutVectors>, SearchFailure> {
     if !embeds(parsed) {
@@ -830,31 +834,17 @@ async fn without_vectors(
     let (index_stamp, cache_stamp) =
         datalib_unified_grid_and_search_index::search_index::stamps(&s.root);
     let stamp: Vec<IndexStamp> = vec![index_stamp, cache_stamp];
-    let key = (
-        q.to_string(),
-        s.repo.head().await.map_err(index)?,
-        stamp.clone(),
-    );
     let mut coverage = s.coverage.lock().await;
-    if let Some((_, counted)) = coverage.last.as_ref().filter(|(k, _)| *k == key) {
-        return Ok(Some(counted.clone()));
-    }
-    let moving = index_moving(&stamp, std::time::SystemTime::now());
     let with_vectors = match coverage
         .with_vectors
         .as_ref()
-        .filter(|(at, _)| moving || *at == stamp)
+        .filter(|(at, _)| *at == stamp)
     {
         Some((_, read)) => read.clone(),
         None => {
-            let fresh = if moving {
-                Freshness::AsHeld
-            } else {
-                Freshness::Current
-            };
             let Some(read) = s
                 .held_vectors
-                .documents(&s.root, fresh)
+                .documents(&s.root)
                 .await
                 .map_err(embedding_failed)?
             else {
@@ -865,10 +855,12 @@ async fn without_vectors(
             read
         }
     };
+    drop(coverage);
     let candidates = s.repo.documents_with_pages(parsed).await.map_err(index)?;
-    let counted = results::WithoutVectors::among(&candidates, &with_vectors);
-    coverage.last = Some((key, counted.clone()));
-    Ok(Some(counted))
+    Ok(Some(results::WithoutVectors::among(
+        &candidates,
+        &with_vectors,
+    )))
 }
 
 /// the search's score, and the words the hit matched in place of the row's
@@ -929,7 +921,7 @@ async fn land(
         .collect();
     let n = work.len();
     let root = (*s.root).clone();
-    tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(datalib_sql_work::with_count(move || {
         // Each hit lands by the item the search index named, and reads
         // only what the item it quotes says.
         let landed: Vec<_> = work
@@ -960,7 +952,7 @@ async fn land(
             // Another page may have landed it first, on the same row.
             let _ = cell.set(found);
         }
-    })
+    }))
     .await
     .map_err(|e| SearchFailure::Ranking(format!("landing a page's hits: {e}")))?;
     tracing::info!(
@@ -1259,12 +1251,6 @@ async fn search_index_nearest(
     parsed: &ParsedQuery,
     text: String,
 ) -> Result<Vec<DocumentHit>, SearchFailure> {
-    let (index, cache) = datalib_unified_grid_and_search_index::search_index::stamps(&s.root);
-    let fresh = if index_moving(&[index, cache], std::time::SystemTime::now()) {
-        Freshness::AsHeld
-    } else {
-        Freshness::Current
-    };
     let started = std::time::Instant::now();
     let embedder = s.local_embedder.clone();
     let query = tokio::task::spawn_blocking(move || embedder.embed(&text))
@@ -1278,14 +1264,7 @@ async fn search_index_nearest(
     let scope = search_scope(s).await?;
     let hits = s
         .held_vectors
-        .nearest(
-            &s.root,
-            &query,
-            Some(scope.as_slice()),
-            among,
-            RANK_DEPTH,
-            fresh,
-        )
+        .nearest(&s.root, &query, Some(scope.as_slice()), among, RANK_DEPTH)
         .await
         .map_err(embedding_failed)?
         .ok_or(SearchFailure::NoIndex)?;
@@ -1294,35 +1273,36 @@ async fn search_index_nearest(
         narrow_ms = (narrowed - embedded).as_millis() as u64,
         score_ms = (started.elapsed() - narrowed).as_millis() as u64,
         among = among.map(|a| a.len()),
-        as_held = fresh == Freshness::AsHeld,
         "scored the search index's vectors"
     );
     Ok(hits)
 }
 
-/// What the structured terms keep of each document they reach: the
-/// messages they keep, or all of it when they keep only the document's own
-/// row. A long chat whose last message falls in a date window keeps its
-/// row too, and that must not bring back its other days.
+/// What the structured terms keep of each document they reach: the rows
+/// they keep, or all of it when they keep only the document's own row. A
+/// long chat whose last message falls in a date window keeps its row too,
+/// and that must not bring back its other days; the row itself stays
+/// kept, since a page's own text is named by it, or by no row at all.
 fn kept_of(
     rows: Vec<(String, String, bool)>,
 ) -> std::collections::HashMap<String, datalib_unified_grid_and_search_index::hits::vectors::Kept> {
     use datalib_unified_grid_and_search_index::hits::vectors::Kept;
     let mut sections: std::collections::HashMap<String, std::collections::HashSet<String>> =
         std::collections::HashMap::new();
+    let mut with_messages: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (uuid, document, is_document) in rows {
-        let kept = sections.entry(document).or_default();
         if !is_document {
-            kept.insert(uuid);
+            with_messages.insert(document.clone());
         }
+        sections.entry(document).or_default().insert(uuid);
     }
     sections
         .into_iter()
         .map(|(document, kept)| {
-            let kept = if kept.is_empty() {
-                Kept::Whole
-            } else {
+            let kept = if with_messages.contains(&document) {
                 Kept::Sections(kept)
+            } else {
+                Kept::Whole
             };
             (document, kept)
         })
@@ -1363,23 +1343,6 @@ async fn keyed(
 /// How many hits the search ranks for one free-text search: every page of it is
 /// cut from these.
 const RANK_DEPTH: usize = 1_000;
-
-/// How long the search index must sit still before a search reads what
-/// changed in it. A sync's embed step commits every few seconds, and on a
-/// large library reading the documents again at each commit took a search
-/// past its deadline; until then a search answers from what it last read,
-/// and the warm loop reads the rest once the sync is done.
-const INDEX_SETTLE: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// Whether the index changed within [`INDEX_SETTLE`] of `now`. A change
-/// stamped after `now` is a clock that moved back, and counts as recent.
-fn index_moving(stamps: &[IndexStamp], now: std::time::SystemTime) -> bool {
-    stamps.iter().any(|stamp| {
-        stamp
-            .last_change()
-            .is_some_and(|at| now.duration_since(at).map_or(true, |d| d < INDEX_SETTLE))
-    })
-}
 
 /// A ranking's hits as one entry per document, best first, each landed on a
 /// message only when a page shows it, of the documents holding a row the
@@ -1509,11 +1472,7 @@ async fn index_state(
     let every = |report: DocReport| -> std::collections::HashMap<String, DocReport> {
         uuids.iter().map(|u| (u.clone(), report.clone())).collect()
     };
-    let opened = datalib_search_index::Reader::open(
-        &datalib_runtime::layout::grid_index_db(&s.root),
-        &datalib_runtime::layout::inference_cache_db(&s.root),
-    )
-    .await;
+    let opened = datalib_unified_grid_and_search_index::search_index::open(&s.root).await;
     let reader = match opened {
         Ok(Some(reader)) => reader,
         Ok(None) => {
@@ -1633,8 +1592,7 @@ pub async fn with_people(
 /// Each `me` value given the owner's handles: `me:self`, the stand-in
 /// sources write for them, every handle a source says is its account's
 /// own, and every handle of the contacts the person marked as themself,
-/// read from the contacts store now. Refused when the index predates the
-/// accounts' handles.
+/// read from the contacts store now. Refused before there is an index.
 async fn with_me(
     root: &std::path::Path,
     q: &str,
@@ -1647,7 +1605,8 @@ async fn with_me(
         .await
         .map_err(|e| format!("read the account's handles: {e:#}"))?
         .ok_or_else(|| {
-            "`me` reads the account's handles, which the next sync of the index writes".to_string()
+            "`me` reads the account's handles, which the grid index holds once it is built"
+                .to_string()
         })?;
     let marked = marked_as_me(root)
         .await
@@ -1892,7 +1851,7 @@ async fn chat(
     let version = where_kept.get(&markdown_uuid).map(|k| k.commit.clone());
     let root = (*s.root).clone();
     let document = markdown_uuid.clone();
-    let read = tokio::task::spawn_blocking(move || match page {
+    let read = tokio::task::spawn_blocking(datalib_sql_work::with_count(move || match page {
         Some((ask, limit)) => stored_text::page(&root, &where_kept, &document, ask, limit),
         None => Ok(stored_text::spell(&root, &where_kept)?
             .remove(&document)
@@ -1901,7 +1860,7 @@ async fn chat(
                 from_top: true,
                 ..Default::default()
             })),
-    })
+    }))
     .await
     .map_err(|e| {
         tracing::error!(document = %markdown_uuid, error = %e, "reading the document panicked");
@@ -2005,49 +1964,11 @@ async fn chat(
 mod tests {
     use super::*;
 
-    /// A search reads what changed in the search index only once the index has
-    /// sat still for `INDEX_SETTLE`: during a sync it answers from what it
-    /// holds rather than re-reading the index at every embed commit.
-    #[test]
-    fn an_index_written_within_the_settle_time_is_moving() {
-        let tmp = tempfile::tempdir().unwrap();
-        let index = tmp.path().join("index.sqlite");
-        assert!(
-            !index_moving(&[IndexStamp::of(&index)], std::time::SystemTime::now()),
-            "no index is not moving"
-        );
-        std::fs::write(&index, b"").unwrap();
-        let stamp = IndexStamp::of(&index);
-        let at = stamp.last_change().unwrap();
-        let second = std::time::Duration::from_secs(1);
-        assert!(index_moving(std::slice::from_ref(&stamp), at));
-        assert!(index_moving(
-            std::slice::from_ref(&stamp),
-            at + INDEX_SETTLE - second
-        ));
-        assert!(!index_moving(
-            std::slice::from_ref(&stamp),
-            at + INDEX_SETTLE
-        ));
-        assert!(
-            index_moving(std::slice::from_ref(&stamp), at - second),
-            "a clock that moved back"
-        );
-
-        let mut wal = index.clone().into_os_string();
-        wal.push("-wal");
-        std::fs::write(&wal, b"a frame").unwrap();
-        let later = std::fs::File::options().write(true).open(&wal).unwrap();
-        later.set_modified(at + INDEX_SETTLE * 2).unwrap();
-        assert!(
-            index_moving(&[IndexStamp::of(&index)], at + INDEX_SETTLE * 2 + second),
-            "a commit lands in the write-ahead log, not the index file"
-        );
-    }
-
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
-    /// messages, not by every day of it.
+    /// messages, not by every day of it. The row itself stays kept: a
+    /// page's own text is named by it, and was dropped from every search
+    /// with a filter that also kept one of the page's comments.
     #[test]
     fn a_kept_document_row_counts_whole_only_without_kept_messages() {
         use datalib_unified_grid_and_search_index::hits::vectors::Kept;
@@ -2057,11 +1978,16 @@ mod tests {
         let kept = kept_of(vec![
             row("bridge-log", "bridge-log", true),
             row("stardate-2", "bridge-log", false),
+            row("stardate-3", "away-team", false),
             row("ten-forward", "ten-forward", true),
         ]);
         assert_eq!(
             kept["bridge-log"],
-            Kept::Sections(["stardate-2".to_string()].into())
+            Kept::Sections(["stardate-2".to_string(), "bridge-log".to_string()].into())
+        );
+        assert_eq!(
+            kept["away-team"],
+            Kept::Sections(["stardate-3".to_string()].into())
         );
         assert_eq!(kept["ten-forward"], Kept::Whole);
     }
@@ -2950,11 +2876,11 @@ mod tests {
         assert!(found("from:me").await.is_empty());
     }
 
-    /// An index written before it held the account's handles refuses
-    /// `me` by name, where it would otherwise fail on a missing table or
-    /// quietly find only the stand-in "Me".
+    /// An index an older build wrote is refused, naming the step that
+    /// brings it up to date, where it would otherwise fail on a missing
+    /// table or quietly find only the stand-in "Me".
     #[tokio::test]
-    async fn me_on_an_index_without_the_accounts_handles_says_so() {
+    async fn me_on_an_index_in_another_shape_says_what_to_run() {
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
         let path = datalib_runtime::layout::grid_index_db(tmp.path());
@@ -2964,7 +2890,7 @@ mod tests {
             .connect()
             .await
             .unwrap();
-        sqlx::query("DROP TABLE account_handles")
+        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
             .execute(&mut conn)
             .await
             .unwrap();
@@ -2972,15 +2898,12 @@ mod tests {
         let s = index_over(tmp.path()).await;
         let r = search(&s, "from:me", None, 10, None).await;
         assert!(r.rows.is_empty());
+        let step = "unified_grid_and_search_index/unified_grid_and_search_index";
         assert!(
-            r.refused.iter().any(|why| why.contains("`me`")),
+            r.refused.iter().any(|why| why.contains(step)),
             "{:?}",
             r.refused
         );
-        assert!(search(&s, "from:ann", None, 10, None)
-            .await
-            .refused
-            .is_empty());
     }
 
     /// Each person key reads the search terms in its role: a handle by its

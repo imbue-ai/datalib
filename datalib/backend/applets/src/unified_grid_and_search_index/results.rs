@@ -171,17 +171,14 @@ impl WithoutVectors {
     }
 }
 
-/// What counting [`WithoutVectors`] last read: the documents with vectors,
-/// until the search index moves, and the last search's count, until it or the
-/// grid does. A person repeats one search far more than they change it.
+/// The documents with vectors, as counting [`WithoutVectors`] last read
+/// them, until the search index moves. The count itself is read again for
+/// every search: what a search's terms keep can move with the clock
+/// (`after:-7d`) as well as with the index.
 #[derive(Default)]
 pub struct VectorCoverage {
     pub with_vectors: Option<(Vec<IndexStamp>, Arc<HashSet<String>>)>,
-    pub last: Option<(CoverageKey, WithoutVectors)>,
 }
-
-/// A search's cache key, the grid's commit and how the search index looks.
-pub type CoverageKey = (String, Option<String>, Vec<IndexStamp>);
 
 /// A search's terms, written out, and the commit they were read at.
 pub type KeyedKey = (String, Option<String>);

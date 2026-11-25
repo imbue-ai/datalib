@@ -295,7 +295,8 @@ pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String
         // The `.eml`'s fetch problem goes with it: an email upstream no
         // longer has cannot fail to download.
         sqlx::query(
-            "DELETE FROM problems WHERE scope_kind = ? AND scope_key IN \
+            "DELETE FROM problems INDEXED BY problems_by_scope \
+             WHERE scope_kind = ? AND scope_key IN \
              (SELECT 'email_blobs:' || id FROM email_blobs WHERE email_id = ?)",
         )
         .bind(datalib_problems::ScopeKind::Entity.as_str())

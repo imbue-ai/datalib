@@ -6,6 +6,7 @@
 use datalib_query::table::{self, Column, FreeText, SearchKey, SearchTable};
 use datalib_schema::grid_rows::GridRowColumn;
 
+use crate::at_node::Arms;
 use crate::db::ANY_VALUE;
 use crate::terms_keys::{self, TermsKey, TermsValue, TERMS_KEYS};
 
@@ -28,6 +29,9 @@ pub enum Field<C: 'static> {
     /// ending in one, or an address, typed as free text. The value is as
     /// typed; [`identifier`] reads it.
     Names,
+    /// `at:<node>`: the rows directly under a node of the tree, by its uuid
+    /// (`crate::at_node`).
+    At,
 }
 
 /// One filter occurrence from the query string.
@@ -41,6 +45,9 @@ pub struct FilterTerm<C: 'static> {
     /// For a `contact:<id>` or `me` value, the handles it reaches, read
     /// when the search runs.
     pub handles: Option<Vec<String>>,
+    /// For `at:`, what puts a row there, read when the search
+    /// runs.
+    pub arms: Arms,
 }
 
 /// Whether free text is searched by meaning too, and how near a document
@@ -142,11 +149,17 @@ impl<C: Column> ParsedQuery<C> {
                 }
                 datalib_query::Token::Term(t) => match field::<C>(&t.key, &t.value, terms_keys) {
                     Ok(field) => terms.push(FilterTerm {
+                        // A node is named one way however its uuid, or the
+                        // link to it, was written.
+                        value: match field {
+                            Field::At => datalib_uuid_text::at_end(&t.value).unwrap_or(t.value),
+                            _ => t.value,
+                        },
                         field,
-                        value: t.value,
                         negate: t.negate,
                         quoted: t.quoted,
                         handles: None,
+                        arms: Arms::UNREAD,
                     }),
                     Err(why) => {
                         refusal.get_or_insert(why);
@@ -225,6 +238,27 @@ impl<C: Column> ParsedQuery<C> {
         self
     }
 
+    /// The nodes the query names (`at:<node>`), each once.
+    pub fn nodes(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for t in self.terms.iter().filter(|t| t.field == Field::At) {
+            if !out.contains(&t.value) {
+                out.push(t.value.clone());
+            }
+        }
+        out
+    }
+
+    /// Each `at:` term given what puts a row there.
+    pub fn with_arms(mut self, read: &std::collections::HashMap<String, Arms>) -> Self {
+        for t in self.terms.iter_mut().filter(|t| t.field == Field::At) {
+            if let Some(arms) = read.get(&t.value) {
+                t.arms = *arms;
+            }
+        }
+        self
+    }
+
     /// The first positive `before:` or `after:`, as typed.
     pub fn bound(&self, field: Field<C>) -> Option<&str> {
         self.terms
@@ -242,6 +276,9 @@ impl ParsedQuery<GridRowColumn> {
     }
 }
 
+/// The key that holds a search to one node of the tree.
+pub const AT: &str = "at";
+
 /// One free token of a ranked table's query. An id or an address is a
 /// filter on the row's terms; a quoted, `+` or `-` one a filter on its
 /// text; every word but an excluded one is ranked by.
@@ -255,6 +292,7 @@ fn free_token<C>(raw: &str, terms: &mut Vec<FilterTerm<C>>, words: &mut Vec<Stri
         negate,
         quoted,
         handles: None,
+        arms: Arms::UNREAD,
     };
     if !quoted && identifier(&text).is_some() {
         terms.push(filter(Field::Names, text));
@@ -313,6 +351,15 @@ fn field<C: Column>(
     {
         return Ok(Field::Terms(k));
     }
+    // The search terms are the grid's, and the tree is in the same index.
+    if key == AT && !terms.is_empty() {
+        return match datalib_uuid_text::at_end(value) {
+            Some(_) => Ok(Field::At),
+            None => Err(format!(
+                "`at:` takes a place by its id, not `{value}`; a source is `source:`"
+            )),
+        };
+    }
     let t = || <C::Table as SearchTable>::FLAGS;
     let ranged = <C::Table as SearchTable>::RANGE.is_some();
     match key {
@@ -356,6 +403,9 @@ fn field<C: Column>(
                     known.push("is");
                 }
                 known.extend(terms.iter().map(|k| k.key));
+                if !terms.is_empty() {
+                    known.push(AT);
+                }
                 Err(format!(
                     "`{key}:` is not something the search can filter on; try one of {}",
                     known.join(", ")

@@ -7,9 +7,10 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, WirePayloadRow as _};
 use datalib_etl_claude::ingest::schema_raw::{
-    ConversationAttachmentRow, ConversationRow, OrgRow, ProjectDocRow, ProjectRow, UserRow,
+    full_ddl, ConversationAttachmentRow, ConversationRow, CoworkEventRow, OrgRow, ProjectDocRow,
+    ProjectRow, UserRow,
 };
-use datalib_etl_claude::ingest::{db_path_for, RawDb};
+use datalib_etl_claude::ingest::{db, db_path_for, RawDb};
 use datalib_etl_web::owed::{self, Listed};
 use datalib_problems::Reason;
 
@@ -202,7 +203,118 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
             "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
         )
         .await,
-        ["1"]
+        ["2"]
+    );
+    db.close().await;
+}
+
+/// `cowork_events` as the builds before rung 2 declared it.
+const COWORK_EVENTS_BY_ID: &str = "CREATE TABLE IF NOT EXISTS cowork_events (
+    id             TEXT PRIMARY KEY,
+    payload        TEXT NULL,
+    session_id     TEXT NULL,
+    sequence_num   INTEGER NULL
+)";
+const COWORK_EVENTS_SESSION_INDEX: &str =
+    "CREATE INDEX IF NOT EXISTS cowork_events_session ON cowork_events(session_id)";
+
+/// Rung 2: a store whose Cowork events were keyed by their `event_id`
+/// opens keyed `(session_id, id)`, holding every event, and a render
+/// reads only the logs it asks for, each as one range of the key.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cowork_events_keyed_by_id_open_keyed_by_session() {
+    let d = tempfile::tempdir().unwrap();
+    let path = db_path_for(d.path());
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let new_events = CoworkEventRow::ddl();
+    let new_index = CoworkEventRow::index_ddls();
+    let ddl: Vec<String> = full_ddl()
+        .into_iter()
+        .map(|sql| match sql {
+            sql if sql == new_events => COWORK_EVENTS_BY_ID.to_string(),
+            sql if new_index.contains(&sql) => COWORK_EVENTS_SESSION_INDEX.to_string(),
+            sql => sql,
+        })
+        .collect();
+    let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
+    let pool = dr::open(&path, &ddl).await.unwrap();
+    for session in ["cse-picard", "cse-riker"] {
+        sqlx::query("INSERT INTO cowork_sessions (id, payload) VALUES (?, jsonb('{}'))")
+            .bind(session)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO cowork_events (id, payload, session_id, sequence_num) VALUES \
+         ('ev-9', jsonb('{\"text\": \"Engage.\"}'), 'cse-picard', 2), \
+         ('ev-1', jsonb('{\"text\": \"Make it so.\"}'), 'cse-riker', 1), \
+         ('ev-3', jsonb('{\"text\": \"Set a course.\"}'), 'cse-picard', 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    dr::commit_run(&pool, "events keyed by id").await.unwrap();
+    pool.close().await;
+
+    let db = RawDb::open(&path).await.expect("the rung carries it");
+    let pool = db.pool();
+    assert_eq!(
+        dr::primary_key_columns(pool, "cowork_events")
+            .await
+            .unwrap(),
+        ["session_id", "id"]
+    );
+    assert_eq!(
+        strings(
+            pool,
+            "SELECT name || ':' || \"unique\" FROM pragma_index_list('cowork_events') \
+             WHERE origin = 'c' ORDER BY name",
+        )
+        .await,
+        ["cowork_events_by_id:1"],
+        "the id index is unique and the old session index is gone"
+    );
+    assert_eq!(
+        strings(
+            pool,
+            "SELECT session_id || '/' || id FROM cowork_events ORDER BY session_id, id"
+        )
+        .await,
+        ["cse-picard/ev-3", "cse-picard/ev-9", "cse-riker/ev-1"]
+    );
+
+    let mut picard: Vec<_> = db::load_cowork_sessions_from(pool)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.id == "cse-picard")
+        .collect();
+    db::load_cowork_events_into(pool, &mut picard)
+        .await
+        .unwrap();
+    let texts: Vec<&str> = picard[0]
+        .events
+        .iter()
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["Set a course.", "Engage."], "one log, in order");
+
+    // Audited: a constant statement of the crate under test.
+    let explain = format!("EXPLAIN QUERY PLAN {}", db::LOAD_COWORK_EVENTS_SQL);
+    let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
+        .bind("[]")
+        .fetch_all(pool)
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| sqlx::Row::get::<String, _>(r, "detail"))
+        .collect();
+    assert!(
+        plan.iter()
+            .any(|d| d.starts_with("SEARCH cowork_events USING")
+                && d.contains("sqlite_autoindex_cowork_events_1 (session_id=?)")),
+        "{plan:?}"
     );
     db.close().await;
 }

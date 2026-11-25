@@ -1,0 +1,63 @@
+# Discord as your own account, signed in through latchkey, with every option
+# set, and searchable. Discord forbids automating a user account and may
+# close one it catches; this only reads.
+[[groups]]
+id = "discord"
+name = "Discord"
+type = "discord"
+
+[[steps]]
+id = "discord/ingest"
+command = "datalib-step run ingest discord"
+
+[steps.params.common]
+blob_size_limit_bytes = "5 MB"  # skip a file larger than this; unset is no limit
+
+# When to give up on rate limits. The download always honours a 429's
+# Retry-After and backs off; these only decide when to stop.
+[steps.params.common.download_params]
+maximum_time_without_progress_in_minutes = 30  # the default
+maximum_sequential_failed_requests = 50        # the default
+
+# Which stored latchkey account to use (`latchkey auth list`). Omit it to
+# use the only one.
+[steps.params.latchkey_settings]
+account = "picard@enterprise.org"
+
+[steps.params.api]
+servers = ["Starfleet Academy", "1180000000000000001"]  # by name or id; omit for none
+all_servers = false            # every server the account is in, whatever `servers` says
+channels = ["bridge", "https://discord.com/channels/1180000000000000001/1180000000000000100"]
+                               # only these channels, by name, id or pasted link; a
+                               # category takes every channel in it. Omit for every
+                               # channel the account can read
+threads = true                 # their threads and forum posts; on unless set
+dms = true                     # direct messages, one-to-one and group; on unless set
+dm_conversations = ["1180000000000000900"]
+                               # only these, by id or pasted link; omit for all of them
+since = "2025-01-01"           # oldest message: a day ("2025-01-01"), an RFC 3339 instant
+                               # ("2025-01-01T09:00:00-08:00"), or an offset back from each
+                               # sync ("-30d": a rolling window). Omit it for the whole
+                               # history, 100 messages a request
+media = true                   # download the files messages carry; on unless set
+refresh_window_days = 7        # re-read this many trailing days for edits, reactions
+                               # and deletions; default 7, 0 turns it off
+refresh_every_minutes = 360    # re-read that window at most this often; default 360,
+                               # 0 re-reads it on every sync
+list_every_hours = 6           # list roles and threads at most this often; default 6,
+                               # 0 lists them on every sync
+
+[[steps]]
+id = "discord/render_markdown"
+command = "datalib-step run render_markdown discord"
+inputs = ["discord/ingest"]
+reads = "pinned"
+
+# Search by meaning: cuts this source's documents into chunks and embeds
+# them. Leave it out and keyword search still finds it.
+[[steps]]
+id = "discord/embed"
+command = "datalib-step run embed discord"
+inputs = ["unified_grid_and_search_index/unified_grid_and_search_index"]
+reads = "files"
+locks = ["embedder"]

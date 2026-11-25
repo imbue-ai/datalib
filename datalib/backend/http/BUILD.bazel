@@ -80,12 +80,12 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     # Sets CARGO_PKG_VERSION under rules_rust (which does NOT read
-    # Cargo.toml) — /api/health and the feedback cards report it, and
+    # Cargo.toml) — /api/health reports it, and
     # since the Tauri shell ships this bazel-built binary, it's also the
     # desktop app's version. Must match [package].version in
     # datalib/backend/Cargo.toml; the
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.55.0",
+    version = "0.56.0",
     # The rust-embed proc macro reads `$DATALIB_UI_DIST` (env-var
     # interpolation via the `interpolate-folder-path` feature). We
     # point it at the hermetic Bazel-built dist (via `:ui_dist_host`,
@@ -128,6 +128,7 @@ rust_library(
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -224,6 +225,7 @@ rust_test(
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/time:datalib_time",

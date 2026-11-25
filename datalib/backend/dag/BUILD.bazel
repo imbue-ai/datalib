@@ -80,7 +80,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.55.0",
+    version = "0.56.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-pipeline --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -217,11 +217,10 @@ rust_test(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
-        # `Serialize`, for the one-row-a-line store dump's formatter.
-        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:toml",

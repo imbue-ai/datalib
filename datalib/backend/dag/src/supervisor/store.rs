@@ -3,8 +3,8 @@
 //! step off or on — and the one process running the loop reads it and
 //! writes back how each request ended, and what each step did
 //! (`record.rs`). Plain SQLite in rollback-journal mode, several writing
-//! processes at once; its schema only grows, because two builds may share
-//! it. Every commit is announced (`announce.rs`), which is how the loop
+//! processes at once. Its shape moves by the rungs of [`LADDER`]: a build
+//! older than the store's refuses it. Every commit is announced (`announce.rs`), which is how the loop
 //! and the server hear of it. `dag/README.md` §"The record".
 
 use std::collections::BTreeMap;
@@ -20,19 +20,44 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 use super::pass::{PassRow, PassState};
 use crate::step::StoreBytes;
 
+/// How a store's tables reach this build's shape, after what
+/// `CREATE TABLE IF NOT EXISTS` makes on its own. Every store from before
+/// the ladder records version 5, with whichever of the record's later
+/// columns its release had.
+const LADDER: &[datalib_store_meta::Migration] = &[datalib_store_meta::Migration {
+    version: 6,
+    name: "steps in one shape; launch_passes goes",
+    apply: |conn| {
+        Box::pin(async move {
+            sqlx::query("ALTER TABLE steps RENAME TO steps_v5")
+                .execute(&mut *conn)
+                .await?;
+            sqlx::query(super::record::STEPS)
+                .execute(&mut *conn)
+                .await?;
+            sqlx::raw_sql(STEPS_FROM_V5).execute(&mut *conn).await?;
+            Ok(())
+        })
+    },
+}];
+
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
-const SCHEMA_VERSION: u32 = 5;
+const SCHEMA_VERSION: u32 = LADDER[LADDER.len() - 1].version;
 
-/// Tables and columns this build calls by another name, renamed in place
-/// on open so what a person set carries over: (table, new name), then
-/// (table, column, new name), in the order they apply.
-const RENAMED_TABLES: [(&str, &str); 1] = [("pauses", "turned_off")];
-const RENAMED_COLUMNS: [(&str, &str, &str); 3] = [
-    ("turned_off", "paused_by", "turned_off_by"),
-    ("turned_off", "paused_at_utc", "turned_off_at_utc"),
-    ("steps", "paused_by", "turned_off_by"),
-];
+/// Each step's record, from the columns every release since 0.38 had.
+/// What it leaves behind a release may not have had, and the loop
+/// writes again: `needs_rerun` at the launch's prepare pass,
+/// `waiting_for` on its next tick, `last_failure_kind` at the step's next
+/// run. `launch_passes` goes with it: nothing reads it.
+const STEPS_FROM_V5: &str = "INSERT INTO steps (step, succeeded, fingerprint, reads, \
+     last_run_id, last_started_at_utc, last_finished_at_utc, last_status, last_attempts, \
+     last_error, last_success_at_utc, tz_offset, state, state_detail, turned_off_by, requests) \
+     SELECT step, succeeded, fingerprint, reads, last_run_id, last_started_at_utc, \
+     last_finished_at_utc, last_status, last_attempts, last_error, last_success_at_utc, \
+     tz_offset, state, state_detail, turned_off_by, requests FROM steps_v5; \
+     DROP TABLE steps_v5; \
+     DROP TABLE IF EXISTS launch_passes";
 
 const DDL: [&str; 4] = [
     "CREATE TABLE IF NOT EXISTS requests (
@@ -79,6 +104,22 @@ const DDL: [&str; 4] = [
         PRIMARY KEY (wipe_id, ord)
     )",
 ];
+
+/// `requests` and `wipes` keep every row they were ever given; the loop
+/// reads only the open ones, and these find them without the rest.
+const INDEXES: [&str; 2] = [
+    "CREATE INDEX IF NOT EXISTS requests_open ON requests (closed_at_utc, opened_at_utc, id)",
+    "CREATE INDEX IF NOT EXISTS wipes_open ON wipes (closed_at_utc, opened_at_utc, id)",
+];
+
+const OPEN_REQUESTS: &str =
+    "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+     FROM requests INDEXED BY requests_open \
+     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id";
+
+const OPEN_WIPES: &str = "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+     FROM wipes INDEXED BY wipes_open \
+     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id";
 
 /// Long enough to outlast another process's write transaction, which is
 /// a single row here.
@@ -225,20 +266,26 @@ impl Store {
                 NEXT_STORE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ),
         };
-        store.refuse_if_newer(&path).await?;
-        store.rename_retired().await?;
-        let ddl = || DDL.into_iter().chain(super::record::DDL);
+        store.climb(&path).await?;
+        let ddl = || {
+            DDL.into_iter()
+                .chain(super::record::DDL)
+                .chain(INDEXES)
+                .chain(super::record::INDEXES)
+        };
         for stmt in ddl() {
             sqlx::query(stmt).execute(&store.pool).await?;
         }
-        store.add_missing_columns().await?;
         datalib_store_meta::write(
             &store.pool,
             datalib_store_meta::StoreKind::Supervisor,
-            &datalib_store_meta::schema_hash(ddl()),
-            datalib_store_meta::Versions {
-                schema: SCHEMA_VERSION,
-                shared: 0,
+            &datalib_store_meta::Shape {
+                tables: datalib_store_meta::schema_hash(ddl()),
+                indexes: None,
+                versions: datalib_store_meta::Versions {
+                    schema: SCHEMA_VERSION,
+                    shared: 0,
+                },
             },
         )
         .await?;
@@ -246,78 +293,40 @@ impl Store {
         Ok(store)
     }
 
-    /// Before the DDL runs, so `CREATE TABLE IF NOT EXISTS` finds the
-    /// renamed table rather than making an empty one beside it. One
+    /// Run the rungs above the store's version, before the DDL, so
+    /// `CREATE TABLE IF NOT EXISTS` finds each table in its new shape. One
     /// transaction, taken for writing first, so two processes opening at
-    /// once do not both rename.
-    async fn rename_retired(&self) -> Result<()> {
+    /// once climb once. A new store has nothing to climb: the DDL makes it
+    /// at the top.
+    async fn climb(&self, path: &Path) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let tables: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
-                .fetch_all(&mut *tx)
-                .await?;
-        for (old, new) in RENAMED_TABLES {
-            if tables.iter().any(|t| t == old) && !tables.iter().any(|t| t == new) {
-                // Safe: both names are literals from `RENAMED_TABLES`.
-                let rename = sqlx::AssertSqlSafe(format!("ALTER TABLE {old} RENAME TO {new}"));
-                sqlx::query(rename).execute(&mut *tx).await?;
-            }
+        let Some(meta) = datalib_store_meta::read_in(&mut tx).await? else {
+            return Ok(());
+        };
+        if meta.schema_version > SCHEMA_VERSION {
+            bail!(
+                "{} was written by Datalib {} (schema {}), newer than this build \
+                 (schema {SCHEMA_VERSION}); run that build or a later one",
+                path.display(),
+                meta.datalib_version,
+                meta.schema_version
+            );
         }
-        for (table, old, new) in RENAMED_COLUMNS {
-            // Safe: `table` is a literal from `RENAMED_COLUMNS`.
-            let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
-            let have: Vec<String> = sqlx::query(pragma)
-                .fetch_all(&mut *tx)
-                .await?
-                .iter()
-                .map(|r| r.try_get("name"))
-                .collect::<Result<_, _>>()?;
-            if have.iter().any(|c| c == old) && !have.iter().any(|c| c == new) {
-                // Safe: every name here is a literal from `RENAMED_COLUMNS`.
-                let rename = sqlx::AssertSqlSafe(format!(
-                    "ALTER TABLE {table} RENAME COLUMN {old} TO {new}"
-                ));
-                sqlx::query(rename).execute(&mut *tx).await?;
-            }
+        for rung in LADDER.iter().filter(|m| m.version > meta.schema_version) {
+            tracing::info!(
+                version = rung.version,
+                name = rung.name,
+                "supervisor store: migrating"
+            );
+            (rung.apply)(&mut tx)
+                .await
+                .with_context(|| format!("migrate {} to v{}", path.display(), rung.version))?;
         }
+        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'schema_version'")
+            .bind(SCHEMA_VERSION.to_string())
+            .execute(&mut *tx)
+            .await?;
         tx.commit().await?;
-        Ok(())
-    }
-
-    /// `CREATE TABLE IF NOT EXISTS` leaves a table an older build made as
-    /// it was, so a column added since reaches it here.
-    async fn add_missing_columns(&self) -> Result<()> {
-        for (table, column, decl) in super::record::ADDED_COLUMNS {
-            // Safe: `table` is a literal from `ADDED_COLUMNS`.
-            let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
-            let have: Vec<String> = sqlx::query(pragma)
-                .fetch_all(&self.pool)
-                .await?
-                .iter()
-                .map(|r| r.try_get("name"))
-                .collect::<Result<_, _>>()?;
-            if !have.iter().any(|c| c == column) {
-                // Safe: every name here is a literal from `ADDED_COLUMNS`.
-                let alter =
-                    sqlx::AssertSqlSafe(format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"));
-                sqlx::query(alter).execute(&self.pool).await?;
-            }
-        }
-        Ok(())
-    }
-
-    async fn refuse_if_newer(&self, path: &Path) -> Result<()> {
-        if let Some(meta) = datalib_store_meta::read(&self.pool).await? {
-            if meta.schema_version > SCHEMA_VERSION {
-                bail!(
-                    "{} was written by Datalib {} (schema {}), newer than this build \
-                     (schema {SCHEMA_VERSION}); run that build or a later one",
-                    path.display(),
-                    meta.datalib_version,
-                    meta.schema_version
-                );
-            }
-        }
         Ok(())
     }
 
@@ -412,12 +421,7 @@ impl Store {
     }
 
     pub async fn open_requests(&self) -> Result<Vec<RequestRow>> {
-        let rows = sqlx::query(
-            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
-             FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(OPEN_REQUESTS).fetch_all(&self.pool).await?;
         rows.iter().map(request_of).collect()
     }
 
@@ -427,12 +431,7 @@ impl Store {
     /// a step turned back on, and the loop ran a stopped sync's step again.
     pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
         let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query(
-            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
-             FROM requests WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
-        )
-        .fetch_all(&mut *tx)
-        .await?;
+        let rows = sqlx::query(OPEN_REQUESTS).fetch_all(&mut *tx).await?;
         let turned_off = sqlx::query("SELECT step, turned_off_by FROM turned_off")
             .fetch_all(&mut *tx)
             .await?;
@@ -638,12 +637,7 @@ impl Store {
     }
 
     pub async fn open_wipes(&self) -> Result<Vec<WipeRow>> {
-        let rows = sqlx::query(
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error \
-             FROM wipes WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id",
-        )
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = sqlx::query(OPEN_WIPES).fetch_all(&self.pool).await?;
         rows.iter().map(wipe_of).collect()
     }
 
@@ -819,7 +813,7 @@ mod tests {
     use super::*;
 
     async fn columns(store: &Store, table: &str) -> Vec<String> {
-        // Safe: `table` is a literal from `ADDED_COLUMNS`.
+        // Safe: `table` is a literal in a test.
         let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
         sqlx::query(pragma)
             .fetch_all(store.pool())
@@ -830,31 +824,159 @@ mod tests {
             .collect()
     }
 
-    /// A store written before a column was added gains it when opened,
-    /// and its record reads as before.
+    /// `steps` as two releases left it: 0.38, the first with this store,
+    /// and 0.55, the last before the ladder, which also kept
+    /// `launch_passes`. Copied from those tags.
+    const STEPS_AT_0_38: &str = "CREATE TABLE steps (step TEXT PRIMARY KEY, \
+        succeeded INTEGER NOT NULL, fingerprint TEXT NOT NULL, reads TEXT NOT NULL, \
+        last_run_id TEXT, last_started_at_utc TEXT, last_finished_at_utc TEXT, \
+        last_status TEXT, last_attempts INTEGER, last_error TEXT, last_success_at_utc TEXT, \
+        tz_offset TEXT, state TEXT, state_detail TEXT, turned_off_by TEXT, requests TEXT)";
+    const STEPS_AT_0_55: &str = "CREATE TABLE steps (step TEXT PRIMARY KEY, \
+        succeeded INTEGER NOT NULL, fingerprint TEXT NOT NULL, reads TEXT NOT NULL, \
+        last_run_id TEXT, last_started_at_utc TEXT, last_finished_at_utc TEXT, \
+        last_status TEXT, last_attempts INTEGER, last_error TEXT, last_failure_kind TEXT, \
+        last_success_at_utc TEXT, tz_offset TEXT, state TEXT, state_detail TEXT, \
+        turned_off_by TEXT, requests TEXT, needs_rerun INTEGER NOT NULL DEFAULT 0)";
+    const LAUNCH_PASSES: &str = "CREATE TABLE launch_passes (build TEXT PRIMARY KEY, \
+        finished_at_utc TEXT NOT NULL, tz_offset TEXT NOT NULL)";
+
+    /// A store as a release before the ladder left it reaches this
+    /// build's shape at its first open: every step's record and every
+    /// switch a person set carry over, `steps` has exactly the columns a
+    /// new store's has, and `launch_passes` is gone.
     #[tokio::test]
-    async fn a_store_missing_an_added_column_gains_it_on_open() {
-        use crate::supervisor::record::ADDED_COLUMNS;
+    async fn a_store_from_before_the_ladder_climbs_to_this_builds_shape() {
+        let fresh = tempfile::tempdir().unwrap();
+        let store = Store::open(fresh.path()).await.unwrap();
+        let want = columns(&store, "steps").await;
+        store.close().await;
+
+        for old in [&[STEPS_AT_0_38][..], &[STEPS_AT_0_55, LAUNCH_PASSES]] {
+            let root = tempfile::tempdir().unwrap();
+            let path = datalib_runtime::layout::supervisor_db(root.path());
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let pool = SqlitePoolOptions::new()
+                .max_connections(1)
+                .idle_timeout(None)
+                .max_lifetime(None)
+                .connect_with(options(&path))
+                .await
+                .unwrap();
+            for stmt in old.iter().chain(DDL.iter()) {
+                // Safe: every statement is a constant of this file.
+                sqlx::query(sqlx::AssertSqlSafe(*stmt))
+                    .execute(&pool)
+                    .await
+                    .unwrap();
+            }
+            sqlx::query(
+                "INSERT INTO steps (step, succeeded, fingerprint, reads, last_status) \
+                 VALUES ('a/ingest', 1, 'f', '{}', 'succeeded')",
+            )
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("INSERT INTO turned_off VALUES ('a/render_markdown', 'thad', 't', 'z')")
+                .execute(&pool)
+                .await
+                .unwrap();
+            datalib_store_meta::write(
+                &pool,
+                datalib_store_meta::StoreKind::Supervisor,
+                &datalib_store_meta::Shape {
+                    tables: "a release's".into(),
+                    indexes: None,
+                    versions: datalib_store_meta::Versions {
+                        schema: 5,
+                        shared: 0,
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            pool.close().await;
+
+            for _ in 0..2 {
+                let store = Store::open(root.path()).await.unwrap();
+                assert_eq!(columns(&store, "steps").await, want);
+                let record = store.load_record().await.unwrap();
+                assert!(record.steps["a/ingest"].succeeded, "{record:?}");
+                assert_eq!(
+                    store
+                        .turned_off()
+                        .await
+                        .unwrap()
+                        .into_keys()
+                        .collect::<Vec<_>>(),
+                    ["a/render_markdown"]
+                );
+                let tables: Vec<String> = sqlx::query_scalar(
+                    "SELECT name FROM sqlite_master WHERE name IN ('launch_passes', 'steps_v5')",
+                )
+                .fetch_all(store.pool())
+                .await
+                .unwrap();
+                assert!(tables.is_empty(), "{tables:?}");
+                let meta = datalib_store_meta::read(store.pool())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(meta.schema_version, SCHEMA_VERSION);
+                store.close().await;
+            }
+        }
+    }
+
+    /// `requests`, `wipes` and `invocations` keep every row they were
+    /// given, and the loop reads only the open ones. A store from before
+    /// their indexes gets them at its next open, and each read seeks the
+    /// open rows: before, each one read the whole table.
+    #[tokio::test]
+    async fn the_open_rows_are_read_by_an_index_an_old_store_gains() {
+        use crate::supervisor::record::{CLOSE_ABANDONED_INVOCATIONS, RUNNING_INVOCATIONS};
+        const NAMES: [&str; 3] = ["requests_open", "wipes_open", "invocations_open"];
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        store.turn_off("a/ingest", "test").await.unwrap();
-        for (table, column, _) in ADDED_COLUMNS {
-            // Safe: every name here is a literal from `ADDED_COLUMNS`.
-            let drop = sqlx::AssertSqlSafe(format!("ALTER TABLE {table} DROP COLUMN {column}"));
+        for name in NAMES {
+            // Safe: `name` is one of the three literals above.
+            let drop = sqlx::AssertSqlSafe(format!("DROP INDEX {name}"));
             sqlx::query(drop).execute(store.pool()).await.unwrap();
-            assert!(!columns(&store, table).await.iter().any(|c| c == column));
         }
         store.close().await;
 
         let store = Store::open(root.path()).await.unwrap();
-        for (table, column, _) in ADDED_COLUMNS {
+        for (sql, seek) in [
+            (OPEN_REQUESTS, "USING INDEX requests_open (closed_at_utc=?)"),
+            (OPEN_WIPES, "USING INDEX wipes_open (closed_at_utc=?)"),
+            (
+                RUNNING_INVOCATIONS,
+                "USING INDEX invocations_open (outcome=?)",
+            ),
+            (
+                CLOSE_ABANDONED_INVOCATIONS,
+                "USING INDEX invocations_open (outcome=?)",
+            ),
+        ] {
+            // Safe: each `sql` is one of this module's constants.
+            let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}"));
+            let plan: Vec<String> = sqlx::query(explain)
+                .fetch_all(store.pool())
+                .await
+                .unwrap()
+                .iter()
+                .map(|r| r.get("detail"))
+                .collect();
             assert!(
-                columns(&store, table).await.iter().any(|c| c == column),
-                "{table}.{column}"
+                plan.iter()
+                    .any(|d| d.starts_with("SEARCH") && d.ends_with(seek)),
+                "{sql}: {plan:?}"
+            );
+            assert!(
+                !plan.iter().any(|d| d.contains("TEMP B-TREE")),
+                "{sql}: {plan:?}"
             );
         }
-        store.load_record().await.unwrap();
-        assert_eq!(store.turned_off().await.unwrap().len(), 1);
         store.close().await;
     }
 
@@ -988,44 +1110,6 @@ mod tests {
         assert_eq!(store.rename_switches("g/Raw", "g/raw").await.unwrap(), 1);
         let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
         assert_eq!(off, ["Emailer/x", "email", "email/embed", "g/raw"]);
-        store.close().await;
-    }
-
-    /// A step someone turned off under the old `pauses` table stays off
-    /// after the rename, rather than silently running in the next sync.
-    #[tokio::test]
-    async fn a_store_from_before_the_rename_keeps_what_was_turned_off() {
-        let root = tempfile::tempdir().unwrap();
-        let path = datalib_runtime::layout::supervisor_db(root.path());
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let old = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(options(&path))
-            .await
-            .unwrap();
-        for stmt in [
-            "CREATE TABLE pauses (step TEXT PRIMARY KEY, paused_by TEXT NOT NULL, \
-             paused_at_utc TEXT NOT NULL, tz_offset TEXT NOT NULL)",
-            "INSERT INTO pauses VALUES ('a/ingest', 'claude', '2026-09-01T00:00:00Z', '+00:00')",
-            "CREATE TABLE steps (step TEXT PRIMARY KEY, succeeded INTEGER NOT NULL, \
-             fingerprint TEXT NOT NULL, reads TEXT NOT NULL, paused_by TEXT)",
-        ] {
-            sqlx::query(stmt).execute(&old).await.unwrap();
-        }
-        old.close().await;
-
-        let store = Store::open(root.path()).await.unwrap();
-        assert_eq!(
-            store.turned_off().await.unwrap(),
-            BTreeMap::from([("a/ingest".to_string(), "claude".to_string())])
-        );
-        assert!(columns(&store, "steps")
-            .await
-            .iter()
-            .any(|c| c == "turned_off_by"));
-        store.load_record().await.unwrap();
         store.close().await;
     }
 

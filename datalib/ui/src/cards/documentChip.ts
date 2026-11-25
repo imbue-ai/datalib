@@ -62,7 +62,7 @@ export type DocumentChipEntry = { id: DocumentChipMenuId; label: string; separat
 
 /** The right-click menu: open it, then its copies, in the order
  *  `CHIP_ACTIONS` gives every chip's menu. The rest of the document title
- *  bar's menu (open at the source, feedback) needs the document itself,
+ *  bar's menu (open at the source, copy as Markdown) needs the document itself,
  *  which a chip does not hold. */
 export function documentMenu(uri: string, title: string): DocumentChipEntry[] {
   if (!parseDoc(uri)) return [];

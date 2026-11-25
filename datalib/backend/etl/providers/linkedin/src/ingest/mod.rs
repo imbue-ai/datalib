@@ -1,10 +1,8 @@
 //! LinkedIn data-export ("takeout") ingester — dead simple, one table
 //! per file.
 
-pub mod photos;
 pub mod schema_raw;
 
-use datalib_etl::blob_cas::{cas_path_for, BlobCas};
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_macros::RawStoreHandle;
 use std::path::{Path, PathBuf};
@@ -22,7 +20,7 @@ use std::collections::HashSet;
 use tracing::warn;
 use uuid::Uuid;
 
-use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE, CONNECTIONS_TABLE};
+use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -33,17 +31,6 @@ const INSERT_CHUNK: usize = 400;
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
     pool: SqlitePool,
-    /// Connection profile photos an earlier build fetched (see
-    /// [`photos`]). Opened with the handle rather than from a path at the
-    /// call site, so there is one opener per store and `close_all`
-    /// reaches it.
-    ///
-    /// `Some` on the download path, which writes nothing to it but keeps
-    /// the store set the same for every root. `None` only on a reader
-    /// whose store never had a photo fetched, since opening a missing
-    /// file read-only is an error and creating it would be a write
-    /// render does not own.
-    cas: Option<BlobCas>,
     /// The commit a reader is pinned at; `None` for the writer.
     pin: Option<datalib_etl::pin::Pin>,
 }
@@ -60,36 +47,20 @@ impl RawDb {
     /// file this caller does not own. See
     /// `datalib_etl::doltlite_raw::open_reader`.
     ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
-    ///
     /// Pinned at `commit`, else HEAD; `None` when nothing is committed.
     pub async fn open_reader(db_path: &Path, commit: Option<&str>) -> Result<Option<Self>> {
         let Some(reader) = datalib_etl::doltlite_raw::open_reader(db_path, commit).await? else {
             return Ok(None);
         };
-        let cas = BlobCas::open_for_render(db_path).await?;
         Ok(Some(Self {
             pool: reader.pool().clone(),
-            cas,
             pin: Some(reader.pin().clone()),
         }))
     }
 
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = dr::open(db_path, &[]).await?;
-        let cas = BlobCas::open(&cas_path_for(db_path)).await?;
-        Ok(Self {
-            pool,
-            cas: Some(cas),
-            pin: None,
-        })
-    }
-
-    /// `None` only on a reader whose store has no CAS file — see the field.
-    pub fn cas(&self) -> Option<&BlobCas> {
-        self.cas.as_ref()
+        Ok(Self { pool, pin: None })
     }
 
     pub fn pool(&self) -> &SqlitePool {
@@ -130,8 +101,6 @@ pub struct FetchSummary {
     pub files: usize,
     pub rows: usize,
     pub parse_errors: usize,
-    /// Photo edges of connections the export no longer lists.
-    pub photos_removed: usize,
 }
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
@@ -174,11 +143,6 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
         };
         let keep: HashSet<String> = rows.iter().map(|(id, _)| id.clone()).collect();
         write_table(&mut tx, &table, &rows, Some(&keep)).await?;
-        // Only a clean read says who is connected: a Connections.csv left
-        // out or unreadable never reaches here.
-        if table == CONNECTIONS_TABLE {
-            summary.photos_removed += photos::prune_to_connections_in_tx(&mut tx, &keep).await?;
-        }
         summary.files += 1;
         summary.rows += rows.len();
         opts.progress.set_message(&format!(
@@ -522,8 +486,7 @@ mod tests {
             row_id("invitations", &inv, Some(&["inviterProfileUrl"])),
             "https://x/in/abc"
         );
-        // `connections` is keyed by the URL itself, which is what the
-        // stored photos join on.
+        // `connections` is keyed by the URL itself.
         let conn_id = row_id("connections", &v, Some(&["URL"]));
         assert_eq!(conn_id, schema_raw::connection_key("https://x/in/abc"));
         assert_eq!(conn_id, "https://x/in/abc");

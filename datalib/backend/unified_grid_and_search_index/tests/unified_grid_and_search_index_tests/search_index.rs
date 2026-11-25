@@ -3,12 +3,13 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use datalib_runtime::layout;
 use datalib_search_index::chunk::{chunk_hash, four_bytes_a_token};
 use datalib_search_index::{model_key, ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache};
 use datalib_unified_grid_and_search_index::hits::mapping::Place;
-use datalib_unified_grid_and_search_index::hits::vectors::{Freshness, Kept};
+use datalib_unified_grid_and_search_index::hits::vectors::Kept;
 use datalib_unified_grid_and_search_index::search_index::HeldVectors;
 
 fn doc(source: &str, uuid: &str, messages: &[(&str, &str)]) -> IndexDoc {
@@ -45,9 +46,15 @@ async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     cache.close().await;
 }
 
-/// `docs` in the keyword index and cut into chunks in the cache, which
-/// is handed back open.
+/// `docs` in the keyword index, in the grid index's file as its step
+/// makes it, and cut into chunks in the cache, which is handed back open.
 async fn index_and_cut(root: &Path, docs: &[IndexDoc]) -> InferenceCache {
+    let grid = datalib_etl_render::grid_index::open_index(&layout::grid_index_db(root))
+        .await
+        .unwrap();
+    datalib_etl_render::grid_index::close_index(grid)
+        .await
+        .unwrap();
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     index.put(docs).await.unwrap();
     index.close().await;
@@ -87,7 +94,7 @@ async fn the_nearest_documents_come_first_of_the_sources_asked() {
     let held = HeldVectors::default();
     let query = [2.0, 0.0, 0.0];
     let all = held
-        .nearest(root, &query, None, None, 10, Freshness::Current)
+        .nearest(root, &query, None, None, 10)
         .await
         .unwrap()
         .unwrap();
@@ -104,7 +111,7 @@ async fn the_nearest_documents_come_first_of_the_sources_asked() {
 
     let mail = ["mail".to_string()];
     let only_mail = held
-        .nearest(root, &query, Some(&mail), None, 1, Freshness::Current)
+        .nearest(root, &query, Some(&mail), None, 1)
         .await
         .unwrap()
         .unwrap();
@@ -135,11 +142,61 @@ async fn a_chunk_covering_no_kept_message_does_not_rank_its_document() {
     };
     for (kept, found) in [(keep("m2"), 1), (keep("someone-else"), 0)] {
         let hits = held
-            .nearest(root, &query, None, Some(&kept), 10, Freshness::Current)
+            .nearest(root, &query, None, Some(&kept), 10)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(hits.len(), found, "{kept:?}");
+    }
+}
+
+/// A page's body, which is no row's, and a comment on it, each its own
+/// chunk. A filter that keeps the page's own row and the comment ranks
+/// the page by its body; one that keeps only the comment does not. Before,
+/// a filter that kept a comment dropped every chunk of the page's body.
+#[tokio::test]
+async fn a_chunk_of_text_that_is_no_rows_is_its_documents_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let page = IndexDoc {
+        source_id: "drive".into(),
+        markdown_uuid: "page".into(),
+        content_hash: "h-page".into(),
+        title: "page".into(),
+        head: None,
+        sections: [(None, "the warp core design"), (Some("c1"), "a comment")]
+            .into_iter()
+            .map(|(uuid, text): (Option<&str>, &str)| IndexSection {
+                uuid: uuid.map(str::to_string),
+                text: format!("{text}\n"),
+                lead: uuid.map(|u| format!("**{u}** wrote")),
+            })
+            .collect(),
+    };
+    let chunks = page.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(chunks.len(), 2, "the comment starts a chunk of its own");
+    let cache = index_and_cut(root, std::slice::from_ref(&page)).await;
+    let vectors = vec![
+        (chunks[0].hash.clone(), vec![1.0, 0.0, 0.0]),
+        (chunks[1].hash.clone(), vec![0.0, 1.0, 0.0]),
+    ];
+    cache.put(&model_key(), &vectors).await.unwrap();
+    cache.close().await;
+
+    let held = HeldVectors::default();
+    let query = [1.0, 0.0, 0.0];
+    for (rows, want) in [(vec!["c1", "page"], 1.0), (vec!["c1"], 0.0)] {
+        let kept = HashMap::from([(
+            "page".to_string(),
+            Kept::Sections(rows.iter().map(|r| r.to_string()).collect()),
+        )]);
+        let hits = held
+            .nearest(root, &query, None, Some(&kept), 10)
+            .await
+            .unwrap()
+            .unwrap();
+        let score = hits[0].1.score;
+        assert!((score - want).abs() < 1e-3, "keeping {rows:?}: {score}");
     }
 }
 
@@ -181,7 +238,7 @@ async fn a_filtered_meaning_search_ranks_by_the_kept_messages() {
         let held = &held;
         async move {
             let hits = held
-                .nearest(root, &query, None, kept.as_ref(), 10, Freshness::Current)
+                .nearest(root, &query, None, kept.as_ref(), 10)
                 .await
                 .unwrap()
                 .unwrap();
@@ -223,7 +280,7 @@ async fn a_removed_document_is_no_longer_found() {
     )
     .await;
     let held = HeldVectors::default();
-    let ask = || held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10, Freshness::Current);
+    let ask = || held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10);
     assert_eq!(documents(&ask().await.unwrap().unwrap()), ["near", "far"]);
 
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
@@ -232,41 +289,33 @@ async fn a_removed_document_is_no_longer_found() {
     assert_eq!(documents(&ask().await.unwrap().unwrap()), ["far"]);
 }
 
-/// What is held is read again once the files move, unless the search asks
-/// for what is held, as one does while a sync writes them.
+/// What is held is read again once the files move.
 #[tokio::test]
 async fn held_vectors_are_read_again_when_the_index_moves() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     let held = HeldVectors::default();
-    assert!(held
-        .nearest(root, &[1.0, 0.0, 0.0], None, None, 10, Freshness::Current)
-        .await
-        .unwrap()
-        .is_none());
+    let ask = || held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10);
+    assert!(ask().await.unwrap().is_none());
     write(
         root,
         &[(doc("mail", "first", &[("a", "one")]), [1.0, 0.0, 0.0])],
     )
     .await;
-    let ask = |fresh| held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10, fresh);
-    assert_eq!(ask(Freshness::Current).await.unwrap().unwrap().len(), 1);
+    assert_eq!(ask().await.unwrap().unwrap().len(), 1);
     write(
         root,
         &[(doc("mail", "second", &[("b", "two")]), [1.0, 0.0, 0.0])],
     )
     .await;
-    assert_eq!(ask(Freshness::AsHeld).await.unwrap().unwrap().len(), 1);
-    assert_eq!(ask(Freshness::Current).await.unwrap().unwrap().len(), 2);
+    assert_eq!(ask().await.unwrap().unwrap().len(), 2);
 }
 
 /// The index shares the grid index's file, which the grid writes far more
-/// often than the index moves, and reading every vector again takes
-/// seconds on a real root. What is held follows the index's generation:
-/// a write to the file that leaves the generation alone, as the grid's
-/// do, is not read.
+/// often than the index moves. A write that changes no document of the
+/// index reads none again: every document held is the one held before.
 #[tokio::test]
-async fn held_vectors_follow_the_index_not_the_file() {
+async fn a_write_that_changes_no_document_reads_none_again() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
     write(
@@ -275,8 +324,7 @@ async fn held_vectors_follow_the_index_not_the_file() {
     )
     .await;
     let held = HeldVectors::default();
-    let ask = || held.nearest(root, &[1.0, 0.0, 0.0], None, None, 10, Freshness::Current);
-    assert_eq!(ask().await.unwrap().unwrap().len(), 1);
+    let before = held.current(root).await.unwrap().unwrap();
 
     let grid = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
@@ -287,16 +335,12 @@ async fn held_vectors_follow_the_index_not_the_file() {
         )
         .await
         .unwrap();
-    for sql in [
-        "CREATE TABLE grid_rows (uuid TEXT)",
-        "DELETE FROM search_documents",
-    ] {
-        sqlx::query(sql).execute(&grid).await.unwrap();
-    }
+    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+        .execute(&grid)
+        .await
+        .unwrap();
     grid.close().await;
-    assert_eq!(
-        ask().await.unwrap().unwrap().len(),
-        1,
-        "read again though the generation did not move"
-    );
+    let after = held.current(root).await.unwrap().unwrap();
+    assert!(!Arc::ptr_eq(&before, &after), "the file moved: read again");
+    assert!(Arc::ptr_eq(&before.docs["first"], &after.docs["first"]));
 }

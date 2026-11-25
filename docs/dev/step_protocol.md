@@ -460,7 +460,7 @@ failure this is, which decides whether it retries:
 | `permission` | the OS would not let you read a path your settings name (macOS privacy) | fail fast; the app's Manage row offers "Choose folder again" |
 | `data` | bad input; retrying won't help | fail fast (the default when absent) |
 | `cancelled` | you were interrupted | fail fast; exit code 130 by convention |
-| `incomplete` | you gave up with work still owed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
+| `incomplete` | you gave up with work still owed, or part of the work failed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
 | `incompatible` | your answer to `--prepare`: what you wrote is in a shape you cannot use | the step is turned off until a later start's `--prepare` does not refuse (§ "Prepare") |
 
 `outputs` on a failure reports what you *did* commit. The scheduler
@@ -662,8 +662,8 @@ step decides, and answers in its outcome line:
   so what reads the output is stale.
 * **needs a rerun** — what it wrote is in a shape it cannot reach in
   place: add `"needs_rerun": true` to the outcome. The runner holds the
-  step due until it next succeeds, and the app offers to run it; a sync
-  that does not reach it leaves it alone.
+  step due until it next succeeds, and opens one request for every such
+  step once the launch's prepare pass is over.
 * **refused** — what it wrote is in a shape this program cannot use,
   such as a newer build's: exit non-zero with `"failure":"incompatible"`
   and say why on stderr. The runner turns the step off, as turned off
@@ -682,12 +682,15 @@ name reads as a download; it then opens its raw store with the
 provider's migration ladder and closes it: every rung, the additive DDL
 and an old blob store's conversion run, and each is sealed to `main`. A
 render step and the grid index answer `needs_rerun` when their store's
-`_datalib_meta.schema_hash` differs; a derived store is rebuilt, never
-migrated. The grid index also answers `needs_rerun` when the search
+tables or ladders differ from this build's (`_datalib_meta`); a derived
+store is rebuilt, never migrated. When only its indexes differ
+(`index_hash`), the step opens the store as its owner, which makes
+them, and answers nothing. The grid index also answers `needs_rerun` when the search
 index's keyword tables are in another shape or a source's documents
-were drawn by another version, which its keyword pass reads again;
-`embed` and `embedding_map` have nothing to answer. Any of them refuses
-a store a newer build wrote.
+were drawn by another version, which its keyword pass reads again.
+`embedding_map` deletes a map this build does not read and answers
+`needs_rerun`, which lays it out afresh; `embed` has nothing to answer.
+Any of them refuses a store a newer build wrote.
 
 ## Compact and collect
 

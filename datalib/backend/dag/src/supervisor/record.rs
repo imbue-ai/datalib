@@ -71,7 +71,7 @@ pub struct StepRecord {
     pub fingerprint: String,
     /// It answered a launch's `--migrate` with `needs_rerun`: what it wrote
     /// is in a shape this build cannot reach in place. The tick holds it
-    /// due, and the app offers to run it, until it next succeeds.
+    /// due, and the loop runs it after the pass, until it next succeeds.
     pub needs_rerun: bool,
     /// What happened the last time a run reached it, whatever the
     /// outcome: what "last synced" says.
@@ -127,27 +127,10 @@ pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     out
 }
 
-pub(super) const DDL: [&str; 5] = [
-    // One per busy period of the loop; the newest is the run in flight,
-    // or the one that finished last.
-    "CREATE TABLE IF NOT EXISTS runs (
-        run_id TEXT PRIMARY KEY,
-        started_at_utc TEXT NOT NULL,
-        finished_at_utc TEXT,
-        tz_offset TEXT
-    )",
-    // What each step is doing in the newest run; a step the run has not
-    // reached has no row.
-    "CREATE TABLE IF NOT EXISTS run_steps (
-        run_id TEXT NOT NULL,
-        step TEXT NOT NULL,
-        state TEXT NOT NULL,
-        PRIMARY KEY (run_id, step)
-    )",
-    // What a step read at its last success (`reads`, input path to
-    // version), under which definition, and what happened the last time a
-    // run reached it.
-    "CREATE TABLE IF NOT EXISTS steps (
+/// What a step read at its last success (`reads`, input path to
+/// version), under which definition, and what happened the last time a
+/// run reached it.
+pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         step TEXT PRIMARY KEY,
         succeeded INTEGER NOT NULL,
         fingerprint TEXT NOT NULL,
@@ -167,7 +150,26 @@ pub(super) const DDL: [&str; 5] = [
         turned_off_by TEXT,
         requests TEXT,
         needs_rerun INTEGER NOT NULL DEFAULT 0
+    )";
+
+pub(super) const DDL: [&str; 5] = [
+    // One per busy period of the loop; the newest is the run in flight,
+    // or the one that finished last.
+    "CREATE TABLE IF NOT EXISTS runs (
+        run_id TEXT PRIMARY KEY,
+        started_at_utc TEXT NOT NULL,
+        finished_at_utc TEXT,
+        tz_offset TEXT
     )",
+    // What each step is doing in the newest run; a step the run has not
+    // reached has no row.
+    "CREATE TABLE IF NOT EXISTS run_steps (
+        run_id TEXT NOT NULL,
+        step TEXT NOT NULL,
+        state TEXT NOT NULL,
+        PRIMARY KEY (run_id, step)
+    )",
+    STEPS,
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
     "CREATE TABLE IF NOT EXISTS sinks (
@@ -191,17 +193,18 @@ pub(super) const DDL: [&str; 5] = [
     )",
 ];
 
-/// Columns added to a table after it first shipped: (table, column,
-/// declaration).
-pub(super) const ADDED_COLUMNS: [(&str, &str, &str); 7] = [
-    ("steps", "state", "TEXT"),
-    ("steps", "state_detail", "TEXT"),
-    ("steps", "turned_off_by", "TEXT"),
-    ("steps", "requests", "TEXT"),
-    ("steps", "needs_rerun", "INTEGER NOT NULL DEFAULT 0"),
-    ("steps", "last_failure_kind", "TEXT"),
-    ("steps", "waiting_for", "TEXT"),
-];
+/// `invocations` keeps every process the loop ever started; this finds
+/// the few still running without the rest.
+pub(super) const INDEXES: [&str; 1] =
+    ["CREATE INDEX IF NOT EXISTS invocations_open ON invocations (outcome, started_at_utc, id)"];
+
+pub(super) const CLOSE_ABANDONED_INVOCATIONS: &str =
+    "UPDATE invocations INDEXED BY invocations_open \
+     SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL";
+
+pub(super) const RUNNING_INVOCATIONS: &str =
+    "SELECT id, step, run_id, started_at_utc FROM invocations INDEXED BY invocations_open \
+     WHERE outcome IS NULL ORDER BY started_at_utc, id";
 
 /// A process the loop started, as its row names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -497,16 +500,13 @@ impl Store {
     /// For the process taking the lock. How many it closed.
     pub async fn close_abandoned_invocations(&self, why: &str) -> Result<u64> {
         let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let closed = sqlx::query(
-            "UPDATE invocations SET finished_at_utc = ?, outcome = ?, error = ? \
-             WHERE outcome IS NULL",
-        )
-        .bind(now)
-        .bind(crate::run_state::RunState::Stopped.as_str())
-        .bind(why)
-        .execute(self.pool())
-        .await?
-        .rows_affected();
+        let closed = sqlx::query(CLOSE_ABANDONED_INVOCATIONS)
+            .bind(now)
+            .bind(crate::run_state::RunState::Stopped.as_str())
+            .bind(why)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
         self.announce("abandoned invocations closed");
         Ok(closed)
     }
@@ -547,22 +547,19 @@ impl Store {
 
     /// The processes the loop started and has not seen end.
     pub async fn running_invocations(&self) -> Result<Vec<InvocationRow>> {
-        sqlx::query(
-            "SELECT id, step, run_id, started_at_utc FROM invocations \
-             WHERE outcome IS NULL ORDER BY started_at_utc, id",
-        )
-        .fetch_all(self.pool())
-        .await?
-        .iter()
-        .map(|r| {
-            Ok(InvocationRow {
-                id: r.try_get("id")?,
-                step: r.try_get("step")?,
-                run_id: r.try_get("run_id")?,
-                started_at_utc: r.try_get("started_at_utc")?,
+        sqlx::query(RUNNING_INVOCATIONS)
+            .fetch_all(self.pool())
+            .await?
+            .iter()
+            .map(|r| {
+                Ok(InvocationRow {
+                    id: r.try_get("id")?,
+                    step: r.try_get("step")?,
+                    run_id: r.try_get("run_id")?,
+                    started_at_utc: r.try_get("started_at_utc")?,
+                })
             })
-        })
-        .collect()
+            .collect()
     }
 }
 

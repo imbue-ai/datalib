@@ -12,20 +12,24 @@
 //! say which card is noisy.
 //!
 //! A request a `root` frame caused carries that frame's chain; the line
-//! stores it, and a chain long enough to be a loop is warned about here
-//! (`loop_guard`).
+//! stores it, the watch is told it for the frame the line causes, and a
+//! chain long enough to be a loop is warned about here (`loop_guard`).
 //!
 //! These are requests the app's own pages make of this server, not ones
 //! that leave the machine (`http.outbound` is those). A page reading what
 //! it draws is a `debug` line, whatever made it ask: only what changes
 //! something, or what went wrong, is in the card's default view
 //! ([`worth`]).
+//!
+//! The line says how many rows the request's statements returned beside
+//! the size of the answer, so one that reads far more than it answers with
+//! shows on its own line.
 
 use std::time::Instant;
 
-use axum::body::Body;
-use axum::extract::Request;
-use axum::http::{header, Method, StatusCode};
+use axum::body::{Body, HttpBody};
+use axum::extract::{Request, State};
+use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 
@@ -76,7 +80,15 @@ fn worth(method: &Method, path: &str, status: StatusCode, live_refetch: bool) ->
     }
 }
 
-pub async fn record(req: Request<Body>, next: Next) -> Response {
+/// On a proxied response: the rows the applet says it read, if it says.
+#[derive(Debug, Clone, Copy)]
+pub struct AppletRowsRead(pub Option<u64>);
+
+pub async fn record(
+    State(echoes): State<crate::loop_guard::Echoes>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let query = req.uri().query().and_then(crate::auth::query_without_token);
@@ -90,17 +102,20 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
     let live_refetch = cause.is_some();
     let chain = crate::loop_guard::request_chain(cause);
     let started = Instant::now();
-    let resp = crate::loop_guard::scope(chain, next.run(req)).await;
+    let (resp, own_rows) =
+        datalib_sql_work::counted(crate::loop_guard::scope(chain, next.run(req))).await;
     let status = resp.status();
     if !is_logged(&path, status) {
         return resp;
     }
+    echoes.logged(chain);
     let ms = started.elapsed().as_millis() as u64;
-    let bytes = resp
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
+    // Not the `Content-Length` header: axum sets that outside this layer.
+    let bytes = resp.body().size_hint().exact();
+    let rows_read = match resp.extensions().get::<AppletRowsRead>() {
+        Some(AppletRowsRead(theirs)) => *theirs,
+        None => own_rows,
+    };
     let code = status.as_u16();
     // Zero is every request nothing caused; leaving it off keeps the
     // line as it was for them.
@@ -114,27 +129,34 @@ pub async fn record(req: Request<Body>, next: Next) -> Response {
              each caused by the frame the one before it caused"
         );
     }
+    let cost = cost(ms, rows_read, bytes);
+    macro_rules! write_line {
+        ($level:ident) => {
+            tracing::$level!(
+                target: TARGET,
+                method = %method, path = %path, query = query.as_deref(), status = code,
+                ms, rows_read, bytes,
+                page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(),
+                chain,
+                "{method} {path} {code} {cost}"
+            )
+        };
+    }
     match worth(&method, &path, status, live_refetch) {
-        Worth::Warn => tracing::warn!(
-            target: TARGET,
-            method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
-            "{method} {path} {code} {ms}ms"
-        ),
-        Worth::Debug => tracing::debug!(
-            target: TARGET,
-            method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
-            "{method} {path} {code} {ms}ms"
-        ),
-        Worth::Info => tracing::info!(
-            target: TARGET,
-            method = %method, path = %path, query = query.as_deref(), status = code, ms, bytes,
-            page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(), chain,
-            "{method} {path} {code} {ms}ms"
-        ),
+        Worth::Warn => write_line!(warn),
+        Worth::Debug => write_line!(debug),
+        Worth::Info => write_line!(info),
     }
     resp
+}
+
+/// What a request took and what it answered with, for a person reading
+/// the line. A part that is not known is left out.
+fn cost(ms: u64, rows_read: Option<u64>, bytes: Option<u64>) -> String {
+    let mut parts = vec![format!("{ms}ms")];
+    parts.extend(rows_read.map(|n| format!("{n} rows read")));
+    parts.extend(bytes.map(|n| format!("{n} bytes")));
+    parts.join(", ")
 }
 
 fn header_text(req: &Request<Body>, name: &str) -> Option<String> {
@@ -202,6 +224,16 @@ mod tests {
         assert_eq!(at(Method::GET, "/api/config", refused, true), Worth::Info);
         let broke = StatusCode::INTERNAL_SERVER_ERROR;
         assert_eq!(at(Method::GET, "/api/config", broke, true), Worth::Warn);
+    }
+
+    #[test]
+    fn a_line_says_what_is_known_of_its_cost() {
+        assert_eq!(
+            cost(4500, Some(31_303), Some(4_821)),
+            "4500ms, 31303 rows read, 4821 bytes"
+        );
+        assert_eq!(cost(3, Some(0), None), "3ms, 0 rows read");
+        assert_eq!(cost(3, None, None), "3ms");
     }
 
     #[test]

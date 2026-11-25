@@ -22,6 +22,8 @@ use crate::file_changes_scan::{FileScanCursor, Listing, ScannedFile};
 /// the caller's responsibility to avoid.
 pub const INGESTED_FILES_TABLE: &str = "ingested_files";
 
+/// Part of each file-backed source's own DDL, so a store has the table
+/// from its first open.
 pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files (
     scope TEXT NOT NULL,
     rel_path TEXT NOT NULL,
@@ -32,42 +34,12 @@ pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files 
     PRIMARY KEY (scope, rel_path)
 )";
 
-/// Create the table, dropping one written to an older shape.
-///
-/// A store from before the cursor became content-based has `mtime_ns` where
-/// `blake3` now goes, and no migration can invent hashes it never recorded.
-/// Dropping is cheap: this is a cursor, so losing it costs one re-ingest.
-pub async fn ensure_schema(pool: &SqlitePool) -> Result<()> {
-    let cols: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('ingested_files')")
-            .fetch_all(pool)
-            .await
-            .context("inspect ingested_files")?;
-    let current = cols.iter().any(|c| c == "blake3") && cols.iter().any(|c| c == "rel_path");
-    if !cols.is_empty() && !current {
-        sqlx::query("DROP TABLE ingested_files")
-            .execute(pool)
-            .await
-            .context("drop outdated ingested_files")?;
-        tracing::info!(
-            event = "ingested_files_reset",
-            "cursor table predates content hashing; dropped so the next run re-reads",
-        );
-    }
-    sqlx::query(INGESTED_FILES_DDL)
-        .execute(pool)
-        .await
-        .context("create ingested_files")?;
-    Ok(())
-}
-
 /// This scope's cursor: what each file hashed to when this feed last
 /// finished with it.
 ///
 /// Feed it straight to [`crate::file_changes_scan::Scan::changes_since`] — that
 /// pair is the whole "what changed since I last looked?" question.
 pub async fn load_cursor(pool: &SqlitePool, scope: &str) -> Result<FileScanCursor> {
-    ensure_schema(pool).await?;
     let rows = sqlx::query_as::<_, (String, String)>(
         "SELECT rel_path, blake3 FROM ingested_files WHERE scope = ?",
     )
@@ -165,20 +137,26 @@ async fn replace_file_problem(
     use datalib_etl::bulk::BulkUpsertable as _;
     use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
     let key = file_problem_key(scope, rel);
-    let earlier = sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&key)
-        .fetch_optional(&mut **tx)
-        .await
-        .with_context(|| format!("read the problem of {key}"))?
-        .map(|r| ProblemRow::from_row(&r))
-        .transpose()?;
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
-        .bind(ScopeKind::Entity.as_str())
-        .bind(&key)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("clear the problem of {key}"))?;
+    let earlier = sqlx::query(
+        "SELECT * FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&key)
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("read the problem of {key}"))?
+    .map(|r| ProblemRow::from_row(&r))
+    .transpose()?;
+    sqlx::query(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key = ?",
+    )
+    .bind(ScopeKind::Entity.as_str())
+    .bind(&key)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("clear the problem of {key}"))?;
     let Some((outcome, problem)) = problem else {
         return Ok(());
     };
@@ -300,7 +278,6 @@ where
 /// `DELETE FROM ingested_files WHERE scope = ?`. Use from a provider's
 /// `reset` path when wiping per-feed state.
 pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
-    ensure_schema(pool).await?;
     forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{scope}:")).await?;
     sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
         .bind(scope)
@@ -311,7 +288,6 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
 }
 
 pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
-    ensure_schema(pool).await?;
     forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{prefix}")).await?;
     sqlx::query("DELETE FROM ingested_files WHERE scope LIKE ?")
         .bind(format!("{prefix}%"))
@@ -322,14 +298,18 @@ pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
 }
 
 async fn forget_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()> {
-    // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a path is a wildcard to
-    // LIKE.
-    sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
-        .bind(datalib_problems::ScopeKind::Entity.as_str())
-        .bind(key_prefix)
-        .execute(pool)
-        .await
-        .with_context(|| format!("clear the file problems under {key_prefix}"))?;
+    let end = datalib_etl::key_range::prefix_end(key_prefix)
+        .with_context(|| format!("no key follows the prefix {key_prefix:?}"))?;
+    sqlx::query(
+        "DELETE FROM problems INDEXED BY problems_by_scope \
+         WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?",
+    )
+    .bind(datalib_problems::ScopeKind::Entity.as_str())
+    .bind(key_prefix)
+    .bind(&end)
+    .execute(pool)
+    .await
+    .with_context(|| format!("clear the file problems under {key_prefix}"))?;
     Ok(())
 }
 
@@ -383,11 +363,16 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        ensure_schema(&pool).await.unwrap();
-        sqlx::query(datalib_etl::doltlite_raw::PROBLEMS_DDL)
-            .execute(&pool)
-            .await
-            .unwrap();
+        for ddl in [INGESTED_FILES_DDL, datalib_etl::doltlite_raw::PROBLEMS_DDL]
+            .into_iter()
+            .chain(
+                datalib_etl::doltlite_raw::SHARED_LOOKUP_INDEXES
+                    .iter()
+                    .copied(),
+            )
+        {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
         let cache = FingerprintCache::open(&dir.path().join("fp.sqlite"))
             .await
             .unwrap();
@@ -578,31 +563,6 @@ mod tests {
             "the cache vouched for the old bytes' hash",
         );
         assert_eq!(second.changes_since(&cursor).needs_reading().count(), 1);
-    }
-
-    #[tokio::test]
-    async fn an_outdated_table_is_dropped_not_read() {
-        let e = env().await;
-        sqlx::query("DROP TABLE ingested_files")
-            .execute(&e.pool)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE ingested_files (scope TEXT NOT NULL, path TEXT NOT NULL,
-             size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL,
-             last_finished_at_utc TEXT NOT NULL, PRIMARY KEY (scope, path))",
-        )
-        .execute(&e.pool)
-        .await
-        .unwrap();
-        sqlx::query("INSERT INTO ingested_files VALUES ('p/feed','a.txt',5,1,'t')")
-            .execute(&e.pool)
-            .await
-            .unwrap();
-
-        // Reading the scope must succeed and report nothing stamped,
-        // rather than failing on the missing column.
-        assert!(load_cursor(&e.pool, "p/feed").await.unwrap().is_empty());
     }
 
     #[tokio::test]

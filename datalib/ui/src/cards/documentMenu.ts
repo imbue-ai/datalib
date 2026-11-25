@@ -22,8 +22,7 @@ export type DocumentAction =
   | "copy-id"
   | "copy-name"
   | "copy-both"
-  | "copy-markdown"
-  | "feedback";
+  | "copy-markdown";
 
 export type DocumentEntry = { id: DocumentAction; label: string; separator?: boolean };
 
@@ -80,11 +79,9 @@ export function documentMenu(doc: DocumentAbout, host: Host): DocumentEntry[] {
     { id: "copy-name", label: `Copy “${documentTitle(doc)}”` },
     { id: "copy-both", label: "Copy title and link" },
     { id: "copy-markdown", label: "Copy as Markdown" },
-    { id: "feedback", label: "Feedback on this document…" },
   );
-  // A line before the copies and before Feedback, when something is above it.
+  // A line before the copies, when something is above them.
   const firstCopy = out.findIndex((e) => e.id === "copy-id");
   if (firstCopy > 0) out[firstCopy] = { ...out[firstCopy], separator: true };
-  out[out.length - 1] = { ...out[out.length - 1], separator: true };
   return out;
 }

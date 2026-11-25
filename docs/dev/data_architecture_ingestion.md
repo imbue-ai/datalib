@@ -65,6 +65,12 @@ A few cases justify more schema:
 - If the payload returned by the data source includes fields that always change regardless of the object's state, like a fetch time, then we move those fields into the bookkeeping sidecar so that they don't churn the main payload table ([`etl/README.md` §"Volatile fields"](/datalib/backend/etl/README.md)).
 - For attachments (which are stored separately in a BLOB CAS), we need to know which attachments belong with which payloads. A dedicated edge table links payloads and BLOBs many-to-many.
 
+### Consider keying a child table by its parent first
+
+Doltlite stores a table's rows in primary-key order. A table keyed by an upstream id that is random, like a uuid, scatters the children of one parent (the records of one transcript, the messages of one conversation) all over the file, so reading one parent's children is one random page read per child. When a table is mostly read by parent — a render that draws a document from all of one parent's rows is the usual case — key it `(parent_id, id)` instead, and keep the id unique with an index, so writes still land by id. `#[wire_payload_row(table = "…", cluster_by = "parent_id")]` declares exactly that ([`macros/README.md`](/datalib/backend/etl/macros/README.md#wirepayloadrow)).
+
+Claude Code's `records` and Claude's `cowork_events` moved to this shape, and loading a page's records got about 13 times faster on a real store. Decide it when the table is new: changing the key of a table that already holds data is a rung on the store's migration ladder that rewrites the whole table, and because the old rows stay in the store's history, the file grows by about one copy of the table until someone folds that history away (4.55 GB to 6.8 GB for that `records`).
+
 ## Object identity: Ship of Theseus on UUIDs
 We lean **heavily** on upstream-provided UUIDs to establish permanent object identity.
 
@@ -325,8 +331,8 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 12 of the 32 source types use `DownloadRun`** (baby_connect,
-calendar, chatgpt, claude's `api` method, email's JMAP and Gmail paths,
+**Only 13 of the 33 source types use `DownloadRun`** (baby_connect,
+calendar, chatgpt, claude's `api` method, discord, email's JMAP and Gmail paths,
 github and gitlab through `forge-ingest-common`, google_drive, linear,
 notion, slack, todoist). The
 others write no `sync_runs` row and no deltas — their history is still
@@ -391,6 +397,7 @@ therefore what it can see:
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
 | `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file: every run for mbox, and for the others whenever one was removed or rewritten | records no file holds any more, in the transaction that writes what was read. Nothing is deleted when the walk or any file's read failed (an mbox with no message, an SMS backup with no XML element or cut off before its root closes, a Voice thread with no message, a call with no time, a `Bills.html` with no table each count as a failed read), or when Takeout's `Voice/` is missing. After a clean read of the mbox folder, everything under an account other than the configured one is deleted |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | top-level messages inside the walked range, each with its thread's replies; replies on a re-fetched thread |
+| `discord` | the trailing `refresh_window_days` re-read of each conversation that holds a message that new | messages inside the stretch read that it did not return, with their files' edges. A conversation that leaves its listing keeps what it holds |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
@@ -402,7 +409,7 @@ therefore what it can see:
 | `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
 | `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
 | `signal` | each snapshot read, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds, in that snapshot's commit. A frame that would not decode, a snapshot that will not open, a missing snapshot folder or an unset passphrase deletes nothing |
-| `linkedin` | each CSV, read whole | rows its table no longer lists, and, when `Connections.csv` read cleanly, the `contact_photos` edges of connections it no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing, photo edges included; articles prune only after a clean walk |
+| `linkedin` | each CSV, read whole | rows its table no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing; articles prune only after a clean walk |
 | `lightroom`, `apple_photos`, `whatsapp` (msgstore) | the database file, dropped and refilled | structurally. A source with no table to mirror (0 bytes, no tables, filters matching none) drops nothing: a `phase:source` problem, or for lightroom a backup problem or a failed step |
 | `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
 | `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
@@ -603,12 +610,13 @@ The one position kept is upstream's own **delta token** (JMAP `state`,
 Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,
 Todoist's `sync_token`),
 written in the transaction that stores the page it covers, and a
-**sweep marker** that only schedules when to list again (Slack's
+**sweep marker** (`datalib_etl::sweep`) that only schedules when to list again (Slack's
 user list, claude's orgs and project docs).
 
 | Source | Listed | Held at | Range in `coverage` |
 |---|---|---|---|
 | slack | channels, threads (by `latest_reply`), file edges, the authors of stored messages | `messages`, `threads`, `slack_attachments`, `users` sidecars | each channel's history; each conversation's searched reply time |
+| discord | channels, threads and direct messages, each with its newest message; file edges | `discord_attachments` sidecar | each conversation's message ids; each channel's thread listing, by newest message |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows; in roots mode, `listed_pages` (written by the walk down from the roots on a first sync, by the search after), and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the page's `last_edited_time`, as the search or the walk lists it |
@@ -702,6 +710,7 @@ leaves an on-disk superset, and nothing deletes it.
 | Provider | Widening a knob |
 |---|---|
 | slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
+| discord | An earlier `since` is a gap below the spans held; a server or channel newly named has no spans; `media` turned on makes every stored file edge without bytes owed |
 | github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
 | email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes, and so, on Gmail, is one whose last walk began after the `since` now set; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed; `whole_threads` turned on lists the rest of every kept thread |
 | garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |
@@ -744,7 +753,8 @@ Distinctions every provider should try to follow.
 
 - **Per-item failures are tolerated.** A transient failure on one window / page / blob — 5xx, network blip, timeout, parse error, transient permission denied, rate-limit response — should not kill the run. Log a `warn!`, increment an error counter, **leave durable evidence in the row** (next bullet), advance the cursor, keep going. The run's `FetchSummary` reports the count.
 - **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), in the transaction that writes the record, which the Manage row counts and the record's document shows once render has linked it. Where the rows are read: [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
-- **Everything else a run could not do goes into its collector.** A download's `fetch` runs inside [`run_problems::collecting`](/datalib/backend/etl/src/run_problems.rs), which hands it one `RunProblems` and writes it when `fetch` returns, whichever way it returns. Nothing else writes these rows, so there is no report call to forget, to make twice, or to make after a stop. A listing, a phase, or one container's walk (a channel, a mailbox) that fails while the rest can still be fetched is `.listing(..)` / `.phase(..)`, and the step succeeds; `.run_phase(name, fut)` runs one phase so that its error or panic costs only that phase. A local file's parse goes through `run_problems::catching_panics(|| ..)`, so a parser that panics on one malformed file fails that file, through its usual error arm, and not the step; the file is tried again next run. A configured entry upstream does not have (a label, a channel, a conversation id) is `.config(..)`. A record that failed before there was a row to pin it to is `.record_failed(..)`. When the failed part is one record's (a thread, a file), record it on that record (above) instead, so it reaches its document.
+- **Everything else a run could not do goes into its collector.** A download's `fetch` runs inside [`run_problems::collecting`](/datalib/backend/etl/src/run_problems.rs), which hands it one `RunProblems` and writes it when `fetch` returns, whichever way it returns. Nothing else writes these rows, so there is no report call to forget, to make twice, or to make after a stop. A listing, a phase, or one container's walk (a channel, a mailbox) that fails while the rest can still be fetched is `.listing(..)` / `.phase(..)`, and the run goes on; `.run_phase(name, fut)` runs one phase so that its error or panic costs only that phase. A local file's parse goes through `run_problems::catching_panics(|| ..)`, so a parser that panics on one malformed file fails that file, through its usual error arm, and not the step; the file is tried again next run. A configured entry upstream does not have (a label, a channel, a conversation id) is `.config(..)`. A record that failed before there was a row to pin it to is `.record_failed(..)`. When the failed part is one record's (a thread, a file), record it on that record (above) instead, so it reaches its document.
+- **A web source that could not read a listing or a phase is not done, whatever its provider does about it.** `collecting` tells the step every `.listing(..)` and `.phase(..)` row of a run that returned `Ok`, and the step driver ends a source that reaches a service `incomplete` once the store is committed, naming them. There is nothing for a provider to remember to call. A listing that *was* answered and still is not the whole (the service cuts it off however it is asked, or the config limits it) is `.listing_cut_off(..)`, a warning, and the step succeeds: asking again gets the same. So are a refusal (`RunProblem::forbidden`) and a call not made (`not_asked`). A source that reads local files keeps its error rows and succeeds, since a file that will not parse fails the same way until someone changes it.
 - **A row clears only when the same thing was tried again and worked, so every report says what the run covered.** Adding a row needs no coverage; clearing one does, and the collector clears exactly what the run vouches for:
 
   | Kind | Key | Cleared when |
@@ -769,7 +779,7 @@ There are existing chokepoint mechanisms to enforce some of these rules, but not
 
 A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/web/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/web/src/retry.rs)) says the run has gone too long without progress, or has failed too many requests in a row (`download_params`, 30 minutes and 50 by default); then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
-A network that is not there is the same case. A request that never reached the service (a timeout; curl exits 6 could not resolve the host, 7, 28, 35, 52, 55, 56) is retried like a 429, so a laptop waking from sleep rides through its first seconds without DNS. Only an answer counts as progress. When the guard gives up, the request that tripped it fails as itself, for its caller to report, and the source's next request stops the whole source instead of leaving (`StopFlag::give_up`): every loop ends at its next boundary as on a stop, sealed, and `datalib-step` ends the ingest `incomplete`, saying why, even when the provider took the failure in its stride. A provider needs no failure budget of its own for an outage; it needs one only for failures the chokepoint does not retry, such as a run of 404s.
+A network that is not there is the same case. A request that got no answer (a timeout, or curl failing in any way but the few that go the same every time: a malformed URL, a certificate it will not trust, a body past the limit, a fault on this machine) is retried like a 429, so a laptop waking from sleep rides through its first seconds without DNS. Only an answer counts as progress. When the guard gives up, the request that tripped it fails as itself, for its caller to report, and the source's next request stops the whole source instead of leaving (`StopFlag::give_up`): every loop ends at its next boundary as on a stop, sealed, and `datalib-step` ends the ingest `incomplete`, saying why, even when the provider took the failure in its stride. A provider needs no failure budget of its own for an outage; it needs one only for failures the chokepoint does not retry, such as a run of 404s.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:

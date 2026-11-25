@@ -96,6 +96,15 @@ async fn an_ingest_that_finds_nothing_new_keeps_its_version() {
         ]}),
     )
     .unwrap();
+    for filter in ["saved", "completed", "archived"] {
+        record_call(
+            &api,
+            "saved.list",
+            json!({"filter": filter, "limit": "50"}),
+            json!({"ok": true, "saved_items": []}),
+        )
+        .unwrap();
+    }
     // The search for replies to threads history will not read again,
     // which the second sync makes, finding none.
     record_call(

@@ -57,6 +57,9 @@ pub fn source_docs(t: SourceType) -> SourceDocs {
         T::Contacts => docs::<datalib_etl_contacts_config::ContactsConfig>(
             datalib_etl_contacts_config::EXAMPLES,
         ),
+        T::Discord => {
+            docs::<datalib_etl_discord_config::DiscordConfig>(datalib_etl_discord_config::EXAMPLES)
+        }
         T::Email => {
             docs::<datalib_etl_email_config::EmailConfig>(datalib_etl_email_config::EXAMPLES)
         }

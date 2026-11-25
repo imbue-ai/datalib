@@ -477,7 +477,7 @@ clicks through from — a log, a commit history, a table. It sits in the
 layout beside what opened it and is kept with the layout. A modal
 dialog is for a question that has to be answered before anything else
 happens: a confirm, a short form that is submitted or cancelled (the
-source wizard, feedback).
+source wizard).
 
 ## Prebuilt views
 
@@ -782,43 +782,35 @@ besides components:
   configured sources (`GET /api/manage/rows`; a comparison's `diff`
   group is none), and each place below them, an account, a label, a
   workspace, a channel, a folder, a page, a chat, is a level of
-  `GET /children/{parent}?places=true` read when it is opened
-  (`docs/user/applets.md` § "A container's children"); a thread or a
+  `GET /places/{parent}` read when it is opened
+  (`docs/user/applets.md` § "Places"); a thread or a
   message is no place, so it is not in the tree. A source that holds no
-  places has no arrow: one place asked of each source as the tree opens
-  says which. Every row is a chip (`docs/dev/chips.md`): a source its
+  places has no arrow: `GET /sources_with_places` says which hold some,
+  and "Loading…" stands in for the tree until it answers. Every row is a chip (`docs/dev/chips.md`): a source its
   group's, any other node its node's, drawn into the tree's own shadow
   root through its `renderLabel` and `extraCss`. Picking a node shows it
   beside the tree as a `nodeView`, drawn in a shadow root of its own as
   the Search card draws its preview, so it lands there whatever layout
   holds the card; a double-click on its chip opens the chip's card and a
   right-click its menu, as everywhere. What each way of picking does is
-  one table, `TREE_PICKS`. A node that node card opens replaces it
-  there; anything else it opens is a card of its own, and ↗ opens the
-  node shown as one. What is open in the tree and the node shown are the
+  one table, `TREE_PICKS`. What the node card opens is a card of its
+  own, and ↗ opens the node shown as one. What is open in the tree and the node shown are the
   card's state.
-- `nodeView({ node, name, doc })` — one node of that tree
-  (`cards/NodeCard.ce.vue`): what `GET /children/{node}` lists of it,
-  newest at the bottom, with Earlier and Later to read on past either
-  end. `node` is a container's uuid, or `source:<id>` for what a source
-  holds at its top, and `doc` the document the node is, when it is one
-  (a Notion page, a contact group's card); the card refuses any other
-  shape of either, since `node` goes into a request's path and `doc`
-  names a document to read (`nodeCardProps`). A row is titled by its
-  name, else its author, else its first line, and a name that only
-  repeats the node's (a channel's threads are each named for the
-  channel) gives way; its kind shows only where the list mixes kinds.
-  The title is a chip where it names something (`rowTitle`): a
-  container its node's, a message its author's, a page its document's;
-  and each row's date is a date chip. A click on a row reads its
-  document beside the list through `documentPreview`, as the Search card
-  does; a level of containers alone (an account's labels) is a list
-  without one. A node that is a document shows it there until a row is
-  picked, and alone where it holds nothing else. A double-click on a
-  chip, or a right-click, is the chip's; elsewhere on a row a
-  double-click or Enter opens the child: a container as another
-  `nodeView`, a row's document as `documentView`. Keeps the picked
-  child as its state.
+- `nodeView({ node, name, doc })` — one node of that tree, as the Search
+  card held to it (`libs/nodeView.ts`): `GridCard` with a `scope`, terms
+  every search it makes carries and its box never shows. The scope is
+  `at:<uuid>` for a place, what is directly in it, and `source:<id>` for
+  a source's top, the whole of the source (`library.ts::scopeOf`). It
+  opens as the list with a preview, newest first. `doc` is the document
+  the node is, when it is one (a Notion page, a chat): it is read until
+  another is picked, and alone, with no list, where nothing else is
+  directly there. The card refuses any other shape of `node` or `doc`,
+  since `node` goes into a search and `doc` names a document to read
+  (`nodeCardProps`). A result whose name only repeats the place's (a
+  channel's threads are each named for the channel) is titled by its
+  author, else its first line (`search.ts::titleWithin`). Its box does
+  not take the keyboard as it opens, so a person moving through the tree
+  stays there.
 - `configView()` — `config.toml` itself, edited directly, saved through
   the backend's loader. Reloads on the root's `config_changed` frame
   and, a beat sooner, on the `config.written` bus topic a card publishes

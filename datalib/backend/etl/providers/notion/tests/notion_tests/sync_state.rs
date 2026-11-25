@@ -114,7 +114,7 @@ async fn max_pages_bounds_the_listing_and_leaves_the_rest_for_the_next_run() {
     assert_eq!(stored_pages(&store).await, vec![BRIDGE.to_string()]);
     assert_eq!(
         problems(&store).await,
-        vec![row("listing:search", "error")],
+        vec![row("listing:search", "warning")],
         "a listing cut off at max_pages says so"
     );
 

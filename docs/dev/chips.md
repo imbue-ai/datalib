@@ -215,7 +215,7 @@ A grid draws a chip from an `identity` typed cell,
   `grid_rows.author_handle`), and so is its Contact column on a
   contact's own row (`contact_ref`, built by
   `columns.rs::contact_identity` from `grid_rows.contact`, `email` and
-  `phone`, else any handle `source_contact_handles` holds for the
+  `phone`, else any handle `contact_record_handles` holds for the
   contact). An identity cell whose `id` is no handle is drawn as plain
   text: a group of contacts, a contact with no handle at all.
   One whose `id` is a `datalib:contact/` URI is drawn as that contact's
@@ -322,14 +322,12 @@ A card that uses it lists it, `ChipMenu` and `chip.css` in its
 puts their styles in the document (`documentStyles.ts::adoptStyles`)
 and imports `chip.css`.
 
-**The Library card** (`LibraryCard.ce.vue`, `NodeCard.ce.vue`) draws its
-own: its tree's rows, inside `<vs-tree>`'s shadow root through the
-tree's `renderLabel` and `extraCss`, a source as its group's chip and
-every other node as its node's; its pane's title as the shown node's;
-and in the pane each row's title, a thread its node's, a message its
-author's, a page its document's, and each row's date. The tree's
-`menu` event and a row's `contextmenu` show `ChipMenu`, and a
-double-click on a chip opens its card. `ChipMenu` hears Escape on its
+**The Library card** (`LibraryCard.ce.vue`) draws its own: its tree's
+rows, inside `<vs-tree>`'s shadow root through the tree's `renderLabel`
+and `extraCss`, a source as its group's chip and every other node as its
+node's; and its pane's title as the shown node's. The tree's `menu`
+event and the title's `contextmenu` show `ChipMenu`, and a double-click
+on a chip opens its card. `ChipMenu` hears Escape on its
 way down, since the tree takes the key for itself.
 
 ## In the search field
@@ -372,7 +370,7 @@ from the cell alone, and a new search shows the new title.
   href is the document's name, which Datalib reads; no app registers
   the scheme, so outside Datalib it is a name, not a link that opens
   anything. The rest of the title
-  bar's menu (`documentMenu.ts`: open at the source, feedback) needs the
+  bar's menu (`documentMenu.ts`: open at the source, copy as Markdown) needs the
   document itself, which a chip does not hold.
 - **drag**: it drags as a link, with no search
   (`chipDragQuery`).
@@ -381,7 +379,7 @@ from the cell alone, and a new search shows the new title.
 
 **Every node of a source's tree is a chip by its name**, named by its
 `datalib:node/<uuid>` (`ui/src/cards/nodeChip.ts`): a channel, a label,
-a folder, a page, a thread, any `data_nodes` row
+a folder, a page, a thread, any `nodes` row
 ([`grid_rows.md`](grid_rows.md) § "where a row sits"). Like a
 document's, it has **no resolver**: whoever draws it read the node's
 name and kind from the index, and those change only when its source
@@ -390,14 +388,13 @@ contact group's card) carries the document's uuid beside it, as
 `data-node-doc`.
 
 - **look**: the name; its kind and its URI on hover.
-- **double-click**: its node card (`nodeView`), its children listed and,
-  for a node that is a document, the document beside them. In the
-  Library card's pane it shows there instead.
+- **double-click**: its node card (`nodeView`), the search held to what
+  is directly in it, led by its document when it is one.
 - **right-click**: Open “<name>”; Copy ID (the uuid), the name, or Copy
   name and link, a link as a document chip's is.
 
-The Library card draws one for every place in its tree and every thread
-in its pane (§"In a card's own template"). Nothing else does yet, and
+The Library card draws one for every place in its tree, and as its
+pane's title (§"In a card's own template"). Nothing else does yet, and
 no render writes a `datalib:node/` link.
 
 ## A date
@@ -598,8 +595,9 @@ A new kind of *handle* is a person and goes through
 
 A system event as a chip ("Worf joined the channel"), which needs each
 provider to carry the handle on its system events; a search for
-everything in a node (a node chip's "Everything in", which no key names
-yet, and which must follow the whole chain of nodes above a row); a node
+everything beneath a node at any depth (a node chip's "Everything in":
+`at:` is what is directly in it); a place's chip in the search field,
+where `at:` shows its id; a node
 chip anywhere but the Library card; a document chip in a rendered page (a `datalib:doc/` link in
 markdown is not marked as one yet, and would need a resolver for its
 title) or in the search field; a search when a document chip is

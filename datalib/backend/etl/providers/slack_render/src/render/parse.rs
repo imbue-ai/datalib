@@ -3,7 +3,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
-use std::future::Future;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -12,8 +11,9 @@ use anyhow::{Context, Result};
 use datalib_etl::blob_cas::{self, BlobBundle, CasEdgeRow};
 use datalib_etl::doltlite_raw::Reader;
 use datalib_etl::read_marks::{self, ReadMark};
+use datalib_etl_chat_common::Page;
 use datalib_etl_render::inputs::{Inputs, RawRange};
-use datalib_etl_render::pages::{KeyColumn, RenderUnitPages};
+use datalib_etl_render::pages::{block_on, KeyColumn, RenderUnitPages};
 use datalib_etl_render::processor::Unparsed;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
@@ -151,17 +151,6 @@ pub struct SlackStore {
     pub unparsed: Vec<Unparsed>,
 }
 
-/// One page of threads, their messages loaded and no attachment bytes.
-pub struct Page {
-    pub threads: Vec<SlackThreadRenderUnit>,
-    /// On a narrowed run, the stale thread keys this page looked at,
-    /// declared empty before the ones it renders. Empty on a full walk,
-    /// whose threads all come from rows.
-    pub looked_at: Vec<String>,
-    /// `messages` rows of the page that would not read as JSON.
-    pub unparsed: Vec<Unparsed>,
-}
-
 impl SlackStore {
     /// The thread keys to render, a page of `page` at a time.
     pub fn pages(&self, page: usize) -> RenderUnitPages {
@@ -171,8 +160,12 @@ impl SlackStore {
         }
     }
 
-    /// The next page's threads, or `None` once every page is read.
-    pub fn next_page(&self, pages: &mut RenderUnitPages) -> Result<Option<Page>> {
+    /// The next page's threads and, on a narrowed run, the key of every one
+    /// it looked at; `None` once every page is read.
+    pub fn next_page(
+        &self,
+        pages: &mut RenderUnitPages,
+    ) -> Result<Option<Page<SlackThreadRenderUnit>>> {
         block_on(async {
             let pool = self.reader.pool();
             let Some(keys) = pages.next(pool).await? else {
@@ -186,7 +179,7 @@ impl SlackStore {
                 Some(_) => keys,
             };
             Ok(Some(Page {
-                threads,
+                conversations: threads,
                 looked_at,
                 unparsed,
             }))
@@ -270,10 +263,6 @@ impl SlackStore {
             }
         })
     }
-}
-
-fn block_on<F: Future>(f: F) -> F::Output {
-    tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(f))
 }
 
 /// The store under `path`, open at the driver's commit. `None` when
@@ -560,18 +549,8 @@ async fn load_users(
     Ok(out)
 }
 
-/// Each bot's name, as `bots.info` gave it. A store the download has
-/// not opened since `bots` arrived has no such table, and no names.
+/// Each bot's name, as `bots.info` gave it.
 async fn load_bots(pool: &SqlitePool) -> Result<BTreeMap<String, String>> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'bots')",
-    )
-    .fetch_one(pool)
-    .await
-    .context("look for the bots table")?;
-    if !exists {
-        return Ok(BTreeMap::new());
-    }
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''")
             .fetch_all(pool)
@@ -581,22 +560,7 @@ async fn load_bots(pool: &SqlitePool) -> Result<BTreeMap<String, String>> {
 }
 
 async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
-    // The DM columns landed after the first stores were written, and
-    // this pool is read-only — it never runs `doltlite_raw::open`'s
-    // schema reconcile, so a store the current downloader has not
-    // touched still lacks them. Naming a missing column in the SELECT
-    // fails at prepare time and sinks the render step, so probe first
-    // and fall back to the columns that have always been there. Such a
-    // store has no DMs in it anyway: they could not have been listed.
-    let has_dm_columns = datalib_etl::doltlite_raw::column_exists(pool, "channels", "is_dm")
-        .await?
-        && datalib_etl::doltlite_raw::column_exists(pool, "channels", "dm_user_ids").await?;
-    let sql = if has_dm_columns {
-        "SELECT id, name, is_dm, dm_user_ids FROM channels"
-    } else {
-        "SELECT id, name FROM channels"
-    };
-    let rows = sqlx::query(sql)
+    let rows = sqlx::query("SELECT id, name, is_dm, dm_user_ids FROM channels")
         .fetch_all(pool)
         .await
         .context("select channels")?;
@@ -1031,70 +995,5 @@ mod no_data_tests {
     fn parse_missing_source_returns_empty_silently() {
         let store = open(Path::new("/this/does/not/exist"), "src", RawRange::cold()).unwrap();
         assert!(store.is_none());
-    }
-}
-
-#[cfg(test)]
-mod legacy_schema_tests {
-    use super::*;
-    // A deliberately *writable* pool: this test builds the legacy store it
-    // then reads, so it cannot go through `open_reader`.
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use std::str::FromStr;
-
-    /// Render must survive a raw store written before the DM columns
-    /// existed.
-    #[tokio::test]
-    async fn load_channels_tolerates_a_store_without_the_dm_columns() {
-        let d = tempfile::tempdir().unwrap();
-        let path = d.path().join("legacy.db");
-        let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
-            .unwrap()
-            .create_if_missing(true);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        // The `channels` shape as it was before this change.
-        sqlx::query(
-            "CREATE TABLE channels (id TEXT PRIMARY KEY, payload BLOB, name TEXT,
-                                    is_member INTEGER, is_archived INTEGER)",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("INSERT INTO channels (id, name, is_member) VALUES ('C1', 'bridge', 1)")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        // Read it the way render does: committed, through a reader at that
-        // commit. The store still lacks the DM columns, which is what this
-        // guards — a reader does not conjure a column the store never had.
-        datalib_etl::doltlite_raw::commit_run(&pool, "legacy store")
-            .await
-            .unwrap();
-        let reader = datalib_etl::doltlite_raw::open_reader(&path, None)
-            .await
-            .unwrap()
-            .expect("the legacy store has a commit now");
-
-        let channels = load_channels(&reader)
-            .await
-            .expect("must not fail to prepare");
-        let c = channels.get("C1").expect("C1");
-        assert_eq!(c.name.as_deref(), Some("bridge"));
-        // Such a store could never have listed a DM, so "not a DM" is
-        // the truthful reading of the absent columns.
-        assert!(!c.is_dm);
-        assert!(c.dm_user_ids.is_empty());
-        let inputs = Inputs::default();
-        assert_eq!(
-            c.display(inputs.lookup("users", &BTreeMap::new()), None),
-            "#bridge"
-        );
     }
 }

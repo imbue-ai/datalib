@@ -114,6 +114,7 @@ pub(crate) fn handle_mark(kind: HandleKind) -> &'static str {
         HandleKind::Email => "email",
         HandleKind::Tel => "sms",
         HandleKind::Slack => "slack",
+        HandleKind::Discord => "discord",
         HandleKind::SignalAci => "signal",
         HandleKind::Facebook => "facebook",
         HandleKind::Linkedin => "linkedin",
@@ -212,6 +213,12 @@ pub fn grid_keys() -> Vec<SearchKeySpec> {
         },
         partial: true,
     }));
+    keys.push(SearchKeySpec {
+        key: datalib_unified_grid_and_search_index::query::AT,
+        aliases: &[],
+        values: KeyValues::Node,
+        partial: false,
+    });
     keys
 }
 
@@ -695,6 +702,7 @@ mod tests {
             let value = match &k.values {
                 KeyValues::Words { words } => words[0],
                 KeyValues::Stamp => "2026-11-01",
+                KeyValues::Node => "00000000-0000-4000-8000-000000000001",
                 _ => "x",
             };
             let q = format!("{}:{value}", k.key);

@@ -323,6 +323,9 @@ async fn parse_open(
         }
     };
 
+    let mut cowork = cowork;
+    db::load_cowork_events_into(&pool, &mut cowork).await?;
+
     let raw = LoadedRaw {
         users,
         first_user_uuid,

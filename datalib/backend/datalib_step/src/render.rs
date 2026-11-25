@@ -61,6 +61,8 @@ pub async fn run(
     // render no documents of their own — for `file_inventory` and `media` it
     // is the only thing they put in the grid.
     let storage = crate::introspect::plan(&name, measured, now)?;
+    let raw_db = datalib_etl::doltlite_raw::db_path_for(&raw_path);
+    require_raw_shape(&raw_db, source_type.as_str()).await?;
 
     let source = RenderSource {
         name: name.clone(),
@@ -73,7 +75,7 @@ pub async fn run(
         cadence: control.checkpoint_cadence.unwrap_or_default(),
         page_size: page_size(),
         storage,
-        raw_db: Some(datalib_etl::doltlite_raw::db_path_for(&raw_path)),
+        raw_db: Some(raw_db),
         progress: progress.clone(),
     };
     // Render is synchronous work driven by `futures`' executor (NOT
@@ -273,7 +275,6 @@ pub fn render_source(
     let declared = declared_render_versions(processors);
     let declared_params = declared_render_params(processors);
     let declared_params_text = declared_params.to_string();
-    crate::old_markdown::clear(&rendered_root);
     let store = IndexedMarkdownStore::open(&rendered_root)
         .map(|s| s.with_now(&now))
         .with_context(|| format!("open render store for {}", name))?;
@@ -1214,9 +1215,33 @@ fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
         .split_once(':')
 }
 
+/// The raw store a render reads is in this build's shape, or the render
+/// is refused before any provider reads it, naming the download step that
+/// brings it there: the launch's prepare pass migrates every raw store, so
+/// a refusal here is one that pass could not migrate. A store this very
+/// build opened is in its shape by construction; any other is compared
+/// with a new store made in scratch. No store yet is nothing to read.
+pub(crate) async fn require_raw_shape(raw_db: &Path, source_type: &str) -> Result<()> {
+    if !raw_db.exists() {
+        return Ok(());
+    }
+    let meta = datalib_store_meta::guard::read_at(raw_db)
+        .await
+        .with_context(|| format!("read {}'s _datalib_meta", raw_db.display()))?;
+    if meta
+        .as_ref()
+        .is_some_and(crate::prepare::opened_by_this_build)
+    {
+        return Ok(());
+    }
+    let want = crate::prepare::raw_shape(source_type).await?;
+    let step = datalib_store_meta::step_of(raw_db);
+    datalib_store_meta::require(raw_db, step.as_deref(), meta.as_ref(), &want)
+}
+
 /// The entity scopes of the raw store's fetch problems at `commit` (HEAD
-/// when the run consumed none). None when there is no store, nothing
-/// committed, or a store from before the table.
+/// when the run consumed none). None when there is no store or nothing
+/// committed.
 fn fetch_problem_entities(raw_db: &Path, commit: Option<&str>) -> Result<Vec<String>> {
     if !raw_db.exists() {
         return Ok(Vec::new());
@@ -1228,7 +1253,7 @@ fn fetch_problem_entities(raw_db: &Path, commit: Option<&str>) -> Result<Vec<Str
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        match sqlx::query_scalar::<_, String>(
+        sqlx::query_scalar::<_, String>(
             "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? \
              ORDER BY scope_key",
         )
@@ -1236,11 +1261,7 @@ fn fetch_problem_entities(raw_db: &Path, commit: Option<&str>) -> Result<Vec<Str
         .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
         .fetch_all(&pool)
         .await
-        {
-            Ok(keys) => Ok(keys),
-            Err(e) if datalib_etl::pin::is_missing_table(&e, "problems") => Ok(Vec::new()),
-            Err(e) => Err(e).context("read the raw store's problems"),
-        }
+        .context("read the raw store's problems")
     });
     blocking(pool.close());
     result

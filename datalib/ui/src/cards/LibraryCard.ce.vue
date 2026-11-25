@@ -2,17 +2,14 @@
 // `libraryTreeView()`: the library as VS Code's tree (`<vs-tree>`,
 // third-party/vscode-tree) — its sources, then their places, a level at a
 // time, each drawn as its chip — and, beside it, the node picked there as
-// a node card (`nodeView`, cards/NodeCard.ce.vue), drawn in a shadow root
-// of its own the way the Search card draws its preview. A node the node
-// card opens in turn replaces it here; a document opens as a card. A
-// chip's double-click and right-click are a chip's everywhere
+// a node card (`nodeView`: the search list held to it), drawn in a shadow
+// root of its own the way the Search card draws its preview. A chip's double-click and right-click are a chip's everywhere
 // (docs/dev/chips.md § Clicks). What is open in the tree, and the node
 // shown, are the card's state. The rules are cards/library.ts.
 import { onBeforeUnmount, onMounted, ref, useTemplateRef, watchEffect } from "vue";
 import type { VsTree, VsTreeNode, VsTreeViewState } from "vs-tree";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
-import { parseCardSource } from "./cardCall";
 import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { nodeView } from "./libs/nodeView";
 import ChipMenu from "./ChipMenu.ce.vue";
@@ -34,6 +31,7 @@ import {
   nodeOpts,
   placeNodes,
   sourceNodes,
+  sourceTop,
   treeChip,
   type TreeChip,
   type TreeNode,
@@ -59,40 +57,39 @@ const paneEl = useTemplateRef<HTMLDivElement>("paneEl");
 const shown = ref<NodeViewOpts | null>(null);
 const paneTitle = ref("");
 const failed = ref<string | null>(null);
+// Until the tree has its first level: `<vs-tree>` draws nothing meanwhile.
+const loading = ref(true);
 let tree: VsTree | null = null;
 
 /// A level of places, every page of it: a level is a few dozen places, a
 /// few thousand at the most (a drive's folders).
 async function placesUnder(parent: string): Promise<TreeNode[]> {
-  const children = [];
+  const places = [];
   let after: string | undefined;
   do {
-    const page = await api.fetchChildren(parent, { places: true, limit: 1000, after });
-    children.push(...page.children);
+    const page = await api.fetchPlaces(parent, { limit: 1000, after });
+    places.push(...page.places);
     after = page.after ?? undefined;
   } while (after);
-  return placeNodes(children);
-}
-
-/// Which sources hold places at their top: one place each tells, so a
-/// source without any draws no arrow to open onto nothing, and is shown
-/// beside the tree instead.
-async function sourcesWithPlaces(ids: string[]): Promise<Set<string>> {
-  const held = await Promise.all(
-    ids.map(async (id) => {
-      const page = await api.fetchChildren(id, { places: true, limit: 1 });
-      return page.children.length > 0 ? id : null;
-    }),
-  );
-  return new Set(held.filter((id): id is string => id !== null));
+  return placeNodes(places);
 }
 
 const dataSource = {
   async getChildren(node: VsTreeNode | null): Promise<VsTreeNode[]> {
     if (node !== null) return placesUnder(node.id);
-    const rows = (await api.fetchManageRows()).rows;
-    const held = await sourcesWithPlaces(sourceNodes(rows).map((n) => n.id));
-    return sourceNodes(rows, (id) => held.has(id));
+    try {
+      const [{ rows }, held] = await Promise.all([
+        api.fetchManageRows(),
+        api.fetchSourcesWithPlaces(),
+      ]);
+      const opens = new Set(held.map(sourceTop));
+      return sourceNodes(rows, (id) => opens.has(id));
+    } catch (e) {
+      failed.value = `The library could not be read: ${(e as Error).message}`;
+      return [];
+    } finally {
+      loading.value = false;
+    }
   },
 };
 
@@ -109,20 +106,6 @@ function save() {
 // ---- the node beside the tree ----
 let paneRoot: ShadowRoot | null = null;
 let teardown: Teardown | null = null;
-
-/// A node card's opens: another node shows here, anything else opens as
-/// cards do.
-function openFromPane(...sources: string[]): string[] {
-  if (sources.length === 1) {
-    const call = parseCardSource(sources[0]);
-    const opts = call.args[0] as NodeViewOpts | undefined;
-    if (call.name === "nodeView" && typeof opts?.node === "string") {
-      show(opts);
-      return [];
-    }
-  }
-  return props.ctx.host.openCards(...sources);
-}
 
 // A pick in the tree waiting for the selection to settle. Whatever the pane
 // shows meanwhile, from the pane itself, cancels it.
@@ -150,7 +133,6 @@ function show(opts: NodeViewOpts | null) {
     bus: props.ctx.bus,
     host: {
       ...props.ctx.host,
-      openCards: openFromPane,
       setState: () => {},
       setSource: () => {},
       close: () => show(null),
@@ -249,8 +231,9 @@ onMounted(async () => {
   props.ctx.setHelp(
     "<p>Your library as a tree: each source, then the places in it — accounts, " +
       "labels, workspaces, channels, folders, chats — a level at a time.</p>" +
-      "<p>Pick a place to show what it holds beside the tree. There, a click " +
-      "reads a message beside the list. A double-click on a name opens its " +
+      "<p>Pick a place to list what is directly in it beside the tree, newest " +
+      "first, the picked one to read; the box above searches within it. " +
+      "A double-click on a name opens its " +
       "card, and a right-click shows what else you can do with it. ↗ opens " +
       "what is shown as a card of its own.</p>" +
       "<p>The tree keeps what you opened, and what you showed, when you come back.</p>",
@@ -259,6 +242,7 @@ onMounted(async () => {
     await import("vs-tree");
   } catch (e) {
     failed.value = `The tree could not load: ${(e as Error).message}`;
+    loading.value = false;
     return;
   }
   const el = document.createElement("vs-tree") as VsTree;
@@ -307,6 +291,7 @@ const TREE_CHIP_CSS = `.label { display: flex; min-width: 0; } .label > .chip { 
   <div class="lib">
     <div class="lib-tree">
       <p v-if="failed" class="lib-note lib-failed">{{ failed }}</p>
+      <p v-else-if="loading" class="lib-note" data-testid="library-loading">Loading…</p>
       <div ref="treeHost" class="lib-tree-host" data-testid="library-tree" />
     </div>
     <section class="lib-pane" :class="{ 'is-empty': !shown }">

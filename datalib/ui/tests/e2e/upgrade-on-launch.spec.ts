@@ -1,12 +1,12 @@
 // What a launch on an upgraded root shows (dag/README.md §"Upgrading a root"):
-// the app as usual with a pill in the toolbar while every step is asked to
-// migrate, then the offer to re-render, and the pill again for a source
-// the pass could not update. The server's side — which steps are asked, the pass before
-// any sync, what the offer lists — is the Rust tests'; here `/api/config`'s
-// `upgrade` is set to each state in turn and the re-render request is
-// caught before it reaches the shared root.
+// the upgrade screen in front of the library while every step is asked to
+// prepare and while the steps it found in another shape re-run, which the
+// server starts by itself; then the library, with the pill for a source the
+// pass could not update. The server's side — which steps are asked, the
+// pass before any sync, the re-runs it opens — is the Rust tests'; here
+// `/api/config`'s `upgrade` is set to each state in turn.
 
-import { test, expect, type Page, type Request } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 type Upgrade = {
   migrating: boolean;
@@ -56,22 +56,19 @@ const MIGRATED: Upgrade = {
   ],
 };
 
-test("the migrate pass leaves the app usable and says in the toolbar how each source is going", async ({
+test("the pass puts the upgrade screen in front of the library, saying how each source is going", async ({
   page,
 }) => {
   await launchWith(page, MIGRATING);
-  // Nothing is in the way of searching while it runs.
-  await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
-  // One count per source, however many steps it has; a source is done
-  // when every step of it is.
-  const pill = page.getByRole("button", { name: "Updating data · 1 of 3" });
-  await expect(pill).toBeVisible();
-  await pill.click();
-  const menu = page.getByRole("dialog", { name: "Updating data · 1 of 3" });
+  const screen = page.getByTestId("upgrading");
   await expect(
-    menu.getByRole("heading", { name: "Updating your data for this version" }),
+    screen.getByRole("heading", { name: "Updating your library for this version" }),
   ).toBeVisible();
-  const rows = menu.locator(".pass-list li");
+  // Nothing reads a store in another shape, so there is nothing to search yet.
+  await expect(page.getByRole("searchbox", { name: "Search your data" })).toHaveCount(0);
+  // One row per source, however many steps it has; a source is done
+  // when every step of it is.
+  const rows = screen.locator(".rows li");
   await expect(rows).toHaveCount(3);
   await expect(rows.nth(0)).toContainText("enterprise-mail");
   await expect(rows.nth(0)).toContainText("Done");
@@ -79,45 +76,32 @@ test("the migrate pass leaves the app usable and says in the toolbar how each so
   await expect(rows.nth(2)).toContainText("Waiting");
 });
 
-test("after the pass, a yes re-runs what asked for it, as the upgrade", async ({ page }) => {
-  const asked: Request[] = [];
-  await page.route("**/api/requests", async (route) => {
-    if (route.request().method() !== "POST") return route.fallback();
-    asked.push(route.request());
-    await route.fulfill({ json: [] });
-  });
-  await launchWith(page, MIGRATED);
-
-  const dialog = page.getByRole("dialog", { name: "Your rendered documents are out of date" });
-  await expect(dialog).toBeVisible();
-  const sources = dialog.locator("ul.sources li");
-  await expect(sources).toHaveText(["enterprise-mail", "ten-forward", "Search index"]);
-  // The source the pass could not update is the pill's to report, once.
-  await expect(dialog).not.toContainText("holodeck-slack");
-  await expect(page.getByRole("button", { name: "1 source could not be updated" })).toBeVisible();
-
-  await dialog.getByRole("button", { name: "Re-render now" }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect.poll(() => asked.length).toBe(1);
-  expect(asked[0].postDataJSON()).toEqual({ roots: MIGRATED.rerender, by: "upgrade" });
-  await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
-});
-
-test("not now leaves the steps alone until the next launch", async ({ page }) => {
+test("after the pass, the screen waits on the re-runs the server started, asking nothing", async ({
+  page,
+}) => {
   let posted = 0;
   await page.route("**/api/requests", async (route) => {
     if (route.request().method() === "POST") posted += 1;
     await route.fallback();
   });
   await launchWith(page, MIGRATED);
-
-  const dialog = page.getByRole("dialog", { name: "Your rendered documents are out of date" });
-  await dialog.getByRole("button", { name: "Not now" }).click();
-  await expect(dialog).toHaveCount(0);
+  const screen = page.getByTestId("upgrading");
+  await expect(screen.locator(".rows li")).toHaveText([
+    /enterprise-mail.*Re-running/,
+    /ten-forward.*Re-running/,
+    /Search index.*Re-running/,
+  ]);
+  await expect(screen).toContainText("Nothing is downloaded");
   expect(posted).toBe(0);
+});
 
-  await page.reload();
-  await expect(dialog).toBeVisible();
+test("Open Sources lifts the screen for a source whose re-run is stuck", async ({ page }) => {
+  await launchWith(page, MIGRATED);
+  await page.getByTestId("upgrading").getByRole("button", { name: "Open Sources" }).click();
+  await expect(page.getByTestId("upgrading")).toHaveCount(0);
+  await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
+  // The source the pass could not update is the pill's to report.
+  await expect(page.getByRole("button", { name: "1 source could not be updated" })).toBeVisible();
 });
 
 test("a step the pass could not ask turns the pill red, not a dialog, until dismissed", async ({
@@ -133,9 +117,7 @@ test("a step the pass could not ask turns the pill red, not a dialog, until dism
     rerender: [],
   });
   await expect(page.getByRole("searchbox", { name: "Search your data" })).toBeVisible();
-  await expect(
-    page.getByRole("dialog", { name: "Your rendered documents are out of date" }),
-  ).toHaveCount(0);
+  await expect(page.getByTestId("upgrading")).toHaveCount(0);
 
   const pill = page.getByRole("button", { name: "1 source could not be updated" });
   await pill.click();
