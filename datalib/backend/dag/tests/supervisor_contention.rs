@@ -115,3 +115,86 @@ async fn seven_processes_share_the_store_and_every_write_lands() {
     }
     assert_eq!(heard, expected());
 }
+
+/// How a worker names the data root: as the absolute path, or relative
+/// to the directory above it, from there, as a server given a relative
+/// root does while its runner resolves the same root to an absolute one.
+#[derive(Clone, Copy)]
+enum Naming {
+    Absolute,
+    Relative,
+}
+
+/// The seven roles above, each naming the root as `naming` says, all at
+/// once; what each wrote is then in the store. No announcements are
+/// counted, so nothing need open the store first.
+async fn seven_at_once(root: &Path, naming: impl Fn(usize) -> Naming) {
+    // Absolute, since some workers start from another directory.
+    let worker = std::path::absolute(std::env::var("STORE_WORKER").expect("STORE_WORKER")).unwrap();
+    let roles = [
+        ("mailbox", "m1"),
+        ("record", "r1"),
+        ("reader", "q1"),
+        ("mailbox", "m2"),
+        ("record", "r2"),
+        ("reader", "q2"),
+        ("mailbox", "m3"),
+    ];
+    let above = root.parent().unwrap();
+    let relative = root.file_name().unwrap();
+    let children: Vec<_> = roles
+        .iter()
+        .enumerate()
+        .map(|(i, (role, tag))| {
+            let mut cmd = tokio::process::Command::new(&worker);
+            match naming(i) {
+                Naming::Absolute => cmd.arg(root),
+                Naming::Relative => cmd.current_dir(above).arg(relative),
+            };
+            let child = cmd
+                .arg(role)
+                .arg(tag)
+                .arg(N.to_string())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            tokio::spawn(child.wait_with_output())
+        })
+        .collect();
+    for ((role, tag), child) in roles.iter().zip(children) {
+        let out = child.await.unwrap().unwrap();
+        assert!(
+            out.status.success(),
+            "{role} {tag}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let store = Store::open(root).await.unwrap();
+    assert_eq!(store.open_requests().await.unwrap().len(), 3 * N);
+    assert_eq!(store.load_record().await.unwrap().steps.len(), 2 * N);
+    store.close().await;
+}
+
+/// On a root nobody has opened, the seven make the file at once, as a
+/// new library's server and its runner do.
+#[tokio::test(flavor = "multi_thread")]
+async fn seven_processes_make_the_store_at_once() {
+    let td = tempfile::tempdir().unwrap();
+    seven_at_once(td.path(), |_| Naming::Absolute).await;
+}
+
+/// Some name the root by a relative path and some by the absolute one,
+/// as a server started with a relative root and its runner do.
+#[tokio::test(flavor = "multi_thread")]
+async fn processes_naming_the_root_two_ways_share_the_store() {
+    let td = tempfile::tempdir().unwrap();
+    Store::open(td.path()).await.unwrap().close().await;
+    seven_at_once(td.path(), |i| {
+        if i % 2 == 0 {
+            Naming::Relative
+        } else {
+            Naming::Absolute
+        }
+    })
+    .await;
+}
