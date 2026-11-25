@@ -90,22 +90,8 @@ the grouping are all built from. The grid's own column ids
 
 Every request reads inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so it sees one state of the index.
-`grid_rows` carries one index for the newest-first order and one per
-key the search bar filters on, each `(key, touched_at_utc, is_document,
-uuid)`; a filter on a key without one reads and sorts the whole table
-([query plans](doltlite.md#query-plans-and-indexes)). A key whose one
-value many rows share (`kind`, `channel`, `subject`, `account`,
-`project`, `change`, and the place and the conversation `at:` reads) has
-`source_id` after those, so the key beside `source:` is answered from its
-index alone; a key whose value names one thing (`id`, `notion_page`) has
-few rows to read.
-Beside either, `build_where` tells the planner a source is a share of
-the library (`likelihood`), or it would walk the source's index and read
-each row; `beside_a_key_a_source_is_tested_never_walked` checks every
-key. They are declared
-on the struct (`#[portable_table(index = …)]`) and created only in the
-grid index, not in the render stores that also hold a `grid_rows`.
-`every_filter_key_is_served_by_an_index` fails when a key has none.
+Which index answers which key, and how SQLite is held to it, is
+[`unified_grid_and_search_index/README.md`](../../datalib/backend/unified_grid_and_search_index/README.md).
 
 Free text never reaches `grid_rows`' SQL: the applet works out what the
 query's filters keep first, as `grid_rows` row ids read from the
@@ -338,9 +324,7 @@ its labels: those are `filings` rows, and a place has none.
 The search's `at:<node>` (`unified_grid_and_search_index/src/at_node.rs`)
 reads these: the rows whose `place_uuid` the node is, those in what is
 filed under it, and its own document when it is one, off
-`grid_rows_by_place` and `grid_rows_by_conversation` alone. A node with
-two of these is read as one set of row ids, since SQLite serves an `OR`
-of them beside a source or `is:document` from that one's index, whole.
+`grid_rows_by_place` and `grid_rows_by_conversation` alone.
 
 **Every container is a row.** Most are already a document's row: a
 thread or a chat is the document that holds its messages, under the

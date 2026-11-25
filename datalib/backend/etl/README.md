@@ -762,7 +762,10 @@ So:
 - **Don't reach for `ANALYZE`.** Its statistics are a guess drawn from
   whatever rows a store held when it ran, so two libraries can plan one
   statement two ways, and a plan can change as the rows do. Which index
-  a statement needs is known when it is written; say so in the SQL.
+  a statement needs is known when it is written; say so in the SQL. What
+  it did to the grid's searches, measured, is in
+  [`unified_grid_and_search_index/README.md`](/datalib/backend/unified_grid_and_search_index/README.md)
+  §"What was measured".
 - **Test the plan, not the time.** Run `EXPLAIN QUERY PLAN` on the
   statement over the table's real DDL and assert the index it must
   start from, not only what it must not do: a plan with no `SCAN` can

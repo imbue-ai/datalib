@@ -848,7 +848,7 @@ fn statements_of(
         (
             "pages",
             (
-                documents_with_pages_sql("grid_rows", "markdowns", &where_sql, " AND"),
+                documents_with_pages_sql("grid_rows", "markdowns", &where_sql),
                 params,
             ),
         ),
@@ -911,11 +911,10 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                 ] {
                     let parsed = parse_query(&q);
                     for (what, (sql, params)) in statements_of(&parsed, &within) {
-                        let plan = explain(&writer, &sql, &params).await;
+                        let plan = plan_of_filters(&writer, what, &sql, &params).await;
                         // `email:` is in no index, so its row is read.
-                        let reads_the_index_alone = covered
-                            && matches!(what, "listing" | "matching")
-                            && !beside.contains("email");
+                        let reads_the_index_alone =
+                            covered && what != "groups" && !beside.contains("email");
                         let wanted = if reads_the_index_alone {
                             format!("SEARCH grid_rows USING COVERING INDEX {index} ")
                         } else {
@@ -947,9 +946,8 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                     let read = std::collections::HashMap::from([(node.to_string(), *arms)]);
                     let parsed = parse_query(&q).with_arms(&read);
                     for (what, (sql, params)) in statements_of(&parsed, &within) {
-                        let plan = explain(&writer, &sql, &params).await;
-                        let reads_the_index_alone =
-                            matches!(what, "listing" | "matching") && !beside.contains("email");
+                        let plan = plan_of_filters(&writer, what, &sql, &params).await;
+                        let reads_the_index_alone = what != "groups" && !beside.contains("email");
                         let first = plan.iter().find(|d| d.contains(" grid_rows"));
                         let starts = |with: &str| first.is_some_and(|d| d.starts_with(with));
                         let by_row_id = starts("SEARCH grid_rows USING INTEGER PRIMARY KEY ");
@@ -1000,24 +998,6 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
                 wrong.push(format!("{q:?} (not by its source): {plan:?}"));
             }
         }
-        // The documents a search by meaning can reach are most of the
-        // library: beside a person in a source it tried each one with each
-        // of the person's rows, and had not finished in a minute.
-        for q in [
-            "from:riker",
-            "source:x",
-            "source:x from:riker",
-            "source:x is:document",
-        ] {
-            let (_, (sql, params)) = statements_of(&parse_query(q), &[])
-                .into_iter()
-                .find(|(what, _)| *what == "pages")
-                .expect("the statement");
-            let plan = explain(&writer, &sql, &params).await;
-            if plan.iter().any(|d| d.contains("(markdown_uuid=?")) {
-                wrong.push(format!("pages of {q:?}: {plan:?}"));
-            }
-        }
         assert!(
             wrong.is_empty(),
             "{} plans (indexes made in reverse: {reversed}):\n{}",
@@ -1032,7 +1012,29 @@ async fn plan_of(db: &sqlx::SqlitePool, q: &str) -> Vec<String> {
     explain(db, &sql, &params).await
 }
 
-async fn explain(db: &sqlx::SqlitePool, sql: &str, params: &[String]) -> Vec<String> {
+/// How a statement finds the rows its filters keep. The one over the
+/// searchable documents finds them in a set of its own, beside the single
+/// walk of the index its answer is in; a search that started at the
+/// documents instead tried each with each row kept, and had not finished
+/// in a minute.
+async fn plan_of_filters(
+    db: &sqlx::SqlitePool,
+    what: &str,
+    sql: &str,
+    params: &[String],
+) -> Vec<String> {
+    let mut plan = explain(db, sql, params).await;
+    if what == "pages" {
+        assert_eq!(
+            plan.remove(0),
+            "SCAN grid_rows USING COVERING INDEX grid_rows_by_markdown_source",
+            "{sql}"
+        );
+    }
+    plan
+}
+
+pub(crate) async fn explain(db: &sqlx::SqlitePool, sql: &str, params: &[String]) -> Vec<String> {
     let mut query = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
     for p in params {
         query = query.bind(p.clone());
