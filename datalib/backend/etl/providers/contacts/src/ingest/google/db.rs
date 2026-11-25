@@ -25,7 +25,6 @@ pub const PHOTOS: &str = "google_photos";
 pub struct LoadedGooglePerson {
     pub id: String,
     pub addressbook_id: String,
-    pub addressbook_label: String,
     pub resource_name: String,
     /// As Google sent it, its volatile fields back in place.
     pub person: Value,
@@ -38,7 +37,6 @@ pub struct LoadedGooglePerson {
 pub struct LoadedGoogleGroup {
     pub id: String,
     pub addressbook_id: String,
-    pub addressbook_label: String,
     pub resource_name: String,
     pub group: Value,
 }
@@ -203,12 +201,10 @@ impl RawDb {
         let rows = sqlx::query(
             "SELECT p.id, p.addressbook_id, p.resource_name, json(p.payload) AS payload,
                     json(b.volatile_payload) AS volatile,
-                    ph.id AS photo_id, ph.blake3 AS photo_blake3,
-                    COALESCE(a.display_name, a.href, p.addressbook_id) AS label
+                    ph.id AS photo_id, ph.blake3 AS photo_blake3
                FROM google_people p
                LEFT JOIN google_people_bookkeeping b ON b.id = p.id
                LEFT JOIN google_photos ph ON ph.person_id = p.id
-               LEFT JOIN addressbooks a ON a.id = p.addressbook_id
               ORDER BY p.id",
         )
         .fetch_all(self.pool())
@@ -220,7 +216,6 @@ impl RawDb {
                 Ok(LoadedGooglePerson {
                     id: r.try_get("id")?,
                     addressbook_id: r.try_get("addressbook_id")?,
-                    addressbook_label: r.try_get("label")?,
                     resource_name: r.try_get("resource_name")?,
                     person: overlaid(r)?,
                     photo: match photo {
@@ -235,11 +230,9 @@ impl RawDb {
     pub async fn load_google_groups(&self) -> Result<Vec<LoadedGoogleGroup>> {
         let rows = sqlx::query(
             "SELECT g.id, g.addressbook_id, g.resource_name, json(g.payload) AS payload,
-                    json(b.volatile_payload) AS volatile,
-                    COALESCE(a.display_name, a.href, g.addressbook_id) AS label
+                    json(b.volatile_payload) AS volatile
                FROM google_contact_groups g
                LEFT JOIN google_contact_groups_bookkeeping b ON b.id = g.id
-               LEFT JOIN addressbooks a ON a.id = g.addressbook_id
               ORDER BY g.id",
         )
         .fetch_all(self.pool())
@@ -250,7 +243,6 @@ impl RawDb {
                 Ok(LoadedGoogleGroup {
                     id: r.try_get("id")?,
                     addressbook_id: r.try_get("addressbook_id")?,
-                    addressbook_label: r.try_get("label")?,
                     resource_name: r.try_get("resource_name")?,
                     group: overlaid(r)?,
                 })

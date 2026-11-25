@@ -64,7 +64,6 @@ fn person(
     let v = &p.person;
     let mut inputs = vec![
         Input::new("google_people", &p.id),
-        Input::new("addressbooks", &p.addressbook_id),
         Input::new("accounts", ACCOUNT_ID),
     ];
     let mut categories = Vec::new();
@@ -93,7 +92,7 @@ fn person(
     };
     ParsedContact {
         uid: p.resource_name.clone(),
-        addressbook: p.addressbook_label.clone(),
+        addressbook: ADDRESSBOOK_NAME.into(),
         addressbook_id: Some(p.addressbook_id.clone()),
         display_name,
         other_names: names,
@@ -118,7 +117,7 @@ fn person(
 fn label(g: &LoadedGoogleGroup, members: Vec<String>, login: Option<&str>) -> ParsedContact {
     ParsedContact {
         uid: g.resource_name.clone(),
-        addressbook: g.addressbook_label.clone(),
+        addressbook: ADDRESSBOOK_NAME.into(),
         addressbook_id: Some(g.addressbook_id.clone()),
         display_name: group_name(&g.group),
         other_names: Vec::new(),
@@ -142,7 +141,6 @@ fn label(g: &LoadedGoogleGroup, members: Vec<String>, login: Option<&str>) -> Pa
         source_url: label_page(&g.resource_name, login),
         inputs: vec![
             Input::new("google_contact_groups", &g.id),
-            Input::new("addressbooks", &g.addressbook_id),
             Input::new("accounts", ACCOUNT_ID),
         ],
     }
@@ -391,7 +389,6 @@ mod tests {
         LoadedGooglePerson {
             id: format!("{BOOK}#people/{id}"),
             addressbook_id: BOOK.into(),
-            addressbook_label: ADDRESSBOOK_NAME.into(),
             resource_name: format!("people/{id}"),
             person: v,
             photo: None,
@@ -402,7 +399,6 @@ mod tests {
         LoadedGoogleGroup {
             id: format!("{BOOK}#contactGroups/{id}"),
             addressbook_id: BOOK.into(),
-            addressbook_label: ADDRESSBOOK_NAME.into(),
             resource_name: format!("contactGroups/{id}"),
             group: json!({"groupType": kind, "name": id, "formattedName": name}),
         }
@@ -649,11 +645,15 @@ mod tests {
             format!("google_people:{BOOK}#people/c1"),
             format!("google_photos:{BOOK}#people/c1#PROFILE/1c1"),
             format!("google_contact_groups:{BOOK}#contactGroups/starred"),
-            format!("addressbooks:{BOOK}"),
             "accounts:google".to_string(),
         ] {
             assert!(card.contains(&want), "{want} not in {card:?}");
         }
+        let book = format!("addressbooks:{BOOK}");
+        assert!(
+            !card.contains(&book) && !read(&parsed[1]).contains(&book),
+            "that row holds the sync token, which every edit of any contact moves"
+        );
         assert_eq!(parsed[1].members, ["people/c1"]);
         assert!(
             read(&parsed[1]).contains(&format!("google_contact_groups:{BOOK}#contactGroups/5ea9"))

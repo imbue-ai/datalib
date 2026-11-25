@@ -20,9 +20,10 @@ The reference:
 What is marked *measured* was seen on one Google Workspace account of 95
 contacts, which
 `bazel run //datalib/backend/etl/providers/contacts:contacts_live` checks
-again. Nothing was deleted or merged on it, so a deletion, a rename
-(`previousResourceNames`) and an expired token are the reference's shapes
-and have only run on the made-up fixtures in
+again, with made-up contacts and labels added, edited, merged and deleted
+on it. A contact given a new resource name (`previousResourceNames`) and
+an expired token were not seen, so those are the reference's shapes and
+have only run on the made-up fixtures in
 `tests/contacts_tests/google_*.rs`.
 
 ### Sign-in
@@ -88,6 +89,17 @@ address book, and a changed photo is one more.
   contact, so a listing that meets one deletes nothing it did not name,
   leaves the token where it was and says so on `listing:contacts`.
 
+- **Merging two contacts** in Google's page keeps one, with everything
+  both said, and sends the other as `metadata.deleted` (*measured*).
+  Deleting a label sends each contact that was in it as changed. Both
+  arrive in the delta like any edit.
+- **A delta can lag a write by some seconds** (*measured*), a contact's
+  more than a label's. The run in between sees nothing new, and the next
+  one's token still covers the write.
+- **The sync token moves with any edit** and is kept on the
+  `addressbooks` row, so no Google page reads that row: the book's name
+  is a constant.
+
 ### Photos
 
 `photos[].url` ends in the size it would serve (`=s100`); the download
@@ -114,8 +126,10 @@ none.
   addresses and numbers again, so the page shows one of each.
 - Every contact had photos, but two in three had only letters Google
   drew.
-- `canonicalForm` came only with a number already written with its `+`
-  and country code.
+- `canonicalForm` comes with some numbers: one written with its `+` and
+  country code, and a US one with its area code (`(202) 555-0101`), but
+  not a seven-digit number, a UK one written `020 …`, or eight ten-digit
+  US-shaped ones already on the account.
 - A `DOMAIN_PROFILE` location's `value` is the word `desk`; `buildingId`
   and `floor` say where, `$$NO_BUILDING$$` standing for no building.
 - A label is a `USER_CONTACT_GROUP` with `metadata.updateTime`; Google's
