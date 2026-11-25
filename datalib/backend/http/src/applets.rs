@@ -950,6 +950,9 @@ impl Drop for Supervisor {
 pub struct ProxyResponse {
     pub status: u16,
     pub content_type: String,
+    /// What the applet says it read to answer, in
+    /// [`datalib_sql_work::ROWS_READ_HEADER`].
+    pub rows_read: Option<u64>,
     pub body: Vec<u8>,
 }
 
@@ -1176,17 +1179,21 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| format!("applet response has no status: {status_line:?}"))?;
     let mut content_type = "application/octet-stream".to_string();
+    let mut rows_read = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim();
             if k.eq_ignore_ascii_case("content-type") {
                 content_type = v.trim().to_string();
+            } else if k.eq_ignore_ascii_case(datalib_sql_work::ROWS_READ_HEADER) {
+                rows_read = v.trim().parse().ok();
             }
         }
     }
     Ok(ProxyResponse {
         status,
         content_type,
+        rows_read,
         body,
     })
 }
