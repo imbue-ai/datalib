@@ -22,7 +22,7 @@ import { chainHref } from "@/cards/chainHref";
 import { setCardHelp } from "@/cards/help";
 import { cardType, newCardId } from "@/cards/cardId";
 import { displayTitle } from "@/cards/title";
-import { sameCard } from "@/cards/cardSources";
+import { contactsSource, sameCard } from "@/cards/cardSources";
 import { editMode } from "@/editMode";
 import { decodeColumns } from "@/router/columns";
 import { pushToast } from "@/toasts";
@@ -55,7 +55,7 @@ import {
   parentOf,
   parseTree,
   pinnedTabs,
-  predatesPins,
+  pinsGiven,
   remove,
   rename,
   resetTo,
@@ -113,12 +113,14 @@ function dashboard(): TreeNode {
   return instantiate(BUILTIN_COMPOSITES.Dashboard, newCardId);
 }
 
-// The tabs a main window has pinned until the person says otherwise.
+// The tabs a main window has pinned until the person says otherwise. A
+// new one goes last: a kept tree is given the ones it has not had.
 function defaultPins(): TreeNode[] {
   return [
     dashboard(),
     { ...makeCard(newCardId(), "searchView()"), name: "Search" },
     { ...makeCard(newCardId(), "sourcesView()"), name: "Sources" },
+    { ...makeCard(newCardId(), contactsSource()), name: "Contacts" },
   ].map((tab) => ({ ...tab, pinned: true }));
 }
 
@@ -251,11 +253,13 @@ async function start() {
   const kept = parseTree(stored);
   // A second window starts with nothing but the cards its URL names.
   const fromUrl = routeNode();
-  let tree = kept ?? makeBox(newCardId(), "tabs", mainWindow ? defaultPins() : []);
-  if (kept && mainWindow && predatesPins(stored)) tree = withPins(kept, defaultPins());
+  const pins = mainWindow ? defaultPins() : [];
+  let tree = kept
+    ? withPins(kept, pins.slice(pinsGiven(stored)))
+    : makeBox(newCardId(), "tabs", pins);
   if (fromUrl) tree = addChild(tree, tree.id, fromUrl) as BoxNode;
   // The outermost container is tabs and never solidified, whatever was stored.
-  root.value = withATab({ ...tree, layout: "tabs", solidified: false });
+  root.value = withATab({ ...tree, layout: "tabs", solidified: false, pinsGiven: pins.length });
   ready.value = true;
   if (fromUrl) void router.replace("/");
   for (const ask of askedBeforeReady.splice(0)) ask();

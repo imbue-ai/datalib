@@ -1,6 +1,6 @@
 //! `datalib-applet datalib_contacts` — the contacts app: the one writer of
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
-//! handle, what its popover needs to create or link a contact, the
+//! handle, what its page needs to create or link a contact, the
 //! photo a person put on one, the draft a contact is edited through
 //! on its card, the table of every contact the app's Browse opens, and
 //! the review of what agents proposed (`review.rs`). `GET /` lists every
@@ -155,7 +155,7 @@ fn api() -> Api {
             Post,
             "/unlink",
             Person,
-            "`{handle}`: take a handle off its contact",
+            "`{handle}`: take a handle off its contact, remembering it is not theirs",
             unlink,
         )
         .add(

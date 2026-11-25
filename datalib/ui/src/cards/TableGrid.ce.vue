@@ -35,7 +35,7 @@ import { stampRowKeys } from "@/grid/rowKeys";
 import { treeColumnField, typedColumns, type SlickColumnOptions } from "./typedColumns";
 import type { TableGridApi } from "./tableGridApi";
 import { fieldsOfType } from "./cellRenderers";
-import { chipCardSource, chipElAt, chipOf } from "./chipActions";
+import { chipElAt, chipOf, openChip } from "./chipActions";
 import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
 const props = withDefaults(
@@ -560,10 +560,8 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
   // in-place edit does not open under it.
   const chipEl = chipElAt(target);
   const chip = chipEl ? chipOf(chipEl) : null;
-  const source = chip ? chipCardSource(chip.ref, null) : null;
-  if (source) {
+  if (chip && openChip(chip.ref, null, (source) => emit("openCard", source))) {
     e.preventDefault();
-    emit("openCard", source);
     return;
   }
   const part = target instanceof Element ? target.closest<HTMLElement>("[data-field]") : null;

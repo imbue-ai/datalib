@@ -202,25 +202,18 @@ function photoOf(who: Who): string | null {
   return who.mine?.photo_url ?? who.sourceContacts.find((a) => a.photo_url)?.photo_url ?? null;
 }
 
-/** `canLink` is whether a contacts app is there to link the handle with. */
-export function chipLook(
-  handle: string,
-  shownAs: string,
-  who: Who,
-  canLink: boolean,
-  ownName = false,
-): ChipLook {
+export function chipLook(handle: string, shownAs: string, who: Who, ownName = false): ChipLook {
   const { mine } = who;
   if (!mine) {
     const text = unlinkedName(handle, shownAs, who, ownName);
     return {
       text,
-      ariaLabel: `${text}, ${handleValue(handle)}, not linked to a contact`,
-      classes: ["handle-chip", "handle-unresolved", ...(canLink ? ["handle-linkable"] : [])],
+      ariaLabel: `${text}, ${handleValue(handle)}, not in your contacts`,
+      classes: ["handle-chip", "handle-unresolved"],
       initial: null,
       icon: handleIcon(handle),
       photo: photoOf(who),
-      title: chipTooltip(handle, shownAs, who, canLink, ownName),
+      title: chipTooltip(handle, shownAs, who, ownName),
     };
   }
   const name = nameOf(mine);
@@ -235,31 +228,31 @@ export function chipLook(
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
     photo: photoOf(who),
-    title: chipTooltip(handle, shownAs, who, canLink, ownName),
+    title: chipTooltip(handle, shownAs, who, ownName),
   };
 }
 
 /** What a right-click on a person's chip offers, as ids `chipActions`
  *  acts on, in its `CHIP_ACTIONS` order (docs/dev/chips.md § Clicks). */
 export type ChipMenuId =
-  "open" | "compose" | "copy-id" | "copy-name" | "copy-both" | "search" | "edit";
+  "open" | "compose" | "copy-id" | "copy-name" | "copy-both" | "search" | "add";
 export type ChipMenuEntry = { id: ChipMenuId; label: string; separator?: boolean };
 
 /** The menu for one chip: open the person's card, the double-click's
  *  card; write to an email address; copy the identifier, the name, or
- *  both; find everything with this person; and, with a contacts app,
- *  link or edit the link. `canLink` is whether a contacts app is there
- *  to link with. */
+ *  both; find everything with this person; and, where they are not in
+ *  your contacts, add them. `canAdd` is whether a contacts app is there
+ *  to add them to. */
 export function chipMenu(
   handle: string,
   shownAs: string,
   who: Who,
-  canLink: boolean,
+  canAdd: boolean,
 ): ChipMenuEntry[] {
-  const { text: name } = chipLook(handle, shownAs, who, canLink);
+  const { text: name } = chipLook(handle, shownAs, who);
   const value = handleValue(handle);
   const named = name !== value;
-  const out: ChipMenuEntry[] = [{ id: "open", label: "Open contact" }];
+  const out: ChipMenuEntry[] = [{ id: "open", label: who.mine ? "Open contact" : "Open" }];
   if (composeUri(handle)) {
     out.push({ id: "compose", label: `Compose mail to ${value}`, separator: true });
   }
@@ -267,13 +260,7 @@ export function chipMenu(
   if (named) out.push({ id: "copy-name", label: `Copy “${name}”` });
   if (named) out.push({ id: "copy-both", label: `Copy “${copyText(handle, name)}”` });
   out.push({ id: "search", label: `Everything with ${name}`, separator: true });
-  if (canLink) {
-    out.push({
-      id: "edit",
-      label: who.mine ? "Edit contact link…" : "Link to a contact…",
-      separator: true,
-    });
-  }
+  if (canAdd && !who.mine) out.push({ id: "add", label: "Add to contacts…", separator: true });
   return out;
 }
 
@@ -293,13 +280,7 @@ export function searchQueryFor(handle: string): string {
 const MAX_SOURCE_CONTACTS = 4;
 const MAX_OTHER_HANDLES = 4;
 
-export function chipTooltip(
-  handle: string,
-  shownAs: string,
-  who: Who,
-  canLink: boolean,
-  ownName = false,
-): string {
+export function chipTooltip(handle: string, shownAs: string, who: Who, ownName = false): string {
   const { mine, sourceContacts } = who;
   const name = mine ? nameOf(mine) : unlinkedName(handle, shownAs, who, ownName);
   const value = handleValue(handle);
@@ -322,8 +303,7 @@ export function chipTooltip(
     ),
   ];
   if (others.length) lines.push(`Also ${others.slice(0, MAX_OTHER_HANDLES).join(", ")}`);
-  if (mine) lines.push("Click to edit");
-  else if (canLink) lines.push("Not linked to a contact. Click to link it.");
+  lines.push("Double-click to open");
   return lines.join("\n");
 }
 
@@ -730,9 +710,9 @@ function followLive() {
   });
 }
 
-/** Whether a contacts app answered the last question, so a chip can offer
- *  to link a handle. */
-export function canLinkHandles(): boolean {
+/** Whether a contacts app answered the last question, so there is
+ *  somewhere to add a person. */
+export function hasContactsApp(): boolean {
   return contactsApp;
 }
 
@@ -751,7 +731,6 @@ export async function decorateHandles(root: HTMLElement): Promise<void> {
     if (s.dataset.shownAs === undefined) s.dataset.shownAs = s.textContent ?? "";
   }
   await people.ask(new Set(spans.map((s) => s.dataset.handle ?? "")));
-  const canLink = canLinkHandles();
   for (const s of spans) {
     if (!s.isConnected) continue;
     const handle = s.dataset.handle ?? "";
@@ -760,8 +739,8 @@ export async function decorateHandles(root: HTMLElement): Promise<void> {
     drawChip(
       s,
       s.closest(".chip-identifiers")
-        ? identifierLook(handle, shown, who, canLink)
-        : chipLook(handle, shown, who, canLink, s.dataset.chipHeader !== undefined),
+        ? identifierLook(handle, shown, who)
+        : chipLook(handle, shown, who, s.dataset.chipHeader !== undefined),
     );
   }
 }
@@ -845,27 +824,21 @@ function chipLead(doc: Document, look: ChipLook): Element | null {
 
 /** A chip for a grid cell: the same link a renderer writes, drawn at
  *  once from what is known. `who` is undefined until the grid has asked. */
-export function chipCell(
-  handle: string,
-  shownAs: string,
-  who: Who | undefined,
-  canLink: boolean,
-): HTMLAnchorElement {
+export function chipCell(handle: string, shownAs: string, who: Who | undefined): HTMLAnchorElement {
   const a = document.createElement("a");
   a.className = "chip";
   const uri = uriFromHandle(handle);
   if (uri) a.href = uri;
   a.dataset.handle = handle;
   a.dataset.shownAs = shownAs;
-  drawChip(a, chipLook(handle, shownAs, who ?? { mine: null, sourceContacts: [] }, canLink));
+  drawChip(a, chipLook(handle, shownAs, who ?? NOBODY));
   return a;
 }
 
 /** A conversation titled by the people it is named after: one person's
  *  chip, or for several one pill with their photos side by side and each
- *  name a chip of its own, so each still opens, links and copies alone. */
+ *  name a chip of its own, so each still opens and copies alone. */
 export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLElement {
-  const canLink = canLinkHandles();
   const drawn = named.map(({ handle, shownAs }) => ({
     handle,
     shownAs,
@@ -873,7 +846,7 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
   }));
   if (drawn.length === 1) {
     const [p] = drawn;
-    return chipCell(p!.handle, p!.shownAs, p!.who, canLink);
+    return chipCell(p!.handle, p!.shownAs, p!.who);
   }
   const group = document.createElement("span");
   group.className = "chip-group";
@@ -882,7 +855,7 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
   faces.setAttribute("aria-hidden", "true");
   group.append(faces);
   drawn.forEach(({ handle, shownAs, who }, i) => {
-    const look = chipLook(handle, shownAs, who, canLink);
+    const look = chipLook(handle, shownAs, who);
     faces.append(chipLead(document, look) ?? chipLead(document, { ...look, initial: "?" })!);
     if (i > 0) {
       const sep = document.createElement("span");
@@ -890,7 +863,7 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
       sep.textContent = ", ";
       group.append(sep);
     }
-    const name = chipCell(handle, shownAs, who, canLink);
+    const name = chipCell(handle, shownAs, who);
     drawChip(name, { ...look, photo: null, initial: null, icon: null });
     name.classList.add("chip-bare");
     group.append(name);
@@ -902,15 +875,10 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
  *  one person's handles, where the name would repeat on every line. Its
  *  colour, tooltip and menu are the person chip's; its lead is always the
  *  kind's mark. `shown` is the identifier as the source wrote it. */
-export function identifierLook(
-  handle: string,
-  shown: string,
-  who: Who,
-  canLink: boolean,
-): ChipLook {
+export function identifierLook(handle: string, shown: string, who: Who): ChipLook {
   const text = shown.trim() || handleValue(handle);
   return {
-    ...chipLook(handle, text, who, canLink),
+    ...chipLook(handle, text, who),
     text,
     initial: null,
     photo: null,
@@ -923,7 +891,6 @@ export function identifierCell(
   handle: string,
   shown: string,
   who: Who | undefined,
-  canLink: boolean,
 ): HTMLAnchorElement {
   const a = document.createElement("a");
   a.className = "chip";
@@ -931,7 +898,7 @@ export function identifierCell(
   if (uri) a.href = uri;
   a.dataset.handle = handle;
   a.dataset.shownAs = shown;
-  drawChip(a, identifierLook(handle, shown, who ?? NOBODY, canLink));
+  drawChip(a, identifierLook(handle, shown, who ?? NOBODY));
   return a;
 }
 

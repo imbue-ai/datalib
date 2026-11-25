@@ -64,9 +64,7 @@ export function withDateChips(render: CardRender): CardRender {
         const chip = chipOf(el);
         if (!chip) return;
         ev.preventDefault();
-        menu.open(chipMenuOf(chip, false), ev.clientX, ev.clientY, (id) =>
-          runChipAction(id, chip, host),
-        );
+        menu.open(chipMenuOf(chip), ev.clientX, ev.clientY, (id) => runChipAction(id, chip, host));
       }),
     ];
 

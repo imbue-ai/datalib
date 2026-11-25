@@ -725,9 +725,9 @@ impl Store {
             .await
     }
 
-    /// Returns whether the handle was linked to anyone. Unlinking what an
-    /// agent linked is a person overriding it, written down in
-    /// `not_linked` so no agent proposes it again.
+    /// Returns whether the handle was linked to anyone. Taking a handle off
+    /// a contact is written down in `not_linked`, so no agent proposes it
+    /// again.
     pub async fn unlink(&self, handle: &Handle) -> Result<bool> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;

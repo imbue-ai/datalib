@@ -3,7 +3,7 @@
 // record of them as a section of its own. Pure; `PersonCard.ce.vue`
 // draws it and `people` (contacts.ts) supplies the answers.
 
-import { handleValue, nameOf, type NormalizedContact, type Who } from "./contacts";
+import { handleValue, nameOf, stoppedBy, type NormalizedContact, type Who } from "./contacts";
 
 /** One source's record of the person, for one of their handles. */
 export type PersonSection = {
@@ -94,8 +94,8 @@ export function sectionLines(
   return out;
 }
 
-/** Where one handle stands against the card's contact: linked to it,
- *  linked to someone else, or to nobody. */
+/** Where one handle stands against the card's contact: on it, on someone
+ *  else's, or on nobody's. */
 export type LinkState = "this" | "other" | "none";
 
 export function linkState(
@@ -108,8 +108,39 @@ export function linkState(
   return mine && owner.key === mine.key ? "this" : "other";
 }
 
+const HANDLE_ACTIONS = ["handle-add", "handle-remove", "handle-stopped", "handle-works"] as const;
+export type HandleAction = (typeof HANDLE_ACTIONS)[number];
+
+export function isHandleAction(id: string): id is HandleAction {
+  return (HANDLE_ACTIONS as readonly string[]).includes(id);
+}
+
+/** What a handle's chip on the card offers beyond a chip anywhere: to go
+ *  on the card's contact, or to come off it. Nothing for a handle someone
+ *  else has, or with no contact to act on. */
+export function handleMenu(
+  handle: string,
+  model: PersonModel,
+  whoOf: (handle: string) => Who | undefined,
+): { id: HandleAction; label: string; separator?: boolean }[] {
+  if (!model.mine) return [];
+  switch (linkState(handle, model.mine, whoOf)) {
+    case "none":
+      return [{ id: "handle-add", label: `Add to ${model.title}`, separator: true }];
+    case "this":
+      return [
+        { id: "handle-remove", label: "Not theirs", separator: true },
+        stoppedBy(model.mine, handle)
+          ? { id: "handle-works", label: "Works again" }
+          : { id: "handle-stopped", label: "No longer works" },
+      ];
+    case "other":
+      return [];
+  }
+}
+
 /** The handles a source's record holds that no contact has: what its
- *  "Link to …" button links to the card's contact. A handle someone else
+ *  "Add its other handles" button puts on the card's contact. A handle someone else
  *  holds is left alone, since linking it would take it from them. */
 export function linkableHandles(
   section: PersonSection,
