@@ -1,6 +1,7 @@
 //! The unified grid and search index: the grid index and the search index, the query
 //! language over them, and the repo that reads them.
 
+pub mod at_node;
 pub mod children;
 pub mod db;
 pub mod dolt_repo;

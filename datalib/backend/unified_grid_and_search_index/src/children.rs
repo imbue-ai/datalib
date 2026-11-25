@@ -90,8 +90,10 @@ impl Parent {
 pub enum Only {
     /// Rows, containers and what is filed, as they come.
     All,
-    /// The containers a person browses or filters by (`is_place`), each
-    /// with whether more of them lie below it: a library's tree.
+    /// The containers a person browses or filters by (`is_place`) that
+    /// live there, each with whether more of them lie below it: a library's
+    /// tree, where a place is in one place. What is filed there is found by
+    /// listing all.
     Places,
 }
 
@@ -416,10 +418,10 @@ fn from(scope: &Scope, via: Via) -> Option<&'static str> {
              WHERE parent_uuid IS NULL AND source_id = ?1 AND is_place = 1"
         }
         (Via::Filed, Only::All, false) => FILED,
-        (Via::Filed, Only::Places, false) => FILED_PLACES,
-        (Via::Row, Only::Places, _) | (Via::Node, Only::All, _) | (Via::Filed, _, true) => {
-            return None
-        }
+        (Via::Row, Only::Places, _)
+        | (Via::Node, Only::All, _)
+        | (Via::Filed, Only::Places, _)
+        | (Via::Filed, Only::All, true) => return None,
     })
 }
 
@@ -427,12 +429,6 @@ fn from(scope: &Scope, via: Via) -> Option<&'static str> {
 const FILED: &str = "(SELECT f.node_uuid AS uuid, \
      COALESCE((SELECT g.sort_key FROM grid_rows g WHERE g.uuid = f.node_uuid), '') AS sort_key \
      FROM filings f WHERE f.under_uuid = ?1) WHERE 1";
-
-/// The places filed under `?1`, each with its container's sort key.
-const FILED_PLACES: &str = "(SELECT f.node_uuid AS uuid, n.sort_key \
-     FROM filings f INDEXED BY filings_by_under CROSS JOIN nodes n ON n.uuid = f.node_uuid \
-     WHERE f.under_uuid = ?1 AND n.is_place = 1) \
-     WHERE 1";
 
 /// The sort key of `?2` among `scope`'s children, `?1` its parent, found
 /// the best way it is one; no row when it is not one.
@@ -455,14 +451,15 @@ pub fn child_key_sql(scope: &Scope) -> String {
     )
 }
 
-/// Which of the places in the JSON array `?1` have places below them,
-/// held or filed.
+/// Which of the places in the JSON array `?1` have places below them.
 pub const PLACES_BELOW_SQL: &str = "SELECT value FROM json_each(?1) \
      WHERE EXISTS (SELECT 1 FROM nodes n INDEXED BY nodes_places \
-                   WHERE n.parent_uuid = json_each.value AND n.is_place = 1) \
-        OR EXISTS (SELECT 1 FROM filings f INDEXED BY filings_by_under \
-                   CROSS JOIN nodes n ON n.uuid = f.node_uuid \
-                   WHERE f.under_uuid = json_each.value AND n.is_place = 1)";
+                   WHERE n.parent_uuid = json_each.value AND n.is_place = 1)";
+
+/// The sources that hold places at their top.
+pub const SOURCES_WITH_PLACES_SQL: &str = "SELECT DISTINCT source_id \
+     FROM nodes INDEXED BY nodes_places WHERE parent_uuid IS NULL AND is_place = 1 \
+     ORDER BY source_id";
 
 /// What a page's rows say of them, for the uuids in the JSON array `?1`.
 pub const ROW_FACTS_SQL: &str =

@@ -5,6 +5,7 @@ import {
   semanticOf,
   setOneRowPerDocument,
   setSemantic,
+  titleWithin,
 } from "./search";
 
 describe("semantic search in a query", () => {
@@ -52,5 +53,33 @@ describe("one row per document in a query", () => {
     expect(setOneRowPerDocument("warp is:document", true)).toBe("warp is:document");
     expect(setOneRowPerDocument("warp is:document from:riker", false)).toBe("warp from:riker");
     expect(setOneRowPerDocument("warp -is:document", false)).toBe("warp -is:document");
+  });
+});
+
+describe("a result's title in a place", () => {
+  const row = { name: "#bridge", author: null, snippet: "Shields up.\nRed alert.", kind: "Thread" };
+
+  /** A channel's threads are each named for the channel, and a thread's row
+   *  names no author: listed in it, each reads as its first line, which the
+   *  text under it then leaves out. */
+  it("is its author, or its first line, where its name only repeats the place", () => {
+    expect(titleWithin(row, "#bridge")).toEqual({
+      title: "Shields up.",
+      snippet: "Red alert.",
+      repeats: true,
+    });
+    expect(titleWithin({ ...row, author: "Worf" }, "#bridge").title).toBe("Worf");
+    expect(titleWithin({ ...row, snippet: "" }, "#bridge").title).toBe("#bridge");
+  });
+
+  it("is its name anywhere else, or its kind", () => {
+    for (const within of [null, "#engineering"]) {
+      expect(titleWithin(row, within)).toEqual({
+        title: "#bridge",
+        snippet: row.snippet,
+        repeats: false,
+      });
+    }
+    expect(titleWithin({ ...row, name: null }, "#bridge").title).toBe("Thread");
   });
 });

@@ -124,9 +124,9 @@ export function searchSource(q: string): string {
   return `searchView(${JSON.stringify({ q })})`;
 }
 
-/// What a node card shows: a container's children, by uuid, or what a
-/// source holds at its top (`library.ts::sourceTop`). `name` titles it until the
-/// card reads one.
+/// What a node card shows: a place by uuid, or a source
+/// (`library.ts::sourceTop`). `name` titles it, and `doc` is the document
+/// the place is, when it is one.
 export type NodeViewOpts = { node: string; name?: string | null; doc?: string | null };
 
 /// The source of a node card.
