@@ -1304,8 +1304,7 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// A path the scan did not read is not a path that is gone (audit
-/// 2026-10-02 §4). A file now over `max_bytes`, a file evicted to the
+/// A path the scan did not read is not a path that is gone. A file now over `max_bytes`, a file evicted to the
 /// cloud (a size and no blocks, which the scan must not read), and a
 /// removed file seen through a walk that reported an error each used to
 /// lose its row.

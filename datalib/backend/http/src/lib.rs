@@ -2331,7 +2331,7 @@ mod tests {
 
     /// A `.js` a sender attached is served as bytes: under `nosniff` a
     /// `<script src>` refuses it, so the app page's `script-src 'self'`
-    /// cannot be turned into a way to run it (audit 2026-10-02, P3).
+    /// cannot be turned into a way to run it.
     #[test]
     fn proxied_scripts_are_not_runnable() {
         for ct in [

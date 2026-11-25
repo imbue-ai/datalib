@@ -1381,7 +1381,7 @@ struct Rewrite {
 /// A newer export in a layout this reader does not know used to read as
 /// a file that lists nothing — every watch, subscription, review or
 /// Gemini activity deleted — or, for a Maps file with no `features`,
-/// as a quiet `warn!` with the file marked read (audit 2026-10-02 §4).
+/// as a quiet `warn!` with the file marked read.
 /// Now it deletes nothing and fails its feed where a person sees it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_file_in_a_layout_this_reader_does_not_know_deletes_nothing_and_says_so() {

@@ -833,9 +833,7 @@ after a layout change. A fixture is too small and too fresh to show any
 of these. The run store of a real root, after a large sync, shows all of
 them. So after changing a download, a render, an index or a stored
 layout, sync a real root and read its logs as well as running the
-suite. Write what you find as a dated audit under `audits/`
-([`2026-10-29_live_sync_logs.md`](audits/2026-10-29_live_sync_logs.md)
-is one). Write counts and timings only, never what the records say
+suite. Write what you find as a dated audit under `audits/`. Write counts and timings only, never what the records say
 (AGENTS.md §"Real data stays out of the repo").
 
 Everything is plain SQLite. Open it with `sqlite3 -readonly`, the
