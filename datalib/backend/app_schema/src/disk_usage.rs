@@ -9,7 +9,11 @@ pub const ROOT_PATH: &str = ".";
 
 /// One measurement of one tree.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable)]
-#[portable_table(table = "disk_usage", primary_key = "path, measured_at_utc")]
+#[portable_table(
+    table = "disk_usage",
+    primary_key = "path, measured_at_utc",
+    index = "disk_usage_by_time:measured_at_utc"
+)]
 pub struct DiskUsageRow {
     /// Which tree this measures: a step id (the data-root-relative tree
     /// that step writes), or [`ROOT_PATH`] for the whole data root.
