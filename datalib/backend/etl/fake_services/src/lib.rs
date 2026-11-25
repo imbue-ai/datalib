@@ -311,6 +311,35 @@ impl Fakes {
         })
     }
 
+    /// The base URL the fake of `service` serves at, for a test that drives
+    /// the service's own API directly.
+    pub fn service_url(&self, service: &str) -> String {
+        format!("http://127.0.0.1:{}", self.ports[service])
+    }
+
+    /// A form `POST` to `path` of the fake of `service`, with `header` as
+    /// its `Authorization`; the JSON answer. How a test makes the upstream
+    /// change a later sync has to notice: a message deleted, a reaction
+    /// added, a channel archived.
+    pub fn post_form(
+        &self,
+        service: &str,
+        path: &str,
+        header: &str,
+        form: &[(&str, &str)],
+    ) -> Result<Value> {
+        let mut args: Vec<String> =
+            vec!["-X".into(), "POST".into(), "-H".into(), header.to_string()];
+        for (key, value) in form {
+            args.push("--data-urlencode".into());
+            args.push(format!("{key}={value}"));
+        }
+        args.push(format!("{}{path}", self.service_url(service)));
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let text = curl(&refs)?;
+        serde_json::from_str(&text).with_context(|| format!("the fake's answer to {path}: {text}"))
+    }
+
     fn control_url(&self, route: &str) -> String {
         format!(
             "http://127.0.0.1:{}/_control/{route}",

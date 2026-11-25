@@ -227,14 +227,14 @@ async fn an_edit_and_a_new_issue_are_what_a_later_sync_writes() {
 }
 
 /// Linear's hourly request bucket drains at its rate and refuses a caller
-/// past it with a 429 and a Retry-After; shrunk to three requests a
-/// second here, so a sync of a dozen requests meets the refusal and has
-/// only a second to wait out.
+/// past it with a 429 and a Retry-After; shrunk to five requests over ten
+/// seconds here, so a sync of a dozen requests meets the refusal however
+/// slowly it runs, and has at most two seconds to wait out.
 #[tokio::test]
 async fn a_sync_past_linears_request_limit_waits_and_completes() {
     let launch = Launch {
-        rate_limit_by_bucket: BTreeMap::from([("linear:requests".to_string(), 3)]),
-        rate_limit_window_seconds: Some(1),
+        rate_limit_by_bucket: BTreeMap::from([("linear:requests".to_string(), 5)]),
+        rate_limit_window_seconds: Some(10),
     };
     let fakes = Fakes::start_with(
         &BTreeMap::from([(LINEAR, with_real_rate_limits(seed()))]),

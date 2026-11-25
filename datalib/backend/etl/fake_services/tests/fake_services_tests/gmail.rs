@@ -212,13 +212,14 @@ async fn a_window_lists_only_the_mail_after_its_start() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sync_past_gmails_per_user_quota_waits_and_completes() {
-    // A full `messages.get` costs 60 units, so a bucket of 150 a second
-    // takes two and refuses the third with a Retry-After; a bucket a single
-    // request overruns would be refused for good, as Gmail refuses a
-    // request past its per-request maximum.
+    // A full `messages.get` costs 60 units, so a bucket of 150 takes two
+    // and refuses the third with a Retry-After, however slowly the four
+    // gets come within the window; a bucket a single request overruns
+    // would be refused for good, as Gmail refuses a request past its
+    // per-request maximum.
     let launch = Launch {
         rate_limit_by_bucket: BTreeMap::from([("google:gmail_per_user".to_string(), 150)]),
-        rate_limit_window_seconds: Some(1),
+        rate_limit_window_seconds: Some(10),
     };
     let fakes = Fakes::start_with(
         &BTreeMap::from([(GOOGLE, with_real_rate_limits(seed()))]),

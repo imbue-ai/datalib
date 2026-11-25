@@ -433,9 +433,11 @@ async fn an_edited_reply_in_a_quiet_thread_is_not_re_read() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_sync_rate_limited_by_slack_waits_and_completes() {
+    // One history call a window: the second channel's is refused however
+    // slowly the download runs, and waits out the rest of the window.
     let launch = Launch {
         rate_limit_by_bucket: BTreeMap::from([("slack:conversations.history".to_string(), 1)]),
-        rate_limit_window_seconds: Some(1),
+        rate_limit_window_seconds: Some(5),
     };
     let fakes = Fakes::start_with(
         &BTreeMap::from([(SLACK, with_real_rate_limits(seed()))]),
@@ -514,4 +516,444 @@ async fn a_refused_credential_ends_the_run_and_stores_nothing() {
     let shown = format!("{err:#}");
     assert!(shown.to_lowercase().contains("auth"), "{shown}");
     assert_eq!(load(out.path()).messages.len(), 0);
+}
+
+// What a later sync has to notice when the workspace changes under it:
+// driven through the fake's own Slack API as Picard, the way a person
+// using Slack would make the change.
+
+const AUTH: &str = "Authorization: Bearer xoxb-fake-starfleet-token";
+
+/// A Slack method called as Picard, which must answer `ok`.
+fn slack_do(fakes: &Fakes, method: &str, form: &[(&str, &str)]) -> Value {
+    let answer = fakes
+        .post_form(SLACK, &format!("/api/{method}"), AUTH, form)
+        .expect("the fake answers");
+    assert_eq!(answer["ok"], json!(true), "{method}: {answer}");
+    answer
+}
+
+/// The id Slack gives the conversation named `name`, as the download's
+/// store holds it.
+fn channel_id(raw: &LoadedRaw, name: &str) -> String {
+    raw.channels
+        .iter()
+        .find(|c| c["name"] == name)
+        .unwrap_or_else(|| panic!("no channel {name}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// The stored `ts` of the message reading `text`, which under the shift
+/// only the store knows.
+fn ts_of(raw: &LoadedRaw, text: &str) -> String {
+    raw.messages
+        .iter()
+        .find(|m| m.payload["text"] == text)
+        .unwrap_or_else(|| panic!("no message reads {text:?}"))
+        .ts
+        .clone()
+}
+
+/// The `conversations.history` calls of `phase` for the conversation `id`.
+fn history_calls(fakes: &Fakes, phase: &str, id: &str) -> usize {
+    calls(fakes, phase, "conversations.history")
+        .iter()
+        .filter(|url| url.contains(&format!("channel={id}")))
+        .count()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_root_deleted_upstream_inside_the_window_is_pruned() {
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the first download runs");
+    let raw = load(out.path());
+    let bridge = channel_id(&raw, "bridge");
+    // Slack lets a person delete their own messages: Picard posts, syncs, deletes.
+    slack_do(
+        &fakes,
+        "chat.postMessage",
+        &[("channel", &bridge), ("text", "Make it so.")],
+    );
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the second download runs");
+    let raw = load(out.path());
+    assert!(texts(&raw).contains("Make it so."));
+    slack_do(
+        &fakes,
+        "chat.delete",
+        &[("channel", &bridge), ("ts", &ts_of(&raw, "Make it so."))],
+    );
+
+    let third = fetch_into(out.path(), |o| o)
+        .await
+        .expect("the third download runs");
+
+    let raw = load(out.path());
+    assert!(!texts(&raw).contains("Make it so."), "{:?}", texts(&raw));
+    assert_eq!(
+        third.pruned,
+        1,
+        "{}",
+        serde_json::to_string(&third).unwrap()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_deleted_upstream_goes_when_its_thread_is_read_again() {
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the first download runs");
+    let raw = load(out.path());
+    let bridge = channel_id(&raw, "bridge");
+    let root = ts_of(&raw, "Status report.");
+    // Slack lets a person delete their own messages: Picard replies, syncs,
+    // deletes the reply, and the thread gains another so it is read again.
+    slack_do(
+        &fakes,
+        "chat.postMessage",
+        &[
+            ("channel", &bridge),
+            ("thread_ts", &root),
+            ("text", "Acknowledged."),
+        ],
+    );
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the second download runs");
+    let raw = load(out.path());
+    assert!(texts(&raw).contains("Acknowledged."));
+    slack_do(
+        &fakes,
+        "chat.delete",
+        &[("channel", &bridge), ("ts", &ts_of(&raw, "Acknowledged."))],
+    );
+    slack_do(
+        &fakes,
+        "chat.postMessage",
+        &[
+            ("channel", &bridge),
+            ("thread_ts", &root),
+            ("text", "Shields holding."),
+        ],
+    );
+
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the third download runs");
+
+    let raw = load(out.path());
+    assert!(
+        texts(&raw).contains("Shields holding."),
+        "{:?}",
+        texts(&raw)
+    );
+    assert!(!texts(&raw).contains("Acknowledged."), "{:?}", texts(&raw));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reaction_added_inside_the_window_lands_on_the_next_sync() {
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the first download runs");
+    let raw = load(out.path());
+    slack_do(
+        &fakes,
+        "reactions.add",
+        &[
+            ("channel", &channel_id(&raw, "bridge")),
+            ("timestamp", &ts_of(&raw, "Course laid in for Farpoint.")),
+            ("name", "rocket"),
+        ],
+    );
+
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the second download runs");
+
+    let raw = load(out.path());
+    let reactions = &text_of(&raw, "Course laid in for Farpoint.")["reactions"];
+    assert_eq!(reactions[0]["name"], "rocket", "{reactions}");
+}
+
+/// Picard is not in #ten-forward, whose one message is older than the
+/// refresh window. Once he joins, the next sync walks the channel from the
+/// start, not from the window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_channel_the_account_joins_later_is_walked_from_its_start() {
+    let mut seeded = seed();
+    seeded["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"channel": "ten-forward", "user": "laforge", "ts": ts_before(45 * DAY), "text": "Welcome aboard, Ensign."}));
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seeded)])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the first download runs");
+    let raw = load(out.path());
+    assert!(!texts(&raw).contains("Poker tonight."));
+    slack_do(
+        &fakes,
+        "conversations.join",
+        &[("channel", &channel_id(&raw, "ten-forward"))],
+    );
+
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the second download runs");
+
+    let raw = load(out.path());
+    assert!(texts(&raw).contains("Poker tonight."), "{:?}", texts(&raw));
+    assert!(
+        texts(&raw).contains("Welcome aboard, Ensign."),
+        "{:?}",
+        texts(&raw)
+    );
+}
+
+/// An archived channel is read once (INGEST.md § "Archived channels"): the
+/// run that finds it archived walks it whole and leaves it alone after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_archived_channel_is_walked_once_and_then_left_alone() {
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fakes.mark_phase("first").unwrap();
+    fetch_into(out.path(), |o| FetchOptions {
+        archived: true,
+        ..o
+    })
+    .await
+    .expect("the first download runs");
+    let raw = load(out.path());
+    let engineering = channel_id(&raw, "engineering");
+    slack_do(
+        &fakes,
+        "conversations.archive",
+        &[("channel", &engineering)],
+    );
+
+    fakes.mark_phase("second").unwrap();
+    fetch_into(out.path(), |o| FetchOptions {
+        archived: true,
+        ..o
+    })
+    .await
+    .expect("the second download runs");
+    fakes.mark_phase("third").unwrap();
+    fetch_into(out.path(), |o| FetchOptions {
+        archived: true,
+        ..o
+    })
+    .await
+    .expect("the third download runs");
+
+    let raw = load(out.path());
+    assert!(texts(&raw).contains("Warp core diagnostic scheduled."));
+    assert_eq!(
+        raw.channels
+            .iter()
+            .find(|c| c["name"] == "engineering")
+            .unwrap()["is_archived"],
+        json!(true)
+    );
+    assert!(history_calls(&fakes, "second", &engineering) >= 1);
+    assert_eq!(history_calls(&fakes, "third", &engineering), 0);
+}
+
+/// Slack takes at most twenty `in:` filters in one search, so a reply
+/// search over more channels than that is more than one query, and every
+/// old thread's new reply is still found.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reply_search_over_more_channels_than_one_query_names_finds_every_reply() {
+    let mut seeded = seed();
+    let mut replies = Vec::new();
+    for n in 0..25 {
+        let name = format!("deck-{n:02}");
+        seeded["channels"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"name": name, "members": ["picard", "riker"]}));
+        seeded["messages"].as_array_mut().unwrap().push(json!({
+            "channel": name, "user": "riker", "ts": ts_before(50 * DAY + n * 60), "text": format!("Deck {n} report.")
+        }));
+        replies.push(json!({
+            "channel": name, "user": "riker", "ts": format!("first+00:00:01.{n:06}"),
+            "thread_ts": ts_before(50 * DAY + n * 60), "text": format!("Deck {n} follow-up.")
+        }));
+    }
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seeded)])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fakes.mark_phase("first").unwrap();
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the first download runs");
+    fakes
+        .add_records(SLACK, &json!({"messages": replies}), Some("first"))
+        .expect("the update lands");
+
+    fakes.mark_phase("second").unwrap();
+    fetch_into(out.path(), |o| FetchOptions {
+        search_replies: true,
+        ..o
+    })
+    .await
+    .expect("the second download runs");
+
+    let raw = load(out.path());
+    let missing: Vec<String> = (0..25)
+        .map(|n| format!("Deck {n} follow-up."))
+        .filter(|t| !texts(&raw).contains(t))
+        .collect();
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(calls(&fakes, "second", "search.messages").len() >= 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_direct_message_opened_after_the_first_sync_is_mirrored_on_the_next() {
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    let dms = |o: FetchOptions| FetchOptions {
+        dms: true,
+        list_every_hours: 0,
+        ..o
+    };
+    fetch_into(out.path(), dms)
+        .await
+        .expect("the first download runs");
+    let raw = load(out.path());
+    let user_id = |name: &str| -> String {
+        raw.users.iter().find(|u| u["name"] == name).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // A direct message has no name; Riker's is the im whose other party he is.
+    let riker_dm = raw
+        .channels
+        .iter()
+        .find(|c| c["is_im"] == json!(true) && c["user"] == user_id("riker"))
+        .expect("Riker's im is listed")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let opened = slack_do(
+        &fakes,
+        "conversations.open",
+        &[("users", &user_id("laforge"))],
+    );
+    let laforge_dm = opened["channel"]["id"].as_str().unwrap().to_string();
+    slack_do(
+        &fakes,
+        "chat.postMessage",
+        &[
+            ("channel", &laforge_dm),
+            ("text", "Geordi, a word about the warp core."),
+        ],
+    );
+    slack_do(
+        &fakes,
+        "chat.postMessage",
+        &[
+            ("channel", &riker_dm),
+            ("text", "Number One, my ready room."),
+        ],
+    );
+
+    fetch_into(out.path(), dms)
+        .await
+        .expect("the second download runs");
+
+    let raw = load(out.path());
+    assert!(
+        texts(&raw).contains("Number One, my ready room."),
+        "{:?}",
+        texts(&raw)
+    );
+    assert!(
+        texts(&raw).contains("Geordi, a word about the warp core."),
+        "{:?}",
+        texts(&raw)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_private_channel_the_account_is_in_is_mirrored() {
+    let mut seeded = seed();
+    seeded["channels"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "senior-staff", "is_private": true, "members": ["picard", "riker"]}));
+    seeded["messages"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"channel": "senior-staff", "user": "riker", "ts": ts_before(DAY + 600), "text": "Eyes only: the Borg."}));
+    let _fakes = Fakes::start(&BTreeMap::from([(SLACK, seeded)])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+
+    fetch_into(out.path(), |o| o)
+        .await
+        .expect("the download runs");
+
+    let raw = load(out.path());
+    assert!(
+        texts(&raw).contains("Eyes only: the Borg."),
+        "{:?}",
+        texts(&raw)
+    );
+    assert_eq!(
+        raw.channels
+            .iter()
+            .find(|c| c["name"] == "senior-staff")
+            .unwrap()["is_private"],
+        json!(true)
+    );
+}
+
+/// A channel with more roots than a history page is mirrored whole, and
+/// the window re-read pages too; a thread of more replies than a page is
+/// mirrored whole as well, though the fake serves a thread's replies in one
+/// page, so only the download's paging of history is exercised here.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn more_than_a_page_of_roots_and_of_replies_is_read_whole() {
+    let mut seeded = seed();
+    seeded["channels"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name": "ops-log", "members": ["picard", "laforge"]}));
+    let messages = seeded["messages"].as_array_mut().unwrap();
+    for n in 0..1200 {
+        messages.push(json!({
+            "channel": "ops-log", "user": "laforge", "ts": ts_before(20 * DAY - n * 60), "text": format!("Log entry {n}.")
+        }));
+    }
+    for n in 0..1100 {
+        messages.push(json!({
+            "channel": "bridge", "user": "riker", "ts": ts_before(2 * DAY - 1200 - n * 10), "thread_ts": ts_before(2 * DAY),
+            "text": format!("Nominal, check {n}.")
+        }));
+    }
+    let fakes = Fakes::start(&BTreeMap::from([(SLACK, seeded)])).expect("the fakes serve");
+    let out = tempfile::tempdir().unwrap();
+    fakes.mark_phase("first").unwrap();
+
+    let summary = fetch_into(out.path(), |o| o)
+        .await
+        .expect("the download runs");
+
+    let raw = load(out.path());
+    let shown = serde_json::to_string(&summary).unwrap();
+    assert_eq!(summary.messages, 3 + 1200, "{shown}");
+    assert_eq!(summary.replies, 2 + 1100, "{shown}");
+    assert_eq!(raw.messages.len(), 5 + 1200 + 1100);
+    assert!(history_calls(&fakes, "first", &channel_id(&raw, "ops-log")) >= 2);
 }
