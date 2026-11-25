@@ -78,9 +78,9 @@ http_archive(
 # (third-party/fake-services/README.md).
 http_archive(
     name = "fake_services",
-    urls = ["https://github.com/imbue-ai/fake-services/archive/9d41e74f3bf1c7613170f04a0bd04e0b31a49105.tar.gz"],
-    sha256 = "db83788246347c79409e4e0962f11774805e5a85258f93938599ca4124da4a90",
-    strip_prefix = "fake-services-9d41e74f3bf1c7613170f04a0bd04e0b31a49105",
+    urls = ["https://github.com/imbue-ai/fake-services/archive/c8f29daabe3553ced5226dc056003552dfab8ae4.tar.gz"],
+    sha256 = "5376149b2d67937546f7cb1c7043e5b7b232fa4cc24d5fe6ff610779b4fa5734",
+    strip_prefix = "fake-services-c8f29daabe3553ced5226dc056003552dfab8ae4",
     build_file = "//third-party/fake-services:fake_services.BUILD.bazel",
 )
 
