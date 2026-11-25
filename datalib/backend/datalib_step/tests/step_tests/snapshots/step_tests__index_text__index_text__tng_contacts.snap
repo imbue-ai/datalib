@@ -96,6 +96,9 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 9 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_contact_groups` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_people` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_photos` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#ingested_files` |  | 3 rows | `00000000` |
 
 === tng_contacts 00000000-0000-8acb-9e72-ef58e1a96813 Seven of Nine

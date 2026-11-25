@@ -1,8 +1,9 @@
 //! Raw-store schema for the CardDAV (contacts) provider.
 
+use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
-use datalib_etl_macros::{RawTable, WirePayloadRow};
+use datalib_etl_macros::{CasEdgeRow, RawTable, WirePayloadRow};
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::Sqlite;
@@ -10,16 +11,26 @@ use uuid::Uuid;
 
 use super::api::{split_vcards, vcard_categories, vcard_is_group, vcard_members};
 
-pub const DATA_TABLES: &[&str] = &["accounts", "addressbooks", "contacts"];
+pub const DATA_TABLES: &[&str] = &[
+    "accounts",
+    "addressbooks",
+    "contacts",
+    "google_people",
+    "google_contact_groups",
+    "google_photos",
+];
 
 // accounts
 
-/// `accounts` — one row per configured CardDAV server.
+/// `accounts` — one row per configured CardDAV server; `google` for a
+/// Google account, whose `principal_href` is its own resource name
+/// (`people/<account id>`) and `login` its address.
 pub const ACCOUNTS_DDL: &str = "CREATE TABLE IF NOT EXISTS accounts (
     id TEXT PRIMARY KEY,
     server_url TEXT NULL,
     principal_href TEXT NULL,
-    addressbook_home_set TEXT NULL
+    addressbook_home_set TEXT NULL,
+    login TEXT NULL
 )";
 
 #[derive(Debug, Clone, Default)]
@@ -28,12 +39,17 @@ pub struct AccountRow {
     pub server_url: Option<String>,
     pub principal_href: Option<String>,
     pub addressbook_home_set: Option<String>,
+    pub login: Option<String>,
 }
 
 impl BulkUpsertable for AccountRow {
     const TABLE: &'static str = "accounts";
-    const TYPED_COLUMNS: &'static [&'static str] =
-        &["server_url", "principal_href", "addressbook_home_set"];
+    const TYPED_COLUMNS: &'static [&'static str] = &[
+        "server_url",
+        "principal_href",
+        "addressbook_home_set",
+        "login",
+    ];
     const PAYLOAD_COLUMN: Option<&'static str> = None;
     fn id(&self) -> &str {
         &self.id
@@ -46,13 +62,15 @@ impl BulkUpsertable for AccountRow {
             .bind(self.server_url.as_deref())
             .bind(self.principal_href.as_deref())
             .bind(self.addressbook_home_set.as_deref())
+            .bind(self.login.as_deref())
     }
 }
 
 // addressbooks
 
 /// `addressbooks` — one row per CardDAV addressbook collection
-/// discovered under an account's home-set.
+/// discovered under an account's home-set. A Google account has one, its
+/// contacts, at `people/<account id>/connections`.
 ///
 /// PK choice: `"<account_id>!<href>"`. The CardDAV href (e.g.
 /// `/dav/addressbooks/user/default/`) is stable per server and known
@@ -264,6 +282,58 @@ impl ContactCategoryRow {
     }
 }
 
+// google_people, google_contact_groups, google_photos
+
+/// `google_people` — one contact as Google's People API sends it, keyed
+/// `"<addressbook_id>#people/<id>"`. Its `memberships` are a set Google
+/// sends as a list, so they are stored sorted.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "google_people")]
+pub struct GooglePersonRow {
+    pub id_and_payload: WirePayload,
+    pub addressbook_id: String,
+    pub resource_name: String,
+    pub display_name: Option<String>,
+}
+
+/// Google re-stamps these without the contact changing (some photos'
+/// links are signed afresh for every listing), so they live in the
+/// sidecar where the diff does not see them. Render reads `updateTime` as
+/// the contact's `modified_at`.
+pub const GOOGLE_PERSON_VOLATILE_PATHS: &[dr::VolatilePath] = &[
+    &["etag"],
+    &["metadata", "sources", dr::EVERY_ELEMENT, "etag"],
+    &["metadata", "sources", dr::EVERY_ELEMENT, "updateTime"],
+    &["photos", dr::EVERY_ELEMENT, "url"],
+];
+
+/// `google_contact_groups` — one label (or one of Google's own groups,
+/// such as `myContacts` and `starred`), keyed
+/// `"<addressbook_id>#contactGroups/<id>"`. Who is in it is each person's
+/// `memberships`.
+#[derive(Debug, Clone, WirePayloadRow)]
+#[wire_payload_row(table = "google_contact_groups")]
+pub struct GoogleContactGroupRow {
+    pub id_and_payload: WirePayload,
+    pub addressbook_id: String,
+    pub resource_name: String,
+    pub name: Option<String>,
+}
+
+pub const GOOGLE_GROUP_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["etag"]];
+
+/// `google_photos` — the photo Google lists for a contact, by where Google
+/// has it from (`PROFILE/<id>`); the bytes are in the blob store once
+/// fetched. The link they were fetched at is the sidecar's `held_version`.
+#[derive(Debug, Clone, CasEdgeRow)]
+#[cas_edge_row(table = "google_photos")]
+pub struct GooglePhotoRow {
+    pub id: String,
+    pub person_id: String,
+    pub photo_source: String,
+    pub blake3: Option<String>,
+}
+
 /// The UID a group member names: `urn:uuid:<UID>`, or a bare UID. `None`
 /// for any other URI (`mailto:`), which names no card.
 pub fn member_uid(member: &str) -> Option<&str> {
@@ -352,7 +422,33 @@ pub const LADDER: &[Migration] = &[
             ))
         },
     },
+    Migration {
+        version: 5,
+        name: "the Google tables, empty",
+        apply: |conn| {
+            Box::pin(async move {
+                let sidecars = ["google_people", "google_contact_groups", "google_photos"]
+                    .map(dr::bookkeeping_ddl_for);
+                create(conn, google_ddl().into_iter().chain(sidecars).collect()).await
+            })
+        },
+    },
 ];
+
+fn google_ddl() -> Vec<String> {
+    let mut out = vec![
+        GooglePersonRow::ddl(),
+        "CREATE INDEX IF NOT EXISTS google_people_by_addressbook \
+         ON google_people(addressbook_id)"
+            .to_string(),
+        GoogleContactGroupRow::ddl(),
+        "CREATE INDEX IF NOT EXISTS google_contact_groups_by_addressbook \
+         ON google_contact_groups(addressbook_id)"
+            .to_string(),
+    ];
+    out.extend(<GooglePhotoRow as CasEdgeRow>::all_ddl());
+    out
+}
 
 /// A rung creates its table rather than leaving it to the DDL, so the
 /// open does not see a new table and clear the cursors: an address book's
@@ -436,6 +532,7 @@ pub fn full_ddl() -> Vec<String> {
     out.extend(GroupMemberRow::all_ddl());
     out.extend(ContactCategoryRow::all_ddl());
     out.extend(datalib_etl_web::dav::state::ddl());
+    out.extend(google_ddl());
     for table in DATA_TABLES {
         out.push(dr::bookkeeping_ddl_for(table));
     }

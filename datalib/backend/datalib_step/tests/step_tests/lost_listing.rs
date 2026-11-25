@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use datalib_etl_calendar::ingest::google::{calendar_list_url, events_url, HTTP_SERVICE};
+use datalib_etl_calendar::ingest::google::{calendar_list_url, events_url, API};
 use datalib_etl_web::http::{HttpRequest, HttpResponse};
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use serde_json::{json, Value};
@@ -18,7 +18,7 @@ const BRIDGE: &str = "bridge@group.calendar.google.com";
 const AWAY: &str = "away@group.calendar.google.com";
 
 fn fixture(playback: &Path, url: &str, resp: HttpResponse) {
-    let req = HttpRequest::get(HTTP_SERVICE, url).header("Accept", "application/json");
+    let req = HttpRequest::get(API.service, url).header("Accept", "application/json");
     write_fixture(playback, &req, &resp).unwrap();
 }
 

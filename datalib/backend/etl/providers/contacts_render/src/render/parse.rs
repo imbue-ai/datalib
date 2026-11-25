@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use datalib_contact_schema::Photo;
+use datalib_contact_schema::{ContactHandle, Detail, Photo};
 
 use datalib_etl_contacts::ingest::api::{
     split_vcards, vcard_all, vcard_categories, vcard_created, vcard_is_group, vcard_members,
@@ -16,14 +16,17 @@ use datalib_etl_contacts::ingest::photo::card_photo;
 use datalib_etl_render::inputs::{changed_rows, Input, RawRange};
 use datalib_etl_render::photo;
 
-/// One parsed vCard, with everything render cares about pulled
-/// out so render doesn't have to re-walk the text.
+use super::google;
+
+/// One card, whichever way it was stored, with everything render cares
+/// about pulled out of the raw row.
 #[derive(Debug, Clone)]
 pub struct ParsedContact {
-    /// Stable identifier from the vCard's `UID:`. A card without one
-    /// (every card of a Google export) takes the id its download gave
-    /// its row, from the name or the file position; that id is the
-    /// card's alone, where the row's href is shared by a whole file.
+    /// The vCard's `UID:`, or Google's resource name (`people/c1701`). A
+    /// card without a `UID:` (every card of a Google export) takes the id
+    /// its download gave its row, from the name or the file position;
+    /// that id is the card's alone, where the row's href is shared by a
+    /// whole file.
     pub uid: String,
     /// Addressbook label — the file stem of the `.vcf` this contact
     /// came from. Shows up on grid rows as `channel` and groups
@@ -36,31 +39,36 @@ pub struct ParsedContact {
     /// `FN` (formatted name). `None` for nameless cards — the
     /// render path falls back to the UID.
     pub display_name: Option<String>,
-    /// `REV:` (revision timestamp). Render uses it for `modified_at`;
-    /// null when absent.
+    /// The other names the card gives.
+    pub other_names: Vec<String>,
+    /// When the card was last changed (`REV:`), as written. Render uses
+    /// it for `modified_at`; null when absent.
     pub revision: Option<String>,
     /// `CREATED:`, which Fastmail writes; render's `created_at`.
     pub created: Option<String>,
     /// A contact group, whose `members` name the cards in it.
     pub is_group: bool,
     pub members: Vec<String>,
-    /// `CATEGORIES`, as written: Google's export files a contact under
-    /// its labels this way rather than with group cards.
+    /// The groups it is in that have no card of their own: a vCard's
+    /// `CATEGORIES`, as written, which is how Google's export files a
+    /// contact under its labels.
     pub categories: Vec<String>,
     /// Multi-valued properties surfaced in document order.
-    pub emails: Vec<VcardProp>,
-    pub phones: Vec<VcardProp>,
-    pub addresses: Vec<VcardProp>,
-    /// `ORG:` parts, unescaped, in order: the company, then its units.
+    pub emails: Vec<ContactHandle>,
+    pub phones: Vec<ContactHandle>,
+    /// Its addresses and anything else it says.
+    pub details: Vec<Detail>,
+    /// The company, then its units.
     pub org: Vec<String>,
     pub title: Option<String>,
     pub note: Option<String>,
-    /// The blake3 of the inline `PHOTO`'s decoded bytes, which the
-    /// download keeps in the blob store. `None` for a URL-only photo,
-    /// which is `photo_url`.
+    /// The blake3 of the photo in the blob store, where the download put
+    /// it. `None` for a vCard's URL-only photo, which is `photo_url`.
     pub photo: Option<String>,
     pub photo_url: Option<String>,
-    /// The raw rows this card came from: its `contacts` row and the
+    /// The contact's page at the service, where it has one.
+    pub source_url: Option<String>,
+    /// The raw rows this card came from: its own row and the
     /// `addressbooks` row its label is read off.
     pub inputs: Vec<Input>,
 }
@@ -68,6 +76,8 @@ pub struct ParsedContact {
 #[derive(Debug, Default)]
 pub struct ParsedContacts {
     pub contacts: Vec<ParsedContact>,
+    /// The signed-in account, where the source has one.
+    pub login: Option<String>,
     /// The rows the diff names as changed since the cursor, per table.
     /// `None` when there is no cursor: everything renders. A changed row
     /// maps to its cards through `ParsedContact::inputs`, which is how a
@@ -80,8 +90,18 @@ pub struct ParsedContacts {
     pub held_photos: HashMap<String, Photo>,
 }
 
-/// Load every contact from the raw doltlite store at `db_path` and parse each
-/// vCard. `None` when the store is absent or cannot be read — a render
+/// The raw tables a card's `inputs` name rows of.
+const INPUT_TABLES: &[&str] = &[
+    "accounts",
+    "addressbooks",
+    "contacts",
+    "google_people",
+    "google_contact_groups",
+    "google_photos",
+];
+
+/// Load every contact from the raw doltlite store at `db_path` and parse
+/// it. `None` when the store is absent or cannot be read — a render
 /// path must not fail hard because the download has not run yet, and an
 /// unreadable store is not one that lost every contact it had.
 pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContacts>> {
@@ -96,10 +116,16 @@ pub fn parse(db_path: &Path, range: RawRange<'_>) -> Result<Option<ParsedContact
             };
             let loaded = async {
                 let rows = db.load_all_for_render_and_index_md().await?;
+                let people = db.load_google_people().await?;
+                let groups = db.load_google_groups().await?;
+                let login = db.google_login().await?;
                 let pin = db.pin().expect("open_reader returns a pinned handle");
-                let changed =
-                    changed_rows(db.pool(), range, pin, &["contacts", "addressbooks"]).await?;
+                let changed = changed_rows(db.pool(), range, pin, INPUT_TABLES).await?;
                 let mut parsed = parse_loaded(rows);
+                parsed
+                    .contacts
+                    .extend(google::parse(&people, &groups, login.as_deref()));
+                parsed.login = login;
                 parsed.changed = changed;
                 parsed.head = Some(pin.commit().to_string());
                 if let Some(cas) = db.cas() {
@@ -172,24 +198,42 @@ pub fn parse_loaded(rows: Vec<LoadedRawContact>) -> ParsedContacts {
 /// of these keeps `None` and is titled by its id downstream — but an
 /// address-book export routinely holds cards that are just an email
 /// address, and `contacts:#93:0` says nothing where `weishi@x.test` does.
-fn display_name(block: &str, emails: &[VcardProp], phones: &[VcardProp]) -> Option<String> {
-    let nonblank = |s: String| (!s.trim().is_empty()).then(|| s.trim().to_string());
-    single_text(block, "FN")
-        .and_then(nonblank)
-        .or_else(|| {
-            vcard_n_family_given(block)
-                .and_then(|(family, given)| nonblank([given, family].join(" ")))
-        })
-        .or_else(|| emails.first().and_then(|e| nonblank(e.value.clone())))
+fn display_name(block: &str, emails: &[ContactHandle], phones: &[ContactHandle]) -> Option<String> {
+    let own = single_text(block, "FN").and_then(nonblank).or_else(|| {
+        vcard_n_family_given(block).and_then(|(family, given)| nonblank([given, family].join(" ")))
+    });
+    own.or_else(|| name_from_the_rest(emails, phones, &org(block)))
+}
+
+/// What a card with no name is called: its first email, else its first
+/// phone, else its organization.
+pub(super) fn name_from_the_rest(
+    emails: &[ContactHandle],
+    phones: &[ContactHandle],
+    org: &[String],
+) -> Option<String> {
+    emails
+        .first()
+        .and_then(|e| nonblank(e.value.clone()))
         .or_else(|| phones.first().and_then(|p| nonblank(p.value.clone())))
-        .or_else(|| nonblank(org(block).join(" — ")))
+        .or_else(|| nonblank(org.join(" — ")))
+}
+
+pub(super) fn nonblank(s: String) -> Option<String> {
+    (!s.trim().is_empty()).then(|| s.trim().to_string())
 }
 
 fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
     let uid = vcard_uid(block).unwrap_or_default();
-    let emails = vcard_all(block, "EMAIL");
-    let phones = vcard_all(block, "TEL");
-    let addresses = vcard_all(block, "ADR");
+    let emails: Vec<ContactHandle> = vcard_all(block, "EMAIL")
+        .iter()
+        .map(|e| ContactHandle::email(e.label(), e.value.clone()))
+        .collect();
+    let phones: Vec<ContactHandle> = vcard_all(block, "TEL")
+        .iter()
+        .map(|p| ContactHandle::phone(p.label(), phone_number(&p.value)))
+        .collect();
+    let details = vcard_all(block, "ADR").iter().map(address).collect();
     let (photo, photo_url) = card_photo(block);
     let photo = photo.map(|p| datalib_etl::blob_cas::blake3_hex(&p.bytes));
     ParsedContact {
@@ -198,6 +242,7 @@ fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
         uid,
         addressbook: addressbook.to_string(),
         display_name: display_name(block, &emails, &phones),
+        other_names: Vec::new(),
         revision: vcard_rev(block),
         created: vcard_created(block),
         is_group: vcard_is_group(block),
@@ -205,12 +250,46 @@ fn parse_block(block: &str, addressbook: &str) -> ParsedContact {
         categories: vcard_categories(block),
         emails,
         phones,
-        addresses,
+        details,
         org: org(block),
         title: single_text(block, "TITLE"),
         note: single_text(block, "NOTE"),
         photo,
         photo_url,
+        source_url: None,
+    }
+}
+
+/// A vCard 4 `TEL;VALUE=uri:tel:+1-…` carries the number as a URI; the
+/// card means the number.
+fn phone_number(value: &str) -> String {
+    let v = value.trim();
+    match v.get(..4) {
+        Some(scheme) if scheme.eq_ignore_ascii_case("tel:") => v[4..].to_string(),
+        _ => v.to_string(),
+    }
+}
+
+/// `ADR` is `;`-separated: PO box; ext; street; locality; region;
+/// postcode; country. Most cards leave most of them empty.
+fn address(a: &VcardProp) -> Detail {
+    let parts: Vec<String> = a
+        .text_list(';')
+        .into_iter()
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect();
+    Detail::new(
+        field_label("Address", a.label().as_deref()),
+        parts.join(", "),
+    )
+}
+
+/// A detail's label and the source's word for which one: `Address (home)`.
+pub(super) fn field_label(base: &str, which: Option<&str>) -> String {
+    match which {
+        Some(w) if !w.is_empty() => format!("{base} ({w})"),
+        _ => base.to_string(),
     }
 }
 
@@ -365,8 +444,24 @@ mod tests {
         assert_eq!(c.title.as_deref(), Some("Captain; Diplomat"));
         assert_eq!(c.note.as_deref(), Some("Make it so.\nTea, Earl Grey, hot."));
         assert_eq!(
-            c.addresses[0].text_list(';'),
-            ["", "", "Ready Room, Deck 1", "", "", "", ""]
+            c.details,
+            [Detail::new("Address (work)", "Ready Room, Deck 1")],
+            "empty parts are left out"
+        );
+    }
+
+    /// A vCard 4 number written as a URI (`TEL;VALUE=uri:tel:+1-…`) is
+    /// the number: it reads and links as one.
+    #[test]
+    fn a_tel_uri_is_its_number() {
+        let c = parse_block(
+            "BEGIN:VCARD\nFN:Worf\nTEL;TYPE=cell;VALUE=uri:tel:+1-202-555-0101\nEND:VCARD",
+            "book",
+        );
+        assert_eq!(c.phones[0].value, "+1-202-555-0101");
+        assert_eq!(
+            c.phones[0].handle.as_ref().map(|h| h.as_str()),
+            Some("tel:+12025550101")
         );
     }
 

@@ -159,7 +159,9 @@ international form, but an address-book card is often typed by hand
 without one, and a phone's SMS backup keeps whatever the phone was
 given. A card whose numbers are all national reaches nobody through
 them. The planned fix, not built, is a default region the render
-applies to such a number.
+applies to such a number. Google sends its own full reading of some
+numbers (`canonicalForm`), and one typed without its country code takes
+its handle from that where there is one.
 
 ### Changing the rules
 
@@ -355,7 +357,9 @@ image). A vCard carries its photo inside
 the card: the contacts download decodes each inline `PHOTO` into the
 source's blob store before the card is stored, and the source's
 `--prepare` does the same for every card a store already holds. Render
-hashes the card's decoded photo and links it. A photo the blob store
+hashes the card's decoded photo and links it. A Google contact's photo
+is a link, which the download fetches into the blob store
+(`contacts/INGEST.md`). A photo the blob store
 lacks leaves the contact with no photo and a `blob_missing` problem on
 its page.
 

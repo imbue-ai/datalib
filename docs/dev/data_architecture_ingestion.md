@@ -400,6 +400,7 @@ therefore what it can see:
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
 | `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it. A home listing that names nothing, not even the home itself (a 200 with an empty body), fails the run and deletes nothing (`dav::list_members`); `datalib_etl_web::dav` |
+| `contacts` (Google) | `metadata.deleted` and `previousResourceNames` in a sync-token listing; a whole listing on a first sync or after the token expired; the label listing, whole every run | contacts a whole listing does not name, once it reaches its end, each with its photo; labels the label listing does not name; another account's contacts, when the login changes. A listing with an entry it could not identify deletes nothing it did not name |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error. A file that is nothing deletes nothing and is a `listing:` problem: a `.vcf` with no card or cut off inside one, an `.ics` with no `VCALENDAR`, cut off before `END:VCALENDAR`, or whose events all lack a `UID`. Only a whole `VCALENDAR` with no events empties its calendar; a book is emptied by deleting its file |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing, nor does a `messages.json` listing entries none of which has a `message_id`. Deletions land in the transaction that stamps the files |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
@@ -581,7 +582,7 @@ Nothing is marked done, and no position in a walk is stored.
   `listed_messages`, the forges' `listed_change_requests`, DAV's
   `dav_resources`), the rows of an enumeration it re-reads every run
   (chatgpt, claude), or results that are themselves the content
-  (Notion's search, Google Calendar's events).
+  (Notion's search, Google Calendar's events, Google's contacts).
 - **Held.** The version each record's content satisfies, in
   `held_version` on that table's `_bookkeeping` sidecar, written in the
   transaction that writes the content. A failed attempt leaves a
@@ -633,6 +634,7 @@ user list, claude's orgs and project docs).
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
+| contacts (Google) | the connections page is the content; each contact's photo link | `google_photos` sidecar, at its link | — |
 | calendar (Calendly) | the scheduled-events listing, at each event's `listing_hash` | `calendly_invitees` sidecar | — |
 | google_drive | the file listing, at each file's Drive `version`; each stored revision's export links. The folder and shared-drive listings, and each listed file's `parents`, are the content (`folders`, `drives`, `file_parents`) | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |

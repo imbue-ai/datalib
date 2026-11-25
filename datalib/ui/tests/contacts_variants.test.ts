@@ -1,4 +1,4 @@
-// Fastmail, CardDAV and .vcf are one `contacts` step type with three
+// Google, Fastmail, CardDAV and .vcf are one `contacts` step type with four
 // descriptors, told apart by which method table the step carries.
 // Written the wrong way, a step names no method and `datalib-step`
 // refuses it; read back the wrong way, it loses its form.
@@ -16,6 +16,7 @@ describe("the catalog's contacts variants", () => {
     expect(CONTACTS.map((e) => e.variantKey).sort()).toEqual([...declared].sort());
     expect(CONTACTS.every((e) => e.wizard)).toBe(true);
     expect(CONTACTS.map(entryKey)).toEqual([
+      "contacts:google",
       "contacts:fastmail",
       "contacts:carddav",
       "contacts:vcf",
@@ -32,6 +33,18 @@ describe("the catalog's contacts variants", () => {
     expect(byKey("vcf").canProbe).toBeFalsy();
   });
 
+  it("signs in to Google with a service of its own, and picks labels", () => {
+    const google = byKey("google");
+    expect(google.credentialService).toBe("google-people");
+    expect(google.canProbe).toBe(true);
+    expect(google.fields!.map((f) => f.target)).toEqual([
+      "latchkey_settings.account",
+      "google.labels",
+    ]);
+    const labels = google.fields!.find((f) => f.target === "google.labels")!;
+    expect(labels.kind === "string_list" && labels.probe).toBe("labels");
+  });
+
   it("logs in to Fastmail with the app password Fastmail Calendar uses", () => {
     const calendar = CATALOG.find((e) => e.type === "calendar" && e.variantKey === "fastmail")!;
     expect(byKey("fastmail").credentialService).toBe("fastmail-dav");
@@ -41,13 +54,15 @@ describe("the catalog's contacts variants", () => {
 
 describe("writing and reading a step", () => {
   it("writes the method table even when nothing is filled in", () => {
-    const toml = buildStep({
-      entry: byKey("fastmail"),
-      group: "f",
-      phase: "download",
-      values: seedFieldValues(byKey("fastmail")),
-    });
-    expect(toml).toContain("fastmail = {}");
+    for (const key of ["google", "fastmail"]) {
+      const toml = buildStep({
+        entry: byKey(key),
+        group: key,
+        phase: "download",
+        values: seedFieldValues(byKey(key)),
+      });
+      expect(toml).toContain(`${key} = {}`);
+    }
   });
 
   it("writes a CardDAV server and a .vcf folder under their own tables", () => {
@@ -68,11 +83,18 @@ describe("writing and reading a step", () => {
     const vcf = write("vcf", { "vcf.path": "~/backups/crew_vcf" });
     expect(vcf).toContain("[steps.params.vcf]");
     expect(vcf).toContain('path = "~/backups/crew_vcf"');
+    const google = write("google", { "google.labels": ["Bridge crew"] });
+    expect(google).toContain("[steps.params.google]");
+    expect(google).toContain('labels = ["Bridge crew"]');
   });
 
   it("finds each method's form from the table it carries", () => {
     const steps = listSteps(`data_root = "~/datalib"
-${["f", "c", "v"].map((id) => `\n[[groups]]\nid = "${id}"\ntype = "contacts"\n`).join("")}
+${["g", "f", "c", "v"].map((id) => `\n[[groups]]\nid = "${id}"\ntype = "contacts"\n`).join("")}
+[[steps]]
+id = "g/ingest"
+[steps.params.google]
+
 [[steps]]
 id = "f/ingest"
 [steps.params.fastmail]
@@ -89,6 +111,7 @@ id = "v/ingest"
 path = "~/backups/contacts"
 `);
     for (const [id, label] of [
+      ["g/ingest", "Google Contacts"],
       ["f/ingest", "Fastmail Contacts"],
       ["c/ingest", "Contacts (CardDAV)"],
       ["v/ingest", "Contacts (.vcf files)"],
