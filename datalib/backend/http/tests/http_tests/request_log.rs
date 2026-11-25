@@ -2,7 +2,8 @@
 //! `system/runs/runs.sqlite`, read back through `GET /api/log` — except the
 //! reads of the log itself, which would otherwise wake the log panel
 //! into refetching forever; and a path under the home directory is
-//! stored as `~/…`. One test, because the subscriber it installs is the
+//! stored as `~/…`. A line says how many rows were read to answer and how
+//! big the answer was. One test, because the subscriber it installs is the
 //! process's only one.
 
 use axum::body::Body;
@@ -57,14 +58,33 @@ fn fields(line: &serde_json::Value) -> serde_json::Value {
     serde_json::from_str(line["fields"].as_str().unwrap()).unwrap()
 }
 
+/// Returns once the store holds the first lines the writer was handed,
+/// and with them the row of this process.
+async fn until_the_store_has_lines(root: &Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let (status, body) = send(root, "/api/log", true).await;
+        if status == StatusCode::OK && body != b"[]" {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no line reached the store: {status}"
+        );
+        tokio::task::yield_now().await;
+    }
+}
+
 #[tokio::test]
 async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path();
+    datalib_sql_work::install();
     let log = datalib_http::logging::init(root).expect("the store opens in a temp dir");
+    until_the_store_has_lines(root).await;
 
     // A plain API read, with the token in the header.
-    let (status, _) = send(root, "/api/health", true).await;
+    let (status, health_body) = send(root, "/api/health", true).await;
     assert_eq!(status, StatusCode::OK);
     // The token on the query string is dropped from the line; the rest
     // stays. Made by a card, which names itself.
@@ -93,6 +113,12 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     assert_eq!(status, StatusCode::OK);
     let (status, _) = send_with(root, "/api/config", false, &[(CAUSE, "0")]).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // A read of a table, which is what most requests are.
+    let (status, body) = send(root, "/api/processes", true).await;
+    assert_eq!(status, StatusCode::OK);
+    let processes: Vec<serde_json::Value> = serde_json::from_slice(&body).unwrap();
+    assert_eq!(processes.len(), 1, "{processes:#?}");
+    let processes_bytes = body.len();
     // The read the log panel makes on every `log` frame. Made while the
     // writer is still up, so a line for it would be flushed with the rest.
     let (status, _) = send(root, "/api/log", true).await;
@@ -125,7 +151,8 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
             "/api/config",
             "/modules/not-a-hash",
             "/api/health",
-            "/api/config"
+            "/api/config",
+            "/api/processes"
         ],
         "{lines:#?}"
     );
@@ -134,6 +161,10 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
     assert_eq!(health["method"], "GET");
     assert_eq!(health["status"], 200);
     assert!(health["ms"].is_u64(), "{health}");
+    // No `Content-Length` is set yet where the line is written, which is
+    // what it once read: no line had a size.
+    assert_eq!(health["bytes"], health_body.len(), "{health}");
+    assert_eq!(health["rows_read"], 0, "{health}");
     assert!(health.get("query").is_none(), "{health}");
     assert!(health.get("card").is_none(), "{health}");
     assert_eq!(lines[0]["level"], "debug");
@@ -157,4 +188,12 @@ async fn every_request_but_a_read_of_the_log_leaves_a_line() {
 
     assert_eq!(lines[4]["level"], "debug", "{:#?}", lines[4]);
     assert_eq!(lines[5]["level"], "info", "{:#?}", lines[5]);
+
+    let listed = fields(&lines[6]);
+    assert_eq!(listed["bytes"], processes_bytes, "{listed}");
+    let read = listed["rows_read"].as_u64().unwrap();
+    assert!(read >= 1, "{listed}");
+    let msg = lines[6]["msg"].as_str().unwrap();
+    let said = format!("ms, {read} rows read, {processes_bytes} bytes");
+    assert!(msg.ends_with(&said), "{msg}");
 }

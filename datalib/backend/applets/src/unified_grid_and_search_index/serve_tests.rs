@@ -60,37 +60,58 @@ fn announced_port(child: &mut Child) -> u16 {
 }
 
 fn get(port: u16, path: &str, secret: Option<&str>) -> (u16, serde_json::Value) {
-    let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     let secret = secret
         .map(|s| format!("{}: {s}\r\n", crate::gate::SECRET_HEADER))
         .unwrap_or_default();
-    write!(
-        conn,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{secret}Connection: close\r\n\r\n"
-    )
-    .expect("send");
-    let mut response = String::new();
-    conn.read_to_string(&mut response).expect("read");
-    let (head, body) = response.split_once("\r\n\r\n").expect("a head and a body");
-    let status = head[9..12].parse().expect("a status code");
-    (status, serde_json::from_str(body).expect("a JSON body"))
+    let (head, body) = exchange(
+        port,
+        &format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{secret}Connection: close\r\n\r\n"
+        ),
+    );
+    (status_of(&head), body)
 }
 
 fn post(port: u16, path: &str, body: &str) -> (u16, serde_json::Value) {
-    let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-    write!(
-        conn,
-        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{}: {SECRET}\r\n\
-         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        crate::gate::SECRET_HEADER,
-        body.len()
+    let (head, body) = post_for_head(port, path, body);
+    (status_of(&head), body)
+}
+
+fn post_for_head(port: u16, path: &str, body: &str) -> (String, serde_json::Value) {
+    exchange(
+        port,
+        &format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n{}: {SECRET}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            crate::gate::SECRET_HEADER,
+            body.len()
+        ),
     )
-    .expect("send");
+}
+
+fn exchange(port: u16, request: &str) -> (String, serde_json::Value) {
+    let mut conn = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    conn.write_all(request.as_bytes()).expect("send");
     let mut response = String::new();
     conn.read_to_string(&mut response).expect("read");
     let (head, body) = response.split_once("\r\n\r\n").expect("a head and a body");
-    let status = head[9..12].parse().expect("a status code");
-    (status, serde_json::from_str(body).expect("a JSON body"))
+    (
+        head.to_string(),
+        serde_json::from_str(body).expect("a JSON body"),
+    )
+}
+
+fn status_of(head: &str) -> u16 {
+    head[9..12].parse().expect("a status code")
+}
+
+/// What the applet says it read, in the header the gateway logs.
+fn rows_read(head: &str) -> u64 {
+    head.lines()
+        .find_map(|l| l.strip_prefix(datalib_sql_work::ROWS_READ_HEADER))
+        .and_then(|v| v.trim_start_matches(':').trim().parse().ok())
+        .unwrap_or_else(|| panic!("no count of the rows read in:\n{head}"))
 }
 
 fn exit_code_within_deadline(child: &mut Child) -> Option<i32> {
@@ -279,6 +300,41 @@ fn sql_reads_a_store_it_lists() {
 
     let (status, _) = get(port, "/sql/stores", None);
     assert_eq!(status, 401, "a request without the secret got through");
+    child.kill().ok();
+}
+
+/// An answer says how many rows were read for it, whichever thread read
+/// them: `/sql` reads on a blocking thread through SQLite's own API, and
+/// `/people` on the connection's through sqlx.
+#[test]
+fn an_answer_says_how_many_rows_it_took() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::copy_grid_index(root.path());
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+
+    let read_for = |limit: usize| {
+        let asked = serde_json::json!({
+            "store": "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
+            "sql": format!("SELECT uuid FROM grid_rows LIMIT {limit}"),
+        });
+        let (head, body) = post_for_head(port, "/sql", &asked.to_string());
+        assert_eq!(body["rows"].as_array().map(Vec::len), Some(limit), "{body}");
+        rows_read(&head)
+    };
+    assert_eq!(read_for(50) - read_for(10), 40);
+
+    let picard = "email:picard@enterprise.starfleet";
+    let asked = serde_json::json!({ "handles": [picard] });
+    let (head, body) = post_for_head(port, "/people", &asked.to_string());
+    let answered = body["people"][picard].as_array().expect("people").len() as u64;
+    assert!(answered > 0, "{body}");
+    assert!(rows_read(&head) >= answered, "{head}");
     child.kill().ok();
 }
 
