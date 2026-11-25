@@ -64,14 +64,14 @@ let tree: VsTree | null = null;
 /// A level of places, every page of it: a level is a few dozen places, a
 /// few thousand at the most (a drive's folders).
 async function placesUnder(parent: string): Promise<TreeNode[]> {
-  const children = [];
+  const places = [];
   let after: string | undefined;
   do {
-    const page = await api.fetchChildren(parent, { places: true, limit: 1000, after });
-    children.push(...page.children);
+    const page = await api.fetchPlaces(parent, { limit: 1000, after });
+    places.push(...page.places);
     after = page.after ?? undefined;
   } while (after);
-  return placeNodes(children);
+  return placeNodes(places);
 }
 
 const dataSource = {

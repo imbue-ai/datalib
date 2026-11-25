@@ -169,8 +169,8 @@ directly in it: a channel's threads and their messages, the threads
 filed under a label, a page and the pages in it. It also takes a thread
 or a chat, for what is in that. What is in a place below it is not
 directly in it, so a Slack workspace, which holds only channels, finds
-no thread. The Library lists a place with it; `GET /children/{uuid}?places=true`
-([the route](applets.md#a-containers-children)) lists the ids.
+no thread. The Library lists a place with it; `GET /places/{uuid}`
+([the route](applets.md#places)) lists the ids.
 
 ### Writing a time
 

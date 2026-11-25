@@ -705,6 +705,9 @@ against the eval before the next.
    with the first query that uses it, and one route that lists a
    container's children around an anchor, a page each way at a time.
    The viewer can use it beside the file.
+   (Landed as #1770; the route and the index on rows were removed on
+   2026-11-25. The viewer had come to page by a piece's place in its
+   document and the Library by places, so nothing read them.)
 3. **The body in the render store.** Each item's body is stored with
    its row, and the index text is drawn from it on read
    (§"Store the body, format on read"). The search index reads items from the store instead of

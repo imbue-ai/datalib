@@ -34,7 +34,7 @@ use datalib_schema::edges::{EdgeRow, DDL as EDGES_DDL};
 use datalib_schema::filings::{FilingRow, DDL as FILINGS_DDL};
 use datalib_schema::grid_rows::{GridRow, DDL as GRID_ROWS_DDL, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::markdowns::DDL as MARKDOWNS_TABLE_DDL;
-use datalib_schema::nodes::{CHILDREN_INDEXES, DDL as NODES_DDL, PLACE_INDEX};
+use datalib_schema::nodes::{DDL as NODES_DDL, PLACE_INDEX, TREE_INDEXES};
 use datalib_schema::problems::{ProblemRow, Severity, DDL as PROBLEMS_DDL};
 use datalib_schema::search_terms::{TERMS_DDL, TERMS_SHAPE};
 use datalib_schema::source_cursors::{SourceCursorRow, DDL as SOURCE_CURSORS_DDL};
@@ -579,10 +579,12 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 }
 
 /// Create whatever of the index is missing: on a new file, all of it;
-/// after a build stopped partway, the search indexes it left out. Only
+/// after a build stopped partway, the search indexes it left out; and drop
+/// the indexes an earlier build made that this one does not. Only
 /// here: every render store has a `grid_rows` too, and only the index the
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
+    drop_other_indexes(pool).await?;
     for ddl in index_ddl().chain(indexes()) {
         sqlx::query(ddl)
             .execute(pool)
@@ -592,12 +594,38 @@ pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+/// Drop each index of the file that this build does not make: one it
+/// retired, which every write would go on paying for, or one it makes over
+/// other columns, which `IF NOT EXISTS` would leave as it was.
+async fn drop_other_indexes(pool: &SqlitePool) -> Result<()> {
+    // SQLite keeps a statement as written, less its `IF NOT EXISTS`.
+    let made: HashSet<String> = index_ddl()
+        .chain(indexes())
+        .map(|ddl| ddl.replacen("IF NOT EXISTS ", "", 1))
+        .collect();
+    let held: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql NOTNULL")
+            .fetch_all(pool)
+            .await
+            .context("list the grid index's indexes")?;
+    for (name, _) in held.iter().filter(|(_, sql)| !made.contains(sql)) {
+        tracing::info!(index = %name, "dropping an index this build does not make");
+        let quoted = datalib_etl::doltlite_raw::quote_ident(name);
+        // Audited: the name is quoted.
+        sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX {quoted}")))
+            .execute(pool)
+            .await
+            .with_context(|| format!("drop {name}"))?;
+    }
+    Ok(())
+}
+
 /// The search bar's indexes, and those that read the tree.
 fn read_indexes() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_INDEXES
         .iter()
         .map(|(_table, ddl)| *ddl)
-        .chain(CHILDREN_INDEXES.iter().copied())
+        .chain(TREE_INDEXES.iter().copied())
         .chain([PLACE_INDEX])
 }
 
@@ -3240,16 +3268,35 @@ mod shape_tests {
 
     /// An index whose tables are this build's and whose indexes are not is
     /// kept and given them, not rebuilt: adding an index costs making it.
-    /// One that records no shape at all is in none, and made new.
+    /// One this build retired is dropped, and one it makes over other
+    /// columns is made again; before, the first went on being written and
+    /// the second stayed as it was under the shape that said otherwise. An
+    /// index that records no shape at all is in none, and made new.
     #[tokio::test]
     async fn only_moved_indexes_are_made_and_no_recorded_shape_is_made_new() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("db.sqlite");
         let pool = holding_one_document(&db).await;
-        sqlx::query("DROP INDEX grid_rows_by_author")
-            .execute(&pool)
+        let indexes_of = |pool: SqlitePool| async move {
+            let made: Vec<(String, String)> = sqlx::query_as(
+                "SELECT name, sql FROM sqlite_master \
+                 WHERE type = 'index' AND sql NOTNULL ORDER BY name",
+            )
+            .fetch_all(&pool)
             .await
             .unwrap();
+            made
+        };
+        let new = indexes_of(pool.clone()).await;
+        for earlier in [
+            "DROP INDEX grid_rows_by_author",
+            "DROP INDEX grid_rows_by_kind",
+            "CREATE INDEX grid_rows_by_kind ON grid_rows(kind)",
+            "CREATE INDEX grid_rows_by_parent ON grid_rows (parent_uuid, sort_key, uuid)",
+        ] {
+            sqlx::query(earlier).execute(&pool).await.unwrap();
+        }
+        assert_ne!(indexes_of(pool.clone()).await, new);
         sqlx::query("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
             .execute(&pool)
             .await
@@ -3260,13 +3307,7 @@ mod shape_tests {
         assert_eq!(documents(&pool).await, 1, "kept");
         let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
         assert_eq!(meta.shape(), crate::grid_index::shape());
-        let made: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM sqlite_master WHERE name = 'grid_rows_by_author'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(made, 1);
+        assert_eq!(indexes_of(pool.clone()).await, new);
 
         sqlx::query("DROP TABLE _datalib_meta")
             .execute(&pool)

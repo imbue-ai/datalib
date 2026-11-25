@@ -2,14 +2,17 @@
 //! loopback socket, and the gateway's hand-written HTTP/1.1 client
 //! parsing bytes a separate hand-written server produced.
 
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
+use datalib_http::request_log::AppletRowsRead;
 use datalib_http::{router, AppState};
 use std::path::Path;
+use tower::ServiceExt;
 
 use super::{applet_command, seed_doc};
-use crate::support::{get_json, state_with_applets};
+use crate::support::{get_json, state_with_applets, TEST_TOKEN};
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
     let cfg = datalib_dag::config::parse(config_toml).expect("fixture config parses");
@@ -36,6 +39,24 @@ fn seed_tree(root: &Path, rel: &str, channel: &str) {
         channel,
         &[(0, "cid", "second thread", "2026-02-01T00:00:00Z")],
     );
+}
+
+async fn rows_read(app: &axum::Router, uri: &str) -> (Option<u64>, axum::http::HeaderMap) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::get(uri)
+                .header("x-datalib-token", TEST_TOKEN)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let AppletRowsRead(read) = *resp
+        .extensions()
+        .get::<AppletRowsRead>()
+        .expect("a proxied answer says what its applet said");
+    (read, resp.headers().clone())
 }
 
 /// End to end against the shipped applet: discovery, module store,
@@ -74,6 +95,15 @@ workspace = "Work"
     // single document, which made a busy channel look like one message.
     assert_eq!(body["channels"][0]["threads"], 2);
     assert_eq!(body["channels"][0]["messages"], 3);
+
+    // What the applet read to answer reaches this server's request line
+    // (request_log.rs), and goes no further: five messages and threads.
+    let (read, headers) = rows_read(&app, "/applet/slack_work/channels").await;
+    assert!(read >= Some(5), "{read:?}");
+    assert!(
+        !headers.contains_key(datalib_sql_work::ROWS_READ_HEADER),
+        "{headers:?}"
+    );
 
     // Level 2 lists the channel's threads, each showing its opening
     // message with the rest counted as replies — the shape the Slack

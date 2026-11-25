@@ -1341,6 +1341,26 @@ class IngestedTngPipelineTest(unittest.TestCase):
             ],
             "the people the index knows by Picard's address",
         )
+        # Every person in the index, not the ones the checks here name. A
+        # person is one record per source unless some documents knew less
+        # of them than others: an AI chat or a texts backup whose account
+        # names nobody, a Slack document with no profile beside it. Any
+        # other name here is a field that differs by document, which is a
+        # copy of the person for each.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT source_id || '|' || contact_key || '|' || count(*) "
+                "FROM contact_records GROUP BY source_id, contact_key "
+                "HAVING count(*) > 1 ORDER BY 1;",
+            ),
+            [
+                "claude-api|me:self|2",
+                "slack|slack:T_NCC1701D/U_PICARD|2",
+                "sms-backup-restore|me:self|2",
+            ],
+            "the people the index holds more than one record of",
+        )
         # Whose account each source is: the user Slack's `auth.test` names,
         # with the address on his profile; the mailbox's address; the
         # forges' signed-in user; Beeper's own person; Facebook's owner, by
