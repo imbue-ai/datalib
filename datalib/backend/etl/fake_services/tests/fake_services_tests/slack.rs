@@ -132,10 +132,10 @@ fn calls(fakes: &Fakes, phase: &str, method: &str) -> Vec<String> {
         .collect()
 }
 
-/// The datalib Slack download asks for two things the fake has no answer
-/// to and treats as optional: the bookmarks and the unread counts.
+/// The one thing the Slack download asks for that the fake has no answer
+/// to, and treats as optional: the bookmarks.
 fn optional_calls() -> BTreeSet<String> {
-    ["slack:saved.list", "slack:client.counts"]
+    ["slack:saved.list"]
         .into_iter()
         .map(str::to_string)
         .collect()
