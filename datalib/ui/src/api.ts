@@ -475,6 +475,13 @@ export function fetchChildren(
   return getJson<ChildrenPage>(`${path}?${q}`, signal);
 }
 
+/// The sources that hold places at their top, by id: the ones a library's
+/// tree opens.
+export async function fetchSourcesWithPlaces(signal?: AbortSignal): Promise<string[]> {
+  const path = `${UNIFIED_GRID_AND_SEARCH_INDEX}/sources_with_places`;
+  return (await getJson<{ sources: string[] }>(path, signal)).sources;
+}
+
 // --- The embedding map ------------------------------------------------------
 // `unified_grid_and_search_index/embedding_map`, joined to the grid by the applet
 // (applets/src/unified_grid_and_search_index/map.rs). Hand-kept in step with it.
@@ -699,7 +706,7 @@ export type SearchKeySpec = {
 /// `datalib_columns::KeyValues`: what decides how a value is offered and
 /// drawn. A source, group or step is drawn as its chip.
 export type KeyValues = {
-  kind: "text" | "words" | "source" | "group" | "step" | "stamp" | "person";
+  kind: "text" | "words" | "source" | "group" | "step" | "stamp" | "person" | "node";
   words?: string[];
 };
 

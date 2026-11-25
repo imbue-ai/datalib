@@ -3,8 +3,9 @@
 //! container is (read together, a place) and what else each row is filed
 //! under. Before the snapshot, the rules `docs/dev/grid_rows.md` §"Where a
 //! row sits" states: every parent and filing is a row, no row is its own
-//! ancestor, and `read_uuid` and `place_uuid` are the nearest container
-//! above of each kind. Over `:ingested_tng` and over each source synced
+//! ancestor, `read_uuid` and `place_uuid` are the nearest container above
+//! of each kind, a place lives in a place, and what is filed is read
+//! together and no place. Over `:ingested_tng` and over each source synced
 //! on its own.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -22,6 +23,7 @@ struct Placed {
     source_id: String,
     kind: String,
     name: Option<String>,
+    conversation_uuid: String,
     is_document: bool,
     parent_uuid: Option<String>,
     read_uuid: Option<String>,
@@ -55,8 +57,8 @@ impl Tree {
             .await
             .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
         let placed: Vec<Placed> = sqlx::query_as(
-            "SELECT uuid, source_id, kind, conversation_name AS name, is_document, parent_uuid, \
-                    read_uuid, place_uuid, diff_status \
+            "SELECT uuid, source_id, kind, conversation_name AS name, conversation_uuid, is_document, \
+                    parent_uuid, read_uuid, place_uuid, diff_status \
                FROM grid_rows ORDER BY parent_uuid, sort_key, uuid",
         )
         .fetch_all(&pool)
@@ -139,6 +141,13 @@ impl Tree {
                 }
                 above = parent.parent_uuid.as_deref();
             }
+            let is_place = self.roles.get(&row.uuid).is_some_and(|r| r.is_place);
+            if is_place && row.parent_uuid.as_deref() != place {
+                out.push(format!(
+                    "{}: a place in {:?}, which is no place",
+                    row.uuid, row.parent_uuid
+                ));
+            }
             if row.read_uuid.as_deref() != read {
                 out.push(format!(
                     "{}: read_uuid {:?}, but the nearest container read together above is {read:?}",
@@ -153,6 +162,17 @@ impl Tree {
             }
         }
         for (node, unders) in &self.filed_under {
+            let read_there = self
+                .rows
+                .get(node)
+                .is_some_and(|row| row.conversation_uuid == *node);
+            let is_place = self.roles.get(node).is_some_and(|r| r.is_place);
+            if !read_there || is_place {
+                out.push(format!(
+                    "filing {node} under {unders:?}: what is filed is a document or a \
+                     container read together, and no place"
+                ));
+            }
             for uuid in std::iter::once(node).chain(unders) {
                 if !self.rows.contains_key(uuid) {
                     out.push(format!(

@@ -15,16 +15,17 @@ use datalib_schema::nodes::CHILDREN_INDEXES;
 use datalib_schema::providers::Provider;
 use datalib_unified_grid_and_search_index::children::{
     child_key_sql, children_sql, Anchor, Ask, Child, ChildrenError, ChildrenFailure, ChildrenPage,
-    Key, Scope, Side, Via, NODE_FACTS_SQL, PLACES_BELOW_SQL,
+    Key, Scope, Side, Via, NODE_FACTS_SQL, PLACES_BELOW_SQL, ROW_FACTS_SQL,
+    SOURCES_WITH_PLACES_SQL,
 };
 use datalib_unified_grid_and_search_index::dolt_repo::DoltRepo;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
 use crate::dolt_backend_integration::{unique_db_path, writer};
 
-const SOURCE: &str = "slack";
+pub(crate) const SOURCE: &str = "slack";
 
-fn stamp(minute: u32) -> String {
+pub(crate) fn stamp(minute: u32) -> String {
     format!("2364-02-11T09:{minute:02}:00+00:00")
 }
 
@@ -33,7 +34,7 @@ fn key_at(minute: u32) -> String {
     format!("2364-02-11T09:{minute:02}:00.000000Z")
 }
 
-fn row(uuid: &str, parent: &str, markdown: &str, created_at: &str) -> GridRow {
+pub(crate) fn row(uuid: &str, parent: &str, markdown: &str, created_at: &str) -> GridRow {
     let document = uuid == markdown;
     GridRow::builder()
         .uuid(uuid)
@@ -53,15 +54,19 @@ fn row(uuid: &str, parent: &str, markdown: &str, created_at: &str) -> GridRow {
         .expect("a valid row")
 }
 
+fn thread(t: &str, minute: u32) -> RenderedMarkdown {
+    thread_in("ws", "bridge", t, minute)
+}
+
 /// Thread `t` at `minute`, carrying the channel it is in and the workspace
 /// above, as Slack's renderer does.
-fn thread(t: &str, minute: u32) -> RenderedMarkdown {
-    let workspace = DataNodeRow::new(t, "ws", SOURCE, "Slack workspace")
-        .named(Some("#ws".to_string()))
+pub(crate) fn thread_in(ws: &str, channel: &str, t: &str, minute: u32) -> RenderedMarkdown {
+    let workspace = DataNodeRow::new(t, ws, SOURCE, "Slack workspace")
+        .named(Some(format!("#{ws}")))
         .place();
     let in_workspace = Lineage::top().below(&workspace);
-    let channel = DataNodeRow::new(t, "bridge", SOURCE, "Slack channel")
-        .named(Some("#bridge".to_string()))
+    let channel = DataNodeRow::new(t, channel, SOURCE, "Slack channel")
+        .named(Some(format!("#{channel}")))
         .place()
         .under(&in_workspace);
     let in_channel = in_workspace.below(&channel);
@@ -69,6 +74,8 @@ fn thread(t: &str, minute: u32) -> RenderedMarkdown {
         .named(Some(format!("#{t}")))
         .read_together()
         .under(&in_channel);
+    let mut own = row(t, &channel.uuid, t, &stamp(minute));
+    own.place_uuid = in_channel.place_uuid.clone();
     RenderedMarkdown {
         searchable: true,
         content_hash: None,
@@ -77,7 +84,7 @@ fn thread(t: &str, minute: u32) -> RenderedMarkdown {
         upstream_cursor: None,
         render_unit_key: None,
         render_version: 1,
-        rows: vec![row(t, "bridge", t, &stamp(minute))],
+        rows: vec![own],
         sections: Vec::new(),
         front: Default::default(),
         edges: Vec::new(),
@@ -93,9 +100,8 @@ fn thread(t: &str, minute: u32) -> RenderedMarkdown {
 /// document holds a row for; `bridge` holds threads `t1`..`t3`, each a
 /// document, and every thread's document carries the channel and workspace
 /// again. `t1` holds messages `m1`..`m5` a minute apart from minute 10. A
-/// label `lbl`, in an account no document carries, has `t2`, `t3` and the
-/// message `m5` filed under it, and is itself filed under the workspace,
-/// where `t2` is too.
+/// label `lbl`, in an account no document carries, has `t2` and `t3` filed
+/// under it; `t2` is filed under the workspace too.
 fn documents() -> Vec<RenderedMarkdown> {
     let (mut t1, mut t2, mut t3) = (thread("t1", 1), thread("t2", 2), thread("t3", 3));
     for i in 1..=5 {
@@ -108,7 +114,6 @@ fn documents() -> Vec<RenderedMarkdown> {
             .place()
             .under(&Lineage::top().below(&t1.data_nodes[0])),
     );
-    t1.filings.push(FilingRow::new("t1", "m5", "lbl"));
     let account = DataNodeRow::new("t2", "acct", SOURCE, "Account").place();
     t2.data_nodes.push(
         DataNodeRow::new("t2", "lbl", SOURCE, "Label")
@@ -116,8 +121,8 @@ fn documents() -> Vec<RenderedMarkdown> {
             .place()
             .under(&Lineage::top().below(&account)),
     );
-    for (node, under) in [("t2", "lbl"), ("lbl", "ws"), ("t2", "ws")] {
-        t2.filings.push(FilingRow::new("t2", node, under));
+    for under in ["lbl", "ws"] {
+        t2.filings.push(FilingRow::new("t2", "t2", under));
     }
     t3.filings.push(FilingRow::new("t3", "t3", "lbl"));
     vec![t1, t2, t3]
@@ -143,7 +148,7 @@ impl Library {
 }
 
 /// Render `docs`, drop the documents `gone`, and index what moved.
-async fn sync(root: &Path, docs: Vec<RenderedMarkdown>, gone: Vec<&str>) {
+pub(crate) async fn sync(root: &Path, docs: Vec<RenderedMarkdown>, gone: Vec<&str>) {
     let rendered = datalib_etl::layout::render_markdown_root(root, SOURCE);
     let gone: Vec<String> = gone.into_iter().map(String::from).collect();
     tokio::task::spawn_blocking(move || {
@@ -255,10 +260,10 @@ async fn paging_both_ways_reaches_each_end_once() {
 async fn a_container_carried_many_times_or_with_a_row_is_one_child() {
     let Library { repo, .. } = seeded().await;
     let p = page(&repo, "ws", Ask::Around(Anchor::Start), 10).await;
-    assert_eq!(uuids(&p), ["bridge", "lbl", "ops", "t2"]);
-    assert!([0, 2]
+    assert_eq!(uuids(&p), ["bridge", "ops", "t2"]);
+    assert!(p.children[..2]
         .iter()
-        .all(|i| p.children[*i].container && p.children[*i].kind == "Slack channel"));
+        .all(|c| c.container && c.kind == "Slack channel"));
     assert_eq!(p.children[0].name.as_deref(), Some("#bridge"));
     assert_eq!(
         p.children[0].markdown_uuid, None,
@@ -280,11 +285,10 @@ async fn a_container_carried_many_times_or_with_a_row_is_one_child() {
 async fn what_is_filed_under_a_label_is_its_children() {
     let Library { repo, .. } = seeded().await;
     let p = page(&repo, "lbl", Ask::Around(Anchor::Start), 10).await;
-    assert_eq!(uuids(&p), ["t2", "t3", "m5"]);
-    assert_eq!(p.children[2].sort_key, key_at(14));
-    assert!(!p.children[2].container);
+    assert_eq!(uuids(&p), ["t2", "t3"]);
+    assert_eq!(p.children[1].sort_key, key_at(3));
     let p = page(&repo, "lbl", item("t3"), 1).await;
-    assert_eq!(uuids(&p), ["t2", "t3", "m5"]);
+    assert_eq!(uuids(&p), ["t2", "t3"]);
 }
 
 /// A message that arrives after a page was read, older than the page's
@@ -336,7 +340,7 @@ async fn a_container_its_documents_place_differently_is_in_one_place() {
             }
         }
     };
-    assert_eq!(places("ws").await, ["bridge", "lbl", "ops"]);
+    assert_eq!(places("ws").await, ["bridge", "ops"]);
 
     let mut t4 = thread("t4", 4);
     t4.data_nodes[1] = DataNodeRow::new("t4", "bridge", SOURCE, "Slack channel")
@@ -347,7 +351,7 @@ async fn a_container_its_documents_place_differently_is_in_one_place() {
     library.sync(vec![t4], vec![]).await;
     assert_eq!(
         places("ws").await,
-        ["lbl", "ops", "bridge"],
+        ["ops", "bridge"],
         "once, at its newest document's key"
     );
     let p = page(repo, "ws", item("bridge"), 1).await;
@@ -356,11 +360,11 @@ async fn a_container_its_documents_place_differently_is_in_one_place() {
     let mut t5 = thread("t5", 5);
     t5.data_nodes[1] = DataNodeRow::new("t5", "bridge", SOURCE, "Slack channel").place();
     library.sync(vec![t5], vec![]).await;
-    assert_eq!(places("ws").await, ["lbl", "ops"], "moved out of ws");
+    assert_eq!(places("ws").await, ["ops"], "moved out of ws");
     assert_eq!(places("source:slack").await, ["bridge", "ws"]);
 
     library.sync(vec![], vec!["t5", "t4"]).await;
-    assert_eq!(places("ws").await, ["bridge", "lbl", "ops"]);
+    assert_eq!(places("ws").await, ["bridge", "ops"]);
     assert_eq!(places("source:slack").await, ["ws"]);
 }
 
@@ -410,16 +414,15 @@ async fn a_sources_top_is_what_names_no_parent() {
     );
 }
 
-/// Listing places leaves out rows and the containers that are not places,
-/// takes in places filed under the parent, and says which have places
-/// below them.
+/// Listing places leaves out rows, the containers that are not places and
+/// what is filed there, and says which have places below them.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listing_of_places_holds_only_places() {
     let Library { repo, .. } = seeded().await;
     let p = scoped(&repo, &Scope::places("ws"), Ask::Around(Anchor::Start), 10).await;
     assert_eq!(
         uuids(&p),
-        ["bridge", "lbl", "ops"],
+        ["bridge", "ops"],
         "t2 is filed there but no place"
     );
     assert!(
@@ -451,15 +454,16 @@ async fn a_listing_of_places_holds_only_places() {
         "threads and messages are not places"
     );
 
-    let p = scoped(&repo, &Scope::places("ws"), item("lbl"), 1).await;
+    let p = scoped(&repo, &Scope::places("ws"), item("ops"), 1).await;
+    assert_eq!(uuids(&p), ["bridge", "ops"], "a place anchors a window");
+
     assert_eq!(
-        uuids(&p),
-        ["bridge", "lbl", "ops"],
-        "a filed place anchors a window"
+        repo.sources_with_places().await.expect("read the top"),
+        ["slack"]
     );
 }
 
-async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<String> {
+pub(crate) async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<String> {
     let mut query = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
     for _ in 0..binds {
         query = query.bind("x");
@@ -518,17 +522,33 @@ async fn every_children_read_is_served_by_its_index() {
                 }
             }
         }
-        used.extend(index_names(&plan(&w, &child_key_sql(scope), 2).await));
-    }
-    for (sql, binds) in [(NODE_FACTS_SQL, 1), (PLACES_BELOW_SQL, 1)] {
-        let plan = plan(&w, sql, binds).await;
-        if plan
-            .iter()
-            .any(|d| d.starts_with("SCAN") && !d.starts_with("SCAN json_each"))
-        {
+        let sql = child_key_sql(scope);
+        let plan = plan(&w, &sql, 2).await;
+        if reads_a_whole_table(&plan) {
             unserved.push(format!("{sql}: {plan:?}"));
         }
         used.extend(index_names(&plan));
+    }
+    // A level asks each of these once, however many places are in it.
+    for (sql, binds) in [
+        (ROW_FACTS_SQL, 1),
+        (NODE_FACTS_SQL, 1),
+        (PLACES_BELOW_SQL, 1),
+        (SOURCES_WITH_PLACES_SQL, 0),
+    ] {
+        let plan = plan(&w, sql, binds).await;
+        if reads_a_whole_table(&plan) {
+            unserved.push(format!("{sql}: {plan:?}"));
+        }
+        used.extend(index_names(&plan));
+    }
+    for sql in [PLACES_BELOW_SQL, SOURCES_WITH_PLACES_SQL] {
+        let plan = plan(&w, sql, sql.matches('?').count()).await;
+        assert!(
+            plan.iter()
+                .any(|d| d.contains("USING COVERING INDEX nodes_places (parent_uuid=")),
+            "{sql}: {plan:?}"
+        );
     }
     assert!(unserved.is_empty(), "{}", unserved.join("\n"));
     let unused: Vec<&str> = CHILDREN_INDEXES
@@ -537,6 +557,13 @@ async fn every_children_read_is_served_by_its_index() {
         .filter(|name| !used.contains(*name))
         .collect();
     assert!(unused.is_empty(), "no read plans with these: {unused:?}");
+}
+
+/// A bound array is read whole, and so are the rows of a subquery.
+fn reads_a_whole_table(plan: &[String]) -> bool {
+    plan.iter().any(|d| {
+        d.starts_with("SCAN") && !d.starts_with("SCAN json_each") && !d.starts_with("SCAN (")
+    })
 }
 
 fn index_names(plan: &[String]) -> Vec<String> {

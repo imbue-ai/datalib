@@ -131,9 +131,9 @@ source by its id in the config; also `source_id:`), `kind:` (`Email`,
 `Slack Message`, …), `subject:` (also `conversation:`), `channel:`,
 `account:`, `project:`, `id:` (a row by the id its source gave it),
 `datalib_document_id:` (a document by Datalib's id for it, and every
-row in it), and the id of any other column the grid shows (`org_name:`,
-`created_at:`, …) but a contact card's name, email and phone: `with:`
-finds a card by any of those (below). These match the whole value as stored, case and all: `kind:Email`,
+row in it), `at:` (what is directly in a place, below), and the id of any
+other column the grid shows (`org_name:`, `created_at:`, …) but a contact
+card's name, email and phone: `with:` finds a card by any of those (below). These match the whole value as stored, case and all: `kind:Email`,
 not `kind:email`. A uuid is the one exception: 32 hex digits, with or
 without the four dashes, match the same uuid however it is written and
 however its source stored it, dashed or not, in capitals or not.
@@ -162,6 +162,15 @@ a conversation, a page) and keeps that document and every row in it,
 over every month of a chat; Keep only on a Subject cell writes it. A
 message's own id finds nothing, since a message is a row inside a
 document.
+
+`at:` takes a **place** (a channel, a label, a folder, a page with pages
+in it) by its id, or the link its chip copies, and keeps what is
+directly in it: a channel's threads and their messages, the threads
+filed under a label, a page and the pages in it. It also takes a thread
+or a chat, for what is in that. What is in a place below it is not
+directly in it, so a Slack workspace, which holds only channels, finds
+no thread. The Library lists a place with it; `GET /children/{uuid}?places=true`
+([the route](applets.md#a-containers-children)) lists the ids.
 
 ### Writing a time
 

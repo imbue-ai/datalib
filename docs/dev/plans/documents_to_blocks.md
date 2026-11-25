@@ -861,10 +861,11 @@ against the eval before the next.
    rule 4 of §"How search works".
 8. **Browsing the tree.** Built so far (#1913): a Library card that
    draws each source's places as a tree, read a level at a time when
-   opened, with what a place holds listed beside it. Not built: the
-   ancestors table in `unified_grid_and_search_index`, with
-   each row's sort key copied in so everything under a node is one
-   index range around an anchor; and `under:` and `at:` as search keys.
+   opened; and `at:<node>`, what is directly in a place, which lists it
+   beside the tree as a search. It needed no new table: a row names its
+   nearest place. Not built: `under:`, everything beneath a node, with the
+   ancestors table in `unified_grid_and_search_index`, each row's sort key
+   copied in so that it is one index range around an anchor.
    Whether a large subtree pages off that index or by
    the grid's list-then-slice (measured at 74k rows, not at today's
    941k) is measured then. `keyword:` and
