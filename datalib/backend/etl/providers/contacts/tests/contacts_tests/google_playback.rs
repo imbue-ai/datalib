@@ -621,7 +621,8 @@ async fn a_listing_it_cannot_fully_read_deletes_nothing() {
     for (n, tape) in tapes.iter().enumerate() {
         run(tape, &store).await;
         assert_eq!(strings(&store, PEOPLE).await, ["people/c1"], "run {n}");
-        assert_eq!(strings(&store, TOKEN).await, ["none"], "run {n}");
+        let token = strings(&store, TOKEN).await;
+        assert!(token.is_empty(), "run {n}: {token:?}");
         assert_eq!(
             strings(&store, PROBLEMS).await,
             ["listing:contacts"],
