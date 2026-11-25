@@ -3,13 +3,15 @@
 // page"). The look is a person's who is not in your contacts.
 
 import { writeContactPage } from "./chipLinks";
-import { recordHandles } from "./person";
+import { pageContact, recordHandles, sureNumbers } from "./person";
 import {
   addPeople,
+  contactLook,
   drawChip,
   nameOf,
   noteContactsApp,
   numbersOf,
+  people,
   peopleFor,
   resolveHandles,
   type AddedPeople,
@@ -30,19 +32,34 @@ export const contactPages = new Resolver<PageAnswer>(
   async (pages) => {
     const [mine, answer] = await Promise.all([resolveHandles([]), peopleFor([], pages)]);
     noteContactsApp(mine !== null);
-    return new Map(
+    const out = new Map(
       Object.entries(answer.pages).map(([page, contact]) => [
         page,
         { contact, fullNumbers: numbersOf([contact], answer.full_numbers) },
       ]),
     );
+    // Whose contact each is, which its chip says, is who has its number.
+    await people.ask([...out.values()].flatMap((a) => sureNumbers(a.contact, a.fullNumbers)));
+    return out;
   },
   (e) => pushToast(`Contacts: ${e.message}`),
 );
 
-/** How the chip looks: the card's own name once it is read. Until then,
- *  `shown`, which is empty where whoever wrote the link wrote that too. */
+/** Whether an answer about some handles can have changed what a page's chip
+ *  shows: they are the numbers on a card here. */
+export function movesPages(handles: ReadonlySet<string>, pages: string[]): boolean {
+  return pages.some((p) => {
+    const a = contactPages.get(p);
+    return !!a && sureNumbers(a.contact, a.fullNumbers).some((h) => handles.has(h));
+  });
+}
+
+/** How the chip looks: your contact, where the card's number is on one, else
+ *  the card's own name once it is read. Until then, `shown`, which is empty
+ *  where whoever wrote the link wrote that too. */
 export function contactPageLook(shown: string, answer: PageAnswer | undefined): ChipLook {
+  const mine = pageContact(answer, (h) => people.get(h));
+  if (mine) return contactLook(nameOf(mine), mine);
   const text = answer ? nameOf(answer.contact) : shown || "a contact";
   const numbers = (answer?.contact.handles ?? []).map((h) => h.value);
   return {
@@ -90,11 +107,12 @@ export async function decorateContactPages(root: HTMLElement): Promise<void> {
  *  handle their card says is theirs. A group is nobody to add. */
 export async function addContactPages(pages: string[]): Promise<AddedPeople> {
   await contactPages.ask(pages);
-  const people = pages.flatMap((page) => {
-    const answer = contactPages.get(page);
-    return answer?.contact.kind === "person" ? [newPerson(answer)] : [];
-  });
-  return addPeople(people);
+  const answers = pages.flatMap((page) => contactPages.get(page) ?? []);
+  const isPerson = (a: PageAnswer) => a.contact.kind === "person";
+  const added = await addPeople(answers.filter(isPerson).map(newPerson));
+  const groups = answers.filter((a) => !isPerson(a)).map((a) => nameOf(a.contact));
+  const skipped = groups.map((what) => ({ what, why: "a group is not a person" }));
+  return { ...added, skipped: [...added.skipped, ...skipped] };
 }
 
 export function newPerson(answer: PageAnswer): NewPerson {

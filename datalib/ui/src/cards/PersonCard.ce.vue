@@ -34,7 +34,6 @@ import {
   searchContacts,
   setMe,
   setStoppedWorking,
-  suggestedName,
   todayPartialDate,
   unlinkHandle,
   type ContactSummary,
@@ -58,6 +57,7 @@ import {
   isHandleAction,
   linkableHandles,
   linkState,
+  nameToOffer,
   offerNote,
   offers,
   parseSubject,
@@ -399,11 +399,9 @@ function tick(o: Offer, ev: Event) {
 }
 const newName = ref("");
 watch(
-  () => model.value.sections[0]?.contact,
-  (first) => {
-    if (newName.value || !first) return;
-    const s = subject.value;
-    newName.value = suggestedName(nameOf(first), s.kind === "handle" ? s.handle : "");
+  () => nameToOffer(subject.value, model.value),
+  (name) => {
+    newName.value ||= name;
   },
   { immediate: true },
 );

@@ -9,6 +9,7 @@ import {
   handleValue,
   nameOf,
   stoppedBy,
+  suggestedName,
   type FullNumbers,
   type NormalizedContact,
   type Who,
@@ -77,7 +78,7 @@ export function personHandles(mine: NormalizedContact | null, first: string | nu
 
 /** A card's numbers with no country code whose full number the library
  *  knows, and knows only one of. */
-function sureNumbers(contact: NormalizedContact, full: FullNumbers): string[] {
+export function sureNumbers(contact: NormalizedContact, full: FullNumbers): string[] {
   return recordHandles(contact, full).flatMap((h) => (h.written && h.sure ? [h.handle] : []));
 }
 
@@ -87,18 +88,23 @@ function contactOf(subject: Subject, answers: Answers): NormalizedContact | null
       return answers.who(subject.handle)?.mine ?? null;
     case "contact":
       return answers.contact(subject.id) ?? null;
-    case "page": {
-      // A card names no handle of its own; once its number is on a contact,
-      // that contact is who it is about.
-      const answer = answers.page(subject.page);
-      if (!answer) return null;
-      for (const h of sureNumbers(answer.contact, answer.fullNumbers)) {
-        const mine = answers.who(h)?.mine;
-        if (mine) return mine;
-      }
-      return null;
-    }
+    case "page":
+      return pageContact(answers.page(subject.page), answers.who);
   }
+}
+
+/** Your contact who a card with no handle is about: the one its number is
+ *  on, where that is the only number it can be. */
+export function pageContact(
+  answer: PageAnswer | undefined,
+  whoOf: Answers["who"],
+): NormalizedContact | null {
+  if (!answer) return null;
+  for (const h of sureNumbers(answer.contact, answer.fullNumbers)) {
+    const mine = whoOf(h)?.mine;
+    if (mine) return mine;
+  }
+  return null;
 }
 
 /** The page about `subject`, opened from a chip seen in `seenIn`. Each
@@ -226,6 +232,17 @@ export type Offer = {
   owner: NormalizedContact | null;
   ticked: boolean;
 };
+
+/** The name to offer for them: the first a source gives that is a name and
+ *  not an identifier. */
+export function nameToOffer(subject: Subject, model: PersonModel): string {
+  const handle = subject.kind === "handle" ? subject.handle : "";
+  for (const s of model.sections) {
+    const name = suggestedName(nameOf(s.contact), handle);
+    if (name) return name;
+  }
+  return "";
+}
 
 /** The handles to add, while the person is not in your contacts: the one
  *  opened, then every other on any record that holds it. One that another

@@ -29,7 +29,7 @@ import {
   people,
   NOBODY,
 } from "./contacts";
-import { contactPages, decorateContactPages } from "./contactPages";
+import { contactPages, decorateContactPages, movesPages } from "./contactPages";
 import ChipMenu from "./ChipMenu.ce.vue";
 import {
   chipDragQuery,
@@ -189,6 +189,14 @@ const stopPeople = people.subscribe((handles) => {
 onBeforeUnmount(stopPeople);
 
 const stopPages = contactPages.subscribe(() => void redrawContactPages());
+const stopPagePeople = people.subscribe((handles) => {
+  const shown = Array.from(
+    body.value?.querySelectorAll<HTMLElement>("a.chip[data-contact-page]") ?? [],
+  );
+  const pages = shown.map((a) => a.dataset.contactPage ?? "");
+  if (movesPages(handles, pages)) void redrawContactPages();
+});
+onBeforeUnmount(stopPagePeople);
 onBeforeUnmount(stopPages);
 
 // The same for the group and step chips, answered by `entities`.
