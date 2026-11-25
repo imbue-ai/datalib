@@ -294,17 +294,17 @@ pub struct GooglePersonRow {
     pub addressbook_id: String,
     pub resource_name: String,
     pub display_name: Option<String>,
-    /// The photo to fetch, where the contact has one of its own.
-    pub photo_url: Option<String>,
 }
 
-/// Google re-stamps these without the contact changing, so they live in
-/// the sidecar where the diff does not see them. Render reads
-/// `updateTime` as the contact's `modified_at`.
+/// Google re-stamps these without the contact changing (some photos'
+/// links are signed afresh for every listing), so they live in the
+/// sidecar where the diff does not see them. Render reads `updateTime` as
+/// the contact's `modified_at`.
 pub const GOOGLE_PERSON_VOLATILE_PATHS: &[dr::VolatilePath] = &[
     &["etag"],
     &["metadata", "sources", dr::EVERY_ELEMENT, "etag"],
     &["metadata", "sources", dr::EVERY_ELEMENT, "updateTime"],
+    &["photos", dr::EVERY_ELEMENT, "url"],
 ];
 
 /// `google_contact_groups` — one label (or one of Google's own groups,
@@ -322,15 +322,15 @@ pub struct GoogleContactGroupRow {
 
 pub const GOOGLE_GROUP_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["etag"]];
 
-/// `google_photos` — a contact's photo at the URL Google lists it at; the
-/// bytes are in the blob store once fetched. A new photo is a new URL,
-/// and so a new row in place of the old.
+/// `google_photos` — the photo Google lists for a contact, by where Google
+/// has it from (`PROFILE/<id>`); the bytes are in the blob store once
+/// fetched. The link they were fetched at is the sidecar's `held_version`.
 #[derive(Debug, Clone, CasEdgeRow)]
 #[cas_edge_row(table = "google_photos")]
 pub struct GooglePhotoRow {
     pub id: String,
     pub person_id: String,
-    pub photo_url: String,
+    pub photo_source: String,
     pub blake3: Option<String>,
 }
 

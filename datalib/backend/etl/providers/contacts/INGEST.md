@@ -13,13 +13,18 @@ what its upstream sent:
 
 ## Google Contacts
 
-**Not yet run against a live account.** The shapes below are the ones
-Google's reference gives
-([connections](https://developers.google.com/people/api/rest/v1/people.connections/list),
+The reference:
+[connections](https://developers.google.com/people/api/rest/v1/people.connections/list),
 [person](https://developers.google.com/people/api/rest/v1/people),
-[labels](https://developers.google.com/people/api/rest/v1/contactGroups/list)),
-and the fixtures in `tests/contacts_tests/google_*.rs` are made up in
-them.
+[labels](https://developers.google.com/people/api/rest/v1/contactGroups/list).
+What is marked *measured* was seen on one Google Workspace account of 95
+contacts, which
+`bazel run //datalib/backend/etl/providers/contacts:contacts_live` checks
+again. That account had no labels of its own, and nothing was edited or
+deleted on it, so a label's page, a deletion, a rename
+(`previousResourceNames`) and an expired token are the reference's shapes
+and have only run on the made-up fixtures in
+`tests/contacts_tests/google_*.rs`.
 
 ### Sign-in
 
@@ -40,9 +45,9 @@ not mirrored:
 |---|---|---|
 | `accounts` | `google` | the signed-in account: `principal_href` is its resource name (`people/<id>`), `login` its address |
 | `addressbooks` | `google!people/<id>/connections` | the account's one list, named "Contacts", and its `sync_token` |
-| `google_people` | `<address book>#people/<id>` | a contact, verbatim but for its `memberships`, which are a set and are stored sorted. `etag`s and each source's `updateTime` are in the sidecar's `volatile_payload` |
+| `google_people` | `<address book>#people/<id>` | a contact, verbatim but for its `memberships`, which are a set and are stored sorted. `etag`s, each source's `updateTime` and each photo's `url` are in the sidecar's `volatile_payload` |
 | `google_contact_groups` | `<address book>#contactGroups/<id>` | a label, or one of Google's own groups (`myContacts`, `starred`). Who is in it is each contact's `memberships` |
-| `google_photos` | `<contact's key>#<url>` | the photo Google lists for a contact, and the `blake3` of its bytes in `blobs.sqlite` once fetched |
+| `google_photos` | `<contact's key>#<source>`, the source being `PROFILE/<id>` or `CONTACT/<id>` | the photo Google lists for a contact, and the `blake3` of its bytes in `blobs.sqlite` once fetched. The link they came from is the sidecar's `held_version` |
 
 A login for a different account has a different address book, so the
 first run with it drops the other account's contacts.
@@ -68,9 +73,14 @@ address book, and a changed photo is one more.
 
 - **A sync token lasts seven days.** Google refuses an older one with
   the reason `EXPIRED_SYNC_TOKEN`; the run then lists every contact
-  once. A photo already held is not fetched again for it.
-- **A token is only good for the fields it was asked for with**, so a
-  change to `PERSON_FIELDS` needs a rung on the ladder that clears
+  once. A photo held at the link it is listed at is not fetched again
+  for it. A token Google never issued is refused as a plain
+  `INVALID_ARGUMENT` with no reason (*measured*), which fails the
+  listing.
+- **A token is only good for the fields it was asked for with.** Google
+  does not refuse one sent with other fields (*measured*), so nothing
+  would say a new field is missing from the contacts that did not
+  change: a change to `PERSON_FIELDS` needs a rung on the ladder that clears
   `addressbooks.sync_token`.
 - **A page with nobody on it has no `connections`.** What says a reply
   is a page is its `nextPageToken` or `nextSyncToken`; one with neither
@@ -84,10 +94,33 @@ address book, and a changed photo is one more.
 `photos[].url` ends in the size it would serve (`=s100`); the download
 asks for `=s512`. A `default` photo is a letter Google drew, and is not
 fetched. The link needs no sign-in and goes out plain, only to an https
-`googleusercontent.com` address. The link names the photo: a new photo
-is a new link, so a new row, and the old one goes. A photo that will
-not come, or is not an image, is a problem on its row, opens the
-contact's page, and is asked for again on the next run.
+`googleusercontent.com` address. A photo that will not come, or is not an
+image, is a problem on its row, opens the contact's page, and is asked
+for again on the next run.
+
+**A link is not a photo's name.** Most stay the same from one listing to
+the next, but Google signs some afresh every time (*measured*: 2 of 33,
+1,100 characters against 100, both `PROFILE` photos, the same bytes). So a
+photo is keyed by where Google has it from, its link is volatile, and a
+link that is not the one held is fetched again: the bytes say whether the
+photo changed, and one that did not renders nothing again. Only a listing
+that names the contact does this, so a run with nothing new still fetches
+none.
+
+### What a contact carries (*measured*)
+
+- Every contact had a `CONTACT` source; most also had `PROFILE` and
+  `DOMAIN_PROFILE` ones, Google's own account and the Workspace
+  directory's entry for the same person. Both give the same names,
+  addresses and numbers again, so the page shows one of each.
+- Every contact had photos, but two in three had only letters Google
+  drew.
+- `canonicalForm` came only with a number already written with its `+`
+  and country code.
+- A `DOMAIN_PROFILE` location's `value` is the word `desk`; `buildingId`
+  and `floor` say where.
+- Two listings in a row agree but for the photo links: same order, same
+  `etag`s and `updateTime`s. The sync token differs every time.
 
 ### Inspecting the result
 

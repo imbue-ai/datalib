@@ -233,6 +233,21 @@ fn org_parts(organization: &Value) -> Vec<String> {
         .collect()
 }
 
+/// Where an organization says someone sits. Its `value` is often only the
+/// word "desk", so the building and floor are what place it.
+fn location(l: &Value) -> Option<String> {
+    let floor = str_of(l, "floor").map(|f| format!("floor {f}"));
+    let parts = [
+        str_of(l, "value"),
+        str_of(l, "buildingId"),
+        floor,
+        str_of(l, "floorSection"),
+        str_of(l, "deskCode"),
+    ];
+    let parts: Vec<String> = parts.into_iter().flatten().collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 /// Everything the card says that has no field of its own on the page.
 fn details(person: &Value, organization: Option<&Value>) -> Vec<Detail> {
     let mut out: Vec<Detail> = Vec::new();
@@ -267,7 +282,6 @@ fn details(person: &Value, organization: Option<&Value>) -> Vec<Detail> {
         ("urls", "value", "Website"),
         ("sipAddresses", "value", "SIP"),
         ("calendarUrls", "url", "Calendar"),
-        ("locations", "value", "Location"),
         ("externalIds", "value", "ID"),
         ("skills", "value", "Skill"),
         ("interests", "value", "Interest"),
@@ -278,6 +292,9 @@ fn details(person: &Value, organization: Option<&Value>) -> Vec<Detail> {
                     .map(|v| Detail::new(field_label(label, which(item).as_deref()), v)),
             );
         }
+    }
+    for l in items(person, "locations") {
+        out.extend(location(l).map(|v| Detail::new("Location", v)));
     }
     for u in items(person, "userDefined") {
         if let (Some(key), Some(value)) = (str_of(u, "key"), str_of(u, "value")) {
@@ -440,6 +457,7 @@ mod tests {
                 "events": [{"date": {"year": 2379, "month": 4, "day": 1}, "type": "anniversary", "formattedType": "Anniversary"}],
                 "relations": [{"person": "Deanna Troi", "type": "spouse", "formattedType": "Spouse"}],
                 "urls": [{"value": "https://titan.test", "type": "work", "formattedType": "Work"}],
+                "locations": [{"value": "desk", "type": "desk", "buildingId": "NCC-1701-D", "floor": "8"}],
                 "userDefined": [{"key": "Instrument", "value": "Trombone"}],
                 "biographies": [{"value": "Plays jazz.\nBeard since 2365.", "contentType": "TEXT_PLAIN"}],
                 "memberships": filed(&["5ea9", "myContacts", "starred"])
@@ -495,6 +513,7 @@ mod tests {
                 ("Event (anniversary)", "2379-04-01"),
                 ("Relation (spouse)", "Deanna Troi"),
                 ("Website (work)", "https://titan.test"),
+                ("Location", "desk, NCC-1701-D, floor 8"),
                 ("Instrument", "Trombone"),
             ]
         );
@@ -610,7 +629,7 @@ mod tests {
     #[test]
     fn a_page_reads_every_row_it_shows() {
         let mut p = riker();
-        p.photo = Some((format!("{}#https://lh3.test/r", p.id), None));
+        p.photo = Some((format!("{}#PROFILE/1c1", p.id), None));
         let parsed = parse(&[p], &groups(), None);
         let read = |c: &ParsedContact| -> Vec<String> {
             c.inputs
@@ -621,7 +640,7 @@ mod tests {
         let card = read(&parsed[0]);
         for want in [
             format!("google_people:{BOOK}#people/c1"),
-            format!("google_photos:{BOOK}#people/c1#https://lh3.test/r"),
+            format!("google_photos:{BOOK}#people/c1#PROFILE/1c1"),
             format!("google_contact_groups:{BOOK}#contactGroups/starred"),
             format!("addressbooks:{BOOK}"),
             "accounts:google".to_string(),
@@ -642,10 +661,7 @@ mod tests {
         let page = &named(&docs, "William Riker").markdown_uuid;
         for (table, id) in [
             ("google_people", format!("{BOOK}#people/c1")),
-            (
-                "google_photos",
-                format!("{BOOK}#people/c1#https://lh3.test/r"),
-            ),
+            ("google_photos", format!("{BOOK}#people/c1#PROFILE/1c1")),
         ] {
             assert_eq!(
                 document_of("google_contacts", table, &id).as_ref(),

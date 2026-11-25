@@ -14,7 +14,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use super::super::db::RawDb;
 use super::super::schema_raw::{GoogleContactGroupRow, GooglePersonRow, GooglePhotoRow};
 use super::super::FetchSummary;
-use super::Page;
+use super::{photos, Page};
 
 const PEOPLE: &str = "google_people";
 const GROUPS: &str = "google_contact_groups";
@@ -108,7 +108,7 @@ impl RawDb {
             &volatile,
         )
         .await?;
-        list_photos(tx, &rows).await?;
+        list_photos(tx, &ids, &page.photos).await?;
         let gone = Self::delete_google_people(tx, &page.gone).await?;
         summary.contacts_deleted += gone;
         Ok((rows.len() + gone) as u64)
@@ -151,15 +151,26 @@ impl RawDb {
 
     /// Every photo `book` lists: its key, and the link to it.
     pub async fn google_photos_listed(&self, book: &str) -> Result<Vec<(String, String)>> {
-        sqlx::query_as(
-            "SELECT ph.id, ph.photo_url FROM google_photos ph \
-             JOIN google_people p ON p.id = ph.person_id \
-             WHERE p.addressbook_id = ? ORDER BY ph.id",
+        let rows = sqlx::query(
+            "SELECT ph.id, json(p.payload) AS payload,
+                    json(b.volatile_payload) AS volatile
+               FROM google_photos ph
+               JOIN google_people p ON p.id = ph.person_id
+               LEFT JOIN google_people_bookkeeping b ON b.id = p.id
+              WHERE p.addressbook_id = ? ORDER BY ph.id",
         )
         .bind(book)
         .fetch_all(self.pool())
         .await
-        .context("select the listed photos")
+        .context("select the listed photos")?;
+        rows.iter()
+            .map(|r| {
+                let id: String = r.try_get("id")?;
+                let link = photos::photo_url(&overlaid(r)?)
+                    .with_context(|| format!("{id} is listed with no link"))?;
+                Ok((id, link))
+            })
+            .collect()
     }
 
     pub async fn set_google_photo(
@@ -251,44 +262,29 @@ impl RawDb {
 /// Each person's photo as just listed; a row for any other goes.
 async fn list_photos(
     tx: &mut Transaction<'static, Sqlite>,
-    people: &[GooglePersonRow],
+    people: &HashSet<String>,
+    listed: &[GooglePhotoRow],
 ) -> Result<()> {
-    let listed: Vec<GooglePhotoRow> = people
-        .iter()
-        .filter_map(|p| {
-            let person_id = p.id_and_payload.id.clone();
-            let photo_url = p.photo_url.clone()?;
-            Some(GooglePhotoRow {
-                id: GooglePhotoRow::pk_recipe(&person_id, &photo_url),
-                person_id,
-                photo_url,
-                blake3: None,
-            })
-        })
-        .collect();
-    let keep: HashSet<String> = listed.iter().map(|p| p.id.clone()).collect();
-    let ids: Vec<&str> = people
-        .iter()
-        .map(|p| p.id_and_payload.id.as_str())
-        .collect();
+    let keep: HashSet<&str> = listed.iter().map(|p| p.id.as_str()).collect();
     let stored: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM google_photos INDEXED BY google_photos_by_person_id \
          WHERE person_id IN (SELECT value FROM json_each(?))",
     )
-    .bind(serde_json::to_string(&ids)?)
+    .bind(serde_json::to_string(people)?)
     .fetch_all(&mut **tx)
     .await
     .context("select the people's photos")?;
     let gone: Vec<String> = stored
         .iter()
-        .filter(|id| !keep.contains(*id))
+        .filter(|id| !keep.contains(id.as_str()))
         .cloned()
         .collect();
     prune::delete_owned_in_tx(tx, PHOTOS, "id", &gone).await?;
     let stored: HashSet<String> = stored.into_iter().collect();
     let new: Vec<GooglePhotoRow> = listed
-        .into_iter()
+        .iter()
         .filter(|p| !stored.contains(&p.id))
+        .cloned()
         .collect();
     bulk_upsert_entity_in_tx(tx, &new).await
 }

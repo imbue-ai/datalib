@@ -20,7 +20,7 @@ use serde_json::Value;
 use tracing::warn;
 
 use super::db::{addressbook_pk, contact_pk, AccountRow, RawDb};
-use super::schema_raw::{GoogleContactGroupRow, GooglePersonRow};
+use super::schema_raw::{GoogleContactGroupRow, GooglePersonRow, GooglePhotoRow};
 use super::FetchSummary;
 use datalib_etl::doltlite_raw::WirePayload;
 
@@ -304,6 +304,8 @@ fn held_back(unidentified: usize) -> Option<String> {
 #[derive(Default)]
 pub struct Page {
     pub rows: Vec<(GooglePersonRow, Option<Value>)>,
+    /// The photo of each contact that has one.
+    pub photos: Vec<GooglePhotoRow>,
     /// Keys of contacts deleted, and the former names of ones renamed.
     pub gone: Vec<String>,
     /// Contacts with no resource name, which no stored row can be matched to.
@@ -335,6 +337,8 @@ fn read_page<'a>(book: &str, people: impl Iterator<Item = &'a Value>) -> Page {
                 .filter(|former| *former != name)
                 .map(|former| contact_pk(book, former)),
         );
+        page.photos
+            .extend(photos::row(&contact_pk(book, &name), person));
         page.rows.push(person_row(book, &name, person));
     }
     page
@@ -355,7 +359,6 @@ fn person_row(book: &str, name: &str, person: &Value) -> (GooglePersonRow, Optio
         addressbook_id: book.to_string(),
         resource_name: name.to_string(),
         display_name: primary(&content, "names").and_then(|n| str_of(n, "displayName")),
-        photo_url: photos::photo_url(&content),
     };
     (row, volatile)
 }

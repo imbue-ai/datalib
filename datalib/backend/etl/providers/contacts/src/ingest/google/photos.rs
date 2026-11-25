@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use datalib_etl::blob_cas::CasInsert;
+use datalib_etl::blob_cas::{CasEdgeRow, CasInsert};
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl_web::google::is_googleusercontent;
 use datalib_etl_web::http::{
@@ -18,9 +18,10 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
 use super::super::db::RawDb;
+use super::super::schema_raw::GooglePhotoRow;
 use super::super::FetchSummary;
 use super::db::PHOTOS;
-use super::{FetchOptions, API};
+use super::{str_of, FetchOptions, API};
 
 /// The longer side asked for, in pixels; Google never scales one up.
 const SIZE: u32 = 512;
@@ -29,9 +30,9 @@ const FLUSH: usize = 50;
 const FLUSH_BYTES: usize = 8 << 20;
 const FAILURES_IN_A_ROW: usize = 20;
 
-/// The link to a contact's photo, if it has one of its own: a `default`
-/// one is a letter Google drew. The primary one, where there are two.
-pub fn photo_url(person: &Value) -> Option<String> {
+/// A contact's photo, if it has one of its own: a `default` one is a
+/// letter Google drew. The primary one, where there are two.
+fn photo(person: &Value) -> Option<&Value> {
     let is = |p: &Value, pointer: &str| p.pointer(pointer).and_then(Value::as_bool) == Some(true);
     let own: Vec<&Value> = person
         .get("photos")?
@@ -42,7 +43,32 @@ pub fn photo_url(person: &Value) -> Option<String> {
     own.iter()
         .find(|p| is(p, "/metadata/primary"))
         .or_else(|| own.first())
-        .and_then(|p| super::str_of(p, "url"))
+        .copied()
+}
+
+/// The link to a contact's photo, as listed.
+pub fn photo_url(person: &Value) -> Option<String> {
+    str_of(photo(person)?, "url")
+}
+
+/// A contact's photo, as a row of `google_photos` with no bytes yet.
+pub(super) fn row(person_id: &str, person: &Value) -> Option<GooglePhotoRow> {
+    let photo = photo(person)?;
+    str_of(photo, "url")?;
+    let source = |key| {
+        photo
+            .pointer("/metadata/source")
+            .and_then(|s| str_of(s, key))
+    };
+    let photo_source = [source("type"), source("id")]
+        .map(Option::unwrap_or_default)
+        .join("/");
+    Some(GooglePhotoRow {
+        id: GooglePhotoRow::pk_recipe(person_id, &photo_source),
+        person_id: person_id.to_string(),
+        photo_source,
+        blake3: None,
+    })
 }
 
 /// `url`, at [`SIZE`]: the link ends in the size it would serve (`=s100`).
@@ -63,10 +89,11 @@ pub(super) async fn fetch(
 ) -> Result<()> {
     let db = &opts.db;
     let links: HashMap<String, String> = db.google_photos_listed(book).await?.into_iter().collect();
-    // A photo has no version: its link names it.
+    // A photo Google signs afresh is a link not held, and so is fetched
+    // again; the bytes say whether it changed.
     let mut listed: Vec<Listed> = links
-        .keys()
-        .map(|key| Listed::new(key, None::<String>))
+        .iter()
+        .map(|(key, link)| Listed::new(key, Some(link)))
         .collect();
     listed.sort_by(|a, b| a.key.cmp(&b.key));
     let owed = owed::owed(db.pool(), PHOTOS, listed).await?;

@@ -28,13 +28,18 @@ pub(crate) fn fixture(root: &Path, url: &str, resp: HttpResponse) {
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
-/// A photo's link, as Google lists it and as the download asks for it.
+/// A photo's link, as Google lists it and as the download asks for it. The
+/// bytes are the link's own.
 pub(crate) fn photo(root: &Path, url: &str, status: u16, content_type: &str) {
+    photo_of(root, url, url, status, content_type);
+}
+
+fn photo_of(root: &Path, url: &str, bytes: &str, status: u16, content_type: &str) {
     let req = HttpRequest::get(google::API.service, sized(url)).plain();
     let mut resp = HttpResponse {
         status,
         headers: Default::default(),
-        body: [PNG, url.as_bytes()].concat(),
+        body: [PNG, bytes.as_bytes()].concat(),
         duration_ms: 0,
     };
     resp.headers
@@ -88,10 +93,18 @@ pub(crate) fn person(id: &str, name: &str, photo: Option<&str>, labels: &[&str])
             "contactGroupMembership": {"contactGroupId": l, "contactGroupResourceName": format!("contactGroups/{l}")}
         })).collect::<Vec<_>>()
     });
+    let mut letter = json!({"metadata": {"source": {"type": "CONTACT", "id": id}}, "default": true,
+        "url": "https://lh3.googleusercontent.com/cm/letter=s100"});
     p["photos"] = match photo {
-        Some(url) => json!([{"metadata": {"primary": true}, "url": url}]),
-        None => json!([{"metadata": {"primary": true}, "default": true,
-            "url": "https://lh3.googleusercontent.com/cm/letter=s100"}]),
+        Some(url) => json!([
+            {"metadata": {"primary": true, "source": {"type": "PROFILE", "id": format!("1{id}")}},
+             "url": url},
+            letter
+        ]),
+        None => {
+            letter["metadata"]["primary"] = json!(true);
+            json!([letter])
+        }
     };
     p
 }
@@ -162,7 +175,8 @@ async fn strings(store: &Path, sql: &'static str) -> Vec<String> {
 
 const PEOPLE: &str = "SELECT resource_name FROM google_people ORDER BY resource_name";
 const LABELS: &str = "SELECT resource_name FROM google_contact_groups ORDER BY resource_name";
-const PHOTOS: &str = "SELECT photo_url FROM google_photos WHERE blake3 IS NOT NULL ORDER BY id";
+const PHOTOS: &str = "SELECT b.held_version FROM google_photos p \
+     JOIN google_photos_bookkeeping b ON b.id = p.id WHERE p.blake3 IS NOT NULL ORDER BY p.id";
 const PROBLEMS: &str = "SELECT scope_key FROM problems ORDER BY scope_key";
 const TOKEN: &str = "SELECT coalesce(sync_token, 'none') FROM addressbooks";
 
@@ -415,9 +429,9 @@ async fn a_listing_it_cannot_fully_read_deletes_nothing() {
     }
 }
 
-/// Google re-stamps a contact nobody edited, and sends its labels in
-/// another order: the stored payload does not change, so nothing renders
-/// again.
+/// Google re-stamps a contact nobody edited, signs its photo's link
+/// afresh, and sends its labels in another order: no row render reads
+/// changes, so nothing renders again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_restamped_contact_is_not_an_update() {
     let d = tempfile::tempdir().unwrap();
@@ -429,14 +443,33 @@ async fn a_restamped_contact_is_not_an_update() {
             vec![person(
                 "c1",
                 "William Riker",
-                None,
+                Some(&link("signed-1")),
                 &["starred", "myContacts"],
             )],
             None,
             Some("s1"),
         ),
     );
-    let mut touched = person("c1", "William Riker", None, &["myContacts", "starred"]);
+    photo_of(
+        &tapes[0],
+        &link("signed-1"),
+        "riker's face",
+        200,
+        "image/png",
+    );
+    let mut touched = person(
+        "c1",
+        "William Riker",
+        Some(&link("signed-2")),
+        &["myContacts", "starred"],
+    );
+    photo_of(
+        &tapes[1],
+        &link("signed-2"),
+        "riker's face",
+        200,
+        "image/png",
+    );
     touched["etag"] = json!("%New==");
     touched["metadata"]["sources"][0]["etag"] = json!("#2");
     touched["metadata"]["sources"][0]["updateTime"] = json!("2026-10-01T10:00:00Z");
@@ -445,12 +478,16 @@ async fn a_restamped_contact_is_not_an_update() {
         &connections_url(Some("s1"), None),
         page(vec![touched], None, Some("s2")),
     );
-    const PAYLOAD: &str = "SELECT json(payload) FROM google_people";
+    const RENDERED: &str = "SELECT id || json(payload) || addressbook_id || resource_name \
+         || display_name FROM google_people \
+         UNION ALL SELECT id || person_id || photo_source || blake3 FROM google_photos";
     run(&tapes[0], &store).await;
-    let before = strings(&store, PAYLOAD).await;
+    let before = strings(&store, RENDERED).await;
+    assert_eq!(before.len(), 2, "{before:?}");
     let second = run(&tapes[1], &store).await;
-    assert_eq!(strings(&store, PAYLOAD).await, before);
+    assert_eq!(strings(&store, RENDERED).await, before);
     assert_eq!(second.contacts_updated, 0, "{second:?}");
+    assert_eq!(strings(&store, PHOTOS).await, [link("signed-2")]);
 
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
     let loaded = db.load_google_people().await.unwrap();
@@ -503,14 +540,10 @@ async fn a_photo_that_failed_is_asked_for_again() {
         (3, 0, 3),
         "{first:?}"
     );
-    let key = |id: &str, url: &str| format!("google_photos:{BOOK}#people/{id}#{url}");
+    let key = |id: &str| format!("google_photos:{BOOK}#people/{id}#PROFILE/1{id}");
     assert_eq!(
         strings(&store, PROBLEMS).await,
-        [
-            key("c1", &link("riker-1")),
-            key("c2", elsewhere),
-            key("c3", &link("data-1"))
-        ]
+        [key("c1"), key("c2"), key("c3")]
     );
 
     let asked = playback::Asked::default();
@@ -523,7 +556,7 @@ async fn a_photo_that_failed_is_asked_for_again() {
         0,
         "only Google's own host is asked"
     );
-    assert_eq!(strings(&store, PROBLEMS).await, [key("c2", elsewhere)]);
+    assert_eq!(strings(&store, PROBLEMS).await, [key("c2")]);
 }
 
 /// A login for another account loses the contacts of the one before.

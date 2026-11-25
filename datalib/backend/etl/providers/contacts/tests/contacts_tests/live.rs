@@ -14,6 +14,8 @@
 //! on disk, and its path printed, for inspection; nothing it holds is
 //! printed.
 
+use std::collections::HashSet;
+
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_contacts::ingest::google;
 use datalib_etl_contacts::ingest::{db_path_for, FetchSummary, RawDb};
@@ -48,7 +50,8 @@ async fn count(store: &std::path::Path, sql: &'static str) -> i64 {
 
 /// Every contact, label and photo lands, the replies carried what the
 /// reference says they do, and a second run with nothing changed in
-/// between asks for nothing it holds.
+/// between asks for nothing it holds. Listing everyone again, as an
+/// expired token does, changes nothing render reads.
 #[tokio::test(flavor = "multi_thread")]
 async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
     let store = tempfile::TempDir::with_prefix("google-contacts-live-")
@@ -94,4 +97,38 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
         (0, 0, 0, 0, 0, 3),
         "the account, the labels and one page: {second:?}"
     );
+
+    let rendered = render_reads(&store).await;
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+    sqlx::query("UPDATE addressbooks SET sync_token = NULL")
+        .execute(db.pool())
+        .await
+        .unwrap();
+    db.commit_all("forget the sync token").await.unwrap();
+    db.close().await;
+    let third = run(&store).await;
+    eprintln!("[test] a whole listing again: {third:?}");
+    assert_eq!(
+        (third.contacts_updated, third.contacts_deleted, third.errors),
+        (0, 0, 0),
+        "{third:?}"
+    );
+    let moved = rendered
+        .symmetric_difference(&render_reads(&store).await)
+        .count();
+    assert_eq!(moved, 0, "rows render reads that a second listing changed");
+}
+
+async fn render_reads(store: &std::path::Path) -> HashSet<String> {
+    let db = RawDb::open(&db_path_for(store)).await.unwrap();
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT id || json(payload) FROM google_people \
+         UNION ALL SELECT id || json(payload) FROM google_contact_groups \
+         UNION ALL SELECT id || blake3 FROM google_photos",
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap();
+    db.close().await;
+    rows.into_iter().collect()
 }

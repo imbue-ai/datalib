@@ -158,9 +158,9 @@ international form, but an address-book card is often typed by hand
 without one, and a phone's SMS backup keeps whatever the phone was
 given. A card whose numbers are all national reaches nobody through
 them. The planned fix, not built, is a default region the render
-applies to such a number. A Google contact's numbers need none: Google
-sends its own full reading of each beside it (`canonicalForm`), and a
-number typed without its country code takes its handle from that.
+applies to such a number. Google sends its own full reading of some
+numbers (`canonicalForm`), and one typed without its country code takes
+its handle from that where there is one.
 
 ### Changing the rules
 

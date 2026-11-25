@@ -624,7 +624,7 @@ user list, claude's orgs and project docs).
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
-| contacts (Google) | the connections page is the content; each contact's photo link | `google_photos` sidecar, at no version | — |
+| contacts (Google) | the connections page is the content; each contact's photo link | `google_photos` sidecar, at its link | — |
 | calendar (Calendly) | the scheduled-events listing, at each event's `listing_hash` | `calendly_invitees` sidecar | — |
 | google_drive | the file listing, at each file's Drive `version`; each stored revision's export links. The folder and shared-drive listings, and each listed file's `parents`, are the content (`folders`, `drives`, `file_parents`) | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |

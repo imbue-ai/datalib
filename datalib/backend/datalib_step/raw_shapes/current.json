@@ -187,7 +187,7 @@
     ]
   },
   "contacts": {
-    "schema_hash": "a844046d453aaf698e032751397a4ff1a9e25119f73f3557c1b08f5a839de6cf",
+    "schema_hash": "70375d603dce04fe7840178b07e313a625674c2a5d2e61e35a984a71506f836d",
     "schema_version": 5,
     "shared_schema_version": 1,
     "sql": [
@@ -213,13 +213,13 @@
       "CREATE TABLE google_contact_groups( id TEXT PRIMARY KEY, payload TEXT NULL, addressbook_id TEXT NOT NULL, resource_name TEXT NOT NULL, name TEXT NULL)",
       "CREATE TABLE google_contact_groups_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX google_contact_groups_by_addressbook ON google_contact_groups(addressbook_id)",
-      "CREATE TABLE google_people( id TEXT PRIMARY KEY, payload TEXT NULL, addressbook_id TEXT NOT NULL, resource_name TEXT NOT NULL, display_name TEXT NULL, photo_url TEXT NULL)",
+      "CREATE TABLE google_people( id TEXT PRIMARY KEY, payload TEXT NULL, addressbook_id TEXT NOT NULL, resource_name TEXT NOT NULL, display_name TEXT NULL)",
       "CREATE TABLE google_people_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX google_people_by_addressbook ON google_people(addressbook_id)",
-      "CREATE TABLE google_photos( id TEXT PRIMARY KEY, person_id TEXT NOT NULL, photo_url TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
+      "CREATE TABLE google_photos( id TEXT PRIMARY KEY, person_id TEXT NOT NULL, photo_source TEXT NOT NULL, blake3 TEXT NULL, CHECK(blake3 IS NULL OR length(blake3) = 64))",
       "CREATE TABLE google_photos_bookkeeping( id TEXT PRIMARY KEY, fetched_at_utc TEXT NULL, attempt_count INTEGER NOT NULL, last_attempt_at_utc TEXT NULL, last_error TEXT NULL, volatile_payload TEXT NULL, tz_offset TEXT NULL, held_version TEXT NULL)",
       "CREATE INDEX google_photos_by_person_id ON google_photos(person_id)",
-      "CREATE INDEX google_photos_by_photo_url ON google_photos(photo_url, blake3)",
+      "CREATE INDEX google_photos_by_photo_source ON google_photos(photo_source, blake3)",
       "CREATE TABLE ingested_files( scope TEXT NOT NULL, rel_path TEXT NOT NULL, blake3 TEXT NOT NULL, size_bytes INTEGER NOT NULL, last_finished_at_utc TEXT NOT NULL, tz_offset TEXT NULL, PRIMARY KEY(scope, rel_path))",
       "CREATE TABLE problems( problem_uuid VARCHAR(36) NOT NULL, source_id VARCHAR(64) NOT NULL, stage VARCHAR(16) NOT NULL, severity VARCHAR(16) NOT NULL, outcome VARCHAR(16) NOT NULL, reason VARCHAR(32) NOT NULL, scope_kind VARCHAR(16) NOT NULL, scope_key VARCHAR(96) NOT NULL, item_uuid VARCHAR(96), field VARCHAR(128), path VARCHAR(255), rule VARCHAR(128), sample TEXT NOT NULL, first_seen_at_utc VARCHAR(40) NOT NULL, changed_at_utc VARCHAR(40) NOT NULL, tz_offset VARCHAR(8), render_version INT, upstream_entity_kind VARCHAR(64), upstream_id VARCHAR(255), upstream_account VARCHAR(255), PRIMARY KEY(problem_uuid))",
       "CREATE INDEX problems_by_scope ON problems(scope_kind, scope_key)",
