@@ -156,7 +156,7 @@ TYPES = {
     ".pdf": "application/pdf",
     ".zip": "application/zip",
     ".csv": "text/csv; charset=utf-8",
-    ".py": "text/x-python; charset=utf-8",
+    ".lua": "text/x-lua; charset=utf-8",
     ".txt": "text/plain; charset=utf-8",
 }
 PICTURES = {".jpg", ".png", ".gif", ".webp", ".mp4", ".mov"}
@@ -174,13 +174,15 @@ The forward array is still pointed at whatever Q left there.
 def text_files() -> dict[str, bytes]:
     csv = ["stardate,array,phase_variance"]
     csv += [f"47988.{n},aft,{0.012 * ((n * 7) % 11):.3f}" for n in range(1, 13)]
-    code = '''"""Phase variance across the aft array."""
-
-
-def variance(readings: list[float]) -> float:
-    mean = sum(readings) / len(readings)
-    return sum((r - mean) ** 2 for r in readings) / len(readings)
-'''
+    code = """-- Phase variance across the aft array.
+local function variance(readings)
+  local sum, squares = 0, 0
+  for _, r in ipairs(readings) do sum = sum + r end
+  local mean = sum / #readings
+  for _, r in ipairs(readings) do squares = squares + (r - mean) ^ 2 end
+  return squares / #readings
+end
+"""
     paste = [
         f"[{n:03}] chroniton flux {'nominal' if n % 9 else 'ELEVATED'} at deck {n % 42 + 1}"
         for n in range(1, 61)
@@ -192,7 +194,7 @@ def variance(readings: list[float]) -> float:
     log = PROVIDERS / "pdf" / "tests" / "fixtures" / "pdf_tng" / "captains_log.pdf"
     return {
         "aft_array.csv": ("\n".join(csv) + "\n").encode(),
-        "phase_variance.py": code.encode(),
+        "phase_variance.lua": code.encode(),
         "message.txt": "\n".join(paste).encode(),
         "tricorder_dump.zip": archive.getvalue(),
         "captains_log.pdf": log.read_bytes(),
@@ -773,7 +775,7 @@ def the_rift(rift: Room) -> None:
         "Chroniton flux is climbing. Readings attached.",
         attachments=[
             attach("05-01 09:16", rift.id, "aft_array.csv"),
-            attach("05-01 09:16", rift.id, "phase_variance.py"),
+            attach("05-01 09:16", rift.id, "phase_variance.lua"),
         ],
     )
     rift.say(
