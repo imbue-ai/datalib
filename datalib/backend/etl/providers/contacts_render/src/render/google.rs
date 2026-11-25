@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use datalib_contact_schema::{ContactHandle, Detail};
 use datalib_etl_contacts::ingest::google::db::{LoadedGoogleGroup, LoadedGooglePerson, PHOTOS};
 use datalib_etl_contacts::ingest::google::ADDRESSBOOK_NAME;
-use datalib_etl_contacts::ingest::google::{person_page, primary, str_of, ACCOUNT_ID};
+use datalib_etl_contacts::ingest::google::{label_page, person_page, primary, str_of, ACCOUNT_ID};
 use datalib_etl_render::inputs::Input;
 use datalib_handle::Handle;
 use serde_json::Value;
@@ -41,13 +41,13 @@ pub fn parse(
     let cards = people.iter().map(|p| person(p, &own, login));
     let labels = groups.iter().filter(|g| is_label(&g.group)).map(|g| {
         let members = members.remove(g.resource_name.as_str());
-        label(g, members.unwrap_or_default())
+        label(g, members.unwrap_or_default(), login)
     });
     cards.chain(labels).collect()
 }
 
 /// The document a raw row of Google's is, or belongs to: `"<address
-/// book>#people/<id>"`, with the link after another `#` for a photo.
+/// book>#people/<id>"`, with the photo's source after another `#` for one.
 pub fn document_of(source_id: &str, table: &str, id: &str) -> Option<String> {
     if ![PHOTOS, "google_people", "google_contact_groups"].contains(&table) {
         return None;
@@ -115,7 +115,7 @@ fn person(
     }
 }
 
-fn label(g: &LoadedGoogleGroup, members: Vec<String>) -> ParsedContact {
+fn label(g: &LoadedGoogleGroup, members: Vec<String>, login: Option<&str>) -> ParsedContact {
     ParsedContact {
         uid: g.resource_name.clone(),
         addressbook: g.addressbook_label.clone(),
@@ -139,10 +139,11 @@ fn label(g: &LoadedGoogleGroup, members: Vec<String>) -> ParsedContact {
         note: None,
         photo: None,
         photo_url: None,
-        source_url: None,
+        source_url: label_page(&g.resource_name, login),
         inputs: vec![
             Input::new("google_contact_groups", &g.id),
             Input::new("addressbooks", &g.addressbook_id),
+            Input::new("accounts", ACCOUNT_ID),
         ],
     }
 }
@@ -604,6 +605,10 @@ mod tests {
         assert_eq!(docs.len(), 3);
         let label = named(&docs, "Bridge crew");
         assert_eq!(label.rows[0].kind, "Contact group");
+        assert_eq!(
+            label.rows[0].source_url.as_deref(),
+            Some("https://contacts.google.com/label/5ea9?authuser=picard%40enterprise.test")
+        );
         let text = join(&label.sections);
         assert!(
             text.contains("- [William Riker](mailto:riker@enterprise.test"),

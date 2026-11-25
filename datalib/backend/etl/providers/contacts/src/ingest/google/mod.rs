@@ -395,11 +395,21 @@ fn is_expired(e: &anyhow::Error) -> bool {
 /// The contact's page on contacts.google.com, as the account that has it.
 pub fn person_page(resource_name: &str, login: Option<&str>) -> Option<String> {
     let id = resource_name.strip_prefix("people/")?;
-    let url = format!("https://contacts.google.com/person/{}", percent_encode(id));
-    Some(match login {
+    Some(page("person", id, login))
+}
+
+/// A label's page on contacts.google.com, as the account that has it.
+pub fn label_page(resource_name: &str, login: Option<&str>) -> Option<String> {
+    let id = resource_name.strip_prefix("contactGroups/")?;
+    Some(page("label", id, login))
+}
+
+fn page(kind: &str, id: &str, login: Option<&str>) -> String {
+    let url = format!("https://contacts.google.com/{kind}/{}", percent_encode(id));
+    match login {
         Some(login) => format!("{url}?authuser={}", percent_encode(login)),
         None => url,
-    })
+    }
 }
 
 /// The item of a person's `field` Google marks primary, else its first.

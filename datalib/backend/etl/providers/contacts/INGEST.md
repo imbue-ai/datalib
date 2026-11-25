@@ -20,8 +20,7 @@ The reference:
 What is marked *measured* was seen on one Google Workspace account of 95
 contacts, which
 `bazel run //datalib/backend/etl/providers/contacts:contacts_live` checks
-again. That account had no labels of its own, and nothing was edited or
-deleted on it, so a label's page, a deletion, a rename
+again. Nothing was deleted or merged on it, so a deletion, a rename
 (`previousResourceNames`) and an expired token are the reference's shapes
 and have only run on the made-up fixtures in
 `tests/contacts_tests/google_*.rs`.
@@ -119,6 +118,12 @@ none.
   and country code.
 - A `DOMAIN_PROFILE` location's `value` is the word `desk`; `buildingId`
   and `floor` say where, `$$NO_BUILDING$$` standing for no building.
+- A label is a `USER_CONTACT_GROUP` with `metadata.updateTime`; Google's
+  own eight groups are `SYSTEM_CONTACT_GROUP` and have no `metadata`.
+  Every membership named a group the label listing gave, or was a
+  `domainMembership`, which names none.
+- `https://contacts.google.com/person/<id>` and `/label/<id>`, the ids of
+  the resource names, open the contact's and the label's own pages.
 - Two listings in a row agree but for the photo links: same order, same
   `etag`s and `updateTime`s. The sync token differs every time.
 
