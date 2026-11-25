@@ -59,6 +59,6 @@ async fn a_sync_then_a_second_run_that_reads_no_message() {
 
     let second = run(&store, &sync).await;
     eprintln!("[test] second run: {}", second.line());
-    // A message sent between the two runs is the one thing it may read.
-    assert!(second.walked <= 2, "{second:?}");
+    // A message that came in between the two runs fails this; run it again.
+    assert_eq!(second.walked, 0, "{second:?}");
 }

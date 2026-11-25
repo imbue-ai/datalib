@@ -153,7 +153,8 @@ the limit again each run.
 
 Discord lists none of them. A run re-reads the trailing
 `refresh_window_days` (7) of each conversation that holds a message that
-new, at most every `refresh_every_minutes` (360). What it returns
+new, at most every `refresh_every_minutes` (360). A run that reads the
+whole window for the first time has refreshed it too. What it returns
 replaces what is stored; a stored message inside the stretch that it
 does not return was deleted, and goes, with its files' edges, in that
 page's transaction. A message edited or deleted after it left the window
@@ -197,6 +198,11 @@ requests whose keys, types and counts were looked at and nothing else:
 - 413 messages read again ten minutes later had not changed at all, and
   neither had 18 channels; a server's `features` came in another order;
 - a deleted or unknown channel answers 404, code 10003.
+
+On 2026-11-25, a sync of one day of that account (`discord_live`,
+latchkey 3.25.0): 239 conversations listed over 2 servers and 4 direct
+messages, 2 of them with anything to read, 6 messages, 2 files, 39
+requests, no problem, and both documents rendered.
 
 Not yet seen live: a 429, a webhook's or an app's message, a forward, a
 poll, a private thread, a group direct message, a channel hidden from

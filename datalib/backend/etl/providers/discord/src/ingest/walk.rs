@@ -32,6 +32,10 @@ pub struct Walk {
     before: Option<u64>,
     /// How far down the current stretch is settled.
     settled: Option<u64>,
+    /// Where the refresh window starts, until everything from there up has
+    /// been read by this walk: what a first read of it leaves nothing to
+    /// refresh of.
+    window: Option<u64>,
 }
 
 /// What a page of messages settled.
@@ -42,8 +46,9 @@ pub struct Settled {
     /// Where a stored message this page lacks is gone: from `0` up to,
     /// not including, `1` (no top on a first page).
     pub reread: Option<(u64, Option<u64>)>,
-    /// The re-read ended with this page.
-    pub reread_done: bool,
+    /// With this page the whole refresh window has been read, again or
+    /// for the first time.
+    pub refreshed: bool,
     /// Messages older than this are outside what was asked for.
     pub floor: u64,
 }
@@ -86,13 +91,23 @@ pub fn owed(floor: u64, tip: u64, held: &[Span], reread_from: Option<u64>) -> Ve
     out
 }
 
+/// Where the refresh window, from `from` up, starts in a conversation that
+/// holds nothing of it: its walk reads the window for the first time.
+/// `None` when some of it is held, or there is nothing in it.
+pub fn unread_window(from: u64, floor: u64, tip: u64, held: &[Span]) -> Option<u64> {
+    let from = from.max(floor);
+    let key = snowflake::key(from);
+    (tip >= from && held.iter().all(|s| s.hi < key)).then_some(from)
+}
+
 impl Walk {
-    pub fn new(channel_id: &str, stretches: Vec<Stretch>) -> Self {
+    pub fn new(channel_id: &str, stretches: Vec<Stretch>, window: Option<u64>) -> Self {
         Self {
             channel_id: channel_id.to_string(),
             stretches: stretches.into(),
             before: None,
             settled: None,
+            window,
         }
     }
 
@@ -131,10 +146,14 @@ impl Walk {
             Some(_) => s.lo,
         };
         let done = bottom <= s.lo;
+        let read_window = self.window.is_some_and(|from| bottom <= from);
+        if read_window {
+            self.window = None;
+        }
         let settled = Settled {
             span: Span::new(snowflake::key(bottom), snowflake::key(top)),
             reread: s.reread.then_some((bottom.max(s.lo), self.before)),
-            reread_done: s.reread && done,
+            refreshed: read_window || (s.reread && done),
             floor: s.lo,
         };
         if oldest.is_none() {
@@ -203,7 +222,7 @@ mod tests {
     /// bottom of the stretch, whether it is past it or empty.
     #[test]
     fn pages_settle_the_stretch_from_the_top_down() {
-        let mut w = Walk::new("c", owed(10, 90, &[], None));
+        let mut w = Walk::new("c", owed(10, 90, &[], None), None);
         assert_eq!((w.next_before(), w.next_key()), (None, Some(90)));
         // A message came in after the listing named 90 the newest.
         let s = w.page(&[95, 90, 60]).unwrap();
@@ -221,7 +240,7 @@ mod tests {
     /// for again.
     #[test]
     fn a_deleted_newest_message_is_settled_by_the_page_that_lacks_it() {
-        let mut w = Walk::new("c", owed(10, 90, &[span(10, 60)], None));
+        let mut w = Walk::new("c", owed(10, 90, &[span(10, 60)], None), None);
         let s = w.page(&[60, 55]).unwrap();
         assert_eq!(s.span, span(60, 90));
         assert_eq!(w.next_key(), None);
@@ -230,7 +249,7 @@ mod tests {
     /// An empty page says there is nothing older anywhere.
     #[test]
     fn an_empty_page_settles_every_stretch_below_it() {
-        let mut w = Walk::new("c", owed(10, 90, &[span(40, 50)], Some(70)));
+        let mut w = Walk::new("c", owed(10, 90, &[span(40, 50)], Some(70)), None);
         let s = w.page(&[]).unwrap();
         assert_eq!(s.span, span(10, 90));
         assert_eq!(s.reread, Some((70, None)), "only the window is judged");
@@ -241,7 +260,7 @@ mod tests {
     /// the window's oldest message, not from the window's edge.
     #[test]
     fn an_adjoining_stretch_goes_on_where_the_one_above_ended() {
-        let mut w = Walk::new("c", owed(10, 90, &[span(80, 90)], Some(70)));
+        let mut w = Walk::new("c", owed(10, 90, &[span(80, 90)], Some(70)), None);
         w.page(&[90, 75, 60]).unwrap();
         assert_eq!(w.next_before(), Some(75));
         let s = w.page(&[60, 5]).unwrap();
@@ -250,7 +269,7 @@ mod tests {
 
     #[test]
     fn a_gap_below_held_messages_starts_at_its_top() {
-        let mut w = Walk::new("c", owed(10, 90, &[span(50, 90)], None));
+        let mut w = Walk::new("c", owed(10, 90, &[span(50, 90)], None), None);
         assert_eq!(w.next_before(), Some(50));
         let s = w.page(&[30, 5]).unwrap();
         assert_eq!((s.span, s.floor), (span(10, 50), 10));
@@ -261,11 +280,31 @@ mod tests {
     /// and each later one only what lies under the page before.
     #[test]
     fn a_reread_judges_each_stretch_once() {
-        let mut w = Walk::new("c", owed(10, 90, &[span(10, 90)], Some(40)));
+        let mut w = Walk::new("c", owed(10, 90, &[span(10, 90)], Some(40)), None);
         let s = w.page(&[90, 70]).unwrap();
-        assert_eq!((s.reread, s.reread_done), (Some((70, None)), false));
+        assert_eq!((s.reread, s.refreshed), (Some((70, None)), false));
         let s = w.page(&[60, 30]).unwrap();
-        assert_eq!((s.reread, s.reread_done), (Some((40, Some(70))), true));
+        assert_eq!((s.reread, s.refreshed), (Some((40, Some(70))), true));
         assert_eq!(w.next_key(), None);
+    }
+
+    /// A window nothing of is held is read for the first time, and there
+    /// is nothing in it to refresh once the walk is under it.
+    #[test]
+    fn a_first_read_of_the_window_counts_as_its_refresh() {
+        assert_eq!(unread_window(40, 10, 90, &[]), Some(40));
+        assert_eq!(unread_window(40, 10, 90, &[span(10, 39)]), Some(40));
+        assert_eq!(
+            unread_window(40, 10, 90, &[span(10, 40)]),
+            None,
+            "some held"
+        );
+        assert_eq!(unread_window(40, 10, 39, &[]), None, "nothing in it");
+        assert_eq!(unread_window(40, 60, 90, &[]), Some(60), "down to `since`");
+
+        let mut w = Walk::new("c", owed(10, 90, &[], None), Some(40));
+        assert!(!w.page(&[90, 41]).unwrap().refreshed, "not under it yet");
+        assert!(w.page(&[35, 20]).unwrap().refreshed);
+        assert!(!w.page(&[12, 5]).unwrap().refreshed, "once");
     }
 }

@@ -132,16 +132,46 @@ async fn a_first_sync_copies_every_conversation_the_account_can_read() {
     assert_eq!(held.await, 1);
 }
 
-/// Nothing new: the listings, and not one page of messages.
+/// Nothing new: the listings, and not one page of messages, whether the
+/// messages are older than the refresh window or inside it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_second_sync_with_nothing_new_only_lists() {
+    for days in [7, 60] {
+        let d = tempfile::tempdir().unwrap();
+        let store = d.path().join("store");
+        let tape = World::before().tape(d.path(), "before");
+        let sync = || DiscordSync {
+            refresh_window_days: Some(days),
+            ..sync()
+        };
+        let first = run_at(&store, &tape, sync(), world::now()).await.unwrap();
+        assert_eq!(first.walked, 4, "{first:?}");
+        let s = run_at(&store, &tape, sync(), world::now()).await.unwrap();
+        // The account, the direct messages, the servers, one server's channels.
+        assert_eq!((s.walked, s.messages, s.requests), (0, 0, 4), "{s:?}");
+    }
+}
+
+/// A conversation quiet for longer than the window, then spoken in: what
+/// the window holds of it has just been read, and is not read again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_window_first_read_by_a_new_message_is_not_read_again() {
     let d = tempfile::tempdir().unwrap();
     let store = d.path().join("store");
-    let tape = World::before().tape(d.path(), "before");
-    run(&store, &tape).await.unwrap();
+    run(&store, &World::before().tape(d.path(), "before"))
+        .await
+        .unwrap();
+    let mut w = World::before();
+    // 2024-05-31, a day before the runs' now and weeks after the rest.
+    let spoken = at(30 * 24 * 60);
+    let dm = w.value["messages"][RIKER_DM].as_array_mut().unwrap();
+    dm.push(message(RIKER_DM, spoken, RIKER, "Awake?"));
+    w.value["dms"][0]["last_message_id"] = json!(spoken.to_string());
+    let tape = w.tape(d.path(), "spoken");
     let s = run(&store, &tape).await.unwrap();
-    // The account, the direct messages, the servers, one server's channels.
-    assert_eq!((s.walked, s.messages, s.requests), (0, 0, 4), "{s:?}");
+    assert_eq!(s.walked, 1, "{s:?}");
+    let s = run(&store, &tape).await.unwrap();
+    assert_eq!((s.walked, s.requests), (0, 4), "{s:?}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

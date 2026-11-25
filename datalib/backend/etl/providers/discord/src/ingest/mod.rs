@@ -388,27 +388,32 @@ impl Ctx<'_> {
     async fn walk_of(&mut self, conversation: &Conversation) -> Result<Option<Walk>> {
         let id = &conversation.id;
         let held = coverage::held(&mut **self.writes.tx().await?, &history_scope(id)).await?;
-        let reread_from = self.reread_from(id, &held).await?;
+        let window = self.window_start();
+        let unread =
+            window.and_then(|from| walk::unread_window(from, self.floor, conversation.tip, &held));
+        let reread_from = match window {
+            Some(from) if unread.is_none() && !held.is_empty() => {
+                self.reread_from(id, from).await?
+            }
+            _ => None,
+        };
         let stretches = walk::owed(self.floor, conversation.tip, &held, reread_from);
-        Ok((!stretches.is_empty()).then(|| Walk::new(id, stretches)))
+        Ok((!stretches.is_empty()).then(|| Walk::new(id, stretches, unread)))
     }
 
-    /// Where the refresh window of a conversation starts, when its re-read
-    /// is due and there is anything in it to find changed.
-    async fn reread_from(&mut self, id: &str, held: &[Span]) -> Result<Option<u64>> {
-        let sync = &self.opts.sync;
-        let days = sync
-            .refresh_window_days
-            .unwrap_or(DEFAULT_REFRESH_WINDOW_DAYS);
-        let every = chrono::Duration::minutes(
-            sync.refresh_every_minutes
-                .unwrap_or(DEFAULT_REFRESH_EVERY_MINUTES),
-        );
-        if days == 0 || held.is_empty() {
-            return Ok(None);
-        }
+    /// Where the refresh window starts; `None` with the window off.
+    fn window_start(&self) -> Option<u64> {
+        let days = self.opts.sync.refresh_window_days;
+        let days = days.unwrap_or(DEFAULT_REFRESH_WINDOW_DAYS);
         let window = chrono::Duration::days(days).num_milliseconds();
-        let from = snowflake::floor_at(self.opts.now.to_unix_millis() - window);
+        (days > 0).then(|| snowflake::floor_at(self.opts.now.to_unix_millis() - window))
+    }
+
+    /// `from`, the window's start, when the conversation's re-read is due
+    /// and there is anything in it to find changed.
+    async fn reread_from(&mut self, id: &str, from: u64) -> Result<Option<u64>> {
+        let every = self.opts.sync.refresh_every_minutes;
+        let every = chrono::Duration::minutes(every.unwrap_or(DEFAULT_REFRESH_EVERY_MINUTES));
         if !db::holds_messages_since(self.writes.tx().await?, id, from).await? {
             return Ok(None);
         }
@@ -510,7 +515,7 @@ impl Ctx<'_> {
             s.pruned += db::prune_messages(tx, &channel, lo, below, &ids).await?;
         }
         coverage::cover(tx, &history_scope(&channel), settled.span).await?;
-        if settled.reread_done {
+        if settled.refreshed {
             db::SWEEPS
                 .record(&mut **tx, &refresh_key(&channel), &run_now)
                 .await?;
