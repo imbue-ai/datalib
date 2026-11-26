@@ -632,8 +632,8 @@ on Tuesday" and "Tuesday was never fetched" look the same in
 stretch of one conversation that the download has walked: everything
 Slack listed in it is stored.
 
-- Scope `history:<channel id>` covers top-level messages, from
-  `conversations.history`.
+- Scope `history:<channel id>` covers top-level messages, and the
+  replies also sent to the channel, from `conversations.history`.
 - Scope `replies:<channel id>` covers the stretches whose new replies
   the download has searched for (a reply to an old root is found this
   way).
@@ -694,11 +694,20 @@ unless it sets `all_channels`; archived channels, unless it sets
 `archived = true` or names them in `channels`; with `scope = "involves_me"`, channels
 where nothing involves the account, and the part of each channel
 before `context_before` (and after `context_after`, when set); files, when it sets `media = false`;
-Slack Lists. A message deleted in Slack is dropped from the mirror only
+Slack Lists.
+
+**Edits and deletions are seen late, or never.** A top-level message's
+edit, reaction or deletion is seen only while the message was posted
 inside the last `refresh_window_days` (30 by default), the next time
 that window is re-read (at most once every `refresh_every_minutes`, 60
-by default); older deletions are never noticed. A deleted reply is noticed the next time someone
-replies in that thread.
+by default), or when its thread is read again. The window is not
+re-read in a DM closed in the sidebar, which only the daily check of
+closed DMs reads, nor in an archived channel already read. A reply's
+edit, reaction or deletion is seen only when its thread is read again,
+which happens only when the root's `latest_reply` changes: when someone
+replies, or when the newest reply is deleted and the root is inside the
+window. A reply also sent to the channel is the exception: the
+channel's history lists it, so it is seen like a top-level message.
 
 **Set aside from the payload** (in `volatile_payload`): a user's
 `updated` and `profile.status_*`, `profile.huddle_*`; a bot's
@@ -706,6 +715,9 @@ replies in that thread.
 `updated` and `num_members`; a message's `subscribed` and the
 `block_id` of each block; everything in `channel_read_states` but
 `last_read`, which is in `read_marks`.
+
+A problem with a channel's history is keyed by the conversation's
+name, not its id: `listing:conversations.history <name>`.
 
 ### `workspaces`
 
@@ -721,7 +733,9 @@ One row per Slack workspace the account signs in to.
 
 ### `users`
 
-One row per person or bot the download has seen.
+One row per person or bot the download has seen. A row with a NULL
+`payload` is an author a stored message named before any listing did;
+the next sync asks `users.info` for it.
 
 | column | what it holds |
 |---|---|
@@ -807,7 +821,7 @@ Which files each message carries, and where their bytes are in
 The account's state in each mirrored conversation, from
 `client.counts`. How far it has read is in `read_marks`; the rest is in
 `channel_read_states_bookkeeping.volatile_payload`: `latest`,
-`has_unreads`, `mention_count`.
+`updated`, `history_invalid`, `has_unreads`, `mention_count`.
 
 | column | what it holds |
 |---|---|

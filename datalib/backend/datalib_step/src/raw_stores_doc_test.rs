@@ -131,9 +131,13 @@ fn disagreements(doc: &Doc, shapes: &BTreeMap<String, Tables>) -> Vec<String> {
     let mut shared_seen = BTreeSet::new();
     for (source_type, said) in &doc.sources {
         let Some(real) = shapes.get(source_type) else {
-            out.push(format!(
-                "`{source_type}` is not a source type with a raw store"
-            ));
+            // A type that keeps no raw store still has a section, to say so.
+            let storeless = crate::source_type::SourceType::parse(source_type).is_some();
+            if !storeless || !said.is_empty() {
+                out.push(format!(
+                    "`{source_type}` is not a source type with a raw store"
+                ));
+            }
             continue;
         };
         for (table, columns) in real {
