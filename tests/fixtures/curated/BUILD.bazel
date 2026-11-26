@@ -1,7 +1,7 @@
-# The TNG corpus's curated stores: what Picard curated, checked in as the
-# files an older build left. Laid over the TNG root by
-# //datalib/backend/curated_overlay:tng_overlay_test; how to change them is
-# datalib/backend/curated_overlay/README.md.
+# The TNG corpus's curated stores: what Picard curated, checked in and
+# carried forward by each change that moves their shape. Laid over the
+# TNG root by //datalib/backend/curated_overlay:tng_overlay_test; how to
+# change them is datalib/backend/curated_overlay/README.md.
 filegroup(
     name = "python_sources",
     srcs = glob(["*.py"]),

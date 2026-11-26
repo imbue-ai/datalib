@@ -557,7 +557,7 @@ fn manual_e2e_live_sync_golden() {
     );
 
     // What a person curated comes with the root, as it would into an
-    // upgrade: the stores an earlier bake left, laid over this one's data.
+    // upgrade: the stores the last bake left, laid over this one's data.
     let curated_src = src_config.with_file_name(datalib_contacts::CURATED_DIR);
     datalib_curated_overlay::copy_in(&curated_src, &data_root);
 

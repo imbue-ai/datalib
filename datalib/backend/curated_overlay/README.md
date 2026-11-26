@@ -4,12 +4,18 @@
 their contacts (`datalib_contacts/contacts.doltlite_db`) and the problem
 rows they muted (`datalib_problem_mutes/mutes.doltlite_db`). Every sync
 rebuilds the rest of a root from upstream; these stores come through it
-as they were, written by an older build, and have to fit the new data.
+as they were. After an upgrade, the new build opens files the previous
+one wrote, and has to bring them forward and fit them to the new data.
 
 A test that makes its contacts afresh each run never sees that: the
 store is always in this build's shape, and its links were made to fit
 the data in front of them. So two tests start from **checked-in
-stores**, the files an earlier build wrote, and lay them over a root:
+stores** and lay them over a root. Each is made in the current shape
+and **carried forward**: a store stays as committed until a change
+moves its shape, and that change then upgrades the committed file and
+writes the result back (step 5). So the next change that moves a shape
+opens the file in the shape before it, as a person's library would be,
+and proves that one step of the upgrade:
 
 | test | the stores | the root |
 |---|---|---|
