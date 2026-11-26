@@ -1,10 +1,12 @@
 //! `datalib-package.toml`: what a package is, the build for each platform,
 //! and what it adds to a library — source types, each with its own
-//! add-source form and the applets each of its sources brings.
+//! add-source form, the steps and the probe its programs run, and the
+//! applets each of its sources brings.
 
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
+use datalib_dag::config::Reads;
 use serde::{Deserialize, Serialize};
 
 use crate::platform::{ANY, TARGETS};
@@ -35,6 +37,10 @@ pub struct Manifest {
     pub artifacts: BTreeMap<String, Artifact>,
     #[serde(default)]
     pub sources: Vec<SourceTemplate>,
+    /// The locks its steps hold, each with the slots the wizard gives its
+    /// `[[locks]]` entry when the config has none of that name yet.
+    #[serde(default)]
+    pub locks: BTreeMap<String, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -56,8 +62,13 @@ pub struct SourceTemplate {
     #[serde(rename = "type")]
     pub source_type: String,
     /// Function → the command its step runs, the first word a path inside
-    /// the package.
-    pub commands: BTreeMap<String, String>,
+    /// the package, with how the step reads and what it locks.
+    pub commands: BTreeMap<String, StepCommand>,
+    /// The command that answers "Check connection" and a picker's "Load"
+    /// for a source of this type, the first word a path inside the package
+    /// (`docs/dev/step_protocol.md` §"Probe").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub probe: Option<String>,
     /// The add-source form, in the shape of the UI's `CatalogEntry`
     /// (`datalib/ui/src/config/catalog.ts`) without `type`: `label`,
     /// `blurb`, `sections`, `fields` and the rest. The UI draws it with the
@@ -67,6 +78,52 @@ pub struct SourceTemplate {
     /// with the source and removed with it.
     #[serde(default)]
     pub applets: Vec<AppletTemplate>,
+}
+
+/// What one function's step runs, and the `reads` and `locks` the wizard
+/// writes on it. A manifest writes either the command alone or a table.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(from = "StepCommandSpelling")]
+pub struct StepCommand {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reads: Option<Reads>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub locks: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StepCommandSpelling {
+    Bare(String),
+    Table(StepCommandTable),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StepCommandTable {
+    command: String,
+    #[serde(default)]
+    reads: Option<Reads>,
+    #[serde(default)]
+    locks: Vec<String>,
+}
+
+impl From<StepCommandSpelling> for StepCommand {
+    fn from(s: StepCommandSpelling) -> Self {
+        match s {
+            StepCommandSpelling::Bare(command) => StepCommand {
+                command,
+                reads: None,
+                locks: Vec::new(),
+            },
+            StepCommandSpelling::Table(t) => StepCommand {
+                command: t.command,
+                reads: t.reads,
+                locks: t.locks,
+            },
+        }
+    }
 }
 
 /// An applet a package source brings. `id` is the applet's name within the
@@ -98,6 +155,9 @@ impl Manifest {
         if self.name.trim().is_empty() || self.version.trim().is_empty() {
             bail!("`name` and `version` must not be empty");
         }
+        if let Some((name, _)) = self.locks.iter().find(|(_, slots)| **slots == 0) {
+            bail!("locks.{name}: a lock needs at least one slot");
+        }
         if self.artifacts.is_empty() {
             bail!("`artifacts` names no build");
         }
@@ -126,6 +186,24 @@ impl Manifest {
                     s.source_type,
                     SOURCE_FUNCTIONS.join(", ")
                 );
+            }
+            for (f, c) in &s.commands {
+                if c.command.trim().is_empty() {
+                    bail!(
+                        "source {:?}: `commands.{f}` names no program",
+                        s.source_type
+                    );
+                }
+                if let Some(lock) = c.locks.iter().find(|l| !self.locks.contains_key(*l)) {
+                    bail!(
+                        "source {:?}: `commands.{f}` holds lock {lock:?}, which the manifest's \
+                         `locks` does not declare",
+                        s.source_type
+                    );
+                }
+            }
+            if s.probe.as_deref().is_some_and(|p| p.trim().is_empty()) {
+                bail!("source {:?}: `probe` names no program", s.source_type);
             }
             if !s.wizard.get("label").is_some_and(|v| v.is_str()) {
                 bail!("source {:?}: `wizard.label` is required", s.source_type);
@@ -220,6 +298,37 @@ blurb = "Hourly observations from a NOAA station."
         assert!(Manifest::parse(&top_level).is_err());
         let bad_id = with.replace("id = \"chart\"", "id = \"a-chart\"");
         assert!(Manifest::parse(&bad_id).is_err());
+    }
+
+    #[test]
+    fn a_command_is_a_string_or_a_table_with_reads_and_locks() {
+        let m = Manifest::parse(WEATHER).unwrap();
+        let ingest = &m.sources[0].commands["ingest"];
+        assert_eq!(ingest.command, "bin/fetch-weather");
+        assert_eq!((ingest.reads, ingest.locks.len()), (None, 0));
+        assert_eq!(m.sources[0].probe, None);
+
+        let table = WEATHER
+            .replace(
+                "commands = { ingest = \"bin/fetch-weather\" }",
+                "probe = \"bin/probe-weather\"\n\
+                 [sources.commands]\n\
+                 ingest = { command = \"bin/fetch-weather\", locks = [\"noaa\"] }\n\
+                 render_markdown = { command = \"bin/render\", reads = \"files\" }",
+            )
+            .replace("[artifacts]", "[locks]\nnoaa = 1\n\n[artifacts]");
+        let m = Manifest::parse(&table).unwrap();
+        let s = &m.sources[0];
+        assert_eq!(s.probe.as_deref(), Some("bin/probe-weather"));
+        assert_eq!(s.commands["ingest"].locks, ["noaa"]);
+        assert_eq!(s.commands["render_markdown"].reads, Some(Reads::Files));
+        assert_eq!(m.locks["noaa"], 1);
+
+        let undeclared = table.replace("[locks]\nnoaa = 1\n", "");
+        let e = Manifest::parse(&undeclared).unwrap_err().to_string();
+        assert!(e.contains("does not declare"), "{e}");
+        let bad_reads = table.replace("reads = \"files\"", "reads = \"sometimes\"");
+        assert!(Manifest::parse(&bad_reads).is_err());
     }
 
     #[test]
