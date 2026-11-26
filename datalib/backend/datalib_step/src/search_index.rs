@@ -1604,6 +1604,20 @@ mod tests {
                 .map(|l| serde_json::from_str(l).unwrap())
                 .collect()
         }
+
+        /// What happened to the Sandboxes that waited for a GPU, in order:
+        /// `("queued", id)` when asked for, `("ended", id)` when ended.
+        fn queue(&self) -> Vec<(String, String)> {
+            let path = format!("{}.queue", self.log.display());
+            std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| {
+                    let event: BTreeMap<String, String> = serde_json::from_str(l).unwrap();
+                    event.into_iter().next().unwrap()
+                })
+                .collect()
+        }
     }
 
     /// What a run reported: each metric's newest value by name and labels,
@@ -2076,6 +2090,52 @@ mod tests {
             format!("{err:#}").contains("is past its limit of 1 s"),
             "{err:#}"
         );
+    }
+
+    /// A stop while every Sandbox still waits for a GPU ends them all: the
+    /// SDK names a Sandbox only once Modal has placed it, so these were
+    /// left to start after the run had gone, and idle, billed, to their
+    /// limit.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stop_ends_the_sandboxes_still_waiting_for_a_gpu() {
+        let td = tempfile::tempdir().unwrap();
+        five_docs(td.path()).await;
+        let fake = FakeModal::new();
+        let stop = StopFlag::new();
+        let progress = Progress::noop();
+        let run = embed_with(
+            td.path(),
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(fake.modal_with(0, true, &[("FAKE_MODAL_QUEUED", "99")], 3)),
+            &progress,
+            &stop,
+        );
+        let queued = |fake: &FakeModal| fake.queue().iter().filter(|(e, _)| e == "queued").count();
+        let stop_once_queued = async {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while queued(&fake) < 3 {
+                assert!(
+                    Instant::now() < deadline,
+                    "three Sandboxes never queued: {:?}",
+                    fake.queue()
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            stop.request();
+        };
+        let (done, ()) = tokio::join!(run, stop_once_queued);
+        assert_eq!(done.unwrap().embedded, 0);
+        let ended: std::collections::BTreeSet<String> = fake
+            .queue()
+            .into_iter()
+            .filter(|(e, _)| e == "ended")
+            .map(|(_, id)| id)
+            .collect();
+        let want: std::collections::BTreeSet<String> =
+            (1..=3).map(|n| format!("sb-fake-{n}")).collect();
+        assert_eq!(ended, want);
     }
 
     /// Many Sandboxes answering while the step is slow to read: each
