@@ -18,7 +18,6 @@ use crate::scheduler::Runner;
 use crate::supervisor::announce::Listener;
 use crate::supervisor::host;
 use crate::supervisor::loop_host::{LoopHost, PeriodSink};
-use crate::supervisor::pass::PassState;
 use crate::supervisor::reload::ConfigFile;
 use crate::supervisor::store::{RequestOutcome, Store};
 
@@ -43,21 +42,6 @@ pub struct ServeOptions {
 pub enum ServeEvent {
     /// This process holds `runner-lock`: the loop is its from here on.
     Holding,
-    /// The prepare pass will ask these steps, in this order. Not said
-    /// when no step's program takes the verb.
-    PreparePlan {
-        steps: Vec<String>,
-    },
-    /// Where the prepare pass stands with one step.
-    PrepareStep {
-        step: String,
-        state: PassState,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-    },
-    /// The prepare pass is over, or there was none to run; the loop takes
-    /// requests from now on.
-    PrepareDone,
     /// A run began: the loop is busy until [`ServeEvent::SyncOver`].
     SyncStarted {
         run_id: String,
@@ -293,24 +277,6 @@ impl LoopHost for Periods<'_> {
         Ok(env.vars)
     }
 
-    fn prepare_plan(&self, steps: &[String]) {
-        (self.emit)(ServeEvent::PreparePlan {
-            steps: steps.to_vec(),
-        });
-    }
-
-    fn prepare_step(&self, step: &str, state: PassState, error: Option<String>) {
-        (self.emit)(ServeEvent::PrepareStep {
-            step: step.to_string(),
-            state,
-            error,
-        });
-    }
-
-    fn prepare_done(&self) {
-        (self.emit)(ServeEvent::PrepareDone);
-    }
-
     /// The run store's record closes when its sink is dropped, here:
     /// before the loop says the sync is over, so no one reads "over"
     /// before it is.
@@ -346,15 +312,6 @@ mod tests {
     fn a_serve_event_reads_back_as_it_was_written() {
         let events = [
             ServeEvent::Holding,
-            ServeEvent::PreparePlan {
-                steps: vec!["a/ingest".into()],
-            },
-            ServeEvent::PrepareStep {
-                step: "a/ingest".into(),
-                state: PassState::Failed,
-                error: Some("why".into()),
-            },
-            ServeEvent::PrepareDone,
             ServeEvent::SyncStarted { run_id: "r".into() },
             ServeEvent::SyncOver { run_id: "r".into() },
             ServeEvent::RunStoreWritten,
@@ -366,15 +323,6 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ServeEvent::RunStoreWritten).unwrap(),
             r#"{"event":"run_store_written"}"#
-        );
-        assert_eq!(
-            serde_json::to_string(&ServeEvent::PrepareStep {
-                step: "a/ingest".into(),
-                state: PassState::Running,
-                error: None,
-            })
-            .unwrap(),
-            r#"{"event":"prepare_step","step":"a/ingest","state":"running"}"#
         );
     }
 }

@@ -13,7 +13,7 @@ use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
 use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
-use crate::supervisor::store::{RequestRow, Store, WipeKind, WipeRow};
+use crate::supervisor::store::{JobKind, JobRow, RequestRow, Store};
 use strum::VariantArray;
 
 /// The environment every step of one busy period gets on top of the
@@ -84,7 +84,7 @@ const REASON_NAMES: usize = 3;
 /// Why a busy period started, from the requests and wipes open as it did.
 /// A period with nothing but compactions and collections to do is a
 /// shrink; any other is a sync.
-pub fn period_start(requests: &[RequestRow], wipes: &[WipeRow]) -> RunStart {
+pub fn period_start(requests: &[RequestRow], wipes: &[JobRow]) -> RunStart {
     let mut parts = Vec::new();
     if !requests.is_empty() {
         let roots: Vec<&str> = requests
@@ -97,8 +97,8 @@ pub fn period_start(requests: &[RequestRow], wipes: &[WipeRow]) -> RunStart {
             named(&roots)
         ));
     }
-    for kind in WipeKind::VARIANTS {
-        let these: Vec<&WipeRow> = wipes.iter().filter(|w| w.kind == Some(*kind)).collect();
+    for kind in JobKind::VARIANTS {
+        let these: Vec<&JobRow> = wipes.iter().filter(|w| w.kind == Some(*kind)).collect();
         if these.is_empty() {
             continue;
         }
@@ -113,24 +113,29 @@ pub fn period_start(requests: &[RequestRow], wipes: &[WipeRow]) -> RunStart {
             named(&targets)
         };
         parts.push(match kind {
-            WipeKind::Collect => format!("freeing disk space, asked for by {by}: {scope}"),
-            WipeKind::Compact => format!(
+            JobKind::Collect => format!("freeing disk space, asked for by {by}: {scope}"),
+            JobKind::Compact => format!(
                 "freeing disk space and dropping old versions of rendered documents, \
                  asked for by {by}: {scope}"
             ),
-            WipeKind::Reset => format!("a reset asked for by {by}: {scope}"),
-            WipeKind::Purge => {
+            JobKind::Reset => format!("a reset asked for by {by}: {scope}"),
+            JobKind::Purge => {
                 format!("deleting what a removed source left, asked for by {by}: {scope}")
             }
+            JobKind::Prepare => PREPARE_REASON.to_string(),
         });
     }
-    let shrink_only = requests.is_empty()
-        && !wipes.is_empty()
-        && wipes
-            .iter()
-            .all(|w| matches!(w.kind, Some(WipeKind::Collect | WipeKind::Compact)));
+    let only = |kinds: &[JobKind]| {
+        requests.is_empty()
+            && !wipes.is_empty()
+            && wipes
+                .iter()
+                .all(|w| w.kind.is_some_and(|k| kinds.contains(&k)))
+    };
     RunStart {
-        kind: if shrink_only {
+        kind: if only(&[JobKind::Prepare]) {
+            RunKind::Migrate
+        } else if only(&[JobKind::Collect, JobKind::Compact]) {
             RunKind::Shrink
         } else {
             RunKind::Sync
@@ -165,14 +170,8 @@ fn named(names: &[&str]) -> String {
 }
 
 /// Why the launch's pass over the steps is running.
-pub fn prepare_start() -> RunStart {
-    RunStart {
-        kind: RunKind::Migrate,
-        reason: "the loop started: each step whose program takes --prepare makes what it \
-                 stored usable, and nothing is downloaded"
-            .to_string(),
-    }
-}
+const PREPARE_REASON: &str = "the loop started: each step whose program takes --prepare \
+     makes what it stored usable, and nothing is downloaded";
 
 /// What [`take_over`] found to put right.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -256,20 +255,20 @@ mod tests {
     /// shrink.
     #[test]
     fn a_period_that_only_frees_disk_is_a_shrink_and_says_who_asked() {
-        let wipe = |kind: WipeKind, targets: &[&str]| WipeRow {
+        let wipe = |kind: JobKind, targets: &[&str]| JobRow {
             id: "w".into(),
             kind: Some(kind),
             targets: targets.iter().map(|t| t.to_string()).collect(),
             opened_by: "ui".into(),
             closed: None,
         };
-        let collect = period_start(&[], &[wipe(WipeKind::Collect, &[])]);
+        let collect = period_start(&[], &[wipe(JobKind::Collect, &[])]);
         assert_eq!(collect.kind, RunKind::Shrink);
         assert_eq!(
             collect.reason,
             "freeing disk space, asked for by ui: every step"
         );
-        let reset = period_start(&[], &[wipe(WipeKind::Reset, &["slack/ingest"])]);
+        let reset = period_start(&[], &[wipe(JobKind::Reset, &["slack/ingest"])]);
         assert_eq!(reset.kind, RunKind::Sync);
         assert_eq!(reset.reason, "a reset asked for by ui: slack/ingest");
     }

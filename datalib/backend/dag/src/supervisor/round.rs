@@ -14,7 +14,7 @@ use super::inputs;
 use super::loop_host::LoopHost;
 use super::pass::PassState;
 use super::record::{InvocationEnd, InvocationRow};
-use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
+use super::store::{JobKind, JobRow, RequestOutcome, Store};
 use super::tick::{
     tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
@@ -193,6 +193,9 @@ struct Live {
     stop: Option<watch::Sender<bool>>,
 }
 
+/// Who opens the jobs the loop opens for itself.
+pub const LOOP_OPENER: &str = "the loop";
+
 /// What a task the loop spawned ended with.
 enum Done {
     /// A step's invocation: its id, its attempts, and how it ended.
@@ -206,6 +209,10 @@ enum Done {
 /// while the rest of the loop goes on. What it has not yet asked, and what
 /// reads that, waits.
 struct PreparePass {
+    /// Its row in the store's `jobs`, whose `job_steps` say how it stands
+    /// with each step, in `order`.
+    job: String,
+    order: Vec<String>,
     to_ask: std::collections::VecDeque<String>,
     asking: Option<String>,
     /// Who had each step turned off as the pass began: one the runner
@@ -214,6 +221,13 @@ struct PreparePass {
 }
 
 impl PreparePass {
+    fn ord(&self, step: &str) -> usize {
+        self.order
+            .iter()
+            .position(|s| s == step)
+            .expect("the pass asks only the steps it planned")
+    }
+
     /// The steps that may not start yet: each it has to ask, and what
     /// reads one.
     fn holds(&self, graph: &Graph) -> Vec<bool> {
@@ -380,7 +394,7 @@ impl Runner {
         let mut open: Vec<Open> = Vec::new();
         // Step id → who turned it off, whether or not the graph has it.
         let mut turned_off: BTreeMap<String, String> = BTreeMap::new();
-        let mut wipes: Vec<WipeRow> = Vec::new();
+        let mut wipes: Vec<JobRow> = Vec::new();
         let mut seq = 0u64;
         let mut queue = QueueLedger::default();
         let mut cancelled = false;
@@ -390,7 +404,7 @@ impl Runner {
         let mut stop_rx = self.stop.clone();
         let mut disk = DiskWatch::default();
         let mut prepare = match host {
-            Some(host) => self.plan_prepare(graph, store, host).await?,
+            Some(_) => self.plan_prepare(graph, store).await?,
             None => None,
         };
 
@@ -505,13 +519,10 @@ impl Runner {
                 .await?;
                 if let Some(host) = host.filter(|_| period.is_none()) {
                     if !open.is_empty() || !wipes.is_empty() || prepare.is_some() {
-                        let start = match (open.is_empty() && wipes.is_empty(), &prepare) {
-                            (true, Some(_)) => super::host::prepare_start(),
-                            _ => super::host::period_start(
-                                &store.open_requests().await?,
-                                &store.open_wipes().await?,
-                            ),
-                        };
+                        let start = super::host::period_start(
+                            &store.open_requests().await?,
+                            &store.open_jobs().await?,
+                        );
                         match host.open(start) {
                             Ok(env) => {
                                 self.set_steps_env(env.into());
@@ -564,21 +575,13 @@ impl Runner {
                 }
             }
             if period.is_some() {
-                if let (Some(pass), Some(host)) = (prepare.as_mut(), host) {
-                    if pass.asking.is_none() {
-                        if let Some(task) = self.ask_next(graph, pass, host) {
-                            set.spawn(task);
-                        }
+                if let Some(pass) = prepare.as_mut().filter(|p| p.asking.is_none()) {
+                    if let Some(task) = self.ask_next(graph, store, pass).await? {
+                        set.spawn(task);
                     }
                 }
-                if prepare
-                    .as_ref()
-                    .is_some_and(|p| p.asking.is_none() && p.to_ask.is_empty())
-                {
-                    prepare = None;
-                    if let Some(host) = host {
-                        host.prepare_done();
-                    }
+                if let Some(pass) = prepare.take_if(|p| p.asking.is_none() && p.to_ask.is_empty()) {
+                    store.close_job(&pass.job, None).await?;
                     if self.open_the_reruns(graph, store, &state).await? {
                         mailbox.seen = None;
                         continue;
@@ -896,13 +899,12 @@ impl Runner {
                         Done::Step(id, attempts, res) => (id, attempts, res),
                         Done::Prepared(step, answer) => {
                             // A stop drops the pass, not the answer in flight.
-                            let turned_off_before = prepare.as_mut().and_then(|pass| {
+                            let at = prepare.as_mut().map(|pass| {
                                 pass.asking = None;
-                                pass.turned_off_before.get(&step).cloned()
+                                (pass.job.clone(), pass.ord(&step),
+                                    pass.turned_off_before.get(&step).cloned())
                             });
-                            let host = host.expect("only a host's loop prepares");
-                            self.answered(graph, store, host, &mut state, &step,
-                                turned_off_before, answer).await?;
+                            self.answered(graph, store, &mut state, &step, at, answer).await?;
                             mailbox.seen = None;
                             record.save(&state).await?;
                             continue;
@@ -938,25 +940,36 @@ impl Runner {
     }
 
     /// The pass a host's loop runs as it starts: every step whose program
-    /// takes `--prepare`, in graph order. `None`, said to the host as done,
-    /// when none does.
-    async fn plan_prepare(
-        &self,
-        graph: &Graph,
-        store: &Store,
-        host: &dyn LoopHost,
-    ) -> Result<Option<PreparePass>> {
+    /// takes `--prepare`, in graph order, as a job in the store with a row
+    /// per step. One a loop before this one left open is closed first.
+    /// `None` when no step's program takes the verb, its job closed at
+    /// once so a reader sees the pass is over.
+    async fn plan_prepare(&self, graph: &Graph, store: &Store) -> Result<Option<PreparePass>> {
+        for left in store.open_jobs().await? {
+            if left.kind == Some(JobKind::Prepare) {
+                store
+                    .close_job(
+                        &left.id,
+                        Some("the loop running it ended; the next asks again"),
+                    )
+                    .await?;
+            }
+        }
         let asked = super::upgrade::steps_to_ask(graph);
+        let job = store.open_job(JobKind::Prepare, &[], LOOP_OPENER).await?;
         if asked.is_empty() {
-            host.prepare_done();
+            store.close_job(&job, None).await?;
             return Ok(None);
         }
         tracing::info!(
             steps = asked.len(),
             "supervisor: asking each step to prepare"
         );
-        host.prepare_plan(&asked);
+        let ids: Vec<&str> = asked.iter().map(String::as_str).collect();
+        store.begin_job_steps(&job, &ids).await?;
         Ok(Some(PreparePass {
+            job,
+            order: asked.clone(),
             to_ask: asked.into(),
             asking: None,
             turned_off_before: store.turned_off().await?,
@@ -965,22 +978,34 @@ impl Runner {
 
     /// The next step the pass asks, as a task, or `None` when none is
     /// left that this graph has.
-    fn ask_next(
+    async fn ask_next(
         &self,
         graph: &Graph,
+        store: &Store,
         pass: &mut PreparePass,
-        host: &dyn LoopHost,
-    ) -> Option<impl std::future::Future<Output = Done> + Send + 'static> {
+    ) -> Result<Option<impl std::future::Future<Output = Done> + Send + 'static>> {
         while let Some(step) = pass.to_ask.pop_front() {
             let Some(&i) = graph.by_id.get(&step) else {
+                let why = "the config no longer has this step";
+                store
+                    .set_job_step(
+                        &pass.job,
+                        pass.ord(&step),
+                        PassState::Failed,
+                        Some(why),
+                        None,
+                    )
+                    .await?;
                 continue;
             };
-            host.prepare_step(&step, PassState::Running, None);
+            store
+                .set_job_step(&pass.job, pass.ord(&step), PassState::Running, None, None)
+                .await?;
             let task = self.verb_task(&graph.steps[i], crate::step::Verb::Prepare);
             pass.asking = Some(step.clone());
-            return Some(async move { Done::Prepared(step, task.await) });
+            return Ok(Some(async move { Done::Prepared(step, task.await) }));
         }
-        None
+        Ok(None)
     }
 
     /// One step's answer to `--prepare`, in the loop's record: a new
@@ -988,16 +1013,18 @@ impl Runner {
     /// [`REFUSED_PREPARE`] until a later pass finds it willing; anything
     /// else is said and the pass goes on.
     #[allow(clippy::too_many_arguments)]
+    /// `at` is the pass's job, the step's place in it, and who had it
+    /// turned off as the pass began; `None` once a stop dropped the pass.
     async fn answered(
         &self,
         graph: &Graph,
         store: &Store,
-        host: &dyn LoopHost,
         state: &mut Record,
         step: &str,
-        turned_off_before: Option<String>,
+        at: Option<(String, usize, Option<String>)>,
         answer: std::result::Result<StepOutcome, InvokeError>,
     ) -> Result<()> {
+        let turned_off_before = at.as_ref().and_then(|(_, _, by)| by.clone());
         let answer = match answer {
             Ok(outcome) => match graph.by_id.get(step) {
                 Some(&i) => apply_answer(graph, i, &outcome, state)
@@ -1035,7 +1062,11 @@ impl Runner {
                 (PassState::Failed, Some(why))
             }
         };
-        host.prepare_step(step, state, error);
+        if let Some((job, ord, _)) = at {
+            store
+                .set_job_step(&job, ord, state, error.as_deref(), None)
+                .await?;
+        }
         Ok(())
     }
 
@@ -1192,7 +1223,7 @@ impl Runner {
         in_period: bool,
         open: &mut Vec<Open>,
         turned_off: &mut BTreeMap<String, String>,
-        wipes: &mut Vec<WipeRow>,
+        wipes: &mut Vec<JobRow>,
         seq: &mut u64,
         slots: &mut Slots,
     ) -> Result<()> {
@@ -1302,7 +1333,13 @@ impl Runner {
                     admit(row.id, row.roots, open);
                 }
                 *turned_off = all_turned_off;
-                *wipes = store.open_wipes().await?;
+                // The loop's own prepare pass is not a wipe it carries out.
+                *wipes = store
+                    .open_jobs()
+                    .await?
+                    .into_iter()
+                    .filter(|j| j.kind != Some(JobKind::Prepare))
+                    .collect();
             }
         }
         Ok(())
@@ -1319,7 +1356,7 @@ impl Runner {
         store: &Store,
         record: &mut Recorded<'_>,
         state: &mut Record,
-        wipes: &mut Vec<WipeRow>,
+        wipes: &mut Vec<JobRow>,
         slots: &mut Slots,
     ) -> Result<bool> {
         if wipes.is_empty() {
@@ -1333,12 +1370,12 @@ impl Runner {
         for w in std::mem::take(wipes) {
             let Some(kind) = w.kind else {
                 store
-                    .close_wipe(&w.id, Some("a kind of wipe this build does not know"))
+                    .close_job(&w.id, Some("a kind of wipe this build does not know"))
                     .await?;
                 continue;
             };
             if let Some(why) = wipe::refusal(latest, kind, &w.targets) {
-                store.close_wipe(&w.id, Some(&why)).await?;
+                store.close_job(&w.id, Some(&why)).await?;
                 continue;
             }
             let held = wipe::held(graph, kind, &w.targets);
@@ -1348,8 +1385,8 @@ impl Runner {
             // A purge waits for the config swap too: a step the graph
             // still has would be written back into the record.
             let ready = match kind {
-                WipeKind::Reset | WipeKind::Compact | WipeKind::Collect => stopped,
-                WipeKind::Purge => held.is_empty(),
+                JobKind::Reset | JobKind::Compact | JobKind::Collect => stopped,
+                JobKind::Purge | JobKind::Prepare => held.is_empty(),
             };
             if !ready {
                 wipes.push(w);
@@ -1364,35 +1401,38 @@ impl Runner {
                 }
             }
             let done = match kind {
-                WipeKind::Reset => self.reset_in_loop(graph, &w.targets, state, slots).await,
-                WipeKind::Purge => delete_trees(&self.data_root, &w.targets)
+                JobKind::Reset => self.reset_in_loop(graph, &w.targets, state, slots).await,
+                JobKind::Purge => delete_trees(&self.data_root, &w.targets)
                     .await
                     .map(|()| wipe::forget_groups(state, &w.targets)),
-                WipeKind::Compact => {
+                JobKind::Compact => {
                     self.shrink_in_loop(graph, &w, Shrink::Compact, state, store)
                         .await
                 }
-                WipeKind::Collect => {
+                JobKind::Collect => {
                     self.shrink_in_loop(graph, &w, Shrink::Collect, state, store)
                         .await
                 }
+                JobKind::Prepare => unreachable!("`wipe::refusal` refuses a prepare job"),
             };
             record.save(state).await?;
             match done {
                 Ok(()) => {
                     let roots = match kind {
-                        WipeKind::Reset => wipe::after_reset(graph, &w.targets),
+                        JobKind::Reset => wipe::after_reset(graph, &w.targets),
                         // A fold or a collection kept every store's content,
                         // so nothing downstream has anything new to read.
-                        WipeKind::Purge | WipeKind::Compact | WipeKind::Collect => Vec::new(),
+                        JobKind::Purge | JobKind::Compact | JobKind::Collect | JobKind::Prepare => {
+                            Vec::new()
+                        }
                     };
                     if !roots.is_empty() {
                         store.open_request(&roots, &w.opened_by).await?;
                         opened = true;
                     }
-                    store.close_wipe(&w.id, None).await?;
+                    store.close_job(&w.id, None).await?;
                 }
-                Err(e) => store.close_wipe(&w.id, Some(&format!("{e:#}"))).await?,
+                Err(e) => store.close_job(&w.id, Some(&format!("{e:#}"))).await?,
             }
         }
         Ok(opened)
@@ -1426,19 +1466,19 @@ impl Runner {
     async fn shrink_in_loop(
         &self,
         graph: &Graph,
-        w: &WipeRow,
+        w: &JobRow,
         how: Shrink,
         state: &mut Record,
         store: &Store,
     ) -> Result<()> {
         let asked = wipe::compact_targets(graph, &w.targets, how);
         let ids: Vec<&str> = asked.iter().map(|&i| graph.steps[i].id.as_str()).collect();
-        store.begin_wipe_steps(&w.id, &ids).await?;
+        store.begin_job_steps(&w.id, &ids).await?;
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
         for (ord, &i) in asked.iter().enumerate() {
             let step = &graph.steps[i].id;
             store
-                .set_wipe_step(&w.id, ord, PassState::Running, None, None)
+                .set_job_step(&w.id, ord, PassState::Running, None, None)
                 .await?;
             match self.shrink_one(graph, step, how).await {
                 Ok((version, bytes)) => {
@@ -1446,12 +1486,12 @@ impl Runner {
                         state.steps.entry(step.clone()).or_default().version = Some(version);
                     }
                     store
-                        .set_wipe_step(&w.id, ord, PassState::Done, None, bytes)
+                        .set_job_step(&w.id, ord, PassState::Done, None, bytes)
                         .await?;
                 }
                 Err(e) => {
                     store
-                        .set_wipe_step(&w.id, ord, PassState::Failed, Some(&e), None)
+                        .set_job_step(&w.id, ord, PassState::Failed, Some(&e), None)
                         .await?;
                     failed.entry(e).or_default().push(step);
                 }
@@ -1732,7 +1772,7 @@ impl Runner {
 }
 
 /// Step index → the wipe holding it, for the steps this graph has.
-fn wiping(graph: &Graph, wipes: &[WipeRow]) -> BTreeMap<usize, WipeKind> {
+fn wiping(graph: &Graph, wipes: &[JobRow]) -> BTreeMap<usize, JobKind> {
     wipes
         .iter()
         .filter_map(|w| Some((w.kind?, w)))
@@ -1745,13 +1785,14 @@ fn wiping(graph: &Graph, wipes: &[WipeRow]) -> BTreeMap<usize, WipeKind> {
 }
 
 /// A held step reads as off, which is not what a person did: say why.
-fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usize, WipeKind>) {
+fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usize, JobKind>) {
     for (&i, kind) in wiping {
         let why = match kind {
-            WipeKind::Reset => "being reset",
-            WipeKind::Purge => "being deleted",
-            WipeKind::Compact => "being compacted",
-            WipeKind::Collect => "collecting unused space",
+            JobKind::Reset => "being reset",
+            JobKind::Purge => "being deleted",
+            JobKind::Compact => "being compacted",
+            JobKind::Collect => "collecting unused space",
+            JobKind::Prepare => "waiting for the upgrade",
         };
         if let Some(entry) = state.steps.get_mut(&graph.steps[i].id) {
             entry.state_detail = Some(match t.states[i] {
