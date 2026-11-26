@@ -225,7 +225,7 @@ export type ConfiguredPackage = {
 export const DATALIB_STEP = "datalib-step";
 
 /// The verbs `datalib-step` takes, as its `[[programs]]` entry lists them.
-export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect"];
+export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect", "check"];
 
 /// The first word of a command, split shell-style as the runner splits
 /// it: the program it starts, which a `[[programs]]` entry names.

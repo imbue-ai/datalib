@@ -160,6 +160,19 @@ async fn main() -> Result<()> {
         );
     }
     if check_only {
+        // Each step whose program takes `--check` is asked about its params,
+        // as the app's save asks; a refusal fails the check like a dropped
+        // entry does.
+        let asked = datalib_dag::check::check_params(&checked, &data_root, None).await;
+        let refused = asked.iter().any(|d| d.severity.drops_the_entry());
+        if !asked.is_empty() {
+            #[allow(clippy::disallowed_macros)]
+            {
+                for d in &asked {
+                    eprintln!("{}", d.render(&config_path, &checked.text));
+                }
+            }
+        }
         #[allow(clippy::disallowed_macros)]
         {
             println!(
@@ -178,7 +191,11 @@ async fn main() -> Result<()> {
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
-        std::process::exit(if checked.nothing_dropped() { 0 } else { 2 });
+        std::process::exit(if checked.nothing_dropped() && !refused {
+            0
+        } else {
+            2
+        });
     }
     let dropped_entries = checked.dropped();
     let cfg = checked.cfg;

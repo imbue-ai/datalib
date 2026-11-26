@@ -3,9 +3,9 @@
 **Status: notes, partly built; checked against the tree 2026-11-20.**
 The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
-is not forgotten. Done: items 5a, 5b and 6, and of item 7 all but one
+is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
 constant. Untouched: items 2 to 5 and 8, and the reconciler in section
-10. Items 1 and 9 are half done.
+10. Item 9 is half done.
 
 ## The end state
 
@@ -31,34 +31,18 @@ does in each of items 1 to 5.
 
 ## Where datalib-http knows datalib-step
 
-### 1. Checking a step's params before a sync
+### 1. Checking a step's params before a sync (done)
 
-**Now.** `datalib-pipeline check` no longer runs `datalib-step
-check-params`. `datalib-http` still does on every save, for configs with
-a `datalib-step run ingest` or `render_markdown` step
-(`datalib/backend/http/src/params_check.rs:21-58`).
-
-**What is wrong.** Only `datalib-step`'s steps get their params checked
-before they run; a custom step's mistake shows up only when it fails.
-A person who edits `config.toml` by hand and runs `datalib-pipeline check`
-no longer sees a params error before the first sync.
-
-**Shape discussed.** A way for any program to check one step's params,
-with optional batching so a save does not start one process per step.
-Cross-step rules (the runner once had one: "`qmd_aggregator` must read
-every `keyword_index`") do not go through it: the step that can see the
-problem reports it as a warning when it runs.
-
-**Also lost: the warnings for params that do nothing.** The runner used
-to warn, at the line, about a `datalib-step` step's params that no
-longer do anything: `period` and `backup.period` (a chat is one
-document now), `common.always_clear_before_ingest`, linkedin's
-`export.fetch_photos` and email's `gmail.request_concurrency`. The
-list was the runner's (`INERT_PARAM_PATHS` in `config.rs` before this
-change); `datalib-step` still drops those keys before it parses
-(`INERT_PARAM_PATHS` in `datalib/backend/datalib_step/src/methods.rs`),
-so the step runs, but nothing tells the person the line can go. The
-same check-params door is where they belong, as warnings.
+Checking params is the `--check` verb (`docs/dev/step_protocol.md`
+§ Check): `datalib-pipeline check` and the app's save ask every step
+whose program takes it (`datalib/backend/dag/src/check.rs`), and
+`datalib-step` answers with its refusal or its warnings, the keys that
+no longer do anything among them. The unattended rewrite `check_verb.rs`
+adds the verb to an existing config's `datalib-step` entry. One step
+is one process; up to eight are asked at once. Cross-step rules stay
+with the step that can see the problem, as a warning when it runs.
+`datalib-step check-params`, which did the same for a whole file, is
+gone; `datalib-pipeline check` is the one way to ask.
 
 ### 2. Checking a connection
 

@@ -42,6 +42,7 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:clap",
+        "@datalib_crates//:futures",
         "@datalib_crates//:libc",
         "@datalib_crates//:process-wrap",
         "@datalib_crates//:serde",

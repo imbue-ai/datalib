@@ -247,7 +247,9 @@ impl Runner {
                         .await?;
                     Err(PrepareError::Refused(why))
                 }
-                Err(InvokeError::Failed(e)) => Err(PrepareError::Failed(e)),
+                Err(InvokeError::Failed(e) | InvokeError::NotStarted(e)) => {
+                    Err(PrepareError::Failed(e))
+                }
             };
             let refused_before = turned_off
                 .get(step)
@@ -306,6 +308,22 @@ impl Runner {
         let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
             .map_err(|e| format!("{e:#}"))?;
         Ok((version, outcome.store_bytes))
+    }
+
+    /// What `step` answers `verb` with, outside any run: its warnings when
+    /// it succeeds, its error when it does not, and `Ok(Err)` when its
+    /// process could not be started at all.
+    pub(crate) async fn invoke_verb(
+        &self,
+        graph: &Graph,
+        step: &StepId,
+        verb: Verb,
+    ) -> std::result::Result<std::result::Result<Vec<String>, String>, String> {
+        match self.invoke_once(graph, step, verb).await {
+            Ok((_, outcome)) => Ok(Ok(outcome.warnings)),
+            Err(InvokeError::NotStarted(why)) => Ok(Err(why)),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// One invocation of `step` with `verb` appended to its argv, outside
@@ -372,6 +390,8 @@ impl Runner {
             Err(e) if e.kind == FailureKind::Incompatible => {
                 Err(InvokeError::Refused(error.unwrap_or_default()))
             }
+            // No exit: the process never started (its program is not there).
+            Err(e) if e.exit.is_none() => Err(InvokeError::NotStarted(error.unwrap_or_default())),
             Err(_) => Err(InvokeError::Failed(error.unwrap_or_default())),
         }
     }
@@ -383,12 +403,16 @@ enum InvokeError {
     /// The step refused: what it wrote is a newer program's.
     Refused(String),
     Failed(String),
+    /// Its process could not be started.
+    NotStarted(String),
 }
 
 impl std::fmt::Display for InvokeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InvokeError::Refused(why) | InvokeError::Failed(why) => f.write_str(why),
+            InvokeError::Refused(why) | InvokeError::Failed(why) | InvokeError::NotStarted(why) => {
+                f.write_str(why)
+            }
         }
     }
 }
@@ -965,6 +989,7 @@ mod tests {
                         exit: None,
                         needs_rerun: false,
                         store_bytes: None,
+                        warnings: Vec::new(),
                     })
                 }
             }),
@@ -1128,6 +1153,7 @@ mod tests {
                         exit: None,
                         needs_rerun: false,
                         store_bytes: None,
+                        warnings: Vec::new(),
                     })
                 }
             }),
@@ -1171,6 +1197,7 @@ mod tests {
                     exit: None,
                     needs_rerun: false,
                     store_bytes: None,
+                    warnings: Vec::new(),
                 })
             }),
         )
@@ -1205,6 +1232,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }
@@ -1260,6 +1288,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -1417,6 +1446,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -1500,6 +1530,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -1558,6 +1589,7 @@ mod tests {
                     exit: None,
                     needs_rerun: false,
                     store_bytes: None,
+                    warnings: Vec::new(),
                 })
             }),
         );
@@ -1651,6 +1683,7 @@ mod tests {
                         exit: None,
                         needs_rerun: false,
                         store_bytes: None,
+                        warnings: Vec::new(),
                     })
                 }),
             )
@@ -1736,6 +1769,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -1901,6 +1935,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2148,6 +2183,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2257,6 +2293,7 @@ mod tests {
                     exit: None,
                     needs_rerun: false,
                     store_bytes: None,
+                    warnings: Vec::new(),
                 })
             }),
         )
@@ -2288,6 +2325,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2351,6 +2389,7 @@ mod tests {
                         exit: None,
                         needs_rerun: false,
                         store_bytes: None,
+                        warnings: Vec::new(),
                     })
                 }
             }),
@@ -2401,6 +2440,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2486,6 +2526,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2544,6 +2585,7 @@ mod tests {
                         exit: None,
                         needs_rerun: false,
                         store_bytes: None,
+                        warnings: Vec::new(),
                     })
                 }),
             )
@@ -2634,6 +2676,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2664,6 +2707,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }),
@@ -2761,6 +2805,7 @@ mod tests {
                             exit: None,
                             needs_rerun: false,
                             store_bytes: None,
+                            warnings: Vec::new(),
                         })
                     }
                 }
@@ -3706,6 +3751,7 @@ mod tests {
                         exit: None,
                         needs_rerun: false,
                         store_bytes: None,
+                        warnings: Vec::new(),
                     })
                 }),
             )

@@ -116,6 +116,9 @@ struct WireOutcome {
     /// A `--collect` or `--compact` answer: the store's size before and after.
     #[serde(default)]
     store_bytes: Option<crate::step::StoreBytes>,
+    /// A `--check` answer: what the step would run but warns about.
+    #[serde(default)]
+    warnings: Vec<String>,
     /// Set (with a non-zero exit) to classify the failure.
     #[serde(default)]
     failure: Option<FailureKind>,
@@ -467,6 +470,7 @@ pub(crate) async fn run_subprocess(
         Ok(StepOutcome {
             needs_rerun: w.needs_rerun,
             store_bytes: w.store_bytes,
+            warnings: w.warnings.clone(),
             outputs: w.into_outputs(sink, &ctx.step_id),
             exit: Some(status.into()),
         })

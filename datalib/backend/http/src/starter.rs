@@ -32,7 +32,7 @@ pub const STARTER_CONFIG: &str = r##"# ── the unified grid and search index 
 
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 
 [[locks]]
 name = "index"
