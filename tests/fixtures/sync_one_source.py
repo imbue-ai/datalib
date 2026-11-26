@@ -93,6 +93,9 @@ def main() -> int:
         # every path here is a sandbox gone by the next run.
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
         "DATALIB_MODELS_NO_FETCH": "1",
+        # The runner hands a step only the variables it lists, and lists
+        # a test's own only when this names them.
+        "DATALIB_CHILD_ENV": "DATALIB_CACHE_DIR,DATALIB_EMBED_THREADS",
     }
     driver = CliDriver(args.pipeline.resolve(), workspace, bindir, args.now, env)
     driver.build_config([config_text(args.id, args.type, params)])

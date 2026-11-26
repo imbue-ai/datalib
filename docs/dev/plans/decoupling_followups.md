@@ -3,7 +3,7 @@
 **Status: notes, partly built; checked against the tree 2026-11-20.**
 The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
-is not forgotten. Done: item 5a, item 6, and of item 7 all but one
+is not forgotten. Done: items 5a, 5b and 6, and of item 7 all but one
 constant. Untouched: items 2 to 5 and 8, and the reconciler in section
 10. Items 1 and 9 are half done.
 
@@ -107,6 +107,27 @@ the variable's name into a WhatsApp or Signal source's params
 (`paramEntries` in `datalib/ui/src/config/sourceSteps.ts`), the
 unattended rewrite `backup_secrets.rs` names the default in an existing
 config that relies on it, and the server hands nothing by name.
+
+### 5b. The runner hands every step three variables datalib-step reads (done)
+
+`datalib_env` used to list, in `STEP_ALSO`, three variables only
+`datalib-step` reads, and the runner handed them to every step. None is
+set by anything Datalib ships:
+
+- `DATALIB_CACHE_DIR` moves the fingerprint cache, and only tests set
+  it; without it the cache goes under `XDG_CACHE_HOME` or `HOME`, which
+  every step gets.
+- `DATALIB_EMBED_THREADS` caps the embedder's threads, and only
+  `.bazelrc` sets it. The server handed it to every applet as well
+  (`APPLET_ALSO`), and no longer does.
+- `MINDS_VIA_DESKTOP_URL_PREFIX` was a URL prefix minds published for
+  some requests. minds no longer publishes it and the route behind it is
+  gone, so the code that read it is deleted.
+
+The first two are now test switches: a test names them in
+`DATALIB_CHILD_ENV` (`.bazelrc` does so for every bazel test). A
+program that needs a variable of its own has no way to say so in its
+`[[programs]]` entry yet; that waits for a package that needs one.
 
 ## Where datalib-http and datalib-pipeline are not yet separate
 

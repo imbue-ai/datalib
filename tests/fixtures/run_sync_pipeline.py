@@ -299,7 +299,7 @@ def prepare(argv: list[str]) -> Prepared:
         # The runner and the server hand a step only the variables they
         # list, and they list a test's own switches only when this names
         # them.
-        "DATALIB_CHILD_ENV": "DATALIB_SQL_CENSUS,DATALIB_HTTP_PLAYBACK",
+        "DATALIB_CHILD_ENV": "DATALIB_CACHE_DIR,DATALIB_EMBED_THREADS,DATALIB_SQL_CENSUS,DATALIB_HTTP_PLAYBACK",
     }
     _stage_embed_model(workspace)
 
