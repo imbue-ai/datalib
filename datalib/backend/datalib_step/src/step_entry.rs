@@ -102,20 +102,12 @@ pub fn entry(group: &str, function: Function, group_type: Option<&str>, inputs: 
     out
 }
 
-/// The `[[programs]]` entry for datalib-step: its verbs, and the
-/// variables of the runner's environment its steps read.
+/// The `[[programs]]` entry for datalib-step.
 pub fn programs_entry() -> String {
-    let list = |words: &[&str]| -> String {
-        words
-            .iter()
-            .map(|w| format!("\"{w}\""))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let verbs: Vec<String> = VERBS.iter().map(|v| format!("\"{v}\"")).collect();
     format!(
-        "[[programs]]\ncommand = \"{PROGRAM}\"\nverbs = [{}]\npass_env = [{}]\n",
-        list(VERBS),
-        list(datalib_env::DATALIB_STEP_PASS_ENV)
+        "[[programs]]\ncommand = \"{PROGRAM}\"\nverbs = [{}]\n",
+        verbs.join(", ")
     )
 }
 

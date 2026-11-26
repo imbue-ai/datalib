@@ -432,7 +432,6 @@ data_root = "~/datalib"
 [[programs]]
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect"]
-pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 [[locks]]
 name = "index"

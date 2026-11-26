@@ -34,10 +34,8 @@
 //! `explicit_steps.rs`: each step writes its `id`, its whole
 //! `datalib-step run …` command, and the locks and `reads` the runner
 //! used to work out for it, and the file its `[[programs]]`, `[[locks]]`
-//! and `[env]`; then `backup_secrets.rs`: a WhatsApp or Signal
-//! ingest names the variable holding its backup secret; and last
-//! `program_pass_env.rs`: `datalib-step`'s `[[programs]]` entry names the
-//! variables of the runner's environment its steps read. Every rewrite
+//! and `[env]`; and last `backup_secrets.rs`: a WhatsApp or Signal
+//! ingest names the variable holding its backup secret. Every rewrite
 //! after `convert.rs` is also one `datalib-http` makes by itself
 //! ([`UNATTENDED`]), and every one before `explicit_steps.rs` reads the
 //! shape from before it.
@@ -53,7 +51,6 @@ pub mod input_patterns;
 pub mod keyword_fold;
 pub mod lock_names;
 pub mod lowercase_ids;
-pub mod program_pass_env;
 pub mod qmd_steps;
 mod retired;
 pub mod step_commands;
@@ -126,9 +123,6 @@ pub fn detect(text: &str) -> Result<LegacyFormat> {
     if backup_secrets::is_retired(text)? {
         return Ok(LegacyFormat::UnnamedBackupSecret);
     }
-    if program_pass_env::is_retired(text)? {
-        return Ok(LegacyFormat::UnpassedStepEnv);
-    }
     bail!("this config is already in the current shape — there is nothing to migrate")
 }
 
@@ -148,8 +142,7 @@ pub fn convert(text: &str) -> Result<String> {
         | LegacyFormat::UnreadGridInputs
         | LegacyFormat::SearchLockNames
         | LegacyFormat::InferredByTheRunner
-        | LegacyFormat::UnnamedBackupSecret
-        | LegacyFormat::UnpassedStepEnv => text.to_string(),
+        | LegacyFormat::UnnamedBackupSecret => text.to_string(),
         _ => convert::rewrite(text)?,
     };
     let out = lowercase_ids::rewrite(&out)?;
@@ -177,11 +170,6 @@ pub fn convert(text: &str) -> Result<String> {
     };
     let out = if backup_secrets::is_retired(&out)? {
         backup_secrets::rewrite(&out)?
-    } else {
-        out
-    };
-    let out = if program_pass_env::is_retired(&out)? {
-        program_pass_env::rewrite(&out)?
     } else {
         out
     };
@@ -310,18 +298,6 @@ pub fn upgrade_backup_secrets(text: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     let out = backup_secrets::rewrite(text)?;
-    refuse_a_loss(text, &out, str::to_string)?;
-    Ok(Some(out))
-}
-
-/// Write `datalib-step`'s `pass_env` into its `[[programs]]` entry
-/// (`program_pass_env.rs`). Refused, naming the program, when the entry
-/// is written inline.
-pub fn upgrade_program_pass_env(text: &str) -> Result<Option<String>> {
-    if !program_pass_env::is_retired(text).unwrap_or(false) {
-        return Ok(None);
-    }
-    let out = program_pass_env::rewrite(text)?;
     refuse_a_loss(text, &out, str::to_string)?;
     Ok(Some(out))
 }
@@ -469,7 +445,7 @@ pub struct Rewrite {
 /// Every unattended rewrite, in the order they are made. `datalib-http`
 /// runs these on its config, and a config the repo ships or documents is
 /// tested to need none of them.
-pub const UNATTENDED: [Rewrite; 17] = [
+pub const UNATTENDED: [Rewrite; 16] = [
     Rewrite {
         why: "has an id with capitals in it",
         what: "every group, step and applet id, and every function, is lower case, \
@@ -573,13 +549,6 @@ pub const UNATTENDED: [Rewrite; 17] = [
                `WHATSAPP_BACKUP_DECRYPTION_KEY` or `SIGNAL_BACKUP_PASSPHRASE`, since a step \
                is handed only the variables its params name",
         run: upgrade_backup_secrets,
-    },
-    Rewrite {
-        why: "has a datalib-step `[[programs]]` entry that names no `pass_env`",
-        what: "datalib-step's `[[programs]]` entry names the variables of the runner's \
-               environment its steps read (`pass_env`), since the runner no longer knows \
-               them itself",
-        run: upgrade_program_pass_env,
     },
 ];
 

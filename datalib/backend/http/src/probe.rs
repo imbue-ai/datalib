@@ -115,10 +115,7 @@ pub async fn start_probe(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    // What the runner would hand the program's steps: the variables the
-    // params name, and the ones its `[[programs]]` entry passes on.
-    let mut named = datalib_dag::subprocess::env_vars_named_in(&params);
-    named.extend(crate::step_program::datalib_step_pass_env(&s.root));
+    let named = datalib_dag::subprocess::env_vars_named_in(&params);
     datalib_env::inherit_only(cmd.as_std_mut(), datalib_env::Child::Step, &named);
     let child = cmd
         .spawn()

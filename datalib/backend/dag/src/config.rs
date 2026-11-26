@@ -294,9 +294,8 @@ pub const RETIRED_SHAPE_HELP: &str = "the app rewrites the file itself when it n
      keeping the old one as `config.toml.bak`; from a terminal, \
      `datalib-migrate-config <data root> --force`";
 
-/// One `[[programs]]` entry: the verbs a program takes, and the variables
-/// of the runner's environment its steps are handed. A step's program is
-/// the first word of its `command`, compared as written.
+/// One `[[programs]]` entry: the verbs a program takes. A step's program
+/// is the first word of its `command`, compared as written.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProgramEntry {
@@ -305,29 +304,6 @@ pub struct ProgramEntry {
     /// Spelled as written: a verb this build does not know costs that
     /// verb, with a warning, not the whole file.
     pub verbs: Vec<String>,
-    /// Names, never values: each is handed to the program's steps when the
-    /// runner's own environment has it (`docs/dev/step_protocol.md`
-    /// § "What your command receives").
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pass_env: Vec<String>,
-}
-
-/// What the runner does for one program's steps, from its `[[programs]]`
-/// entry.
-#[derive(Debug, Clone, Default)]
-struct Program {
-    verbs: BTreeSet<crate::step::Verb>,
-    pass_env: Vec<String>,
-}
-
-/// Whether `name` can be an environment variable's name as a shell spells
-/// one, so a typo in `pass_env` is caught where it was written.
-fn is_env_name(name: &str) -> bool {
-    let mut chars = name.chars();
-    chars
-        .next()
-        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// One `[[packages]]` entry: a package this root uses, pinned to one
@@ -1090,7 +1066,7 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         .map(|p| (p.id.as_str(), p.dir_rel()))
         .collect();
 
-    let (by_program, program_diags) = accept_programs(&c.programs);
+    let (verbs_by_program, program_diags) = accept_programs(&c.programs);
     diags.extend(program_diags);
     let by_id: BTreeMap<&str, &GroupEntry> = groups.iter().map(|g| (g.id.as_str(), g)).collect();
     let (written, step_diags) = accept_steps(
@@ -1099,7 +1075,7 @@ fn accept_entries(c: Candidates, text: Option<&str>) -> Accepted {
         &dropped_groups,
         &lock_specs,
         &package_dirs,
-        &by_program,
+        &verbs_by_program,
         text,
     );
     diags.extend(step_diags);
@@ -1321,11 +1297,15 @@ fn accept_locks(
     (accepted, specs, diags)
 }
 
-/// The `[[programs]]` rules: a program is named once, a verb once per
-/// program, and `pass_env` holds variable names. Returns what each
-/// program's steps get.
-fn accept_programs(programs: &[ProgramEntry]) -> (BTreeMap<String, Program>, Vec<Diagnostic>) {
-    let mut out: BTreeMap<String, Program> = BTreeMap::new();
+/// The `[[programs]]` rules: a program is named once, and a verb once per
+/// program. Returns each program's verbs.
+fn accept_programs(
+    programs: &[ProgramEntry],
+) -> (
+    BTreeMap<String, BTreeSet<crate::step::Verb>>,
+    Vec<Diagnostic>,
+) {
+    let mut out: BTreeMap<String, BTreeSet<crate::step::Verb>> = BTreeMap::new();
     let mut diags = Vec::new();
     for p in programs {
         let command = p.command.trim();
@@ -1361,21 +1341,7 @@ fn accept_programs(programs: &[ProgramEntry]) -> (BTreeMap<String, Program>, Vec
                 )),
             }
         }
-        let mut pass_env = Vec::new();
-        for name in &p.pass_env {
-            if is_env_name(name) {
-                pass_env.push(name.clone());
-            } else {
-                diags.push(Diagnostic::new(
-                    Severity::Warning,
-                    format!(
-                        "[[programs]] {command:?}: pass_env names {name:?}, which is not a \
-                         variable's name; it is ignored"
-                    ),
-                ));
-            }
-        }
-        out.insert(command.to_string(), Program { verbs, pass_env });
+        out.insert(command.to_string(), verbs);
     }
     (out, diags)
 }
@@ -1396,7 +1362,7 @@ fn accept_steps(
     dropped_groups: &BTreeSet<String>,
     locks: &[crate::supervisor::locks::LockSpec],
     packages: &BTreeMap<&str, String>,
-    programs: &BTreeMap<String, Program>,
+    programs: &BTreeMap<String, BTreeSet<crate::step::Verb>>,
     text: Option<&str>,
 ) -> (Vec<WrittenStep>, Vec<Diagnostic>) {
     let mut accepted: Vec<WrittenStep> = Vec::with_capacity(candidates.len());
@@ -1551,7 +1517,7 @@ pub const MAX_PARAMS_BYTES: usize = 64 * 1024;
 fn spec_of(
     e: &StepEntry,
     group: Option<String>,
-    programs: &BTreeMap<String, Program>,
+    programs: &BTreeMap<String, BTreeSet<crate::step::Verb>>,
 ) -> Result<StepSpec> {
     let argv = shlex::split(&e.command)
         .with_context(|| format!("command {:?} has unbalanced quoting", e.command))?;
@@ -1573,14 +1539,13 @@ fn spec_of(
         }
         None => None,
     };
-    let Program { verbs, pass_env } = programs.get(program).cloned().unwrap_or_default();
+    let verbs = programs.get(program).cloned().unwrap_or_default();
     let mut spec = StepSpec::new(
         &e.id,
         StepRun::Subprocess {
             argv,
             env: e.env.clone(),
             params,
-            pass_env,
         },
     );
     spec.code_version = e.code_version.clone();
@@ -3930,29 +3895,6 @@ mod protocol_tests {
             spec(&check, "a").verbs.iter().copied().collect::<Vec<_>>(),
             [Verb::Reset]
         );
-    }
-
-    /// A `pass_env` entry that cannot be a variable's name costs that
-    /// entry, with a warning; the program's other names reach its steps.
-    #[test]
-    fn a_pass_env_entry_that_is_not_a_name_is_a_warning() {
-        let check = check_text(
-            "[[programs]]\ncommand = \"fetch\"\npass_env = [\"FETCH_HOST\", \"FETCH HOST\"]\n\n\
-             [[steps]]\nid = \"a\"\ncommand = \"fetch\"\n",
-        );
-        assert!(!check.is_fatal());
-        assert!(
-            check
-                .diagnostics
-                .iter()
-                .any(|d| d.severity == Severity::Warning && d.message.contains("\"FETCH HOST\"")),
-            "{:?}",
-            check.diagnostics
-        );
-        let StepRun::Subprocess { pass_env, .. } = &spec(&check, "a").run else {
-            panic!("a subprocess step");
-        };
-        assert_eq!(pass_env, &["FETCH_HOST".to_string()]);
     }
 
     /// strum and serde spell a verb independently: the config is read
