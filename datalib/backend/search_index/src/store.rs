@@ -12,13 +12,15 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::SqliteConnection;
 
 use crate::IndexDoc;
 
-const DDL: [&str; 6] = [
+/// The keyword index's tables. They are part of the grid index's shape
+/// (`grid_index::shape`), whose writer makes them and empties them with
+/// its own; [`Index::open`] makes any that are missing.
+pub const DDL: [&str; 6] = [
     // `conversation`: its pieces are messages, each its own utterance, so a
     // word search needs one to hold every word; otherwise it is a page,
     // whose pieces are parts of one thing and may hold the words between
@@ -77,28 +79,16 @@ pub const PUT_BYTES: usize = 1 << 20;
 /// the file the grid index's step is waiting on.
 const REMOVE_BATCH: usize = 500;
 
-/// The shape of the index's tables, as its `_datalib_meta` part records it.
-pub(crate) fn shape() -> String {
-    datalib_store_meta::schema_hash(DDL)
-}
-
 pub struct Index {
     pool: SqlitePool,
 }
 
 impl Index {
-    /// Opens the index in the grid index's file at `path`, creating its
-    /// tables, or emptying them when they were written in another shape:
-    /// every row is derived from the render stores, so the steps index
-    /// everything again. The grid's own tables are left alone.
+    /// Opens the index in the grid index's file at `path`.
     pub async fn open(path: &Path) -> Result<Index> {
-        let pool = crate::file::open(
-            path,
-            &[(&DDL, crate::file::Owns::Part(StoreKind::SearchIndex))],
-            WAIT_FOR_THE_GRID,
-        )
-        .await
-        .with_context(|| format!("open the search index in {}", path.display()))?;
+        let pool = crate::file::open(path, &DDL, WAIT_FOR_THE_GRID)
+            .await
+            .with_context(|| format!("open the search index in {}", path.display()))?;
         let started = sqlx::query(
             "INSERT INTO search_state (id, generation) VALUES (1, 0) ON CONFLICT (id) DO NOTHING",
         )

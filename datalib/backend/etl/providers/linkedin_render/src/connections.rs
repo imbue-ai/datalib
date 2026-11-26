@@ -7,14 +7,10 @@ use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{render_all, ContactDoc, ContactRenderProfile};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{changed_rows, Input, Inputs};
-use datalib_etl_render::photo;
 use datalib_handle::Handle;
-use datalib_schema::problems::{Problem, Reason};
 use serde_json::Value;
-use std::collections::HashMap;
 
 use crate::ids;
-use datalib_etl_linkedin::ingest::photos::load_photo_edges;
 use datalib_etl_linkedin::ingest::{db_path_for, RawDb};
 
 use crate::processor::{FeedOutcome, Source};
@@ -60,40 +56,28 @@ fn render_open(
         ..
     } = *source;
     let pin = db.pin().expect("a reader is pinned at open").clone();
-    let (rows, edges, changed) = block_on(async {
+    let (rows, changed) = block_on(async {
         let rows =
             datalib_etl::doltlite_raw::load_payloads_with_id_if_present(db.pool(), "connections")
                 .await
                 .context("load connections")?;
-        // Photos, if any were fetched, keyed by the connection's URL.
-        let edges = load_photo_edges(db).await?;
-        let changed =
-            changed_rows(db.pool(), range, &pin, &["connections", "contact_photos"]).await?;
-        anyhow::Ok((rows, edges, changed))
+        let changed = changed_rows(db.pool(), range, &pin, &["connections"]).await?;
+        anyhow::Ok((rows, changed))
     })?;
 
-    // Each contact, and the hash of its photo's bytes when it has one.
-    let (mut contacts, photo_of): (Vec<ContactDoc>, HashMap<String, String>) = {
-        let mut photo_of = HashMap::new();
-        let contacts = rows
-            .iter()
-            .map(|(row_id, p)| {
-                let mut c = to_contact(source_id, p);
-                let inputs = Inputs::default();
-                inputs.read("connections", row_id);
-                for input in account_inputs {
-                    inputs.read(&input.table, &input.id);
-                }
-                if let Some(edge) = edges.get(row_id) {
-                    inputs.read("contact_photos", &edge.row_id);
-                    photo_of.insert(c.doc_uuid.clone(), edge.blake3.clone());
-                }
-                c.inputs = inputs.declared();
-                c
-            })
-            .collect();
-        (contacts, photo_of)
-    };
+    let mut contacts: Vec<ContactDoc> = rows
+        .iter()
+        .map(|(row_id, p)| {
+            let mut c = to_contact(source_id, p);
+            let inputs = Inputs::default();
+            inputs.read("connections", row_id);
+            for input in account_inputs {
+                inputs.read(&input.table, &input.id);
+            }
+            c.inputs = inputs.declared();
+            c
+        })
+        .collect();
     drop(rows);
 
     let mut outcome = narrow_docs(
@@ -111,25 +95,6 @@ fn render_open(
         account: account.map(str::to_string),
         render_version: RENDER_VERSION,
     };
-    let hashes: Vec<&str> = contacts
-        .iter()
-        .filter_map(|c| photo_of.get(&c.doc_uuid).map(String::as_str))
-        .collect();
-    let held = match db.cas() {
-        Some(cas) => block_on(cas.describe_many(&hashes))?,
-        None => HashMap::new(),
-    };
-    for c in &mut contacts {
-        let Some(hash) = photo_of.get(&c.doc_uuid) else {
-            continue;
-        };
-        match (db.cas(), held.get(hash)) {
-            (Some(cas), Some(held)) => c.contact.photo = Some(photo::stored(cas.step(), held)),
-            _ => c
-                .problems
-                .push(Problem::field("photo", Reason::BlobMissing, hash)),
-        }
-    }
     let summary = render_all(&profile, &contacts, source_id, progress, on_doc_complete)?;
     outcome.render_units.extend(summary.render_units);
     Ok(outcome)
@@ -195,7 +160,7 @@ fn to_contact(source_id: &str, p: &Value) -> ContactDoc {
 /// `datalib_time::parse_yyyy_mm_dd_assumed_utc`'s policy for
 /// date-only inputs: the day stays correct for sorting and the invented
 /// time-of-day is explicit. The original `16 Jun 2026` text still shows
-/// in the contact's `Connected On` field (see `FIELD_COLUMNS`), so no
+/// in the contact's `Connected On` detail (`to_contact`), so no
 /// human-facing information is lost. Returns `None` for an empty /
 /// unparseable value — a contact with no parseable date simply carries
 /// no timestamp rather than a bogus one (we never fabricate the day).

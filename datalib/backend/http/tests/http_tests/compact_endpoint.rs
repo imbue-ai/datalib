@@ -37,7 +37,7 @@ fn bin_dir_with_fake_step(dir: &Path) -> PathBuf {
 }
 
 const CONFIG: &str = "[[programs]]\ncommand = \"datalib-step\"\n\
-    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\n\n\
+    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\", \"check\"]\n\n\
     [[groups]]\nid = \"enterprise\"\ntype = \"calendar\"\n\n\
     [[steps]]\nid = \"enterprise/ingest\"\ncommand = \"datalib-step run ingest calendar\"\n\n\
     [[steps]]\nid = \"enterprise/render_markdown\"\n\

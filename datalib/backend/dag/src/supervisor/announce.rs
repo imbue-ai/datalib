@@ -10,9 +10,10 @@
 //! Why announcements and not a watch on the database file:
 //! `dag/README.md` § "What wakes the loop".
 
+use std::collections::hash_map::{Entry, HashMap};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -219,9 +220,22 @@ impl Listener {
 
 /// SQLite's file change counter (header bytes 24–27), which every commit
 /// moves in rollback-journal mode, whichever connection made it.
+///
+/// Read through one handle per file that stays open for the life of the
+/// process. Closing any descriptor of a file drops every lock this
+/// process holds on it (fcntl(2)), SQLite's included, so a handle opened
+/// and closed per read let another process write while a store
+/// connection here thought it held the write lock.
 fn change_counter(db: &Path) -> Option<u32> {
+    static OPEN: std::sync::LazyLock<std::sync::Mutex<HashMap<PathBuf, File>>> =
+        std::sync::LazyLock::new(Default::default);
+    let mut open = OPEN.lock().unwrap_or_else(|e| e.into_inner());
+    let file = match open.entry(db.to_path_buf()) {
+        Entry::Occupied(e) => e.into_mut(),
+        Entry::Vacant(e) => e.insert(File::open(db).ok()?),
+    };
     let mut header = [0u8; 28];
-    File::open(db).ok()?.read_exact(&mut header).ok()?;
+    file.read_exact_at(&mut header, 0).ok()?;
     Some(u32::from_be_bytes([
         header[24], header[25], header[26], header[27],
     ]))

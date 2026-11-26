@@ -168,8 +168,9 @@ pub fn photos_sqlite_path(library: &Path) -> PathBuf {
     }
 }
 
-/// Params for the render step. `apple_photos` is download-only (see the
-/// provider crate's `processor`), so this is the shared bare envelope.
+/// Params for the render step. `apple_photos` is download-only
+/// (`INGEST.md` §"What render would need"), so this is the shared bare
+/// envelope.
 pub type ApplePhotosRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for ApplePhotosConfig {

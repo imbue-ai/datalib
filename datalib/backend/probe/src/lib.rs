@@ -48,6 +48,7 @@ pub enum ProbeList {
     Addressbooks,
     Teams,
     Projects,
+    Servers,
 }
 
 impl ProbeList {
@@ -150,12 +151,17 @@ pub enum ProbeItemKind {
     /// A CardDAV address book. `path` is its name, which an
     /// `addressbooks` filter matches exactly.
     AddressBook,
+    /// A label in Google Contacts. `path` is its name, which a `labels`
+    /// filter matches exactly.
+    Label,
     /// A Linear team. `path` is its key, which a `teams` filter
     /// matches without regard to case; its name rides in `title`.
     Team,
     /// A Linear project. `path` is its name, which a `projects` filter
     /// matches exactly.
     Project,
+    /// A Discord server. `path` is its id; its name rides in `title`.
+    Server,
 }
 
 impl ProbeItemKind {

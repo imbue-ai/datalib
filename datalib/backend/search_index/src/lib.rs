@@ -4,7 +4,7 @@
 //! in the grid index's file; the chunks and their vectors in a file of
 //! their own, which each source's `embed` writes. A document comes in as
 //! a value, so whoever has it in memory can index it; nothing here reads
-//! a file. The plan: docs/dev/plans/search_index_from_ram.md.
+//! a file. The plan: docs/dev/plans/completed/search_index_from_ram.md.
 
 use std::borrow::Cow;
 
@@ -21,11 +21,11 @@ mod store;
 pub mod text;
 
 pub use cache::InferenceCache;
-pub use chunked::{carry_chunks_from_the_index, ChunkedDoc, FiledChunk};
+pub use chunked::{ChunkedDoc, FiledChunk};
 pub use holdings::{holdings, Holding};
 pub use owed::{owed, Owed};
 pub use read::{Held, HeldChunk, HeldDoc, KeptRows, MessageHit, Reader};
-pub use store::Index;
+pub use store::{Index, DDL as KEYWORD_DDL};
 
 /// What every table of the index starts with. The index shares the grid
 /// index's file, and each of the two empties only its own tables when its

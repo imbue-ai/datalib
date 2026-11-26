@@ -1,5 +1,6 @@
-//! Where the server finds the binaries it runs: `datalib-step`, for the
-//! connect flow and as the directory every step's `PATH` starts with.
+//! Where the server finds the binaries it runs: `datalib-pipeline`, the
+//! runner it keeps as a child; `datalib-step`, for the connect flow; and
+//! the directory every step's `PATH` starts with.
 
 use std::path::PathBuf;
 
@@ -20,6 +21,27 @@ pub fn resolve_step_bin() -> Option<PathBuf> {
         .collect::<Vec<_>>();
     dirs.iter()
         .flat_map(|dir| ["datalib-step", "datalib_step"].map(|name| dir.join(name)))
+        .find(|cand| cand.is_file())
+}
+
+/// `$DATALIB_PIPELINE_BIN`, else `datalib-pipeline` in
+/// [`resolve_binary_dir`], else a sibling of this executable, else on
+/// `PATH`: an install whose binaries are on `PATH` but not beside the
+/// server runs its steps the same way.
+pub fn resolve_pipeline_bin() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("DATALIB_PIPELINE_BIN") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+        tracing::warn!("$DATALIB_PIPELINE_BIN={} is not a file", p.display());
+    }
+    let path = std::env::var_os("PATH");
+    resolve_binary_dir()
+        .into_iter()
+        .chain(own_dir())
+        .chain(path.iter().flat_map(std::env::split_paths))
+        .map(|dir| dir.join("datalib-pipeline"))
         .find(|cand| cand.is_file())
 }
 

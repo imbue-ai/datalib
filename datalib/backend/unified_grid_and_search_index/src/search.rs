@@ -92,11 +92,16 @@ pub struct SearchRow {
     pub email: Option<String>,
     pub phone: Option<String>,
     /// Every handle the index holds for the contact a contact's own row
-    /// is about (`source_contact_handles`), in handle order; what the
+    /// is about (`contact_record_handles`), in handle order; what the
     /// Contact cell falls back on when neither the address nor the
     /// number makes one. Read beside the row; empty on any other row.
     #[serde(skip)]
     pub contact_handles: Vec<String>,
+    /// On a contact's own row, its page, where the contact is a person
+    /// rather than a group: what names them when no handle does. Read
+    /// beside the row, as `contact_handles` is.
+    #[serde(skip)]
+    pub contact_page: Option<String>,
     /// The Contact cell: `contact` for its label, and where the contact
     /// has an address or a number that makes a handle, that handle as a
     /// URI for its id. Resolved by the applet; never read from the index.

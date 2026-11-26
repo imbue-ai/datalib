@@ -230,7 +230,16 @@ Different upstreams expose different surfaces for "what changed since X": a delt
 
 That is what makes [`AGENTS.md`'s "give a bag an order before storing it"](/AGENTS.md) an architectural rule rather than a tidiness one: an API that returns a set in a different order each time will, left alone, manufacture a diff out of nothing — and the symptom is not an error but a pipeline that quietly stops being incremental. The same reasoning covers volatile paths (`VolatilePath`, which drops a per-fetch stamp that carries no information into the sidecar) and any future rule of that shape: canonical field order, stable number formatting, excluded bookkeeping. When you add one, say which of the two it is — **sorting keeps the signal and removes the noise; declaring a field volatile throws the signal away too** — because the two look interchangeable and are not.
 
-The property this protects is what a consumer actually buys with a cursor; [`toolchain_for_agents.md`](plans/data_lib_as_a_library/toolchain_for_agents.md#the-incremental-contract-is-a-capability-not-a-protocol) makes the case for it as the thing Datalib offers anyone building on it.
+### What a commit hash buys a reader
+
+Every raw store and render store answers one question by itself: **what changed since this commit?** A reader its producer never heard of keeps one hash and gets correct incremental reads, with no registration, no change feed and no schema for one. Two properties make that work:
+
+- **The diff costs what changed, not what is there.** Two commits share their unchanged subtrees by identity, so `dolt_diff` descends only where hashes differ. A `WHERE updated_at > ?` scan or a hash tree computed in Rust costs the whole table every time.
+- **The rows and the change feed are one object.** With a table and a separate log of changes, a reader can see an event whose row is not there yet, or a row no event announced. `dolt_diff` and `SELECT` read one structure, so neither can happen.
+
+The contract is not new: Hudi's incremental queries, Iceberg's snapshots and Delta Lake's change feed make the same one, Datomic had it in 2012, and the prolly tree comes from Noms. Those assume a cluster and a catalog; here it is one file and a library linked into the binary.
+
+What it costs is that a commit keeps every row it ever reached. On a raw store that is the point ([below](#noticing-when-the-upstream-loses-data)). On a derived store it is growth, which `--compact` gives back ([`step_protocol.md`](step_protocol.md)).
 
 ## Wire-fidelity of the raw store
 The raw store preserves the **semantic content** of upstream responses verbatim — every field, every value, with no loss and no pre-shaping into our internal model. The on-disk *encoding* of that content is a separate question; we pick whichever encoding is human-readable and inspectable. Concretely:
@@ -306,8 +315,7 @@ provider's copy is not under your control.
 It is also the good side of a property we criticize elsewhere.
 That a commit keeps every row it ever reached
 ([disk space](/docs/dev/doltlite.md#disk-space-and-dolt_gc)) is a real cost for
-[derived intermediates](plans/data_lib_as_a_library/toolchain_for_agents.md),
-which we could always rebuild. On the raw store it is the feature.
+derived stores, which we could always rebuild. On the raw store it is the feature.
 
 ### What is on disk
 
@@ -331,8 +339,8 @@ the summary reports only the final batch — silently, since a smaller
 number looks like a smaller run. `deltas_span_a_mid_run_commit` in
 `download_run.rs` is the guard.
 
-**Only 12 of the 32 source types use `DownloadRun`** (baby_connect,
-calendar, chatgpt, claude's `api` method, email's JMAP and Gmail paths,
+**Only 13 of the 33 source types use `DownloadRun`** (baby_connect,
+calendar, chatgpt, claude's `api` method, discord, email's JMAP and Gmail paths,
 github and gitlab through `forge-ingest-common`, google_drive, linear,
 notion, slack, todoist). The
 others write no `sync_runs` row and no deltas — their history is still
@@ -392,11 +400,13 @@ therefore what it can see:
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
 | `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it. A home listing that names nothing, not even the home itself (a 200 with an empty body), fails the run and deletes nothing (`dav::list_members`); `datalib_etl_web::dav` |
+| `contacts` (Google) | `metadata.deleted` and `previousResourceNames` in a sync-token listing; a whole listing on a first sync or after the token expired; the label listing, whole every run | contacts a whole listing does not name, once it reaches its end, each with its photo; labels the label listing does not name; another account's contacts, when the login changes. A listing with an entry it could not identify deletes nothing it did not name |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error. A file that is nothing deletes nothing and is a `listing:` problem: a `.vcf` with no card or cut off inside one, an `.ics` with no `VCALENDAR`, cut off before `END:VCALENDAR`, or whose events all lack a `UID`. Only a whole `VCALENDAR` with no events empties its calendar; a book is emptied by deleting its file |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing, nor does a `messages.json` listing entries none of which has a `message_id`. Deletions land in the transaction that stamps the files |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
 | `email` (mbox), `sms_backup_restore`, `google_takeout` Voice | a read of every file: every run for mbox, and for the others whenever one was removed or rewritten | records no file holds any more, in the transaction that writes what was read. Nothing is deleted when the walk or any file's read failed (an mbox with no message, an SMS backup with no XML element or cut off before its root closes, a Voice thread with no message, a call with no time, a `Bills.html` with no table each count as a failed read), or when Takeout's `Voice/` is missing. After a clean read of the mbox folder, everything under an account other than the configured one is deleted |
 | `slack` | the trailing `refresh_window_days` re-walk, and each `conversations.replies` thread | top-level messages inside the walked range, each with its thread's replies; replies on a re-fetched thread |
+| `discord` | the trailing `refresh_window_days` re-read of each conversation that holds a message that new | messages inside the stretch read that it did not return, with their files' edges. A conversation that leaves its listing keeps what it holds |
 | `github` / `gitlab` | every PR's / MR's whole child list, per fetch | deleted comments, reviews, discussions |
 | `claude` (`api`) | `/chat_conversations`, one org at a time | that org's conversations |
 | `chatgpt` | `/conversations`, when the walk reached `total` | conversations |
@@ -408,7 +418,7 @@ therefore what it can see:
 | `facebook` | each table's chunk files, read whole | rows a table no longer holds, only when every chunk file it was last read from is there and read, with the deleted records' media edges and edges to a `uri` a record of that table stopped naming. A missing chunk (a partial unpack), a file that will not parse, or a walk error deletes nothing in that table, edges included; a table none of whose files is present was left out |
 | `claude` (`export`) | `users.json`, `conversations.json` and `projects/`, each read whole | rows a present file no longer lists. A missing `users.json` or `projects/` deletes nothing, nor does a file whose entries are there but none has a uuid (a `phase:<file>` problem) |
 | `signal` | each snapshot read, when every frame decodes | recipients, chats, messages and attachment edges it no longer holds, in that snapshot's commit. A frame that would not decode, a snapshot that will not open, a missing snapshot folder or an unset passphrase deletes nothing |
-| `linkedin` | each CSV, read whole | rows its table no longer lists, and, when `Connections.csv` read cleanly, the `contact_photos` edges of connections it no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing, photo edges included; articles prune only after a clean walk |
+| `linkedin` | each CSV, read whole | rows its table no longer lists. A CSV left out of the export, one that will not read, or one with no header row (0 bytes, or only the Notes preamble) deletes nothing; articles prune only after a clean walk |
 | `lightroom`, `apple_photos`, `whatsapp` (msgstore) | the database file, dropped and refilled | structurally. A source with no table to mirror (0 bytes, no tables, filters matching none) drops nothing: a `phase:source` problem, or for lightroom a backup problem or a failed step |
 | `apple_messages` | — | nothing: append-only, since `chat.db` evicts |
 | `google_drive` | — | nothing: a backup, so a file that leaves the listing keeps its rows and captures |
@@ -572,7 +582,7 @@ Nothing is marked done, and no position in a walk is stored.
   `listed_messages`, the forges' `listed_change_requests`, DAV's
   `dav_resources`), the rows of an enumeration it re-reads every run
   (chatgpt, claude), or results that are themselves the content
-  (Notion's search, Google Calendar's events).
+  (Notion's search, Google Calendar's events, Google's contacts).
 - **Held.** The version each record's content satisfies, in
   `held_version` on that table's `_bookkeeping` sidecar, written in the
   transaction that writes the content. A failed attempt leaves a
@@ -609,20 +619,22 @@ The one position kept is upstream's own **delta token** (JMAP `state`,
 Gmail `historyId`, RFC 6578 `sync-token`, Google's `syncToken`,
 Todoist's `sync_token`),
 written in the transaction that stores the page it covers, and a
-**sweep marker** that only schedules when to list again (Slack's
+**sweep marker** (`datalib_etl::sweep`) that only schedules when to list again (Slack's
 user list, claude's orgs and project docs).
 
 | Source | Listed | Held at | Range in `coverage` |
 |---|---|---|---|
 | slack | channels, threads (by `latest_reply`), file edges, the authors of stored messages | `messages`, `threads`, `slack_attachments`, `users` sidecars | each channel's history; each conversation's searched reply time |
+| discord | channels, threads and direct messages, each with its newest message; file edges | `discord_attachments` sidecar | each conversation's message ids; each channel's thread listing, by newest message |
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows; in roots mode, `listed_pages` (written by the walk down from the roots on a first sync, by the search after), and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the page's `last_edited_time`, as the search or the walk lists it |
-| linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
-| todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from the account's `joined_at` |
+| linear | each walked connection's pages are the rows | the sidecar of each of the five tables walked page by page, at `updatedAt` | each connection's `updatedAt`, per selection |
+| todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from `since`, else the account's `joined_at` |
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
+| contacts (Google) | the connections page is the content; each contact's photo link | `google_photos` sidecar, at its link | — |
 | calendar (Calendly) | the scheduled-events listing, at each event's `listing_hash` | `calendly_invitees` sidecar | — |
 | google_drive | the file listing, at each file's Drive `version`; each stored revision's export links. The folder and shared-drive listings, and each listed file's `parents`, are the content (`folders`, `drives`, `file_parents`) | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |
@@ -708,6 +720,7 @@ leaves an on-disk superset, and nothing deletes it.
 | Provider | Widening a knob |
 |---|---|
 | slack | An earlier `since` is a gap below the spans held; `media` turned on makes every stored file edge without bytes owed |
+| discord | An earlier `since` is a gap below the spans held; a server or channel newly named has no spans; `media` turned on makes every stored file edge without bytes owed |
 | github, gitlab | A wider `refresh_window_days` is a gap below each scope's `coverage` |
 | email (JMAP, Gmail) | An admitted mailbox or label with no `listed_whole` row is enumerated until an enumeration of it finishes, and so, on Gmail, is one whose last walk began after the `since` now set; a raised `blob_size_limit_bytes` makes a held message with no `.eml` owed; `whole_threads` turned on lists the rest of every kept thread |
 | garmin | An earlier `since` leaves days with no row and dates with no `coverage`, and the next run fetches exactly those |
@@ -750,7 +763,8 @@ Distinctions every provider should try to follow.
 
 - **Per-item failures are tolerated.** A transient failure on one window / page / blob — 5xx, network blip, timeout, parse error, transient permission denied, rate-limit response — should not kill the run. Log a `warn!`, increment an error counter, **leave durable evidence in the row** (next bullet), advance the cursor, keep going. The run's `FetchSummary` reports the count.
 - **A failure about a record is a `problems` row, not only a `warn!`.** Record a per-record fetch failure through `record_object_error` / `record_object_attempt` in [`doltlite_raw.rs`](/datalib/backend/etl/src/doltlite_raw.rs): besides the sidecar's `last_error`, it writes the entity's `problems` row (`Reason::FetchFailed`), in the transaction that writes the record, which the Manage row counts and the record's document shows once render has linked it. Where the rows are read: [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
-- **Everything else a run could not do goes into its collector.** A download's `fetch` runs inside [`run_problems::collecting`](/datalib/backend/etl/src/run_problems.rs), which hands it one `RunProblems` and writes it when `fetch` returns, whichever way it returns. Nothing else writes these rows, so there is no report call to forget, to make twice, or to make after a stop. A listing, a phase, or one container's walk (a channel, a mailbox) that fails while the rest can still be fetched is `.listing(..)` / `.phase(..)`, and the step succeeds; `.run_phase(name, fut)` runs one phase so that its error or panic costs only that phase. A local file's parse goes through `run_problems::catching_panics(|| ..)`, so a parser that panics on one malformed file fails that file, through its usual error arm, and not the step; the file is tried again next run. A configured entry upstream does not have (a label, a channel, a conversation id) is `.config(..)`. A record that failed before there was a row to pin it to is `.record_failed(..)`. When the failed part is one record's (a thread, a file), record it on that record (above) instead, so it reaches its document.
+- **Everything else a run could not do goes into its collector.** A download's `fetch` runs inside [`run_problems::collecting`](/datalib/backend/etl/src/run_problems.rs), which hands it one `RunProblems` and writes it when `fetch` returns, whichever way it returns. Nothing else writes these rows, so there is no report call to forget, to make twice, or to make after a stop. A listing, a phase, or one container's walk (a channel, a mailbox) that fails while the rest can still be fetched is `.listing(..)` / `.phase(..)`, and the run goes on; `.run_phase(name, fut)` runs one phase so that its error or panic costs only that phase. A local file's parse goes through `run_problems::catching_panics(|| ..)`, so a parser that panics on one malformed file fails that file, through its usual error arm, and not the step; the file is tried again next run. A configured entry upstream does not have (a label, a channel, a conversation id) is `.config(..)`. A record that failed before there was a row to pin it to is `.record_failed(..)`. When the failed part is one record's (a thread, a file), record it on that record (above) instead, so it reaches its document.
+- **A web source that could not read a listing or a phase is not done, whatever its provider does about it.** `collecting` tells the step every `.listing(..)` and `.phase(..)` row of a run that returned `Ok`, and the step driver ends a source that reaches a service `incomplete` once the store is committed, naming them. There is nothing for a provider to remember to call. A listing that *was* answered and still is not the whole (the service cuts it off however it is asked, or the config limits it) is `.listing_cut_off(..)`, a warning, and the step succeeds: asking again gets the same. So are a refusal (`RunProblem::forbidden`) and a call not made (`not_asked`). A source that reads local files keeps its error rows and succeeds, since a file that will not parse fails the same way until someone changes it.
 - **A row clears only when the same thing was tried again and worked, so every report says what the run covered.** Adding a row needs no coverage; clearing one does, and the collector clears exactly what the run vouches for:
 
   | Kind | Key | Cleared when |
@@ -775,7 +789,7 @@ There are existing chokepoint mechanisms to enforce some of these rules, but not
 
 A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/web/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/web/src/retry.rs)) says the run has gone too long without progress, or has failed too many requests in a row (`download_params`, 30 minutes and 50 by default); then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
-A network that is not there is the same case. A request that never reached the service (a timeout; curl exits 6 could not resolve the host, 7, 28, 35, 52, 55, 56) is retried like a 429, so a laptop waking from sleep rides through its first seconds without DNS. Only an answer counts as progress. When the guard gives up, the request that tripped it fails as itself, for its caller to report, and the source's next request stops the whole source instead of leaving (`StopFlag::give_up`): every loop ends at its next boundary as on a stop, sealed, and `datalib-step` ends the ingest `incomplete`, saying why, even when the provider took the failure in its stride. A provider needs no failure budget of its own for an outage; it needs one only for failures the chokepoint does not retry, such as a run of 404s.
+A network that is not there is the same case. A request that got no answer (a timeout, or curl failing in any way but the few that go the same every time: a malformed URL, a certificate it will not trust, a body past the limit, a fault on this machine) is retried like a 429, so a laptop waking from sleep rides through its first seconds without DNS. Only an answer counts as progress. When the guard gives up, the request that tripped it fails as itself, for its caller to report, and the source's next request stops the whole source instead of leaving (`StopFlag::give_up`): every loop ends at its next boundary as on a stop, sealed, and `datalib-step` ends the ingest `incomplete`, saying why, even when the provider took the failure in its stride. A provider needs no failure budget of its own for an outage; it needs one only for failures the chokepoint does not retry, such as a run of 404s.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:

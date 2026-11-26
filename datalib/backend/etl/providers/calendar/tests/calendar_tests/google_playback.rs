@@ -19,7 +19,7 @@ pub(crate) const PRIMARY: &str = "picard@enterprise.test";
 pub(crate) const AWAY: &str = "c_awayteam@group.calendar.google.com";
 
 pub(crate) fn fixture(root: &Path, url: &str, resp: HttpResponse) {
-    let req = HttpRequest::get(google::HTTP_SERVICE, url).header("Accept", "application/json");
+    let req = HttpRequest::get(google::API.service, url).header("Accept", "application/json");
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
@@ -421,10 +421,69 @@ async fn problem_keys(store: &Path) -> Vec<String> {
     keys
 }
 
+async fn severities(store: &Path) -> Vec<String> {
+    let db = RawDb::open(&db_path_for(store)).await.unwrap();
+    let severities = sqlx::query_scalar("SELECT severity FROM problems ORDER BY scope_key")
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    severities
+}
+
+/// An event with no `id` cannot be stored. A sync that moved its token
+/// past one never asked for it again, and a listing of changes alone did
+/// not say it had met one. A listing that meets one, whole or not, says
+/// so and leaves the token where it was.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_event_with_no_id_is_asked_for_again() {
+    let d = tempfile::tempdir().expect("tempdir");
+    let store = d.path().join("store");
+    std::fs::create_dir_all(&store).unwrap();
+    let briefing = json!({"id": "staff01", "status": "confirmed", "summary": "Senior staff briefing",
+        "start": {"dateTime": "2026-10-01T09:00:00-07:00"}, "end": {"dateTime": "2026-10-01T10:00:00-07:00"}});
+    let poker = json!({"id": "poker01", "status": "confirmed", "summary": "Officers' poker night",
+        "start": {"dateTime": "2026-10-02T20:00:00-07:00"}, "end": {"dateTime": "2026-10-02T23:00:00-07:00"}});
+    let without_id = |event: &Value| {
+        let mut event = event.clone();
+        event.as_object_mut().unwrap().remove("id");
+        event
+    };
+    // The token each run must ask with, what it is told, and whether that
+    // was everything.
+    let runs = [
+        (None, json!([without_id(&briefing)]), "s1", false),
+        (None, json!([briefing.clone()]), "s2", true),
+        (Some("s2"), json!([without_id(&poker)]), "s3", false),
+        (Some("s2"), json!([poker.clone()]), "s4", true),
+        (Some("s4"), json!([]), "s5", true),
+    ];
+    let mut stored = Vec::new();
+    for (n, (asked_with, items, next, whole)) in runs.into_iter().enumerate() {
+        let tape = d.path().join(format!("run{n}"));
+        calendar_list_of(&tape, false);
+        fixture(
+            &tape,
+            &events_url(PRIMARY, asked_with, None),
+            page(items, None, Some(next)),
+        );
+        run(&tape, &store).await;
+        let said = problem_keys(&store).await;
+        if whole {
+            assert!(said.is_empty(), "run {n}: {said:?}");
+        } else {
+            assert_eq!(said, [format!("listing:calendar {PRIMARY}")], "run {n}");
+            assert_eq!(severities(&store).await, ["error"], "run {n}");
+        }
+        stored.push(ids(&store).await.len());
+    }
+    assert_eq!(stored, [0, 1, 1, 2, 2]);
+}
+
 /// A whole listing may delete what it does not name only if it named
 /// everything it listed. An event it could not identify (no `id`) used to
 /// be skipped and the stored copy deleted, and a reply with no `items`
-/// read as an empty calendar (audit 2026-10-02 §4). Google sends `items`
+/// read as an empty calendar. Google sends `items`
 /// on every reply, `[]` when empty — measured live across 7 calendars,
 /// incremental replies included — so its absence is not a listing.
 /// Either now deletes nothing and says why on the calendar's row; the
@@ -483,6 +542,7 @@ async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     assert_eq!(second.events_deleted, 0, "{second:?}");
     assert_eq!(ids(&store).await, stored);
     assert_eq!(problem_keys(&store).await, vec![listing.clone()]);
+    assert_eq!(severities(&store).await, ["error"]);
 
     let third = run_in(&three, &store, Some(window)).await;
     assert_eq!(third.events_deleted, 1, "{third:?}");
@@ -610,4 +670,5 @@ async fn a_calendar_list_it_cannot_fully_read_deletes_no_calendar() {
     assert_eq!(calendar_count(&store).await, 2);
     assert_eq!(ids(&store).await, stored);
     assert_eq!(problem_keys(&store).await, vec!["listing:calendars"]);
+    assert_eq!(severities(&store).await, ["error"]);
 }

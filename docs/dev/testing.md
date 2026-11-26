@@ -370,7 +370,10 @@ page plus whatever has arrived since. Two counts taken either side of a
 reload therefore compared how long each had been open, and failed as
 538 < 569 once the log outgrew a page (#835). Before comparing a reading
 from before an action with one from after it, check that both measure
-the same thing.
+the same thing. A store's size on disk is not what it holds: a doltlite
+store can carry up to 1 MiB of zeros that a later sync gives back, so
+"a document more" is a row count, not a bigger file
+([`doltlite.md`](doltlite.md) § "Disk space and `dolt_gc`").
 
 **Unroute a response rewrite before the page closes.** A `page.route`
 handler that calls `route.fetch()` to edit the real answer is waiting on
@@ -415,6 +418,34 @@ third-party sites faked. It is `manual`, not part of the merge gate; run it with
 (`.github/workflows/latchkey-auth.yml`). What is real and what is faked:
 [`tests/e2e_auth/README.md`](/datalib/ui/tests/e2e_auth/README.md).
 
+## The downloaders against fake services
+
+`//datalib/backend/etl/fake_services:fake_services_tests` runs the real
+`slack`, `linear`, `email` (Gmail) and `calendar` (Google) downloads
+against the fake Slack, Linear and Google of
+[imbue-ai/fake-services](https://github.com/imbue-ai/fake-services),
+through the real latchkey. Where a playback test answers each request
+from a tape the test wrote, these tests seed a service with a small
+Starfleet workspace and let the fake answer as the real one would: Linear
+validates every query against Linear's own public schema, each service
+keeps the real one's rate limits and can misbehave on a schedule of
+faults, and an update between two syncs is what a later sync has to
+notice. They are where a downloader's reading of a service's contract
+is checked, and they are what found the reply-edit gap in the Slack
+download (`an_edited_reply_in_a_quiet_thread_is_not_re_read` holds the
+download to what INGEST.md documents, and should turn around when the
+gap is closed).
+
+The harness is `datalib_fake_services` (`datalib/backend/etl/fake_services/src/lib.rs`):
+`Fakes::start` stages the pinned launcher and its packages out of the
+runfiles, serves the seeds on loopback ports, stores each seed's token
+in a latchkey store of its own and points `LATCHKEY_CURL` at the fake's
+`curl_shim.sh`. latchkey reads all of that from the process environment,
+so the binary runs its tests one at a time (`--test-threads=1`) and a
+`Fakes` holds a process-wide lock while it lives. The fake-services
+commit and its npm packages are pinned in `MODULE.bazel` and
+`third-party/fake-services/` (its README says how to bump them).
+
 ## Watching a sync stream
 
 [`data-sources-streaming.spec.ts`](/datalib/ui/tests/e2e/data-sources-streaming.spec.ts)
@@ -455,7 +486,11 @@ Three pieces make that possible, and each is small:
   a test can take the network away mid-run
   (`datalib_step`'s `step_tests/offline.rs`). A Rust test sets the same
   four on its scope (`Playback::delay`, `hold`, `hold_sealed`,
-  `offline`).
+  `offline`). None of them reaches a step through the runner unless
+  `DATALIB_CHILD_ENV` names it: the runner hands a step only the
+  variables it lists, and it lists no switch only a test sets
+  (`datalib/backend/env/src/lib.rs`). `playwright.config.ts` and
+  `run_sync_pipeline.py` name theirs.
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.
@@ -467,7 +502,8 @@ Three pieces make that possible, and each is small:
   index group and the applet, no data.
 
 To watch the same thing by hand, against any root, run the runner
-directly with the two variables set and a short cadence in the config:
+directly with the two variables set and named in `DATALIB_CHILD_ENV`,
+and a short cadence in the config:
 
 ```bash
 bazelisk build //datalib/backend:bin //datalib/backend/datalib_step:datalib_step
@@ -475,6 +511,7 @@ step=bazel-bin/datalib/backend/datalib_step/datalib_step
 echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
 $step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
+DATALIB_CHILD_ENV=DATALIB_HTTP_PLAYBACK,DATALIB_HTTP_PLAYBACK_DELAY_MS \
   bazel-bin/datalib/backend/bin/datalib-pipeline sync <root>
 ```
 
@@ -766,6 +803,15 @@ the table stays small. A statement that reads only the catalog
 what the fixture sync runs: the server's routes and the applets'
 searches are not in it.
 
+The plan is read with no values bound, and that makes it wrong two
+ways. A `LIKE` or `GLOB` whose pattern is a parameter reads as a scan,
+though once a pattern is bound SQLite seeks its literal prefix: write
+the prefix as a range (`key >= ? AND key < ?`,
+`datalib_etl::key_range::prefix_end`) and the plan says what runs. And
+a walk that starts at one end of an index (`ORDER BY … LIMIT`, `max()`)
+carries SQLite's full-scan mark however few rows it reads before it
+stops; such a statement gets an entry saying so.
+
 ## A statement's work does not grow with the rest of the store
 
 A scan census cannot see a statement that reads everything through an
@@ -793,9 +839,7 @@ after a layout change. A fixture is too small and too fresh to show any
 of these. The run store of a real root, after a large sync, shows all of
 them. So after changing a download, a render, an index or a stored
 layout, sync a real root and read its logs as well as running the
-suite. Write what you find as a dated audit under `audits/`
-([`2026-10-29_live_sync_logs.md`](audits/2026-10-29_live_sync_logs.md)
-is one). Write counts and timings only, never what the records say
+suite. Write what you find as a dated audit under `audits/`. Write counts and timings only, never what the records say
 (AGENTS.md §"Real data stays out of the repo").
 
 Everything is plain SQLite. Open it with `sqlite3 -readonly`, the
@@ -816,6 +860,7 @@ ids are in `runs`. What to look at, and where:
 | is a migration repeating | `msg = 'migrated'` per store, across runs |
 | what is slow to read | `msg LIKE '%slow statement%took %'`, one line per attempt (`top_statement`, `total_ms`), and `msg LIKE 'slow statement%'` at `debug` for each (`db.statement`, `elapsed`); `GET /api/manage/rows` request times; the size of each `-wal` beside its file |
 | which statements walk many rows for few | `msg LIKE '%heavy statement%did%'`, one line per attempt (`top_statement`, `top_file`, `top_params`), and `target = 'datalib::sql_work'` for each (`statement`, `file`, `params`, `vm_steps`, `rows`, `fullscan_steps`). Steps count work, not time, so a cold disk does not move them. |
+| which requests read far more than they answer with | `target = 'http.request'` (debug): `rows_read` beside `bytes`. A high count is right for a cache loaded whole; the ones to look at answer with little ([`logging.md`](logging.md) has the query). |
 | what was left behind | files under each `render_markdown/` against its documents; a directory under the root that no `[[groups]]` names |
 
 ## macOS permissions in the desktop app (by hand)

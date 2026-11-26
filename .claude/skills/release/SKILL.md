@@ -202,6 +202,23 @@ published from a local machine — the tag is the trigger.
     (`docs/dev/release_steps.md` §"Pinning what people get by default").
     If it refuses the release, say so rather than editing the pins by
     hand. Open a PR with what it changed, and land it like any other.
+
+    It needs to read the image on ghcr.io. If the image check fails with
+    "the provided token was denied access", it is a credentials problem,
+    not a missing attestation. `gh attestation verify oci://…` signs in to
+    the registry with Docker's stored login, not with `gh`'s token, so a
+    stale `ghcr.io` login in the keychain is refused even when `gh` has
+    `read:packages` (`gh auth refresh -h github.com -s read:packages` if
+    it doesn't). Run the script with a throwaway Docker config made from
+    `gh`'s token, and delete the config afterwards:
+
+    ```sh
+    D=$(mktemp -d) && chmod 700 "$D"
+    printf '{"auths":{"ghcr.io":{"auth":"%s"}}}' \
+      "$(printf 'x:%s' "$(gh auth token)" | base64)" > "$D/config.json"
+    DOCKER_CONFIG="$D" uv run python scripts/release/pin_release.py vX.Y.Z
+    rm -rf "$D"
+    ```
 13. Bump the pin in DWT, `imbue-ai/default-workspace-template`
     (§"Updating DWT"). Only after step 11 — every pin there is a
     tag-relative URL that has to resolve when a workspace first uses
@@ -234,24 +251,53 @@ it reads cannot drift apart.
    for the literal old version:
 
    ```sh
-   git grep -n v<old> -- ':!.agents/changelog' ':!system/changelog'
+   git grep -n v<old> -- ':!*changelog/*' ':!*CHANGELOG.md'
    ```
 
    Anything it prints outside those two files is either a new pin (bump
-   it, and add the file to this list) or history. The notes under
-   `.agents/changelog/` and `system/changelog/` are history: a `v<old>`
-   there records what that change did.
+   it, and add the file to this list) or history. The notes under any
+   `changelog/` directory and the root `CHANGELOG.md` and
+   `UNABRIDGED_CHANGELOG.md` are history: a `v<old>` there records what
+   that change did.
 3. Read the release's commits against the skill's prose and fix what
    went stale — the pin is not the whole contract. The skill describes
    real behaviour (which sources work and how one is spelled in the
    config, where the store lives), so a change to any of that lands here
    even when nothing about the install moved.
-4. Add the branch's note, `.agents/changelog/<branch>.md`: one paragraph
-   saying which Datalib version the skill now installs and what it
-   brings that an agent or a person would notice.
-5. Run the pin test (`uv run pytest system/apps/datalib/test_datalib_pin.py`),
-   commit as `datalib: bump the pinned version to vX.Y.Z`, push the
-   branch and open the PR against `main`:
+4. Add a changelog note for **every project the branch touches**, not
+   just the skill. DWT's `check-changelog` CI job fails the PR for each
+   one missing, and this step has failed that way more than once. The
+   check (`system/scripts/workspace_scripts/check_changelog_entries.py`)
+   maps each changed path to a project, and each project wants
+   `<its changelog dir>/<branch>.md`:
+
+   | changed path | project | note goes in |
+   |---|---|---|
+   | `.agents/…` (the skill) | `agents` | `.agents/changelog/<branch>.md` |
+   | a `system/apps/<app>/` that has a `pyproject.toml` | that app | `system/apps/<app>/changelog/<branch>.md` |
+   | anything else, including `system/apps/datalib/` (no `pyproject.toml`), `system/scripts/`, `.github/`, top-level docs | `dev` | `system/changelog/<branch>.md` |
+
+   A bare pin bump touches only `.agents/` and needs one note. Step 3
+   often reaches `system/apps/datalib/` too (its README, the launcher),
+   and then `system/changelog/<branch>.md` is owed as well. A changelog
+   directory may be missing because a consolidation emptied it; create it.
+
+   Each note is one paragraph about that project's change: for the
+   skill, which Datalib version it now installs and what that brings an
+   agent or a person; for `dev`, what changed in the files it covers.
+   Don't add a note for a project the branch doesn't touch.
+5. Run the pin test and the changelog check before pushing, then commit
+   as `datalib: bump the pinned version to vX.Y.Z`, push the branch and
+   open the PR against `main`:
+
+   ```sh
+   uv run pytest system/apps/datalib .agents/skills/datalib
+   CHANGELOG_BASE_REF=main uv run --no-sync \
+     system/scripts/workspace_scripts/check_changelog_entries.py
+   ```
+
+   The second command is the CI job. It prints "changelog gate: ok" or
+   names each file still missing.
 
    ```sh
    git push -u origin bump-datalib-vX.Y.Z

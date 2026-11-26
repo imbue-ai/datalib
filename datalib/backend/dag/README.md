@@ -312,9 +312,11 @@ of four ways:
 3. **`needs_rerun`.** What the step wrote can only be rebuilt by running
    it. The record keeps the flag (`steps.needs_rerun`), the tick holds
    the step due until it next succeeds (rule 5), and
-   `round::rerun_offer` lists it for the app, which asks whether to run
-   it now and opens one request rooted at the list if so. A sync that
-   does not reach such a step leaves it alone. A `datalib-step` render
+   `round::rerun_offer` lists it. Once the pass is over, the loop opens
+   one request rooted at that list, by `upgrade`
+   (`serve::UPGRADE_REQUESTER`), unless one it opened is still open:
+   nothing reads a store in another shape, and none of these steps
+   downloads, so there is nothing to ask. A `datalib-step` render
    store or the grid index in another shape answers this way, and so
    does `unified_grid_and_search_index` when a source it reads was drawn
    into the search index by another version of the index text or its
@@ -327,21 +329,33 @@ of four ways:
    person turned off keeps its switch.
 
 A step that fails to answer costs that step only, and the rest are
-asked. For `datalib-step`'s own steps: the grid index reads a render
-store in another shape as the index had it, with a warning; a rebuild of
-the index has nothing to keep, so a source whose render step stays
-turned off then has no rows until it re-renders. Its documents stay in
-the search index with their vectors, and a search reads only the
-sources the grid holds, so it leaves search too and costs a search
-nothing. In the app, the pass writes only what each step brings up to
-date in place, so the app stays usable while it runs: a pill where the
-sync indicator sits says how each step is going, and every Sync on the
-Sources card is disabled (`ManageResponse::sync_paused`); a request
-opened another way waits for the pass. After it, the pill stays red for
-a step the pass could not prepare until it is dismissed. The pass is
-held in the server's memory (`/api/config`'s `upgrade`) and announced as
-`pass_changed` on `/api/sync/stream`; freeing disk space is drawn by the
-same pill (§"Resets and purges").
+asked. For `datalib-step`'s own steps, a store is read only in this
+build's shape (`datalib/backend/store_meta/README.md`). A store whose
+indexes alone moved is brought up to date in place: prepare opens it as
+its owner, which makes them. So is an inference cache in smaller pages
+than this build's, which `unified_grid_and_search_index`'s prepare
+rewrites, keeping every vector: minutes on a large library, once. Until
+a store in another shape is rebuilt, nothing reads it, and the refusal
+names the step to run. The grid index leaves such a source's rows as it
+had them, with a warning; while the grid index itself is in another
+shape, the grid and documents answer with that refusal. A rebuild of the
+index has nothing to keep, so a source whose render step stays turned
+off then has no rows until it re-renders. Its documents stay in the
+search index with their vectors, and a search reads only the sources the
+grid holds, so it leaves search too and costs a search nothing. In the
+app, an upgrade screen stands in front of the library while the pass
+runs and while any step it marked `needs_rerun` has not run since,
+saying how each source is going: the cards would only show refusals
+meanwhile. Its one button opens Sources, for a source whose re-run
+fails, and lifts the screen for that page. Every Sync on the Sources
+card is disabled while the pass runs (`ManageResponse::sync_paused`); a
+request opened another way waits for the pass. After it, a pill where
+the sync indicator sits stays red for a step the pass could not prepare
+until it is dismissed, and, once the screen is lifted, amber, with a
+button that runs them, while any step the pass marked `needs_rerun` has
+not run since. The pass is held in the server's memory (`/api/config`'s
+`upgrade`) and announced as `pass_changed` on `/api/sync/stream`;
+freeing disk space is drawn by the same pill (§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
 renamed to its new path, with the record's rows for its steps
@@ -442,8 +456,8 @@ point and says so with a `checkpoint` event
 the loop manage processes correctly? A puppet step (`tests/puppet`)
 does only what it is told over a FIFO and acks each instruction; the
 harness (`tests/supervisor_harness`) writes a real `config.toml` of
-puppets, runs the loop in-process under `host::run_idle` as the server
-does, and plays a person through the store. It waits only on what it
+puppets, runs the loop in-process under `host::run_idle` as `datalib-pipeline
+serve` does, and plays a person through the store. It waits only on what it
 can observe (an ack, a loop event, an announcement), each under a
 deadline, and asserts only what the loop owns: processes started and
 ended, never two of one step at once (checked on every start), each
@@ -574,25 +588,38 @@ naming no step) looks exactly like one it did.
 - **One loop per data root** (`system/runner-lock`). The loop is the
   only writer of its record, and the steps it spawns write raw stores
   whose doltlite working set is shared across every connection on the
-  branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it holds this lock
-  for its life and runs the loop in-process
-  (`supervisor/serve.rs`, which `datalib-pipeline serve` runs too), so every
+  branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it keeps
+  `datalib-pipeline serve` (`supervisor/serve.rs`) running as a child, which
+  holds this lock and runs the loop, so every other
   `datalib-pipeline` sync is a client of it. A `datalib-pipeline` is never refused for the lock: a sync is a request
   row in `system/supervisor.sqlite`, so it writes its row and follows it
   while whoever holds the lock runs it, trying the lock again whenever
   anything is announced, its release included, in case that loop ends
   first. Only `reset`, which empties stores, and `free-disk-space`,
   which rewrites them, need the root to themselves and is refused while a loop runs —
-  always, with the app up; the app's resets are rows the loop carries out
-  (§"Resets and purges").
+  always, with the app up; the app's resets are rows whichever loop
+  holds the lock carries out (§"Resets and purges").
 - **One server per data root** (`system/lock`), which `datalib-http`
-  takes for its own reasons (the API token, the feedback, usage and
+  takes for its own reasons (the API token, the disk-stats and
   remote-media stores).
 
 They must be *different* files: a server that starts while a
-`datalib-pipeline` runs the loop holds the root as a server and waits for
-`runner-lock` — the UI's syncs are rows that loop serves meanwhile — and
-takes the loop over when it ends.
+`datalib-pipeline` runs the loop holds the root as a server, and its
+child waits for `runner-lock` — the UI's syncs, resets and purges are
+rows that loop serves meanwhile — and takes the loop over when it ends.
+
+The server restarts a child that dies, after one second, doubling to a
+minute, each time logged at ERROR; after three deaths in a row, each
+quicker than a minute, every Sync button says the runner keeps stopping,
+until a child holds the lock again. With no `datalib-pipeline` to start
+(`$DATALIB_PIPELINE_BIN`, `$DATALIB_BINARY_DIR`, beside the server, then
+`PATH`), the server serves everything else and every Sync button says
+why. The child is handed the server's environment but the server's own
+token and address and the protected-library flag
+(`datalib_env::inherit_for_runner`): it is the runner that hands each
+step only what the step protocol allows. At shutdown the server sends it
+SIGTERM; one that outlives the server's wait sees its parent pipe
+close, and stops its steps the same way.
 
 Whoever runs the loop owns its steps' processes. Each step holds a pipe
 from that process (`DATALIB_PARENT_PIPE`) and stops itself when the pipe
@@ -740,7 +767,7 @@ period whenever a request or a wipe is open, requests asked to stop
 before any period took them closed as `stopped`, the record settled when
 the switches or the config move, then a wait for an announcement or the
 host's stop. `supervisor::serve::run` runs it after taking the lock and
-the prepare pass; the server and `datalib-pipeline serve` both call that, and
+the prepare pass; `datalib-pipeline serve` calls that, and
 the harness runs `run_idle` itself. A `datalib-pipeline` sync has no idle
 side: it serves until nothing is open, then exits.
 
@@ -751,8 +778,10 @@ holds: that it holds the lock (`holding`), the prepare pass
 (`sync_started`, `sync_over`), and every write it makes to the run
 store (`run_store_written`), which a filesystem watch would report late.
 Its own log lines go to the run store, as a `dag` process outside any
-run. SIGINT or SIGTERM stops it the way the app's shutdown stops the
-loop: its steps are interrupted and their requests stay open.
+run, which the log card offers under "The runner". SIGINT or SIGTERM
+stops it: its steps are interrupted and their requests stay open. A root
+with no config, or one it cannot read, is served all the same, and
+nothing runs until the file holds a config.
 
 ## Resets and purges
 
@@ -837,6 +866,11 @@ header says rollback-journal:
 | `runs` | busy period of the loop | when it started and finished |
 | `run_steps` | step the newest run has reached | what it is doing in that run |
 | `invocations` | process the loop started | when, in which run, and how it ended (`outcome` is NULL while it runs) |
+
+The store's shape moves by the rungs of
+`supervisor/store.rs`'s `LADDER`, which an open climbs before it runs the
+DDL; a store a newer build climbed further is refused, so two builds
+sharing a root run the newer one.
 
 A run must record a state for *every* step in scope (including ones that
 were skipped or blocked and never "ran"), a `finished_at_utc` that tells

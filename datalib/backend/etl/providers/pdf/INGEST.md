@@ -49,7 +49,7 @@ The scan goes on, and what it could not do is a `problems` row:
 - **A walk error** (an entry the walk could not read) leaves a
   `listing:files` row, and **that scan does not truncate `pdf_paths`**:
   what it saw is upserted over what was there and nothing falls out.
-  **A file that would not open** is `record:files:<path>`; it keeps its
+  **A file that would not open** is `record:pdf_paths:<path>`; it keeps its
   path row and holds back no other deletion. These are the rules of
   [`file_changes_scan`](../../files/README.md#answering-did-it-change-for-a-file-backed-source).
   The next clean walk truncates as usual and clears the listing row

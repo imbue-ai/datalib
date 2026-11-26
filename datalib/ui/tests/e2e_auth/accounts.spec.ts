@@ -133,12 +133,14 @@ test("each browser-login service names accounts the way the wizard is told", asy
   world.installOwnGarminPlugin();
   for (const service of [
     "slack",
+    "discord",
     "google-gmail",
     "google-calendar",
     "google-drive",
     "google-docs",
     "google-sheets",
     "google-slides",
+    "google-people",
     "github",
     "fastmail",
     "garmin",

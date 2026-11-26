@@ -616,10 +616,11 @@ async fn no_index_reads_as_none() {
     assert!(reader.is_none());
 }
 
-/// The grid index's file is there before any keyword pass has run: the
-/// reader takes it as no index yet, not as an error.
+/// The grid index's file holds the keyword index's tables before any
+/// keyword pass has run: the reader takes it as no index yet, not as an
+/// error, until a pass starts the index's generation.
 #[tokio::test]
-async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
+async fn a_grid_index_no_keyword_pass_has_run_on_is_no_index_yet() {
     let dir = tempfile::tempdir().unwrap();
     let grid = dir.path().join("db.sqlite");
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
@@ -632,15 +633,18 @@ async fn a_grid_index_without_the_search_tables_is_no_index_yet() {
         .connect_with(opts)
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE grid_rows (uuid TEXT)")
-        .execute(&pool)
-        .await
-        .unwrap();
+    for ddl in datalib_search_index::KEYWORD_DDL {
+        sqlx::query(ddl).execute(&pool).await.unwrap();
+    }
     pool.close().await;
-    let reader = Reader::open(&grid, &dir.path().join("cache.sqlite"))
+    let cache = dir.path().join("cache.sqlite");
+    assert!(Reader::open(&grid, &cache).await.unwrap().is_none());
+    datalib_search_index::Index::open(&grid)
         .await
-        .unwrap();
-    assert!(reader.is_none());
+        .unwrap()
+        .close()
+        .await;
+    assert!(Reader::open(&grid, &cache).await.unwrap().is_some());
 }
 
 fn page_term(word: &str) -> String {
@@ -714,6 +718,43 @@ async fn the_kept_rows_and_the_sources_narrow_the_pages() {
         .await
         .unwrap();
     assert!(elsewhere.is_empty(), "{elsewhere:?}");
+    f.reader.close().await;
+}
+
+/// A page's heading is no row's, so it is the page's own row: a filter
+/// that keeps that row and one of the page's rows finds the page by its
+/// heading's words, and one that keeps only the other row does not.
+/// Before, any filter that kept one of a page's rows lost the words of
+/// every piece that was no row's, such as a Drive file's whole text.
+#[tokio::test]
+async fn a_piece_that_is_no_rows_is_its_documents_row() {
+    let f = fixture(&[page("page")], &[]).await;
+    let keep = |rows: Vec<&'static str>| KeptRows {
+        whole: Vec::new(),
+        messages: rows,
+    };
+    for (kept, found) in [
+        (keep(vec!["bedroom", "page"]), vec!["page"]),
+        (keep(vec!["bedroom"]), vec![]),
+    ] {
+        let heading = f
+            .reader
+            .words(&all_of(&["quality"]), None, Some(&kept), 10)
+            .await
+            .unwrap();
+        assert_eq!(ids(&heading), found, "words, keeping {:?}", kept.messages);
+        let across = f
+            .reader
+            .page_words(&page_terms(&["bedroom", "quality"]), None, Some(&kept), 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            ids(&across),
+            found,
+            "page words, keeping {:?}",
+            kept.messages
+        );
+    }
     f.reader.close().await;
 }
 

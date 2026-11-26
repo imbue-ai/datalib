@@ -58,7 +58,7 @@ pub struct MapsReviewRow {
 
 /// `maps_saved_places` — one row per "saved place" (starred, wantgo,
 /// list entry, etc.). PK recipe:
-/// `uuidv5(NS, "maps_saved:{ftid_or_cid}:{date}")`.
+/// `uuidv5(NS, "maps_saved:{ftid, else cid, else q= query}:{date}")`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "maps_saved_places")]
 pub struct MapsSavedPlaceRow {

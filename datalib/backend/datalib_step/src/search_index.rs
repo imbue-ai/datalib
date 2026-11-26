@@ -1,4 +1,4 @@
-//! The search index (docs/dev/plans/search_index_from_ram.md): what the
+//! The search index (docs/dev/plans/completed/search_index_from_ram.md): what the
 //! `unified_grid_and_search_index` step's keyword pass and sweep, and
 //! each source's `embed`, do with it. The keyword pass needs no model.
 //! An `embed` cuts each document the keyword index holds into chunks and
@@ -21,7 +21,7 @@ use datalib_runtime::layout;
 use datalib_schema::markdowns::MarkdownRow;
 #[cfg(test)]
 use datalib_search_index::text::{self, Piece, INDEX_TEXT_VERSION};
-use datalib_search_index::{ChunkedDoc, FiledChunk, Index, IndexDoc, InferenceCache, Reader};
+use datalib_search_index::{ChunkedDoc, FiledChunk, Index, IndexDoc, InferenceCache};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::modal::{self, Reply, Route, SignIn};
@@ -122,19 +122,27 @@ pub(crate) async fn update_keywords(
     progress: &Progress,
     stop: &StopFlag,
 ) -> Result<Done> {
-    retire_separate_file(root)?;
     let render_root = datalib_etl::layout::render_markdown_root(root, group);
     // A source in the config whose render has not run yet has no file;
     // it is read as a store with nothing in it, like the grid pass does.
     let rendered = indexed_markdown::path_for(&render_root).is_file();
     let store = match rendered {
         false => None,
-        true => tokio::task::spawn_blocking(move || {
+        true => match tokio::task::spawn_blocking(move || {
             IndexedMarkdownStore::open_for_reading(&render_root, None)
         })
         .await
-        .context("render store open panicked")??
-        .map(Arc::new),
+        .context("render store open panicked")?
+        {
+            Ok(store) => store.map(Arc::new),
+            // The grid pass files it as the source's problem, saying what
+            // to run; the search keeps the source as it had it until then.
+            Err(e) if datalib_store_meta::other_shape(&e).is_some() => {
+                tracing::debug!(group, error = %format!("{e:#}"), "left as the search had it");
+                return Ok(Done::default());
+            }
+            Err(e) => return Err(e),
+        },
     };
     let index = Index::open(&layout::grid_index_db(root)).await;
     let out = match index {
@@ -180,20 +188,9 @@ async fn keyword_pass(
         None => BTreeMap::new(),
         Some(store) => {
             let store = Arc::clone(store);
-            let rows = tokio::task::spawn_blocking(move || match store.in_this_shape()? {
-                true => store.markdown_rows().map(Some),
-                false => Ok(None),
-            })
-            .await
-            .context("render store read panicked")??;
-            let Some(rows) = rows else {
-                tracing::warn!(
-                    group = %group,
-                    "the render store was written by an older build; the search index takes \
-                     this source once its render has rewritten it"
-                );
-                return Ok(done);
-            };
+            let rows = tokio::task::spawn_blocking(move || store.markdown_rows())
+                .await
+                .context("render store read panicked")??;
             rows.into_iter()
                 .filter(searchable)
                 .map(|r| (r.markdown_uuid.clone(), r))
@@ -317,11 +314,7 @@ async fn embed_with<E: EmbedPrompt>(
 ) -> Result<Done> {
     // Read-only: an embed writes only the cache, and a writer of the
     // index's file (a keyword pass, the grid's load) must not hold it up.
-    let Some(reader) = Reader::open(
-        &layout::grid_index_db(root),
-        &layout::inference_cache_db(root),
-    )
-    .await?
+    let Some(reader) = datalib_unified_grid_and_search_index::search_index::open(root).await?
     else {
         return Ok(Done::default());
     };
@@ -803,7 +796,6 @@ async fn embed_batch<E: EmbedPrompt>(
 /// search, then keeps only the vectors a filed chunk names. Answers how
 /// many vectors went. Touches nothing that does not exist yet.
 pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
-    retire_separate_file(root)?;
     let cache_path = layout::inference_cache_db(root);
     if !cache_path.exists() {
         return Ok(0);
@@ -818,18 +810,6 @@ pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
     gone
 }
 
-/// Before the keyword passes: the chunks a build before this one filed in
-/// the keyword index move into the cache, before the index's next open
-/// empties them, so nothing is cut again and the sweep keeps the vectors
-/// they name. Answers how many documents came over.
-pub(crate) async fn carry_chunks(root: &Path) -> Result<usize> {
-    datalib_search_index::carry_chunks_from_the_index(
-        &layout::grid_index_db(root),
-        &layout::inference_cache_db(root),
-    )
-    .await
-}
-
 /// The `unified_grid_and_search_index` step's half after its keyword passes: every document of a
 /// source it does not search goes, whether the source left the config or
 /// was put in `not_searched`. Returns how many went.
@@ -838,24 +818,6 @@ pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<us
     let out = index.keep_sources(searched).await;
     index.close().await;
     out
-}
-
-/// Deletes the file the search index was before its tables moved into the
-/// grid index's: what it held is made again in the grid index's file.
-fn retire_separate_file(root: &Path) -> Result<()> {
-    let old = layout::retired_search_index_db(root);
-    for suffix in ["", "-wal", "-shm"] {
-        let path = PathBuf::from(format!("{}{suffix}", old.display()));
-        match std::fs::remove_file(&path) {
-            Ok(()) => tracing::info!(
-                path = %path.display(),
-                "removed the search index's old file; its tables are in the grid index's now"
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e).with_context(|| format!("remove {}", path.display())),
-        }
-    }
-    Ok(())
 }
 
 /// Where the pinned embedding model is, once provisioned.
@@ -955,7 +917,15 @@ mod tests {
         update_of(root, GROUP).await
     }
 
+    /// The keyword pass, in the grid index's file as the step opens it
+    /// first.
     async fn update_of(root: &Path, group: &str) -> Done {
+        let grid = datalib_etl_render::grid_index::open_index(&layout::grid_index_db(root))
+            .await
+            .unwrap();
+        datalib_etl_render::grid_index::close_index(grid)
+            .await
+            .unwrap();
         update_keywords(root, group, &Progress::noop(), &StopFlag::new())
             .await
             .unwrap()
@@ -1268,94 +1238,6 @@ mod tests {
         assert!(indexed_of(root, "a-new-source").await.is_empty());
     }
 
-    /// A root a build before this one indexed, its chunks filed in the
-    /// keyword index and their vectors cached: the index step moves the
-    /// chunks beside the vectors before the index is emptied for its new
-    /// shape, so the sweep keeps every vector and the documents are still
-    /// embedded, with nothing cut or embedded again.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn an_older_builds_chunks_and_vectors_survive_the_upgrade() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
-        update(root).await;
-        let doc = draw_batch(root, GROUP, vec!["d-tea".into()])
-            .await
-            .unwrap()
-            .remove(0);
-        let cut = doc.prompted(&four_bytes_a_token).unwrap();
-        // What an older build left: its chunks in the keyword index's file,
-        // which was in another shape, and their vectors in the cache.
-        let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(layout::grid_index_db(root));
-        let grid = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .idle_timeout(None)
-            .max_lifetime(None)
-            .connect_with(opts)
-            .await
-            .unwrap();
-        sqlx::query(
-            "CREATE TABLE search_chunks (doc_id INTEGER NOT NULL, seq INTEGER NOT NULL, \
-             start_byte INTEGER NOT NULL, end_byte INTEGER NOT NULL, \
-             first_section INTEGER NOT NULL, last_section INTEGER NOT NULL, \
-             hash TEXT NOT NULL, PRIMARY KEY (doc_id, seq)) WITHOUT ROWID",
-        )
-        .execute(&grid)
-        .await
-        .unwrap();
-        for (seq, p) in cut.iter().enumerate() {
-            sqlx::query(
-                "INSERT INTO search_chunks SELECT doc_id, ?, ?, ?, ?, ?, ? \
-                   FROM search_documents WHERE markdown_uuid = 'd-tea'",
-            )
-            .bind(seq as i64)
-            .bind(p.chunk.start as i64)
-            .bind(p.chunk.end as i64)
-            .bind(p.chunk.first_section as i64)
-            .bind(p.chunk.last_section as i64)
-            .bind(&p.hash)
-            .execute(&grid)
-            .await
-            .unwrap();
-        }
-        sqlx::query(
-            "UPDATE _datalib_meta SET value = 'an older shape' \
-              WHERE key = 'search_index_schema_hash'",
-        )
-        .execute(&grid)
-        .await
-        .unwrap();
-        grid.close().await;
-        let cache = InferenceCache::open(&layout::inference_cache_db(root))
-            .await
-            .unwrap();
-        let vectors: Vec<(String, Vec<f32>)> = cut
-            .iter()
-            .map(|p| (p.hash.clone(), vec![0.6, 0.8]))
-            .collect();
-        cache
-            .put(&datalib_search_index::model_key(), &vectors)
-            .await
-            .unwrap();
-        cache.close().await;
-
-        index_step(root, &[GROUP]).await.unwrap();
-        assert_eq!(cached(root).await.len(), cut.len(), "the sweep kept them");
-        assert_eq!(unembedded(root, GROUP).await, 0);
-        let done = embed_with(
-            root,
-            GROUP,
-            never_cut,
-            never_opened,
-            None,
-            &Progress::noop(),
-            &StopFlag::new(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(done, Done::default());
-    }
-
     /// An embed is one source's: it cuts and embeds that source's
     /// documents and no other's, and with nothing owed it opens neither
     /// the tokenizer nor the model.
@@ -1453,27 +1335,6 @@ mod tests {
             }
         );
         assert_eq!(indexed(root).await.keys().collect::<Vec<_>>(), ["d-tea"]);
-    }
-
-    /// A root upgraded from a build that kept the search index in a file
-    /// of its own: the keyword pass deletes that file and writes the index
-    /// into the grid index's.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn the_search_indexs_old_file_goes_and_its_tables_are_in_the_grid_index() {
-        let td = tempfile::tempdir().unwrap();
-        let root = td.path();
-        let old = layout::retired_search_index_db(root);
-        std::fs::create_dir_all(old.parent().unwrap()).unwrap();
-        std::fs::write(&old, b"an older build's index").unwrap();
-        std::fs::write(format!("{}-wal", old.display()), b"its log").unwrap();
-        let tea = rendered_doc("d-tea", thread("Tea"));
-        commit(root, &[tea], &[]);
-
-        update(root).await;
-        assert!(!old.exists());
-        assert!(!std::path::Path::new(&format!("{}-wal", old.display())).exists());
-        assert_eq!(indexed(root).await.len(), 1);
-        assert!(layout::grid_index_db(root).exists());
     }
 
     /// A render store an older build wrote has neither a document's hash
@@ -1711,6 +1572,10 @@ mod tests {
             ];
             options.slice = 2;
             options.sandboxes = sandboxes;
+            // Pauses of 1, 2, 4 ms and so on, six of them.
+            options.pause_ms = 1;
+            options.reach_ms = 40;
+            options.offline_ms = 40;
             let root = self.root.clone();
             let mut env: Vec<(String, String)> = env
                 .iter()
@@ -1737,6 +1602,20 @@ mod tests {
                 .unwrap_or_default()
                 .lines()
                 .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        }
+
+        /// What happened to the Sandboxes that waited for a GPU, in order:
+        /// `("queued", id)` when asked for, `("ended", id)` when ended.
+        fn queue(&self) -> Vec<(String, String)> {
+            let path = format!("{}.queue", self.log.display());
+            std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| {
+                    let event: BTreeMap<String, String> = serde_json::from_str(l).unwrap();
+                    event.into_iter().next().unwrap()
+                })
                 .collect()
         }
     }
@@ -1877,10 +1756,10 @@ mod tests {
             // stdout is what lost answers on a GPU.
             assert_eq!(s["command"][0], "sleep", "{s}");
             let execs = s["execs"].as_array().unwrap();
-            assert_eq!(execs.len(), 1, "{s}");
-            let script = execs[0][2].as_str().unwrap();
+            assert_eq!(execs.len(), 2, "does it answer, then the work: {s}");
+            let script = execs[1][2].as_str().unwrap();
             assert!(
-                script.contains("< /tmp/datalib-embed/in.jsonl > /tmp/datalib-embed/out.jsonl"),
+                script.contains("< /tmp/datalib-embed/in.jsonl > /tmp/datalib-embed/out-1.jsonl"),
                 "{s}"
             );
         }
@@ -2077,6 +1956,186 @@ mod tests {
             [2, 1, 2, 1, 1],
             "each slice of two, then its one missing prompt"
         );
+    }
+
+    /// Runs five chunks, a slice of two at a time, over the stand-in with
+    /// `env` set.
+    async fn embed_five(fake: &FakeModal, env: &[(&str, &str)]) -> Result<Done> {
+        let td = tempfile::tempdir().unwrap();
+        five_docs(td.path()).await;
+        embed_with(
+            td.path(),
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(fake.modal_with(0, true, env, 1)),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+    }
+
+    /// A Sandbox Modal has placed but that does not answer yet is asked
+    /// again, not ended and replaced: on Modal 34 running Sandboxes were
+    /// ended that way, each the moment the SDK's ten seconds of retries ran
+    /// out.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_still_starting_is_waited_for() {
+        let fake = FakeModal::new();
+        let done = embed_five(&fake, &[("FAKE_MODAL_SILENT", "3")])
+            .await
+            .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(fake.sandboxes().len(), 3, "one Sandbox a slice, no more");
+    }
+
+    /// One that never answers is given up on in bounded time, a second is
+    /// tried, and the error says which Sandbox, that it was running, and
+    /// what the call failed with.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_that_never_answers_is_given_up_on() {
+        let fake = FakeModal::new();
+        let err = embed_five(&fake, &[("FAKE_MODAL_SILENT", "1000000")])
+            .await
+            .unwrap_err();
+        let err = format!("{err:#}");
+        for want in [
+            "5 of 5 chunks could not be embedded on Modal",
+            "sb-fake-2 is running and does not answer",
+            "UNAVAILABLE: not answering",
+        ] {
+            assert!(err.contains(want), "{want}: {err}");
+        }
+        assert_eq!(fake.sandboxes().len(), 6, "two a slice");
+    }
+
+    /// One that really ended is replaced at once, and its end is known from
+    /// Modal, not guessed from the call that failed.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sandbox_that_ended_is_replaced() {
+        let fake = FakeModal::new();
+        let done = embed_five(&fake, &[("FAKE_MODAL_GONE", "1")])
+            .await
+            .unwrap();
+        assert_eq!(done.embedded, 5);
+        assert_eq!(fake.sandboxes().len(), 4);
+        let err = embed_five(&FakeModal::new(), &[("FAKE_MODAL_GONE", "9")])
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("sb-fake-2 ended with 1"),
+            "{err:#}"
+        );
+    }
+
+    /// A laptop that wakes with no network: nothing reaches Modal for a
+    /// while, whatever the slice was doing when it went. It is waited out,
+    /// and no attempt is spent on it. A network that stays gone ends the
+    /// run, in bounded time.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_network_that_is_gone_is_waited_out() {
+        // Every call a slice makes: create, exec, writeText, exec, readText,
+        // terminate.
+        for from in ["0", "1", "2", "3", "4", "5"] {
+            let fake = FakeModal::new();
+            let done = embed_five(
+                &fake,
+                &[
+                    ("FAKE_MODAL_OFFLINE_FROM", from),
+                    ("FAKE_MODAL_OFFLINE", "4"),
+                ],
+            )
+            .await
+            .unwrap_or_else(|e| panic!("gone from call {from}: {e:#}"));
+            assert_eq!(done.embedded, 5, "gone from call {from}");
+            assert_eq!(fake.sandboxes().len(), 3, "gone from call {from}");
+        }
+
+        let err = embed_five(&FakeModal::new(), &[("FAKE_MODAL_OFFLINE", "1000000")])
+            .await
+            .unwrap_err();
+        let err = format!("{err:#}");
+        for want in ["5 of 5 chunks could not be embedded", "ENETUNREACH"] {
+            assert!(err.contains(want), "{want}: {err}");
+        }
+    }
+
+    /// A process nobody hears from again is given up on at the Sandbox's
+    /// limit, and the driver exits though the SDK still waits: the SDK
+    /// retries that wait for ever.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_wait_that_never_ends_is_given_up_at_the_sandboxs_limit() {
+        let td = tempfile::tempdir().unwrap();
+        five_docs(td.path()).await;
+        let fake = FakeModal::new();
+        let mut modal = fake.modal_with(0, true, &[("FAKE_MODAL_HANG", "1")], 3);
+        let driver = modal.driver;
+        modal.driver = Box::new(move || {
+            let mut driver = driver()?;
+            driver.options.timeout_ms = 1000;
+            Ok(driver)
+        });
+        let err = embed_with(
+            td.path(),
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(modal),
+            &Progress::noop(),
+            &StopFlag::new(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("is past its limit of 1 s"),
+            "{err:#}"
+        );
+    }
+
+    /// A stop while every Sandbox still waits for a GPU ends them all: the
+    /// SDK names a Sandbox only once Modal has placed it, so these were
+    /// left to start after the run had gone, and idle, billed, to their
+    /// limit.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_stop_ends_the_sandboxes_still_waiting_for_a_gpu() {
+        let td = tempfile::tempdir().unwrap();
+        five_docs(td.path()).await;
+        let fake = FakeModal::new();
+        let stop = StopFlag::new();
+        let progress = Progress::noop();
+        let run = embed_with(
+            td.path(),
+            GROUP,
+            four_bytes,
+            never_opened,
+            Some(fake.modal_with(0, true, &[("FAKE_MODAL_QUEUED", "99")], 3)),
+            &progress,
+            &stop,
+        );
+        let queued = |fake: &FakeModal| fake.queue().iter().filter(|(e, _)| e == "queued").count();
+        let stop_once_queued = async {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while queued(&fake) < 3 {
+                assert!(
+                    Instant::now() < deadline,
+                    "three Sandboxes never queued: {:?}",
+                    fake.queue()
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            stop.request();
+        };
+        let (done, ()) = tokio::join!(run, stop_once_queued);
+        assert_eq!(done.unwrap().embedded, 0);
+        let ended: std::collections::BTreeSet<String> = fake
+            .queue()
+            .into_iter()
+            .filter(|(e, _)| e == "ended")
+            .map(|(_, id)| id)
+            .collect();
+        let want: std::collections::BTreeSet<String> =
+            (1..=3).map(|n| format!("sb-fake-{n}")).collect();
+        assert_eq!(ended, want);
     }
 
     /// Many Sandboxes answering while the step is slow to read: each

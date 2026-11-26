@@ -11,7 +11,6 @@ import type {
   RunKind,
   WipeKind,
 } from "./generated/enums";
-import type { FeedbackContext } from "./feedback/context";
 import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
 
@@ -147,9 +146,6 @@ export type QueryEcho = {
   search_index_missing?: boolean;
   // What part of the search could not answer, when the rest did.
   partial?: string | null;
-  // How many documents the search could find have no vectors; on a search
-  // by meaning's first page.
-  without_vectors?: { total: number; by_source: [string, number][] } | null;
   [key: string]: unknown;
 };
 
@@ -425,55 +421,50 @@ export function fetchDocs(signal?: AbortSignal): Promise<DocEntry[]> {
   return getJson<DocEntry[]>(`${UNIFIED_GRID_AND_SEARCH_INDEX}/docs`, signal);
 }
 
-// --- A container's children ------------------------------------------------
-// `GET /children/{parent}` (applets/src/unified_grid_and_search_index/children.rs;
-// docs/user/applets.md § "A container's children"). Hand-kept in step with it.
+// --- The places of a library's tree ------------------------------------------
+// `GET /places/{parent}` (applets/src/unified_grid_and_search_index/places.rs;
+// docs/user/applets.md § "Places"). Hand-kept in step with it.
 
-/// One child, as `/children` lists it.
-export type Child = {
+/// One place, as `/places` lists it.
+export type Place = {
   uuid: string;
   sort_key: string;
-  /// It holds children of its own.
-  container: boolean;
   kind: string;
   name: string | null;
-  author: string | null;
-  /// The author as a handle (`email:…`), which their chip names.
-  author_handle: string | null;
-  created_at: string | null;
   preview: string | null;
-  /// The document its row is in; null for a container with no row.
+  /// The document it is; null for a place that is none.
   markdown_uuid: string | null;
   link: string | null;
-  /// Listing places: whether places lie below it.
-  places_below?: boolean;
+  /// Whether places lie below it.
+  places_below: boolean;
 };
 
-export type ChildrenPage = {
-  children: Child[];
-  /// Cursors past each end of the page, null at the end of the list.
-  before: string | null;
+export type PlacesPage = {
+  places: Place[];
+  /// The cursor past the page, null at the end of the level.
   after: string | null;
   at: string | null;
 };
 
-/// A page of `parent`'s children: its uuid, or `source:<id>` for what a
-/// source holds at its top (`cards/library.ts::sourceTop`). `at` opens
-/// around a child, a moment or `now`; `after` and `before` page on from a
-/// cursor; `places` lists only the places.
-export function fetchChildren(
+/// A page of the places directly in `parent`: its uuid, or `source:<id>`
+/// for those at a source's top (`cards/library.ts::sourceTop`).
+export function fetchPlaces(
   parent: string,
-  opts: { at?: string; after?: string; before?: string; limit?: number; places?: boolean },
+  opts: { after?: string; limit?: number },
   signal?: AbortSignal,
-): Promise<ChildrenPage> {
+): Promise<PlacesPage> {
   const q = new URLSearchParams();
-  if (opts.at) q.set("at", opts.at);
   if (opts.after) q.set("after", opts.after);
-  if (opts.before) q.set("before", opts.before);
   if (opts.limit) q.set("limit", String(opts.limit));
-  if (opts.places) q.set("places", "true");
-  const path = `${UNIFIED_GRID_AND_SEARCH_INDEX}/children/${encodeURIComponent(parent)}`;
-  return getJson<ChildrenPage>(`${path}?${q}`, signal);
+  const path = `${UNIFIED_GRID_AND_SEARCH_INDEX}/places/${encodeURIComponent(parent)}`;
+  return getJson<PlacesPage>(`${path}?${q}`, signal);
+}
+
+/// The sources that hold places at their top, by id: the ones a library's
+/// tree opens.
+export async function fetchSourcesWithPlaces(signal?: AbortSignal): Promise<string[]> {
+  const path = `${UNIFIED_GRID_AND_SEARCH_INDEX}/sources_with_places`;
+  return (await getJson<{ sources: string[] }>(path, signal)).sources;
 }
 
 // --- The embedding map ------------------------------------------------------
@@ -700,7 +691,7 @@ export type SearchKeySpec = {
 /// `datalib_columns::KeyValues`: what decides how a value is offered and
 /// drawn. A source, group or step is drawn as its chip.
 export type KeyValues = {
-  kind: "text" | "words" | "source" | "group" | "step" | "stamp" | "person";
+  kind: "text" | "words" | "source" | "group" | "step" | "stamp" | "person" | "node";
   words?: string[];
 };
 
@@ -1147,12 +1138,21 @@ export async function saveConfig(text: string, signal?: AbortSignal): Promise<Sa
 /// One build in a package manifest.
 export type PackageArtifact = { url: string; sha256: string; size?: number | null };
 
+/// What one function's step runs, and how the step reads and what it
+/// locks. Mirrors `StepCommand` in datalib/backend/packages/src/manifest.rs.
+export type PackageCommand = {
+  command: string;
+  reads?: "pinned" | "files" | null;
+  locks?: string[];
+};
+
 /// A source type a package adds: its group `type`, the command each
-/// function runs, its add-source form in the shape of `CatalogEntry`, and
-/// the applets each source of the type gets.
+/// function runs, the command that probes it, its add-source form in the
+/// shape of `CatalogEntry`, and the applets each source of the type gets.
 export type PackageSource = {
   type: string;
-  commands: Record<string, string>;
+  commands: Record<string, PackageCommand>;
+  probe?: string | null;
   wizard: Record<string, unknown>;
   applets: PackageApplet[];
 };
@@ -1173,6 +1173,8 @@ export type PackageManifest = {
   step_protocol?: number | null;
   artifacts: Record<string, PackageArtifact>;
   sources: PackageSource[];
+  /// The slots of each lock its steps hold.
+  locks?: Record<string, number>;
 };
 
 /// A manifest fetched for review: what adding it would pin.
@@ -1952,44 +1954,6 @@ export async function putUiState(
   if (!r.ok) throw new Error(`PUT /api/ui/state/${name} → ${r.status}`);
 }
 
-export type FeedbackRequest = {
-  sentiment: "up" | "down" | null;
-  comment: string;
-  context: FeedbackContext;
-};
-
-export type FeedbackResponse = {
-  feedback_uuid: string;
-  created_at_utc: string;
-  git_hash: string;
-};
-
-// POST /api/feedback. Server stamps the UUID, timestamp, app_version, and
-// git_hash; we ship sentiment + comment + the producer-built context.
-export async function submitFeedback(
-  req: FeedbackRequest,
-  signal?: AbortSignal,
-): Promise<FeedbackResponse> {
-  const r = await fetch("/api/feedback", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(req),
-    signal,
-  });
-  if (!r.ok) {
-    // Surface server message when present; fall back to status code so the
-    // modal's error line says something more useful than "Failed to fetch".
-    let detail = "";
-    try {
-      detail = await r.text();
-    } catch {
-      // ignore — body may not be readable on aborted responses
-    }
-    throw new Error(detail ? `${r.status}: ${detail}` : `POST /api/feedback → ${r.status}`);
-  }
-  return (await r.json()) as FeedbackResponse;
-}
-
 // Credentials and connection testing, for the Add-a-source wizard.
 
 export type StoredAccount = {
@@ -2051,8 +2015,8 @@ export type ServiceRegistration = {
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM),
-/// `channel` (a Slack channel), `calendar`, `address_book`, or a Linear
-/// `team` or `project`.
+/// `channel` (a Slack or Discord channel), `calendar`, `address_book`, `label`
+/// (one in Google Contacts), a Linear `team` or `project`, or a Discord `server`.
 export type ProbeItemKind =
   | "mailbox"
   | "keyword"
@@ -2060,8 +2024,10 @@ export type ProbeItemKind =
   | "channel"
   | "calendar"
   | "address_book"
+  | "label"
   | "team"
-  | "project";
+  | "project"
+  | "server";
 
 /// One row a probe offers a filter field. Mirrors `ProbeItem` in
 /// datalib/backend/probe/src/lib.rs.

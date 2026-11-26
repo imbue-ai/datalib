@@ -12,6 +12,7 @@ command = "datalib-step run ingest whatsapp"
 
 [steps.params.backup]
 path = "~/Downloads/whatsapp-backup"  # holds Databases/msgstore.db.crypt15 and Media/
+key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"  # the variable holding the key
 
 [[steps]]
 id = "whatsapp/render_markdown"

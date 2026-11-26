@@ -1,0 +1,4 @@
+# The build file for the pinned fake-services archive lives beside this
+# file (fake_services.BUILD.bazel) and is applied to the external repository
+# `@fake_services` by MODULE.bazel; this package holds nothing of its own.
+exports_files(["fake_services.BUILD.bazel"])

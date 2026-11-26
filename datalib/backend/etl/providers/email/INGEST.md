@@ -266,9 +266,10 @@ with nothing listed to go on with.
   walked. The label that failed is not recorded as listed whole, so the
   next run walks it again.
 - A refused credential, a spent daily quota, or a retry loop that gave
-  up ends the fetch with one `phase:messages.get` row, and the run
-  still succeeds, so what it fetched is kept; the next run fetches what
-  is still owed. With nothing mirrored at all, the run fails instead.
+  up ends the fetch with one `phase:messages.get` row. The run does
+  not fail: what it fetched is committed, and the step ends
+  `incomplete` rather than `succeeded`; the next run fetches what is
+  still owed. With nothing mirrored at all, the run fails instead.
 - The search for muted messages is a `listing:messages.list muted` row
   when it fails. No mark moves, and the next run asks again.
 - The walk of the whole account that fills `thread_members` is a

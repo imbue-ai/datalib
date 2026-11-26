@@ -6,7 +6,7 @@ use crate::group::like_pattern;
 use crate::query::{Field, FilterTerm, ParsedQuery};
 use crate::terms_keys::{self, Cells, TermsKey, TermsValue};
 use datalib_query::table::{Column, FreeText, SearchTable};
-use datalib_schema::grid_rows::GridRowColumn;
+use datalib_schema::grid_rows::{GridRowColumn, INDEXES as GRID_ROWS_INDEXES};
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTermKind, FROM_THE_DOCUMENT};
 
@@ -43,6 +43,39 @@ pub struct ChatMeta {
 /// A term's value that stands for any value at all: `author:*`.
 pub const ANY_VALUE: &str = "*";
 
+/// How a set of rows a term keeps enters the `WHERE`. SQLite takes any set
+/// to be 25 rows and reads the table for each, where a key's index holds
+/// what a search reads: beside a key an index starts with, a set is tested
+/// (`+`), and only without one does a search start from it.
+fn set_of<C: Column>(q: &ParsedQuery<C>) -> &'static str {
+    let starts_at_a_key = q.terms.iter().any(|t| match t.field {
+        Field::Column(key) => !t.negate && t.value != ANY_VALUE && starts_an_index(key.column),
+        Field::At => !t.negate,
+        Field::Before
+        | Field::After
+        | Field::Is(_)
+        | Field::Terms(_)
+        | Field::Text
+        | Field::Names => false,
+    });
+    if starts_at_a_key {
+        "+"
+    } else {
+        ""
+    }
+}
+
+fn starts_an_index<C: Column>(column: C) -> bool {
+    GRID_ROWS_INDEXES.iter().any(|(table, ddl)| {
+        *table == <C::Table as SearchTable>::TABLE
+            && ddl
+                .rsplit('(')
+                .next()
+                .and_then(|columns| columns.split([',', ')']).next())
+                == Some(column.as_str())
+    })
+}
+
 /// Build the SQL `WHERE` clause (with a leading space) and the matching
 /// parameter list for a parsed query's terms, and for its free text when
 /// the table matches free text with `LIKE`; a ranked table's free text is
@@ -51,17 +84,9 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     let mut clauses: Vec<String> = Vec::new();
     let mut params: Vec<String> = Vec::new();
 
-    // A store has no planner statistics, so SQLite guesses that `is_document
-    // = 1` narrows as hard as `source_id = ?`, and on a tie takes the flag's
-    // index: every document in the library, each looked up for its source.
-    // A flag halves a table at best; `likelihood` says so.
     for (_, column) in <C::Table as SearchTable>::FLAGS {
         if let Some(on) = q.flag(*column) {
-            clauses.push(format!(
-                "likelihood({} = {}, 0.5)",
-                column.as_str(),
-                i32::from(on)
-            ));
+            clauses.push(format!("{} = {}", column.as_str(), i32::from(on)));
         }
     }
 
@@ -70,11 +95,13 @@ pub fn build_where<C: Column>(q: &ParsedQuery<C>) -> (String, Vec<String>) {
     // result, which matches the "keep only X then keep only Y"
     // tree-zoom UX.
     let pk = <C::Table as SearchTable>::PRIMARY_KEY.as_str();
+    let set = set_of(q);
     for term in &q.terms {
         let (clause, bound) = match term.field {
-            Field::Terms(key) => terms_clause(key, term),
-            Field::Names => names_clause(term),
-            Field::Text => text_clause(pk, term),
+            Field::Terms(key) => terms_clause(set, key, term),
+            Field::Names => names_clause(set, term),
+            Field::Text => text_clause(set, pk, term),
+            Field::At => crate::at_node::clause(&term.value, term.arms, term.negate),
             Field::Before | Field::After | Field::Is(_) | Field::Column(_) => {
                 (String::new(), Vec::new())
             }
@@ -213,7 +240,12 @@ fn documents_and_sources_only(q: &ParsedQuery<GridRowColumn>) -> bool {
         && q.terms.iter().all(|t| match t.field {
             Field::Is(column) => column == GridRowColumn::IsDocument,
             Field::Column(key) => key.column == GridRowColumn::SourceId,
-            Field::Before | Field::After | Field::Terms(_) | Field::Text | Field::Names => false,
+            Field::Before
+            | Field::After
+            | Field::Terms(_)
+            | Field::Text
+            | Field::Names
+            | Field::At => false,
         })
 }
 
@@ -227,12 +259,12 @@ pub fn fts5_phrase(text: &str) -> String {
 /// not: a row a message is when its message holds them, a document's own
 /// row (whose uuid is its document's) when any piece of it does. A row
 /// the search index does not hold holds no words.
-fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn text_clause<C>(set: &str, pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
     let phrase = fts5_phrase(&term.value);
     (
         format!(
-            "{pk} {not}IN (SELECT s.uuid FROM search_fts f \
+            "{set}{pk} {not}IN (SELECT s.uuid FROM search_fts f \
              JOIN search_sections s ON s.section_id = f.rowid \
              WHERE search_fts MATCH ? AND s.uuid IS NOT NULL \
              UNION SELECT d.markdown_uuid FROM search_fts f \
@@ -247,18 +279,20 @@ fn text_clause<C>(pk: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
 /// of their terms or, as one of [`FROM_THE_DOCUMENT`], in their
 /// document's; or with `-`, do not.
 /// Both spellings are asked for, as a person key asks: the handle, and the
-/// address as typed, which an author with no handle is filed under.
-fn names_clause<C>(term: &FilterTerm<C>) -> (String, Vec<String>) {
+/// address as typed, which an author with no handle is filed under. A
+/// number is asked for without its country code too, as a card may have it.
+fn names_clause<C>(set: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
     let mut values = vec![term.value.clone()];
     if let Some(id) = crate::query::identifier(&term.value).filter(|id| *id != term.value) {
+        values.extend(terms_keys::spelled_at_home(&id));
         values.push(id);
     }
     let any = vec!["value = ? COLLATE NOCASE"; values.len()].join(" OR ");
     let named = format!("t.val_id IN (SELECT val_id FROM vals WHERE {any})");
     (
         format!(
-            "rowid {not}IN (SELECT t.row_id FROM terms t WHERE {named} \
+            "{set}rowid {not}IN (SELECT t.row_id FROM terms t WHERE {named} \
              UNION SELECT r.row_id FROM terms t JOIN rows r ON r.doc_row_id = t.row_id \
              WHERE t.kind IN ({}) AND {named})",
             codes(FROM_THE_DOCUMENT)
@@ -280,7 +314,7 @@ fn codes(kinds: &[SearchTermKind]) -> String {
 /// The rows whose search terms of `key`'s kinds hold `value`, as one
 /// clause over `pk` and the values it binds. The kinds are the enum's own
 /// codes, so they are written in; the value is bound.
-fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
+fn terms_clause<C>(set: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>) {
     if let Some(clause) = cell_clause(key, term) {
         return (clause, Vec::new());
     }
@@ -314,7 +348,11 @@ fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>
         }
         // `vals_fts` tokenizes the value as the terms were, so the phrase
         // is the words in order, each whole.
-        TermsValue::Words { text, by_name } => {
+        TermsValue::Words {
+            text,
+            by_name,
+            digits,
+        } => {
             let phrase = format!("\"{}\"", text.replace('"', "\"\""));
             let names = if by_name {
                 " OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
@@ -323,20 +361,22 @@ fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>
             } else {
                 String::new()
             };
-            let bound = if by_name {
-                vec![phrase, text]
-            } else {
-                vec![phrase]
-            };
+            let mut bound = vec![phrase];
+            bound.extend(by_name.then_some(text));
+            let number = or_ending_in(digits.as_deref(), &mut bound);
             (
                 format!(
                     " AND (t.val_id IN (SELECT rowid FROM vals_fts \
-                     WHERE vals_fts MATCH ?){names})"
+                     WHERE vals_fts MATCH ?){names}{number})"
                 ),
                 bound,
             )
         }
-        TermsValue::Partial { text, by_name } => {
+        TermsValue::Partial {
+            text,
+            by_name,
+            digits,
+        } => {
             let (held, needle) = vals_holding("t.val_id", &text);
             let names = if by_name {
                 " OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
@@ -345,12 +385,10 @@ fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>
             } else {
                 String::new()
             };
-            let bound = if by_name {
-                vec![needle, like_pattern(&text)]
-            } else {
-                vec![needle]
-            };
-            (format!(" AND ({held}{names})"), bound)
+            let mut bound = vec![needle];
+            bound.extend(by_name.then(|| like_pattern(&text)));
+            let number = or_ending_in(digits.as_deref(), &mut bound);
+            (format!(" AND ({held}{names}{number})"), bound)
         }
         // A contact, or the owner, is its handles, read before the query
         // runs; none read is no row (an empty array), and the applet refuses
@@ -368,10 +406,25 @@ fn terms_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> (String, Vec<String>
     let not = if term.negate { "NOT " } else { "" };
     (
         format!(
-            "rowid {not}IN (SELECT t.row_id FROM terms t WHERE t.kind IN ({}){matched})",
+            "{set}rowid {not}IN (SELECT t.row_id FROM terms t WHERE t.kind IN ({}){matched})",
             codes(&key.kinds())
         ),
         bound,
+    )
+}
+
+/// The values ending in a phone number's `digits`, as one more arm of a
+/// clause, and what it binds. Digits alone, so nothing in them is a
+/// wildcard.
+fn or_ending_in(digits: Option<&str>, bound: &mut Vec<String>) -> String {
+    let Some(digits) = digits else {
+        return String::new();
+    };
+    let (held, needle) = vals_holding("v.val_id", digits);
+    bound.extend([needle, format!("%{digits}")]);
+    format!(
+        " OR t.val_id IN (SELECT v.val_id FROM vals v \
+             WHERE {held} AND v.value LIKE ?)"
     )
 }
 
@@ -408,11 +461,11 @@ fn cell_clause<C>(key: &TermsKey, term: &FilterTerm<C>) -> Option<String> {
         .map(|r| format!("{col} BETWEEN {} AND {}", r.start(), r.end()))
         .collect::<Vec<_>>()
         .join(" OR ");
-    // With no statistics SQLite guesses seven ORed ranges keep most rows,
-    // and walks the newest-first index instead; they keep very few.
     Some(if term.negate {
         format!("({col} IS NULL OR NOT ({any}))")
     } else {
+        // Seven ORed ranges, which nothing tells SQLite keep very few rows:
+        // it would walk the newest-first index instead.
         format!("likelihood(({any}), 0.001)")
     })
 }
@@ -492,10 +545,10 @@ mod tests {
     #[test]
     fn is_document_is_a_column_test_not_a_kind_list() {
         let (sql, params) = build_where(&parse_query("is:document"));
-        assert_eq!(sql, " WHERE likelihood(is_document = 1, 0.5)");
+        assert_eq!(sql, " WHERE is_document = 1");
         assert!(params.is_empty());
         let (sql, _) = build_where(&parse_query("-is:document"));
-        assert_eq!(sql, " WHERE likelihood(is_document = 0, 0.5)");
+        assert_eq!(sql, " WHERE is_document = 0");
     }
 
     /// `author:*` keeps the rows with an author and `-author:*` the rows

@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use datalib_etl::run_problems::noting_give_up;
+use datalib_etl::run_problems::noting_run_end;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_chatgpt::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_chatgpt::synthesize::ChatgptSynth;
@@ -131,7 +131,8 @@ impl Account {
         conv_uuids: &[&str],
     ) -> (anyhow::Result<FetchSummary>, Option<String>) {
         let named: Vec<String> = conv_uuids.iter().map(|s| s.to_string()).collect();
-        noting_give_up(self.run_inner(|o| o.conv_uuids = named)).await
+        let (ran, end) = noting_run_end(self.run_inner(|o| o.conv_uuids = named)).await;
+        (ran, end.gave_up)
     }
 
     async fn run_inner(

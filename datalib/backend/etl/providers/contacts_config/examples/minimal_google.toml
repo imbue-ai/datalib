@@ -1,0 +1,19 @@
+# Google Contacts through Google's People API, signed in through latchkey.
+# The empty `google` table mirrors every contact on the account, with its
+# labels and photo.
+[[groups]]
+id = "contacts"
+name = "Google Contacts"
+type = "contacts"
+
+[[steps]]
+id = "contacts/ingest"
+command = "datalib-step run ingest contacts"
+
+[steps.params.google]
+
+[[steps]]
+id = "contacts/render_markdown"
+command = "datalib-step run render_markdown contacts"
+inputs = ["contacts/ingest"]
+reads = "pinned"

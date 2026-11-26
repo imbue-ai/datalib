@@ -3,7 +3,7 @@
 //! group's type from the environment the runner set; and the runner gave
 //! `datalib-step`'s steps the locks, `reads` and verbs it knew they
 //! needed. The rewrite writes all of that into the file, as
-//! `docs/dev/plans/dag_and_step_decoupling.md` §"Existing configs" lists:
+//! `docs/dev/config_model.md` §"The retired shapes" lists:
 //! each step gets its `id`, its whole `command`, and the `reads` and
 //! `locks` the runner used to give it; the file gets a `[[programs]]`
 //! entry for `datalib-step`, the `[[locks]]` its steps hold, and an
@@ -27,7 +27,7 @@ use toml::Spanned;
 use crate::retired::{is_datalib_step, STEP_PROGRAM};
 
 /// The verbs `datalib-step` takes.
-const STEP_VERBS: &str = r#"["reset", "prepare", "compact", "collect"]"#;
+const STEP_VERBS: &str = r#"["reset", "prepare", "compact", "collect", "check"]"#;
 
 const QMD_KEYWORD: &str = "qmd_keyword";
 const QMD_EMBED: &str = "qmd_embed";
@@ -698,86 +698,7 @@ pub fn rewrite(text: &str) -> Result<String> {
             out.push_str(&block);
         }
     }
-    name_backup_secrets(&out)
-}
-
-/// The variable each source type's ingest reads its backup secret from
-/// when its params name none, and the params key that names it.
-const BACKUP_SECRETS: &[(&str, &str, &str)] = &[
-    ("whatsapp", "key_env_var", "WHATSAPP_BACKUP_DECRYPTION_KEY"),
-    ("signal", "aep_env_var", "SIGNAL_BACKUP_PASSPHRASE"),
-];
-
-/// The runner used to hand `datalib-step` these two secrets by name; now
-/// a step gets a variable of the runner's environment only when its
-/// params name it (`docs/dev/step_protocol.md` § "What your command
-/// receives"). So a WhatsApp or Signal ingest that relied on the default
-/// gets the default written into its `[steps.params.backup]`, and keeps
-/// working when `datalib-pipeline` runs it from a terminal. A step whose
-/// params are written another way is left alone: the app hands both
-/// variables to every step itself.
-fn name_backup_secrets(text: &str) -> Result<String> {
-    let doc: toml::Value = toml::from_str(text).context("parse the rewritten config")?;
-    let mut out = text.to_string();
-    let steps = doc
-        .get("steps")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_default();
-    for step in &steps {
-        let (Some(id), Some(command)) = (
-            step.get("id").and_then(|v| v.as_str()),
-            step.get("command").and_then(|v| v.as_str()),
-        ) else {
-            continue;
-        };
-        let argv: Vec<&str> = command.split_whitespace().collect();
-        let Some((key, var)) = (match argv.as_slice() {
-            [program, "run", ingest, source_type, ..]
-                if is_datalib_step(program) && *ingest == INGEST =>
-            {
-                BACKUP_SECRETS
-                    .iter()
-                    .find(|(t, _, _)| t == source_type)
-                    .map(|&(_, key, var)| (key, var))
-            }
-            _ => None,
-        }) else {
-            continue;
-        };
-        let backup = step.get("params").and_then(|p| p.get("backup"));
-        if backup.is_none_or(|b| b.get(key).is_some()) {
-            continue;
-        }
-        let Some(at) = backup_header_end(&out, id) else {
-            continue;
-        };
-        out.insert_str(at, &format!("\n{key} = {}", quote(var)));
-    }
     Ok(out)
-}
-
-/// The end of the `[steps.params.backup]` header line that belongs to
-/// the step with `id`, when it is written as one.
-fn backup_header_end(text: &str, id: &str) -> Option<usize> {
-    let id_line = format!("id = {}", quote(id));
-    let start = text
-        .match_indices(&id_line)
-        .map(|(i, _)| i)
-        .find(|&i| text[line_start(text, i)..i].trim().is_empty())?;
-    let mut at = line_end(text, start);
-    while at < text.len() {
-        let end = line_end(text, at);
-        let line = text[at..end].trim();
-        if line.starts_with("[[") {
-            return None;
-        }
-        if line == "[steps.params.backup]" {
-            return Some(at + text[at..end].trim_end_matches(['\n', '\r']).len());
-        }
-        at = end;
-    }
-    None
 }
 
 #[cfg(test)]
@@ -933,71 +854,6 @@ at_most_every_secs = 2.5
         out
     }
 
-    /// A WhatsApp or Signal ingest that relied on the runner handing
-    /// `datalib-step` its backup secret gets the variable named in its
-    /// params, since the runner now hands a step only what its params
-    /// name; one that names its own keeps it.
-    #[test]
-    fn a_backup_ingest_names_the_variable_it_used_to_be_handed() {
-        let before = r#"[[groups]]
-id = "phone"
-type = "whatsapp"
-
-[[groups]]
-id = "sig"
-type = "signal"
-
-[[groups]]
-id = "work-phone"
-type = "whatsapp"
-
-[[steps]]
-group = "phone"
-function = "ingest"
-
-[steps.params.backup]
-path = "/backups/phone"
-
-[[steps]]
-group = "sig"
-function = "ingest"
-
-[steps.params.backup]
-path = "/backups/sig"
-
-[[steps]]
-group = "work-phone"
-function = "ingest"
-
-[steps.params.backup]
-path = "/backups/work"
-key_env_var = "WORK_PHONE_KEY"
-"#;
-        let out = rewrite(before).unwrap();
-        let named = |id: &str, k: &str| {
-            step(&out, id)["params"]["backup"]
-                .get(k)
-                .and_then(|v| v.as_str())
-                .map(str::to_string)
-        };
-        assert_eq!(
-            named("phone/ingest", "key_env_var").as_deref(),
-            Some("WHATSAPP_BACKUP_DECRYPTION_KEY"),
-            "{out}"
-        );
-        assert_eq!(
-            named("sig/ingest", "aep_env_var").as_deref(),
-            Some("SIGNAL_BACKUP_PASSPHRASE"),
-            "{out}"
-        );
-        assert_eq!(
-            named("work-phone/ingest", "key_env_var").as_deref(),
-            Some("WORK_PHONE_KEY"),
-            "{out}"
-        );
-        assert_eq!(rewrite(&out).unwrap(), out, "a second pass changes nothing");
-    }
-
     #[test]
     fn group_and_function_become_the_id() {
         let out = after();
@@ -1123,7 +979,7 @@ key_env_var = "WORK_PHONE_KEY"
                 )
             })
             .collect();
-        let verbs = vec!["reset", "prepare", "compact", "collect"];
+        let verbs = vec!["reset", "prepare", "compact", "collect", "check"];
         assert_eq!(
             programs,
             [
@@ -1381,7 +1237,7 @@ key_env_var = "WORK_PHONE_KEY"
                 (None, false) => vec![default.to_string()],
             };
             let verbs = if runs {
-                vec!["reset", "prepare", "compact", "collect"]
+                vec!["reset", "prepare", "compact", "collect", "check"]
             } else {
                 vec![]
             };
@@ -1423,10 +1279,10 @@ inputs = ["*/render_markdown"]
         "docs__user__config_examples__sample_config.toml",
         "garmin_config__complete_api.toml", // render_time_series
         "perseus_config__minimal_github.toml", // a render that reads files
-        "signal_config__minimal_backup.toml", // a backup secret to name
+        "signal_config__minimal_backup.toml", // a backup source
         "slack_config__complete_api.toml",  // an embed reading the index step
         "slack_config__minimal_api.toml",
-        "whatsapp_config__minimal_backup.toml", // a backup secret to name
+        "whatsapp_config__minimal_backup.toml", // a backup source
     ];
 
     /// Every config in [`SHIPPED_FILES`], brought through the unattended
@@ -1447,12 +1303,11 @@ inputs = ["*/render_markdown"]
             .iter()
             .map(|f| std::path::Path::new(SHIPPED).join(f))
             .collect();
-        let (explicit, before) = crate::UNATTENDED.split_last().unwrap();
-        assert!(
-            explicit.what.contains("datalib-step run"),
-            "{}",
-            explicit.what
-        );
+        let at = crate::UNATTENDED
+            .iter()
+            .position(|r| r.what.contains("datalib-step run"))
+            .expect("this rewrite is unattended");
+        let before = &crate::UNATTENDED[..at];
         for path in files {
             let name = path.display();
             let mut text = std::fs::read_to_string(&path).unwrap();

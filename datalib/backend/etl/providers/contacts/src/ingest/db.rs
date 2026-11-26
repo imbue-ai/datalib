@@ -62,9 +62,6 @@ impl RawDb {
     /// the downloader's batch in flight. See
     /// `datalib_etl::doltlite_raw::open_reader`.
     ///
-    /// No DDL, so a store the current downloader has not touched keeps
-    /// whatever columns it has; probe with `column_exists` and fall back
-    /// where that matters.
     /// **`None` means the store cannot be read**, not that it holds no
     /// contacts — no commit to pin, or a build without the dolt
     /// extensions. The caller sweeps every document this pass did not
@@ -130,22 +127,10 @@ impl RawDb {
 
     // ── accounts ────────────────────────────────────────────────────
 
-    pub async fn upsert_account(
-        &self,
-        account_id: &str,
-        server_url: &str,
-        principal_href: Option<&str>,
-        addressbook_home_set: Option<&str>,
-    ) -> Result<()> {
-        let row = AccountRow {
-            id: account_id.to_string(),
-            server_url: Some(server_url.to_string()),
-            principal_href: principal_href.map(String::from),
-            addressbook_home_set: addressbook_home_set.map(String::from),
-        };
+    pub async fn upsert_account(&self, row: &AccountRow) -> Result<()> {
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let mut tx = self.pool.begin().await.context("begin account tx")?;
-        bulk_upsert_in_tx(&mut tx, &[row], &now).await?;
+        bulk_upsert_in_tx(&mut tx, std::slice::from_ref(row), &now).await?;
         tx.commit().await.context("commit account tx")?;
         Ok(())
     }
@@ -454,8 +439,8 @@ impl RawDb {
         Ok(contacts)
     }
 
-    /// The address book, its contacts, their sidecars and what the cards
-    /// derive. Returns how many contacts went.
+    /// The address book, its contacts of either shape, their sidecars and
+    /// what the cards derive. Returns how many contacts went.
     async fn delete_addressbook(
         tx: &mut Transaction<'_, Sqlite>,
         addressbook_id: &str,
@@ -478,6 +463,7 @@ impl RawDb {
             .await
             .context("delete the addressbook's contacts")?
             .rows_affected();
+        let people = Self::delete_google_addressbook(tx, addressbook_id).await?;
         for sql in [
             "DELETE FROM addressbooks WHERE id = ?",
             "DELETE FROM addressbooks_bookkeeping WHERE id = ?",
@@ -488,7 +474,7 @@ impl RawDb {
                 .await
                 .context("delete addressbook")?;
         }
-        Ok(contacts as usize)
+        Ok(contacts as usize + people)
     }
 
     /// Snapshot every contact row for the render pass, joined
@@ -659,12 +645,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("contacts.doltlite_db");
         let db = RawDb::open(&path).await.unwrap();
-        db.upsert_account(
-            "contacts.icloud.com",
-            "https://contacts.icloud.com/",
-            None,
-            None,
-        )
+        db.upsert_account(&AccountRow {
+            id: "contacts.icloud.com".into(),
+            server_url: Some("https://contacts.icloud.com/".into()),
+            ..Default::default()
+        })
         .await
         .unwrap();
         db.upsert_addressbook(

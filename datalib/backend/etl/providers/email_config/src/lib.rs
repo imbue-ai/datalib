@@ -474,9 +474,9 @@ pub struct EmailGmailApi {
     pub fetch: Option<Vec<GmailFetch>>,
     /// Client-side ceiling on Gmail API quota units spent per minute.
     /// Google allows one user 6000 a minute and prices a `messages.get`
-    /// that carries the message at 60 (its quota table), so the mail
-    /// arrives at about 100 messages a minute: a 15,000-message mailbox
-    /// takes about two and a half hours the first time, and a Takeout
+    /// that carries the message at 60 (its quota table). Unset is 5000,
+    /// so the mail arrives at about 80 messages a minute: a
+    /// 15,000-message mailbox takes about three hours the first time, and a Takeout
     /// (`mbox` beside `gmail`) takes most of that away. Above 6000,
     /// Google refuses requests and the throttle comes back down; below
     /// it, the throttle lowers it on its own whenever Google

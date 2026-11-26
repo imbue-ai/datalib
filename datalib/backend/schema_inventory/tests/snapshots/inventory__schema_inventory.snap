@@ -357,6 +357,7 @@ accounts
     server_url
     principal_href
     addressbook_home_set
+    login
 accounts_bookkeeping
     id
     fetched_at_utc
@@ -429,6 +430,50 @@ dav_resources_bookkeeping
 dav_unconfirmed
     collection
     href
+google_contact_groups
+    id
+    payload
+    addressbook_id
+    resource_name
+    name
+google_contact_groups_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+google_people
+    id
+    payload
+    addressbook_id
+    resource_name
+    display_name
+google_people_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
+google_photos
+    id
+    person_id
+    photo_source
+    blake3
+google_photos_bookkeeping
+    id
+    fetched_at_utc
+    attempt_count
+    last_attempt_at_utc
+    last_error
+    volatile_payload
+    tz_offset
+    held_version
 ingested_files
     scope
     rel_path
@@ -2056,17 +2101,6 @@ disk_usage
     measured_at_utc
     tz_offset
     bytes
-feedback
-    feedback_uuid
-    created_at_utc
-    tz_offset
-    sentiment
-    comment
-    app_version
-    git_hash
-    context_json
-    fixed_in_git_hash
-    notes
 
 == datalib_curated/contacts ==
 contacts

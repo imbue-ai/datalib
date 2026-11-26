@@ -158,7 +158,7 @@ pub struct RenderProfile {
 }
 
 /// How a provider's documents are laid out for reading
-/// (docs/dev/plans/document_viewer_from_blocks.md, step 7).
+/// (docs/dev/plans/completed/document_viewer_from_blocks.md, step 7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layout {
     /// Each message in a box of its own, header and all: an email thread,
@@ -736,8 +736,11 @@ fn render_item(
 
     let mut reactions: Vec<&crate::types::NormalizedReaction> = item.reactions.iter().collect();
     reactions.sort_by(|a, b| {
+        // Those counted and not named come after those who are.
+        let unnamed = |r: &crate::types::NormalizedReaction| r.reactor_kind == AuthorKind::Unknown;
         a.emoji
             .cmp(&b.emoji)
+            .then(unnamed(a).cmp(&unnamed(b)))
             .then(a.reactor_display.cmp(&b.reactor_display))
     });
     let message = Item {
@@ -754,6 +757,7 @@ fn render_item(
                 emoji: r.emoji.clone(),
                 name: r.reactor_display.clone(),
                 handle: r.reactor_handle.as_ref().map(|h| h.as_str().to_string()),
+                count: r.count,
             })
             .collect(),
         replies: item.replies.map(|r| item::Replies {
@@ -1514,6 +1518,7 @@ mod tests {
                     kind: ItemKind::Text,
                     attachments: vec![],
                     reactions: vec![NormalizedReaction {
+                        count: 1,
                         reaction_uuid: "44444444-4444-4444-4444-444444444444".to_string(),
                         reactor_handle: None,
                         reactor_kind: AuthorKind::Named,
@@ -2381,6 +2386,7 @@ mod tests {
         chat.render_units[0].orphan_reactions = vec![OrphanReactions {
             target_native_id: "gone-upstream".to_string(),
             reactions: vec![NormalizedReaction {
+                count: 1,
                 reaction_uuid: "55555555-5555-5555-5555-555555555555".to_string(),
                 reactor_handle: None,
                 reactor_kind: AuthorKind::Named,
@@ -3175,6 +3181,7 @@ mod tests {
     fn a_reactor_with_a_handle_is_a_chip_link() {
         use crate::types::NormalizedReaction;
         let r = |handle, display: &str| NormalizedReaction {
+            count: 1,
             reaction_uuid: "r".into(),
             reactor_handle: handle,
             reactor_display: display.into(),

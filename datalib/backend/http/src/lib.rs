@@ -11,7 +11,6 @@
 //! earlier shape is rewritten out of band by `datalib-migrate-config`.
 
 use crate::starter::STARTER_CONFIG;
-use app_schema::feedback::FeedbackRow;
 use axum::{
     body::Body,
     extract::{Path, Query, State},
@@ -21,7 +20,7 @@ use axum::{
     routing::{any, get, post},
     Router,
 };
-use datalib_core::repo::{DynAppRepo, RepoError};
+use datalib_core::repo::DynAppRepo;
 use datalib_dag::supervisor::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -48,7 +47,6 @@ pub mod loop_guard;
 pub mod manage;
 pub mod oauth_client;
 pub mod packages;
-pub mod params_check;
 pub mod plugins;
 pub mod probe;
 pub mod prometheus;
@@ -73,8 +71,8 @@ pub struct AppState {
     /// Data root on disk, and so the config path. The SQL store is
     /// reached through [`AppState::repo`].
     pub root: Arc<PathBuf>,
-    /// The stores this process owns and writes: filed feedback, disk
-    /// usage and remote media.
+    /// The stores this process owns and writes: disk usage and remote
+    /// media.
     pub app: DynAppRepo,
     /// The supervisor loop this server runs: whether a sync is running,
     /// and the store intent is written to.
@@ -169,32 +167,6 @@ pub struct Health {
     pub protected_library: bool,
 }
 
-/// Client-supplied portion of a feedback submission. The server stamps the
-/// rest (UUID, timestamp, app_version, git_hash) at insert time. `context` is
-/// whatever shape `feedback/context.ts` produced, round-tripped as JSON.
-#[derive(Debug, Deserialize)]
-pub struct FeedbackRequest {
-    /// Optional thumb up/down — `null` when the user submitted just a
-    /// comment without choosing a direction.
-    pub sentiment: Option<String>,
-    /// Required free-form comment. The UI disables Submit until non-empty;
-    /// the server enforces the same constraint defensively.
-    pub comment: String,
-    /// Decoded `FeedbackContext`. Re-serialized into the row's
-    /// `context_json` column verbatim.
-    pub context: serde_json::Value,
-}
-
-/// What the client gets back after a successful POST. Mostly a confirmation
-/// that the row landed; the UUID is useful for showing a "filed as X" toast
-/// and for cross-referencing in `dolt log`.
-#[derive(Debug, Serialize)]
-pub struct FeedbackResponse {
-    pub feedback_uuid: String,
-    pub created_at_utc: String,
-    pub git_hash: String,
-}
-
 fn protected_library() -> bool {
     std::env::var_os(datalib_env::DATALIB_PROTECTED_LIBRARY).is_some()
 }
@@ -234,14 +206,13 @@ fn routes(state: AppState) -> Router {
     let echoes = state.echoes.clone();
     Router::new()
         .route("/api/health", get(health))
-        .route("/api/feedback", post(submit_feedback))
         .route("/api/config", get(get_config).put(put_config))
         .route("/api/config/check", post(check_config))
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         // Credentials and connection testing for the Add-a-source
-        // wizard. See `connect.rs` — each shells out to latchkey or
-        // datalib-step, deliberately.
+        // wizard: `connect.rs` runs latchkey, `probe.rs` the step
+        // program's probe.
         .route("/api/latchkey/{service}", get(connect::get_service))
         .route(
             "/api/latchkey/{service}/connect",
@@ -401,52 +372,6 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
     })
 }
 
-async fn submit_feedback(
-    State(s): State<AppState>,
-    Json(req): Json<FeedbackRequest>,
-) -> Result<Json<FeedbackResponse>, StatusCode> {
-    // The UI also disables Submit until non-empty, but enforce it here so
-    // a hand-crafted POST can't slip an all-whitespace row past the audit
-    // trail.
-    if req.comment.trim().is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let context_json = serde_json::to_string(&req.context).map_err(|_| StatusCode::BAD_REQUEST)?;
-    // Server-stamped fields. We mint these here rather than trusting the
-    // client so each row carries a server-vouched provenance and so
-    // `feedback_uuid` collisions are impossible from the wire.
-    let feedback_uuid = uuid::Uuid::new_v4().to_string();
-    let (created_at_utc, tz_offset) =
-        datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let app_version = env!("CARGO_PKG_VERSION").to_string();
-    let git_hash = datalib_runs::git_hash().unwrap_or_else(|| "unknown".into());
-    let row = FeedbackRow {
-        feedback_uuid: feedback_uuid.clone(),
-        created_at_utc: created_at_utc.clone(),
-        tz_offset: Some(tz_offset),
-        sentiment: req.sentiment,
-        comment: req.comment,
-        app_version,
-        git_hash: git_hash.clone(),
-        context_json,
-        // Resolution metadata is filled in by hand later, never at submit time.
-        fixed_in_git_hash: None,
-        notes: None,
-    };
-    match s.app.insert_feedback(row).await {
-        Ok(()) => Ok(Json(FeedbackResponse {
-            feedback_uuid,
-            created_at_utc,
-            git_hash,
-        })),
-        Err(RepoError::ReadOnly) => Err(StatusCode::SERVICE_UNAVAILABLE),
-        Err(e) => {
-            tracing::error!("feedback insert failed: {e}");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
-        }
-    }
-}
-
 // Applets
 
 /// The frontend as the UI consumes it: every namespace the store found
@@ -583,6 +508,8 @@ fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::new(Body::from(r.body));
     *resp.status_mut() = StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY);
     embed::set_data_headers(resp.headers_mut(), &r.content_type);
+    resp.extensions_mut()
+        .insert(request_log::AppletRowsRead(r.rows_read));
     resp
 }
 
@@ -953,7 +880,8 @@ pub struct ConfigResponse {
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
     /// The launch's upgrade: the steps being asked to migrate, and the ones
-    /// that answered they need to run again, which the page offers to run.
+    /// that answered they need to run again, which the loop runs and the
+    /// page waits on.
     pub upgrade: UpgradeView,
     /// The newest "Free up disk space" since this server started, while
     /// it runs and after: how each step it asks stands.
@@ -966,8 +894,8 @@ pub struct UpgradeView {
     #[serde(flatten)]
     pub pass: supervisor::Upgrade,
     /// The steps that answered the pass with `needs_rerun` and have not run
-    /// since (`round::rerun_offer`). Empty while the pass runs: the offer
-    /// comes after it.
+    /// since (`round::rerun_offer`). Empty while the pass runs: the loop
+    /// runs them after it.
     pub rerender: Vec<String>,
 }
 
@@ -1104,23 +1032,29 @@ pub struct ConfigCheckResponse {
     pub source_count: usize,
 }
 
-async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
-    Json(full_verdict(&req.text).await)
+async fn check_config(
+    State(s): State<AppState>,
+    Json(req): Json<PutConfigRequest>,
+) -> Json<ConfigCheckResponse> {
+    Json(full_verdict(&s.root, &req.text).await)
 }
 
-/// [`config_verdict`], with each built-in step's params held to what a
-/// sync would accept: a step a sync would refuse is reported against its
-/// line like any other problem, and the text is not written.
-async fn full_verdict(text: &str) -> ConfigCheckResponse {
+/// [`config_verdict`], with each step whose program takes `--check` asked
+/// about its params (`datalib_dag::check`): a step that would refuse them
+/// is reported against its line like any other problem, and the text is
+/// not written; a warning it answers with is reported and writes.
+async fn full_verdict(root: &std::path::Path, text: &str) -> ConfigCheckResponse {
     let mut verdict = config_verdict(text);
-    let refused = params_check::refused(text).await;
-    if !refused.is_empty() {
+    let checked = datalib_dag::config::check_text(text);
+    let binary_dir = crate::binaries::resolve_binary_dir();
+    let asked = datalib_dag::check::check_params(&checked, root, binary_dir.as_deref()).await;
+    if let Some(refusal) = asked.iter().find(|d| d.severity.drops_the_entry()) {
         verdict.ok = false;
         if verdict.error.is_none() {
-            verdict.error = refused.first().map(|d| d.describe());
+            verdict.error = Some(refusal.describe());
         }
-        verdict.diagnostics.extend(refused);
     }
+    verdict.diagnostics.extend(asked);
     verdict
 }
 
@@ -1144,7 +1078,7 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
 /// returned and the file is written anyway: it changes nothing about what
 /// runs, and refusing it would make the editor unable to save a config the
 /// app is happily running on. A built-in step whose params a sync would
-/// refuse is refused here too (`params_check`), for the same reason.
+/// refuse is refused here too (`datalib_dag::check`), for the same reason.
 ///
 /// Every diagnostic comes back, not just the first, so a caller fixing a
 /// config needs one round-trip rather than one per mistake. Writes via a
@@ -1160,10 +1094,10 @@ async fn put_config(
     // a rejected config never gets written even transiently. Text in a
     // shape the save will upgrade is judged as it will be written: the
     // loader refuses an old shape the upgrade turns into a good one.
-    let mut verdict = full_verdict(&req.text).await;
+    let mut verdict = full_verdict(&s.root, &req.text).await;
     if !verdict.ok {
         if let Some(upgraded) = config_upgrade::upgraded(&req.text) {
-            let after = full_verdict(&upgraded).await;
+            let after = full_verdict(&s.root, &upgraded).await;
             if after.ok {
                 verdict = after;
             }
@@ -1254,8 +1188,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 #[derive(Debug, Serialize)]
 pub struct DagStepInfo {
     pub id: String,
-    /// The command that runs: the step's `command` as written, or
-    /// `datalib-step` for a built-in step that wrote none.
+    /// The step's `command` as written.
     pub command: String,
     /// Declared input artifact patterns (may contain wildcards).
     pub inputs: Vec<String>,
@@ -1469,7 +1402,10 @@ pub struct RecordTimings {
 
 /// An open run in the record while nothing is running is a run that died,
 /// so `live` is [`supervisor::SyncControl::running`].
-pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) -> DagRecord {
+pub async fn dag_record(
+    root: &std::path::Path,
+    sync: &supervisor::SyncControl,
+) -> anyhow::Result<DagRecord> {
     let started = std::time::Instant::now();
     let loaded = match sync.mailbox().await {
         Ok(store) => store.load_record().await,
@@ -1493,12 +1429,12 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         .unwrap_or_default();
 
     let loop_record = started.elapsed();
-    let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await;
+    let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await?;
     let run_progress = started.elapsed() - loop_record;
 
     let problems = manage::counts_by_step(
-        &datalib_runs::latest_metric(root, datalib_problems::METRIC).await,
-        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await,
+        &datalib_runs::latest_metric(root, datalib_problems::METRIC).await?,
+        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await?,
     );
     // Read-only, from the index and the mutes store (problem_mutes/README.md).
     let problem_rows = datalib_problem_mutes::counts(root)
@@ -1511,24 +1447,24 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         .bump_micros(-(manage::ITEMS_WINDOW.as_micros() as i64))
         .to_utc_and_offset();
     let items = manage::items_by_step(
-        &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await,
-        &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await,
-        &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await,
+        &datalib_runs::latest_metric(root, datalib_metrics::ITEMS).await?,
+        &datalib_runs::latest_metric(root, datalib_metrics::DOCUMENTS).await?,
+        &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await?,
     );
     let spend = manage::spend_by_step(
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await,
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await,
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await?,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await?,
+        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await?,
     );
     let owed =
-        manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await);
+        manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await?);
     let took = RecordTimings {
         loop_record,
         run_progress,
         run_metrics: started.elapsed() - loop_record - run_progress,
     };
 
-    DagRecord {
+    Ok(DagRecord {
         run,
         states,
         steps: state.steps,
@@ -1539,7 +1475,7 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
         spend,
         owed,
         took,
-    }
+    })
 }
 
 /// What each step has reported in `run`, the loop's run in flight or the
@@ -1551,19 +1487,19 @@ pub async fn dag_record(root: &std::path::Path, sync: &supervisor::SyncControl) 
 async fn live_progress(
     root: &std::path::Path,
     run: Option<&str>,
-) -> std::collections::HashMap<String, DagStepProgress> {
-    let store = datalib_runs::snapshot(root).await;
-    match (run, store.run_id.as_deref()) {
+) -> anyhow::Result<std::collections::HashMap<String, DagStepProgress>> {
+    let store = datalib_runs::snapshot(root).await?;
+    Ok(match (run, store.run_id.as_deref()) {
         (Some(run), Some(store_run)) if run == store_run => progress_by_step(&store, &now_utc()),
         _ => Default::default(),
-    }
+    })
 }
 
 /// `GET /api/dag` — the step DAG derived from the data root's config,
 /// exactly as the runner would build it (same load → to_specs →
 /// Graph::build chain), so the visualization can never drift from
 /// execution. Steps come back in topological order.
-async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
+async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal> {
     use datalib_dag::config;
 
     let DagRecord {
@@ -1577,7 +1513,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
         spend: _,
         owed: _,
         took: _,
-    } = dag_record(&s.root, &s.sync).await;
+    } = dag_record(&s.root, &s.sync).await.map_err(unread)?;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;
@@ -1612,7 +1548,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
             })
             .collect())
     };
-    match build() {
+    Ok(match build() {
         Ok(steps) => Json(DagResponse {
             ok: true,
             error: None,
@@ -1625,7 +1561,7 @@ async fn get_dag(State(s): State<AppState>) -> Json<DagResponse> {
             steps: Vec::new(),
             run: None,
         }),
-    }
+    })
 }
 
 /// Surface the DAG config's source steps to the UI as `{id}` entries —
@@ -1783,6 +1719,22 @@ struct PurgeRequest {
 }
 
 type Refusal = (StatusCode, String);
+
+/// A read of the run store that failed, as the route's answer: a store
+/// in another shape names what brings it up to date.
+fn unread(e: anyhow::Error) -> Refusal {
+    tracing::error!("read the run store: {e:#}");
+    (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
+}
+
+/// The same, where a query the log's vocabulary cannot read is the
+/// caller's to fix.
+fn unread_query(e: anyhow::Error) -> Refusal {
+    match e.downcast_ref::<datalib_runs::QueryError>() {
+        Some(q) => (StatusCode::BAD_REQUEST, q.to_string()),
+        None => unread(e),
+    }
+}
 
 fn internal(e: anyhow::Error) -> Refusal {
     tracing::error!("intent: {e:#}");
@@ -2038,9 +1990,12 @@ struct RunsParams {
 async fn runs_list(
     State(s): State<AppState>,
     Query(p): Query<RunsParams>,
-) -> Json<Vec<datalib_runs::RunRow>> {
+) -> Result<Json<Vec<datalib_runs::RunRow>>, Refusal> {
     let limit = p.limit.unwrap_or(50).clamp(1, 1000);
-    Json(datalib_runs::runs(&s.root, p.step.as_deref(), limit).await)
+    datalib_runs::runs(&s.root, p.step.as_deref(), limit)
+        .await
+        .map(Json)
+        .map_err(unread)
 }
 
 /// One log line in full, for the inspector: the line, and the process
@@ -2056,11 +2011,14 @@ pub struct LogLineResponse {
 async fn log_line(
     State(s): State<AppState>,
     Path(seq): Path<i64>,
-) -> Result<Json<LogLineResponse>, StatusCode> {
+) -> Result<Json<LogLineResponse>, Refusal> {
     let line = datalib_runs::log_line(&s.root, seq)
         .await
-        .ok_or(StatusCode::NOT_FOUND)?;
-    let process = datalib_runs::process(&s.root, &line.process_id).await;
+        .map_err(unread)?
+        .ok_or((StatusCode::NOT_FOUND, format!("no log line {seq}")))?;
+    let process = datalib_runs::process(&s.root, &line.process_id)
+        .await
+        .map_err(unread)?;
     Ok(Json(LogLineResponse { line, process }))
 }
 
@@ -2083,9 +2041,12 @@ struct ProcessesParams {
 async fn processes_list(
     State(s): State<AppState>,
     Query(p): Query<ProcessesParams>,
-) -> Json<Vec<datalib_runs::ProcessRow>> {
+) -> Result<Json<Vec<datalib_runs::ProcessRow>>, Refusal> {
     let limit = p.limit.unwrap_or(200).clamp(1, 5000);
-    Json(datalib_runs::processes(&s.root, p.run.as_deref(), p.process.as_deref(), limit).await)
+    datalib_runs::processes(&s.root, p.run.as_deref(), p.process.as_deref(), limit)
+        .await
+        .map(Json)
+        .map_err(unread)
 }
 
 /// One step in one run: its row, and what it reported.
@@ -2104,13 +2065,18 @@ pub struct RunStepsResponse {
 
 /// `GET /api/runs/{run}/steps` — every step's state and numbers for one
 /// run, past or in flight. `run: null` for a run the store does not have.
-async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<RunStepsResponse> {
-    let snap = datalib_runs::snapshot_of(&s.root, Some(&run)).await;
+async fn run_steps(
+    State(s): State<AppState>,
+    Path(run): Path<String>,
+) -> Result<Json<RunStepsResponse>, Refusal> {
+    let snap = datalib_runs::snapshot_of(&s.root, Some(&run))
+        .await
+        .map_err(unread)?;
     let Some(run_id) = snap.run_id.clone() else {
-        return Json(RunStepsResponse {
+        return Ok(Json(RunStepsResponse {
             run: None,
             steps: Vec::new(),
-        });
+        }));
     };
     let mut progress = progress_by_step(&snap, &now_utc());
     let steps = snap
@@ -2129,7 +2095,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             }),
         })
         .collect();
-    Json(RunStepsResponse {
+    Ok(Json(RunStepsResponse {
         run: Some(datalib_runs::RunRow {
             run_id,
             started_at_utc: snap.started_at_utc.unwrap_or_default(),
@@ -2139,7 +2105,7 @@ async fn run_steps(State(s): State<AppState>, Path(run): Path<String>) -> Json<R
             reason: snap.reason,
         }),
         steps,
-    })
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -2161,18 +2127,18 @@ async fn run_log(
     State(s): State<AppState>,
     Path(run): Path<String>,
     Query(p): Query<RunLogParams>,
-) -> Json<Vec<datalib_runs::LogLine>> {
+) -> Result<Json<Vec<datalib_runs::LogLine>>, Refusal> {
     let limit = p.limit.unwrap_or(2000).clamp(1, 20_000);
-    Json(
-        datalib_runs::log_after(
-            &s.root,
-            &run,
-            p.step.as_deref(),
-            p.after_seq.unwrap_or(0),
-            limit,
-        )
-        .await,
+    datalib_runs::log_after(
+        &s.root,
+        &run,
+        p.step.as_deref(),
+        p.after_seq.unwrap_or(0),
+        limit,
     )
+    .await
+    .map(Json)
+    .map_err(unread)
 }
 
 /// A parameter this does not take is refused, not ignored: the run, the
@@ -2226,7 +2192,7 @@ async fn log_lines(
     datalib_runs::log_query(&s.root, &q)
         .await
         .map(Json)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))
+        .map_err(unread_query)
 }
 
 /// The keys the run log's search bar offers as a person types.
@@ -2251,7 +2217,7 @@ async fn log_values(
 ) -> Result<Json<Vec<datalib_columns::ValueSuggestion>>, (StatusCode, String)> {
     let values = datalib_runs::log_values(&s.root, &p.q, &p.key, &p.typed)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+        .map_err(unread_query)?;
     Ok(Json(
         values
             .into_iter()
@@ -2320,6 +2286,7 @@ mod tests {
         proxied_response(applets::ProxyResponse {
             status: 200,
             content_type: content_type.into(),
+            rows_read: None,
             body: b"<script>1</script>".to_vec(),
         })
     }
@@ -2368,7 +2335,7 @@ mod tests {
 
     /// A `.js` a sender attached is served as bytes: under `nosniff` a
     /// `<script src>` refuses it, so the app page's `script-src 'self'`
-    /// cannot be turned into a way to run it (audit 2026-10-02, P3).
+    /// cannot be turned into a way to run it.
     #[test]
     fn proxied_scripts_are_not_runnable() {
         for ct in [
@@ -2486,7 +2453,7 @@ mod tests {
             w.metric(metric(QUEUED, 60, ago(30)));
             w.metric(metric(DEQUEUED, 140, ago(30)));
         }
-        let snap = datalib_runs::snapshot(root.path()).await;
+        let snap = datalib_runs::snapshot(root.path()).await.unwrap();
         let by = progress_by_step(&snap, &now_utc());
         let drain = by["s"]
             .queue_drain

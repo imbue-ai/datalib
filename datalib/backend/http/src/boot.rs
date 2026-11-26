@@ -105,13 +105,30 @@ pub async fn build_state(
 
     tracing::info!(
         "stores: {}",
-        datalib_core::layout::feedback_db(&root).display(),
+        datalib_core::layout::remote_media_db(&root).display(),
     );
     let app: DynAppRepo = Arc::new(
         AppStore::open(&root)
             .await
             .map_err(|e| anyhow::anyhow!("open the app stores under {}: {e}", root.display()))?,
     );
+
+    // Before the loop, so its first read is of the current shape, and
+    // before the watcher, whose first act opens the loop's record: the
+    // moves carry the record's rows only from a record that was there
+    // before this server started.
+    let data_root = (*root).clone();
+    let bin_override = binary_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::config_upgrade::upgrade(&data_root);
+        if let Ok(checked) = supervisor::load_config(&data_root) {
+            crate::library_bin::bring_forward(&data_root, &checked, bin_override.as_deref());
+        }
+    })
+    .await?;
+    crate::config_upgrade::move_index_dir(&root).await;
+    crate::config_upgrade::move_index_step_dir(&root).await;
+    crate::config_upgrade::move_case_folders(&root).await;
 
     // Everything the UI shows that changes. One watcher per
     // process, replacing the timers every UI surface used to keep — see
@@ -128,28 +145,25 @@ pub async fn build_state(
             }
         });
     }
-
-    // Before the loop, so its first read is of the current shape.
-    let data_root = (*root).clone();
-    let bin_override = binary_dir.clone();
-    tokio::task::spawn_blocking(move || {
-        crate::config_upgrade::upgrade(&data_root);
-        if let Ok(checked) = supervisor::load_config(&data_root) {
-            crate::library_bin::bring_forward(&data_root, &checked, bin_override.as_deref());
-        }
-    })
-    .await?;
-    crate::config_upgrade::move_index_dir(&root).await;
-    crate::config_upgrade::move_index_step_dir(&root).await;
-    crate::config_upgrade::move_case_folders(&root).await;
     crate::config_upgrade::watch((*root).clone(), root_tx.subscribe());
 
     let sync = supervisor::SyncControl::new(root.clone());
+    // Made here, before the runner starts and before any handler reads
+    // them: two processes making one of these files at once can leave
+    // it unreadable.
+    if let Err(e) = sync.mailbox().await {
+        tracing::error!("supervisor: cannot open the request store: {e:#}");
+    }
+    if let Err(e) = datalib_runs::prepare_store(&root).await {
+        tracing::error!("cannot make the run store: {e:#}");
+    }
     tokio::spawn(supervisor::run(supervisor::HostConfig {
         control: sync.clone(),
+        pipeline: crate::binaries::resolve_pipeline_bin(),
         binary_dir: binary_dir.clone(),
         now,
         announce: Some(root_tx.clone()),
+        nudge: Some(nudge.clone()),
     }));
 
     // Bytes on disk, over time: a walk of the root folded into a
@@ -226,12 +240,6 @@ impl NewerRootRepo {
 
 #[async_trait::async_trait]
 impl datalib_core::repo::AppRepo for NewerRootRepo {
-    async fn insert_feedback(
-        &self,
-        _row: app_schema::feedback::FeedbackRow,
-    ) -> Result<(), datalib_core::repo::RepoError> {
-        self.refuse()
-    }
     async fn recent_disk_usage(
         &self,
         _limit: usize,
@@ -261,7 +269,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let p = layout::feedback_db(root.path());
+        let p = layout::remote_media_db(root.path());
         assert!(p.is_file(), "expected {} to be created", p.display());
         assert_eq!(state.root.as_path(), root.path());
         assert!(state.newer_root.is_empty());
@@ -291,9 +299,9 @@ mod tests {
             .await
             .unwrap(),
         );
-        let feedback = datalib_core::layout::feedback_db(root.path());
+        let remote_media = datalib_core::layout::remote_media_db(root.path());
         {
-            let pool = datalib_core::store::open_pool(&feedback).await.unwrap();
+            let pool = datalib_core::store::open_pool(&remote_media).await.unwrap();
             sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
                 .execute(&pool)
                 .await
@@ -320,7 +328,7 @@ mod tests {
             .to_string();
         assert!(err.contains("written by Datalib 99.0.0"), "{err}");
         // Not opened: still says what the newer release wrote.
-        let meta = datalib_store_meta::guard::read_at(&feedback)
+        let meta = datalib_store_meta::guard::read_at(&remote_media)
             .await
             .unwrap()
             .unwrap();
@@ -345,7 +353,7 @@ mod tests {
         assert_eq!(v["newer_root"]["stores"][0]["wrote"], "99.0.0");
         assert_eq!(
             v["newer_root"]["stores"][0]["store"],
-            "system/feedback.doltlite_db"
+            "system/remote_media.doltlite_db"
         );
         assert_eq!(
             v["newer_root"]["running"],
@@ -375,11 +383,11 @@ mod tests {
         );
     }
 
-    /// Feedback is not inside the tree the pipeline tags as rebuildable
-    /// cache: it is not regenerable and must survive a
-    /// `--exclude-caches` backup.
+    /// What remote media a person let load is not inside the tree the
+    /// pipeline tags as rebuildable cache: nothing regenerates it, and it
+    /// must survive an `--exclude-caches` backup.
     #[tokio::test]
-    async fn build_state_keeps_feedback_out_of_the_cache() {
+    async fn build_state_keeps_remote_media_out_of_the_cache() {
         use datalib_core::layout;
         let root = tempfile::tempdir().unwrap();
         let token = ApiToken::from_value("split-test-token", root.path());
@@ -393,9 +401,13 @@ mod tests {
         .await
         .unwrap();
 
-        let feedback = layout::feedback_db(root.path());
+        let remote_media = layout::remote_media_db(root.path());
         let derived = layout::unified_grid_and_search_index_dir(root.path());
-        assert!(!feedback.starts_with(&derived), "{}", feedback.display());
+        assert!(
+            !remote_media.starts_with(&derived),
+            "{}",
+            remote_media.display()
+        );
     }
 
     /// The token has to reach disk during boot — it is how an agent

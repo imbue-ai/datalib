@@ -488,6 +488,10 @@ async fn a_listing_it_cannot_fully_read_drops_nothing() {
         assert_eq!(s.events_deleted, 0, "{s:?}");
         assert_eq!(event_ids(&store).await, both);
         assert_eq!(problem_keys(&store).await, vec!["listing:meetings"]);
+        assert_eq!(
+            strings(&store, "SELECT severity FROM problems").await,
+            ["error"]
+        );
     }
 
     let fifth = d.path().join("run5");

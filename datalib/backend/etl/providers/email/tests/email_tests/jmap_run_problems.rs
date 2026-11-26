@@ -4,7 +4,7 @@
 //! landed; and each row clears only once the thing it is about is tried
 //! again and works.
 
-use datalib_etl::run_problems::noting_give_up;
+use datalib_etl::run_problems::{noting_run_end, RunEnd};
 use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
 use crate::jmap_tape::{mailbox_get_args, query_args, status, Account, Tape, HOST};
@@ -121,7 +121,8 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     for id in &ids[3..23] {
         tape.blob(id, status(404));
     }
-    let (first, gave_up) = noting_give_up(run(&m, |o| o.blob_download_concurrency = Some(1))).await;
+    let (first, RunEnd { gave_up, .. }) =
+        noting_run_end(run(&m, |o| o.blob_download_concurrency = Some(1))).await;
     let first = first.expect("a spent failure budget keeps the run's work");
     assert_eq!(first.blobs_downloaded, 3, "{first:?}");
     // The step ends `incomplete`, not `succeeded`, once this is committed
@@ -149,7 +150,7 @@ async fn a_run_of_failed_downloads_stops_the_phase_and_keeps_what_downloaded() {
     );
 
     tape.serve(&Account::new(&[("MB1", "Inbox")], &mail));
-    let (second, gave_up) = noting_give_up(run(&m, |_| {})).await;
+    let (second, RunEnd { gave_up, .. }) = noting_run_end(run(&m, |_| {})).await;
     let second = second.expect("second run");
     assert_eq!(gave_up, None, "a run that finished did not give up");
     assert_eq!(second.blobs_downloaded, 22, "{second:?}");

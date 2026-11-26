@@ -90,13 +90,8 @@ the grouping are all built from. The grid's own column ids
 
 Every request reads inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so it sees one state of the index.
-`grid_rows` carries one index for the newest-first order and one per
-key the search bar filters on, each `(key, touched_at_utc, is_document,
-uuid)`; a filter on a key without one reads and sorts the whole table
-([query plans](doltlite.md#query-plans-and-indexes)). They are declared
-on the struct (`#[portable_table(index = …)]`) and created only in the
-grid index, not in the render stores that also hold a `grid_rows`.
-`every_filter_key_is_served_by_an_index` fails when a key has none.
+Which index answers which key, and how SQLite is held to it, is in
+[`search.md`](search.md) §"The indexes".
 
 Free text never reaches `grid_rows`' SQL: the applet works out what the
 query's filters keep first, as `grid_rows` row ids read from the
@@ -269,7 +264,7 @@ group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
 The grid's Contact column, and the Subject cell on such a row, is the
 contact's chip, drawn from the three, else from the contact's handles
-in `source_contact_handles` ([`chips.md`](chips.md) §"In a grid"). A
+in `contact_record_handles`, else by its own page ([`chips.md`](chips.md) §"In a grid"). A
 card is its own subject, so `conversation_name` is the contact's name
 too, and `channel` holds the address book or list it is filed in.
 `author` stays null: nobody wrote a contact.
@@ -295,39 +290,50 @@ workspace and its channel) is its tree, below.
 ### `parent_uuid`, `sort_key`, `read_uuid`, `place_uuid`: where a row sits
 
 Every row sits in a tree of **containers**: the chat, thread, channel,
-page, calendar or label it lives in, each a row of the `data_nodes` table
-that the document carries the way it carries its contacts (a channel
-named by many threads has a row under each, one container when read).
+page, calendar or label it lives in, each one row of the grid index's
+`nodes` table, by its uuid. `nodes` is settled from what the documents
+say: each carries a `data_nodes` row for every container it sits in, the
+way it carries its contacts, so a channel has one there under every
+thread. The document that holds a container's own grid row tells of it,
+else the newest that names it does. Every reader reads `nodes`;
+`data_nodes` is there for when the document that told of one goes, and
+the next one tells.
+
 `parent_uuid` is the container that holds the row. `sort_key` is how
 it sorts among that container's children: its `created_at` in UTC
 unless the source orders children without times, as a page orders its
 blocks, never a position counted by us, so a row that arrives late
 moves none of its siblings. A row with neither has `""`, which sorts
-first; the column is never null, because a page of children is read
+first; the column is never null, because a page of places is read
 past a `(sort_key, uuid)` pair and a null in that comparison would put
-the row on no page. A container that is also a row of its document (a
+the place on no page. A container that is also a row of its document (a
 thread, a chat) takes that row's sort key unless its renderer gave it
-one. The applet's `GET /children/{uuid}` lists a container's children
-in that order, a page each way around an anchor
-([the route](../user/applets.md#a-containers-children)), off indexes
-on `(parent_uuid, sort_key, uuid)` that only the grid index has
-(`data_nodes::CHILDREN_INDEXES`). A container is **read together** (what a
+one. The applet's `GET /places/{uuid}` lists the places in a place in
+that order ([the route](../user/applets.md#places)), off `nodes_places`,
+which only the grid index has (`nodes::TREE_INDEXES`). No index finds the
+rows whose parent a container is: a search finds them by their place or
+their conversation. A container is **read together** (what a
 search groups by and the viewer opens: a thread, a chat, a page) or a
 **place** (what a person browses: a channel, a mailbox, a calendar), or
 both; `read_uuid` and `place_uuid` are the nearest container above the
-row of each kind, so grouping by either is one column. Besides its
-parent a row or container may be filed under others, an email thread
-under each of its labels: those are `filings` rows.
+row of each kind, so grouping by either is one column. A place lives in a
+place, and in one only. Besides its parent, a document or a container
+read together may be filed under others, an email thread under each of
+its labels: those are `filings` rows, and a place has none.
+
+The search's `at:<node>` (`unified_grid_and_search_index/src/at_node.rs`)
+reads these: the rows whose `place_uuid` the node is, those in what is
+filed under it, and its own document when it is one, off
+`grid_rows_by_place` and `grid_rows_by_conversation` alone.
 
 **Every container is a row.** Most are already a document's row: a
 thread or a chat is the document that holds its messages, under the
 same uuid. The rest (a Slack channel or workspace, an email label or
 account, a project, a calendar, an address book) are written by the
-`unified_grid_and_search_index` step from the `data_nodes` its
-documents carry, one row
-per container, as the newest carrier describes it: its `kind`, its name
-as `conversation_name`, its place in the tree and its upstream id, and
-no author, time or text (`etl/render/src/grid_index/node_rows.rs`).
+`unified_grid_and_search_index` step from `nodes`, one row per
+container: its `kind`, its name as `conversation_name`, its place in the
+tree and its upstream id, and no author, time or text
+(`etl/render/src/grid_index/nodes.rs`).
 Such a row has no `markdown_uuid`, because no document owns it: it is
 kept while any document carries its container and deleted with the
 last. So a container's uuid opens a row like any other.
@@ -456,8 +462,7 @@ render gives a row a location and nothing else. `place:<cell>` and
 **A photo's document has no text.** Its render store keeps its rows and
 no markdown: the `photos` applet draws the photo from the
 `NormalizedPhoto` its document carries in `source_photos`
-(`datalib_photo_schema`), which the index copies the way it copies
-`source_contacts`. `/chat/<uuid>` answers such a document with its
+(`datalib_photo_schema`), which the index copies whole. `/chat/<uuid>` answers such a document with its
 `image` and no text, and the document card hands it to the applet's
 card. The search index holds nothing for it, which is why a photo's
 caption is a `caption:` term.
@@ -465,8 +470,7 @@ caption is a `caption:` term.
 **A document can be in the grid and not in the search index.** One its
 renderer hands over with `RenderedMarkdown::searchable` false has its rows
 and opens like any other, and is stored with `markdowns.searchable` false,
-which the keyword index, the source's `embed` and the "without vectors"
-count read. Use it for a document that only repeats what others say, so
+which the keyword index and the source's `embed` read. Use it for a document that only repeats what others say, so
 a free-text search does not return it and nothing embeds it: Notion's
 table of contents is the one. Its row is still found by its own
 columns.
@@ -495,6 +499,18 @@ wrote it.
 
 The terms live on the row so that they go wherever the row goes: a row
 that moves to another document takes its terms with it, in one write.
+
+What may be a term:
+
+- **A mention only where the source marks it up**: Slack's `<@U02>`, a
+  GitHub `@login`, each an exact id. Never an address found in running
+  text: quoted replies repeat every earlier message, and signatures add
+  noise.
+- **Every recipient, with no cap.** Dropping some would make the record
+  lie. If the size of long reply-all threads ever matters, store each
+  distinct recipient list once and point the emails at it.
+- **Never a message's text, nor its preview.** Words in the body are the
+  keyword index's.
 
 ## Storage rows: what a source weighs
 

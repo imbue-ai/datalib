@@ -1,17 +1,18 @@
-//! Map parsed vCards into `NormalizedContact`s and hand them to the shared
+//! Map parsed cards into `NormalizedContact`s and hand them to the shared
 //! [`datalib_etl_contact_common`] renderer.
 
 use std::collections::HashMap;
 
 use anyhow::Result;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, Detail, NormalizedContact, Photo};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Photo};
 use datalib_etl::progress::Progress;
 use datalib_etl_contact_common::{
     card_node, chip_handle, render_all as cc_render_all, ContactDoc, ContactRenderProfile,
 };
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::{keys_reading, RawRange, RenderUnit, RenderUnits};
+use datalib_handle::Handle;
 use datalib_schema::data_nodes::DataNodeRow;
 use datalib_schema::problems::{Problem, Reason};
 
@@ -43,7 +44,10 @@ use datalib_schema::providers::Provider;
 /// under each group naming it and each of its categories.
 /// 18: a category is keyed by its address book's id, which a rename of
 /// the book keeps, not by the book's label.
-pub const RENDER_VERSION: u32 = 18;
+/// 19: a card whose only name is a `tel:` number is titled by the number.
+/// 20: a person with no handle is headed by a chip naming their page, and
+/// a number with no country code is a term by its digits.
+pub const RENDER_VERSION: u32 = 20;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
@@ -83,8 +87,8 @@ pub fn render_all(
         source_label: humanize_source_label(source_id),
         contact_kind: contact_kind.to_string(),
         contact_entity_kind: ids::KIND_CONTACT,
-        // A `.vcf` file has no login behind it.
-        account: None,
+        // Only a Google source says whose contacts these are.
+        account: parsed.login.clone(),
         render_version: RENDER_VERSION,
     };
     let cards: Cards = parsed
@@ -119,9 +123,10 @@ pub fn render_all(
     }
 
     // What to render: the contacts the driver found stale, plus every
-    // card of a row the diff named — one `contacts` row can hold several
-    // cards, which is why the row alone could never name a document and
-    // the mapping goes through the parse.
+    // card that read a row the diff named. A card reads more than its own
+    // row (the group cards naming it, the member cards it names), so the
+    // row alone could never name its documents and the mapping goes
+    // through each card's inputs.
     let forward = parsed.changed.as_ref().map(|changed| {
         keys_reading(
             changed,
@@ -232,42 +237,18 @@ fn normalize(
             .and_then(|c| c.display_name.clone())
             .unwrap_or_else(|| member.clone());
         person.members.push(name);
-        member_handles.push(card.and_then(|c| {
-            chip_handle(
-                c.emails.first().map(|e| e.value.as_str()),
-                c.phones.first().map(|p| p.value.as_str()),
-            )
-        }));
+        member_handles.push(card.and_then(|c| member_handle(c)));
     }
-    person.names = contact.display_name.iter().cloned().collect();
+    person.names = contact
+        .display_name
+        .iter()
+        .chain(&contact.other_names)
+        .cloned()
+        .collect();
     person.org = (!contact.org.is_empty()).then(|| contact.org.join(" — "));
     person.title = contact.title.clone();
-    person.handles.extend(
-        contact
-            .emails
-            .iter()
-            .map(|e| ContactHandle::email(e.label(), e.value.clone())),
-    );
-    person.handles.extend(
-        contact
-            .phones
-            .iter()
-            .map(|p| ContactHandle::phone(p.label(), phone_number(&p.value))),
-    );
-    for a in &contact.addresses {
-        // ADR is `;`-separated: PO box; ext; street; locality; region;
-        // postcode; country. Most cards leave most of them empty.
-        let parts: Vec<String> = a
-            .text_list(';')
-            .into_iter()
-            .map(|p| p.trim().to_string())
-            .filter(|p| !p.is_empty())
-            .collect();
-        person.details.push(Detail::new(
-            field_label("Address", &a.label()),
-            parts.join(", "),
-        ));
-    }
+    person.handles = [contact.emails.as_slice(), &contact.phones].concat();
+    person.details = contact.details.clone();
     person.note = contact.note.clone();
     person.created_at = contact
         .created
@@ -281,8 +262,7 @@ fn normalize(
         .revision
         .as_deref()
         .and_then(datalib_time::coerce_record_stamp);
-    // CardDAV carries no per-contact public web URL (see the prior
-    // note in this file's history re: Fastmail's internal short ids).
+    person.source_url = contact.source_url.clone();
     let mut problems = Vec::new();
     person.photo = match (&contact.photo, &contact.photo_url) {
         (Some(hash), _) => {
@@ -330,21 +310,18 @@ fn category_name(category: &str) -> Option<String> {
     }
 }
 
-/// A vCard 4 `TEL;VALUE=uri:tel:+1-…` carries the number as a URI; the
-/// card means the number.
-fn phone_number(value: &str) -> String {
-    let v = value.trim();
-    match v.get(..4) {
-        Some(scheme) if scheme.eq_ignore_ascii_case("tel:") => v[4..].to_string(),
-        _ => v.to_string(),
-    }
-}
-
-fn field_label(base: &str, label: &Option<String>) -> String {
-    match label {
-        Some(s) if !s.is_empty() => format!("{base} ({s})"),
-        _ => base.to_string(),
-    }
+/// The handle a member's card is drawn by on its group's page, by the rule
+/// its own page's heading follows.
+fn member_handle(card: &ParsedContact) -> Option<Handle> {
+    let first = |handles: &[ContactHandle]| handles.first().map(|h| h.value.clone());
+    chip_handle(
+        first(&card.emails).as_deref(),
+        first(&card.phones).as_deref(),
+    )
+    .or_else(|| {
+        let mut all = card.emails.iter().chain(&card.phones);
+        all.find_map(|h| h.handle.clone())
+    })
 }
 
 /// `source_id` is the group id (`apple_contacts`, `fastmail_contacts`,
@@ -378,18 +355,12 @@ fn humanize_source_label(source_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_contact_schema::Detail;
     use datalib_etl_contact_common::field_rows;
-    use datalib_etl_contacts::ingest::api::VcardProp;
     use datalib_etl_render::inputs::Input;
 
-    fn prop(value: &str, ty: Option<&str>) -> VcardProp {
-        VcardProp {
-            value: value.to_string(),
-            params: ty
-                .map(|t| vec![("TYPE".to_string(), t.to_string())])
-                .unwrap_or_default(),
-            ab_label: None,
-        }
+    fn email(value: &str) -> ContactHandle {
+        ContactHandle::email(Some("work".into()), value)
     }
 
     fn sample() -> ParsedContact {
@@ -399,19 +370,21 @@ mod tests {
             addressbook: "Bridge".to_string(),
             addressbook_id: Some("acct!/books/bridge/".to_string()),
             display_name: Some("Jean-Luc Picard".to_string()),
+            other_names: Vec::new(),
             revision: Some("2370-04-15T00:00:00Z".to_string()),
             created: None,
             is_group: false,
             members: Vec::new(),
             categories: Vec::new(),
-            emails: vec![prop("jlp@enterprise", Some("WORK"))],
-            phones: vec![prop("+1-555", Some("WORK"))],
-            addresses: vec![prop(";;Ready Room;Deck 1;;;", Some("WORK"))],
+            emails: vec![email("jlp@enterprise")],
+            phones: vec![ContactHandle::phone(Some("work".into()), "+1-555")],
+            details: vec![Detail::new("Address (work)", "Ready Room, Deck 1")],
             org: vec!["Starfleet".to_string(), "USS Enterprise".to_string()],
             title: Some("Captain".to_string()),
             note: Some("Make it so.".to_string()),
             photo: None,
             photo_url: None,
+            source_url: None,
         }
     }
 
@@ -467,7 +440,7 @@ mod tests {
             n.contact.modified_at.as_deref(),
             Some("2370-04-15T00:00:00Z")
         );
-        // Org `;` becomes ` — `; address `;` becomes `, `; typed labels.
+        // Org parts become ` — `; typed labels.
         assert_eq!(n.contact.org.as_deref(), Some("Starfleet — USS Enterprise"));
         let rows = field_rows(&n.contact);
         let labels: Vec<(&str, Option<&str>)> = rows
@@ -483,30 +456,7 @@ mod tests {
                 ("Note", None)
             ]
         );
-        assert_eq!(
-            rows[2].value, "Ready Room, Deck 1",
-            "empty parts are left out"
-        );
-    }
-
-    /// A vCard 4 number written as a URI (`TEL;VALUE=uri:tel:+1-…`) is
-    /// the number: it reads and links as one.
-    #[test]
-    fn a_tel_uri_is_its_number() {
-        let mut c = sample();
-        c.phones = vec![prop("tel:+1-202-555-0101", Some("cell"))];
-        let n = normalize(
-            &c,
-            "tng_contacts",
-            &Cards::new(),
-            &Groups::new(),
-            &HashMap::new(),
-        );
-        assert_eq!(n.contact.handles[1].value, "+1-202-555-0101");
-        assert_eq!(
-            n.contact.handles[1].handle.as_ref().map(|h| h.as_str()),
-            Some("tel:+12025550101")
-        );
+        assert_eq!(rows[2].value, "Ready Room, Deck 1");
     }
 
     /// A card's text goes to contact-common as the card has it, markup
@@ -561,7 +511,7 @@ mod tests {
     fn a_group_names_its_members_and_reads_their_rows() {
         let picard = ParsedContact {
             inputs: vec![Input::new("contacts", "row-picard")],
-            emails: vec![prop("jlp@enterprise.test", Some("WORK"))],
+            emails: vec![email("jlp@enterprise.test")],
             ..sample()
         };
         let group = ParsedContact {
@@ -575,7 +525,7 @@ mod tests {
             ],
             emails: Vec::new(),
             phones: Vec::new(),
-            addresses: Vec::new(),
+            details: Vec::new(),
             org: Vec::new(),
             title: None,
             note: None,

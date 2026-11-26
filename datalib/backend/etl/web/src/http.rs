@@ -88,6 +88,9 @@ pub enum HttpService {
     Carddav,
     Chatgpt,
     Claude,
+    /// Discord's API (`discord.com/api`), and, as plain requests, the
+    /// signed file links it hands out (`cdn.discordapp.com`).
+    Discord,
     /// Garmin Connect (`connectapi.garmin.com`), a latchkey service by
     /// way of its Garmin plugin.
     Garmin,
@@ -100,6 +103,8 @@ pub enum HttpService {
     /// Drive and the Docs, Sheets and Slides APIs, for `google_drive`.
     /// latchkey signs each host with its own Google service.
     GoogleDrive,
+    /// The People API, the `contacts` source's `google` mode.
+    GooglePeople,
     /// A JMAP server (Fastmail and friends), another `email` mode.
     Jmap,
     /// Linear's GraphQL API (`api.linear.app`).
@@ -447,6 +452,16 @@ impl CurlFailure {
     }
 }
 
+/// The curl exits that asking again cannot change: what was asked for
+/// (3 URL, 4 not built in, 43 bad call, 47 redirects, 48
+/// option), this machine (2 init, 23 write, 26 read, 27 memory, 77 CA
+/// file), a certificate it will not trust (58, 60, 83, 90), and an answer
+/// that did come (22 an error status, 61 its encoding, 63 past the limit,
+/// 67 the login refused). Any other exit is a connection that failed.
+const SAME_EVERY_TIME: [i32; 18] = [
+    2, 3, 4, 22, 23, 26, 27, 43, 47, 48, 58, 60, 61, 63, 67, 77, 83, 90,
+];
+
 impl HttpError {
     /// `latchkey curl` (or plain `curl`) exiting non-zero with `stderr`.
     pub fn curl_exit(service: HttpService, url: &str, exit: i32, stderr: &str) -> Self {
@@ -459,19 +474,19 @@ impl HttpError {
         }
     }
 
-    /// What this failure says about the service. A timeout and the curl
-    /// exits for a connection that never completed (6 could not resolve
-    /// the host, 7 could not connect, 28 timeout, 35 TLS, 52 empty reply,
-    /// 55 send, 56 receive) are the service not answering, which is also
-    /// what the retry loop retries. 6 is a typo'd host as well as a
-    /// network that is not up yet, as after a laptop wakes; the guard's
-    /// budget is what ends the first.
+    /// What this failure says about the service. A timeout, and curl
+    /// failing in any way but [`SAME_EVERY_TIME`], are the service not
+    /// answering, which is also what the retry loop retries. Exit 6 is a
+    /// typo'd host as well as a network that is not up yet, as after a
+    /// laptop wakes; the guard's budget is what ends the first.
     pub fn upstream(&self) -> Option<Upstream> {
         match self {
             HttpError::Timeout { .. } => Some(Upstream::Unavailable),
-            HttpError::Curl { exit, .. } if matches!(*exit, 6 | 7 | 28 | 35 | 52 | 55 | 56) => {
-                Some(Upstream::Unavailable)
-            }
+            HttpError::Curl {
+                exit,
+                failure: CurlFailure::Curl,
+                ..
+            } if !SAME_EVERY_TIME.contains(exit) => Some(Upstream::Unavailable),
             HttpError::Curl {
                 failure: CurlFailure::NotPermitted,
                 ..
@@ -594,7 +609,9 @@ impl std::error::Error for HttpError {
 /// (or a far-future `x-ratelimit-reset`) can't park a source for hours. The
 /// give-up policy ([`crate::retry::RetryGuard`]) still bounds total effort;
 /// this just keeps any *single* sleep sane. Realistic values (seconds to a
-/// few minutes) are respected exactly.
+/// few minutes) are respected exactly. A classifier that trusts the
+/// service's wait whatever its length says so with
+/// [`Retryability::RetryAfterUncapped`].
 const MAX_RETRY_AFTER: Duration = Duration::from_secs(600);
 
 /// What the retry loop should do with one completed attempt's response.
@@ -607,6 +624,10 @@ pub enum Retryability {
     /// Rate-limited / transient — back off and retry, honoring `retry_after`
     /// (from `Retry-After` or a provider-specific reset header) when known.
     Retry { retry_after: Option<Duration> },
+    /// Retry after exactly this long, however long, uncapped by
+    /// [`MAX_RETRY_AFTER`]: the service named when the request will be
+    /// admitted, and sending earlier only meets another refusal.
+    RetryAfterUncapped(Duration),
 }
 
 /// Default response classifier: HTTP 429 and 502–504 are retryable (honoring
@@ -645,30 +666,6 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 /// the value; on a gateway's later router, `1` means its default profile.
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
-/// URL prefix that makes a request leave from the user's own machine rather
-/// than from the workspace's own egress. Kept so that workspaces created by
-/// a minds that still publishes it keep working; a current minds decides
-/// this inside the gateway instead, by the router curl's
-/// `LATCHKEY_DESKTOP_PROXY_CONFIG` file, with no help from datalib. Remove
-/// this once no supported minds publishes the prefix.
-///
-/// Only the impersonating providers ask for it: a remote workspace runs on a
-/// VPS and reaches third parties through a gateway on that same VPS, so its
-/// requests carry a datacenter IP — and the providers that need TLS
-/// impersonation are the same ones that block those ranges outright, where a
-/// fingerprint fix does not help.
-pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
-
-fn maybe_via_desktop_url(url: &str, service: HttpService, bypass_latchkey: bool) -> String {
-    if bypass_latchkey || !service.impersonates() {
-        return url.to_string();
-    }
-    match std::env::var(VIA_DESKTOP_URL_PREFIX_ENV) {
-        Ok(prefix) if !prefix.is_empty() => format!("{prefix}/{url}"),
-        _ => url.to_string(),
-    }
-}
-
 /// Issue an HTTP request and return the full response, with the shared retry
 /// policy applied — 429, 5xx and transient transport failures, honoring
 /// `Retry-After` else backing off exponentially, bounded by the ambient
@@ -684,7 +681,7 @@ pub async fn latchkey_curl(req: &HttpRequest) -> Result<HttpResponse, HttpError>
 /// Like [`latchkey_curl`], but the caller supplies a response classifier so
 /// a provider can mark responses the status code alone can't (e.g. Slack's
 /// HTTP-200 `ratelimited` body) as retryable. Transport-level transients
-/// (curl exit 7/28/35/56, timeouts) are always retried regardless of the
+/// (a connection that failed, timeouts) are always retried regardless of the
 /// classifier, since there is no response to classify.
 pub async fn latchkey_curl_classified<F>(
     req: &HttpRequest,
@@ -748,19 +745,20 @@ where
 
         // Decide whether this attempt is retryable. `None` = accept (success
         // or a definitive response/error → hand back to the caller as-is);
-        // `Some(retry_after)` = retryable failure.
-        let retry: Option<Option<Duration>> = match &outcome {
+        // `Some((retry_after, capped))` = retryable failure.
+        let retry: Option<(Option<Duration>, bool)> = match &outcome {
             Ok(resp) => match classify(resp) {
                 Retryability::Accept => None,
-                Retryability::Retry { retry_after } => Some(retry_after),
+                Retryability::Retry { retry_after } => Some((retry_after, true)),
+                Retryability::RetryAfterUncapped(wait) => Some((Some(wait), false)),
             },
             // The service did not answer: retry without a server-specified
             // delay. Everything else is terminal and returned as-is.
-            Err(e) if e.upstream() == Some(Upstream::Unavailable) => Some(None),
+            Err(e) if e.upstream() == Some(Upstream::Unavailable) => Some((None, true)),
             Err(_) => None,
         };
 
-        let Some(retry_after) = retry else {
+        let Some((retry_after, capped)) = retry else {
             // Accepted: hand it back untouched. Only an answer is
             // progress; a terminal error is not, or a source whose every
             // request fails at once would never run out of time.
@@ -788,9 +786,11 @@ where
             });
         }
 
-        let wait = retry_after
-            .map(|d| d.min(MAX_RETRY_AFTER))
-            .unwrap_or(backoff);
+        let wait = match retry_after {
+            Some(d) if capped => d.min(MAX_RETRY_AFTER),
+            Some(d) => d,
+            None => backoff,
+        };
         let next_backoff = std::cmp::min(backoff * 2, guard.max_backoff());
         // Only the retryable shapes reach here: a classified response, a
         // timeout, or one of the transient curl exits.
@@ -976,11 +976,7 @@ mod live {
             // A URL someone else wrote cannot be read as an option.
             cmd.arg("--url");
         }
-        cmd.arg(maybe_via_desktop_url(
-            &req.url,
-            req.service,
-            req.bypass_latchkey,
-        ));
+        cmd.arg(&req.url);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -1293,6 +1289,29 @@ mod tests {
         assert_eq!(unreachable.upstream(), Some(Upstream::Unavailable));
     }
 
+    /// Google Calendar's one listing died on curl exit 16 (HTTP/2 framing)
+    /// over a phone link and was never asked again: only a short list of
+    /// exits was retried, and every other one was final.
+    #[test]
+    fn a_connection_that_died_is_retried_whatever_exit_curl_gave_it() {
+        let upstream = |exit: i32| {
+            HttpError::curl_exit(
+                HttpService::GoogleCalendar,
+                "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+                exit,
+                &format!("curl: ({exit}) said so"),
+            )
+            .upstream()
+        };
+        for exit in [5, 6, 7, 16, 18, 28, 35, 52, 55, 56, 92, 95] {
+            assert_eq!(upstream(exit), Some(Upstream::Unavailable), "exit {exit}");
+        }
+        // The same every time it is asked, so waiting cannot mend it.
+        for exit in [3, 23, 26, 27, 47, 60, 63, 77] {
+            assert_eq!(upstream(exit), None, "exit {exit}");
+        }
+    }
+
     /// latchkey's own message is what a failed request says, after the
     /// URL it was asked for without its query.
     #[test]
@@ -1365,82 +1384,6 @@ mod tests {
         ] {
             assert!(!e.to_string().contains("s3cret"), "{e}");
         }
-    }
-
-    fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
-        match prefix {
-            Some(value) => std::env::set_var(VIA_DESKTOP_URL_PREFIX_ENV, value),
-            None => std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV),
-        }
-        let out = body();
-        std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV);
-        out
-    }
-
-    const TEST_VIA_DESKTOP_PREFIX: &str = "https://latchkey-self.invalid/via-desktop";
-
-    #[test]
-    fn via_desktop_prefix_wraps_impersonating_providers_when_minds_sets_one() {
-        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            assert_eq!(
-                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, false),
-                "https://latchkey-self.invalid/via-desktop/https://slack.com/api/auth.test",
-            );
-        });
-    }
-
-    #[test]
-    fn via_desktop_prefix_leaves_the_url_alone_when_it_would_change_nothing() {
-        // A local workspace gets an empty prefix, and outside minds the variable
-        // is unset. Both must leave the URL byte-identical rather than
-        // producing a bare "/".
-        for prefix in [Some(""), None] {
-            with_via_desktop_prefix(prefix, || {
-                assert_eq!(
-                    maybe_via_desktop_url(
-                        "https://slack.com/api/auth.test",
-                        HttpService::Slack,
-                        false
-                    ),
-                    "https://slack.com/api/auth.test",
-                );
-            });
-        }
-    }
-
-    #[test]
-    fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
-        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            assert_eq!(
-                maybe_via_desktop_url("https://example.com/x", HttpService::Notion, false),
-                "https://example.com/x",
-            );
-            assert_eq!(
-                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, true),
-                "https://slack.com/api/auth.test",
-            );
-        });
-    }
-
-    #[test]
-    fn via_desktop_prefix_preserves_the_target_url_verbatim() {
-        // The gateway slices the prefix back off the raw path, so anything that
-        // re-encoded or normalized the target here would change the request the
-        // provider actually receives.
-        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            for url in [
-                "https://slack.com/api/conversations.history?channel=C1&limit=100",
-                "https://slack.com/files/a%20b?u=x%2Fy",
-            ] {
-                let wrapped = maybe_via_desktop_url(url, HttpService::Slack, false);
-                assert_eq!(
-                    wrapped.strip_prefix(&format!("{TEST_VIA_DESKTOP_PREFIX}/")),
-                    Some(url),
-                );
-            }
-        });
     }
 
     #[test]
@@ -1678,6 +1621,98 @@ mod tests {
             "{lines:#?}"
         );
         assert!(!lines[0].1.contains("secret"), "{lines:#?}");
+    }
+
+    /// The wait the retry loop sleeps after one 429, as it logs it; the
+    /// layer that reads it stops the request then, so nothing sleeps.
+    async fn wait_after_one_429(classify: fn(&HttpResponse) -> Retryability) -> Duration {
+        use std::sync::{Arc, Mutex};
+        use tracing_subscriber::layer::{Context, SubscriberExt};
+
+        struct WaitMs(Option<u64>);
+        impl tracing::field::Visit for WaitMs {
+            fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+                if field.name() == "wait_ms" {
+                    self.0 = Some(value);
+                }
+            }
+            fn record_debug(&mut self, _: &tracing::field::Field, _: &dyn std::fmt::Debug) {}
+        }
+        struct StopOnWait {
+            waited: Arc<Mutex<Option<u64>>>,
+            stop: datalib_etl::stop::StopFlag,
+        }
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for StopOnWait {
+            fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+                let mut wait = WaitMs(None);
+                event.record(&mut wait);
+                if let Some(ms) = wait.0 {
+                    *self.waited.lock().unwrap() = Some(ms);
+                    self.stop.request();
+                }
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Linear, "https://api.linear.app/graphql");
+        let provider_dir = dir.path().join("linear");
+        std::fs::create_dir_all(&provider_dir).unwrap();
+        let response = HttpResponse {
+            status: 429,
+            headers: BTreeMap::new(),
+            body: Vec::new(),
+            duration_ms: 0,
+        };
+        std::fs::write(
+            provider_dir.join(fixture_key(&req)),
+            serde_json::to_vec(&response).unwrap(),
+        )
+        .unwrap();
+        let stop = datalib_etl::stop::StopFlag::default();
+        let waited = Arc::new(Mutex::new(None));
+        let _subscriber =
+            tracing::subscriber::set_default(tracing_subscriber::registry().with(StopOnWait {
+                waited: waited.clone(),
+                stop: stop.clone(),
+            }));
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            3,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+            stop,
+        );
+        let outcome = playback::scope(
+            dir.path(),
+            crate::retry::scope(guard, latchkey_curl_classified(&req, classify)),
+        )
+        .await;
+        assert!(
+            matches!(outcome, Err(HttpError::Interrupted { .. })),
+            "{outcome:?}"
+        );
+        let ms = waited.lock().unwrap().expect("the loop logged its wait");
+        Duration::from_millis(ms)
+    }
+
+    /// A wait a classifier names is capped at ten minutes unless it asks
+    /// for the wait uncapped, as Linear's does: a refusal that asked for an
+    /// hour was otherwise retried after ten minutes into another refusal.
+    #[tokio::test]
+    async fn only_an_uncapped_wait_is_slept_past_the_cap() {
+        let hour = Duration::from_secs(3600);
+        assert_eq!(
+            wait_after_one_429(|_| Retryability::Retry {
+                retry_after: Some(Duration::from_secs(3600))
+            })
+            .await,
+            MAX_RETRY_AFTER
+        );
+        assert_eq!(
+            wait_after_one_429(|_| Retryability::RetryAfterUncapped(Duration::from_secs(3600)))
+                .await,
+            hour
+        );
     }
 
     /// A playback fixture that always returns 429 should be retried until

@@ -7,7 +7,7 @@
 //! not steps.
 
 mod append;
-mod check_params;
+mod check;
 mod compact;
 mod config_backup;
 mod dispatch;
@@ -26,7 +26,6 @@ mod markdown;
 mod methods;
 mod modal;
 mod occurrences;
-mod old_markdown;
 mod prepare;
 mod probe;
 mod published;
@@ -118,8 +117,8 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step probe slack",
     },
     Example {
-        what: "the same, with the source's ingest params as JSON, and the channels a picker would offer",
-        command: "datalib-step probe slack --params-file slack-params.json --list channels",
+        what: "the same, with the source's ingest params as JSON in DATALIB_DAG_PARAMS, and the channels a picker would offer",
+        command: "datalib-step probe slack --list channels",
     },
     Example {
         what: "ask a source with more than one way in through one of them, and list its labels",
@@ -140,10 +139,6 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "embed the prompts piped to stdin, one {\"hash\", \"prompt\"} object a line, as the embed step would; vectors come out on stdout",
         command: "datalib-step embed-prompts",
-    },
-    Example {
-        what: "say which datalib-step steps' params a sync would refuse (the app runs this on save)",
-        command: "datalib-step check-params ~/datalib/config.toml",
     },
     Example {
         what: "say whether a config lists each step below the steps it reads",
@@ -190,24 +185,29 @@ struct Run {
     models_dir: Option<PathBuf>,
     /// Appended by `datalib-pipeline reset`: empty what the step wrote and do
     /// nothing else (`step_protocol.md` § Verbs).
-    #[arg(long, conflicts_with_all = ["prepare", "compact", "collect"])]
+    #[arg(long, conflicts_with_all = ["prepare", "compact", "collect", "check"])]
     reset: bool,
     /// Appended each time the runner starts: bring what the step wrote to
     /// this build's shape where that can be done in place, fetch nothing,
     /// and say when it cannot, or when a newer build wrote it
     /// (`step_protocol.md` § Verbs).
-    #[arg(long, conflicts_with_all = ["compact", "collect"])]
+    #[arg(long, conflicts_with_all = ["compact", "collect", "check"])]
     prepare: bool,
     /// Appended by `datalib-pipeline free-disk-space
     /// --drop-old-versions-on-derived-data`: fold the history of a store
     /// nothing reads the history of into one commit, collect any other,
     /// and give back the disk (`step_protocol.md` § Compact and collect).
-    #[arg(long, conflicts_with = "collect")]
+    #[arg(long, conflicts_with_all = ["collect", "check"])]
     compact: bool,
     /// Appended by `datalib-pipeline free-disk-space`: delete what no commit of the
     /// step's store reaches, keeping every commit.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "check")]
     collect: bool,
+    /// Appended by `datalib-pipeline check` and the app's config save: plan
+    /// the params a sync would, open and write nothing, and refuse them or
+    /// answer with warnings (`step_protocol.md` § Check).
+    #[arg(long)]
+    check: bool,
 }
 
 #[derive(Subcommand)]
@@ -255,32 +255,22 @@ enum Cmd {
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
     /// offers — and print one JSON object on stdout. Progress goes to
-    /// stderr while a list pages. Writes nothing and needs no data root.
+    /// stderr while a list pages. The source's ingest params, when it
+    /// needs any, are JSON in `DATALIB_DAG_PARAMS`, as a step's are: not
+    /// an argument, since params carry tokens and argv is readable by every
+    /// user on the machine. Writes nothing and needs no data root.
     Probe {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
         /// Which live way in to ask through (`gmail` or `jmap` for
         /// email). Needed only when the source has more than one and the
-        /// params file names none.
+        /// params name none.
         #[arg(long)]
         method: Option<String>,
         /// The list to load as well: `channels`, `conversations`,
         /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
         list: Option<String>,
-        /// A JSON file holding the source's ingest params. A file, not an
-        /// argument: params carry tokens, and argv is readable by every
-        /// user on the machine.
-        #[arg(long = "params-file")]
-        params_file: Option<PathBuf>,
-    },
-    /// Utility (not a pipeline step): plan every datalib-step step's params
-    /// in a config the way a sync would, and run nothing. Prints one JSON
-    /// object per step a sync would refuse, `{"step", "message"}`; nothing
-    /// when every one plans. The app runs it when a config is saved.
-    CheckParams {
-        /// The config file: `<data root>/config.toml`.
-        path: PathBuf,
     },
     /// Utility (not a pipeline step): put the pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
@@ -545,16 +535,9 @@ async fn main() {
         source_type,
         method,
         list,
-        params_file,
     } = &cli.cmd
     {
-        probe::run_cli(
-            source_type,
-            method.as_deref(),
-            list.as_deref(),
-            params_file.as_deref(),
-        )
-        .await;
+        probe::run_cli(source_type, method.as_deref(), list.as_deref()).await;
     }
     // `pull-models` likewise: nothing here is a step.
     if let Cmd::PullModels { models_dir } = &cli.cmd {
@@ -654,9 +637,6 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-    }
-    if let Cmd::CheckParams { path } = &cli.cmd {
-        std::process::exit(check_params::run_cli(path));
     }
     // `topo-sort-config` likewise: it reads and writes one file.
     if let Cmd::TopoSortConfig { path, check } = &cli.cmd {
@@ -835,7 +815,6 @@ async fn run(
         Cmd::IndexText { .. } => unreachable!("index-text is answered in main"),
         Cmd::Markdown { .. } => unreachable!("markdown is answered in main"),
         Cmd::Examples { .. } => unreachable!("examples is answered in main"),
-        Cmd::CheckParams { .. } => unreachable!("check-params is answered in main"),
         Cmd::PullModels { .. } => unreachable!("pull-models is answered in main"),
         Cmd::EmbedPrompts { .. } => unreachable!("embed-prompts is answered in main"),
         Cmd::PullRuntime { .. } => unreachable!("pull-runtime is answered in main"),
@@ -857,6 +836,12 @@ async fn run(
             }
             if run.collect {
                 return compact::run(&env, data_root, compact::Verb::Collect, emitter).await;
+            }
+            if run.check {
+                let params = source::params_from_env()?;
+                let warnings = check::check(&env, params, data_root).map_err(anyhow::Error::msg)?;
+                emitter.warnings(warnings);
+                return Ok(Vec::new());
             }
             let params = source::params_from_env()?;
             run_function(

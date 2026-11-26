@@ -173,6 +173,30 @@ pub fn md_link_dest(url: &str) -> String {
     out
 }
 
+/// Only a web or mail address becomes a link; anything else upstream
+/// names is left as text.
+pub fn safe_url(url: &str) -> Option<&str> {
+    let lower = url.get(..8).unwrap_or(url).to_ascii_lowercase();
+    ["https://", "http://", "mailto:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+        .then_some(url)
+}
+
+/// `md` as a block quote.
+pub fn md_quote(md: &str) -> String {
+    md.lines()
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_string()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Text inside a code span. Markdown takes a code span's content
 /// literally — an entity there shows as `&lt;`, so nothing is
 /// HTML-escaped — and the only way out is a backtick run, which the

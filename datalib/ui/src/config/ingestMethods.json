@@ -85,6 +85,10 @@
   ],
   "contacts": [
     {
+      "path": "google",
+      "reach": "origin"
+    },
+    {
       "path": "fastmail",
       "reach": "origin"
     },
@@ -95,6 +99,12 @@
     {
       "path": "vcf",
       "reach": "local"
+    }
+  ],
+  "discord": [
+    {
+      "path": "api",
+      "reach": "origin"
     }
   ],
   "email": [

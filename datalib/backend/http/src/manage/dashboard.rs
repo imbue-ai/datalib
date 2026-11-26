@@ -73,7 +73,7 @@ pub async fn get_dashboard(
     State(s): State<AppState>,
     Path(group): Path<String>,
     Query(p): Query<DashboardParams>,
-) -> Json<Dashboard> {
+) -> Result<Json<Dashboard>, crate::Refusal> {
     let text = std::fs::read_to_string(s.config_path()).unwrap_or_default();
     let step_ids: Vec<String> = datalib_dag::written::entries_as_written(&text)
         .map(|w| {
@@ -84,27 +84,32 @@ pub async fn get_dashboard(
                 .collect()
         })
         .unwrap_or_default();
-    let runs = datalib_runs::runs_of_steps(&s.root, &step_ids, RUNS_OFFERED).await;
+    let runs = datalib_runs::runs_of_steps(&s.root, &step_ids, RUNS_OFFERED)
+        .await
+        .map_err(crate::unread)?;
     let run = match p.run {
         Some(id) => datalib_runs::runs(&s.root, None, i64::MAX)
             .await
+            .map_err(crate::unread)?
             .into_iter()
             .find(|r| r.run_id == id),
         None => runs.first().cloned(),
     };
     let Some(run) = run else {
-        return Json(Dashboard {
+        return Ok(Json(Dashboard {
             group,
             run: None,
             live: false,
             runs,
             steps: step_ids.into_iter().map(absent).collect(),
             disk: Vec::new(),
-        });
+        }));
     };
     let live = run.finished_at_utc.is_none() && s.sync.running();
     let until = run.finished_at_utc.clone().unwrap_or_else(crate::now_utc);
-    let snap = datalib_runs::snapshot_of(&s.root, Some(&run.run_id)).await;
+    let snap = datalib_runs::snapshot_of(&s.root, Some(&run.run_id))
+        .await
+        .map_err(crate::unread)?;
     let disk_of = |path: String| {
         let (repo, since, until) = (s.app.clone(), run.started_at_utc.clone(), until.clone());
         async move {
@@ -128,8 +133,12 @@ pub async fn get_dashboard(
             steps.push(absent(id));
             continue;
         };
-        let samples = datalib_runs::step_samples(&s.root, &run.run_id, &id).await;
-        let lines = datalib_runs::step_problem_lines(&s.root, &run.run_id, &id).await;
+        let samples = datalib_runs::step_samples(&s.root, &run.run_id, &id)
+            .await
+            .map_err(crate::unread)?;
+        let lines = datalib_runs::step_problem_lines(&s.root, &run.run_id, &id)
+            .await
+            .map_err(crate::unread)?;
         steps.push(StepPanel {
             in_run: true,
             state: Some(row.state.clone()),
@@ -146,14 +155,14 @@ pub async fn get_dashboard(
         });
     }
     let disk = disk_of(group.clone()).await;
-    Json(Dashboard {
+    Ok(Json(Dashboard {
         group,
         run: Some(run),
         live,
         runs,
         steps,
         disk,
-    })
+    }))
 }
 
 fn absent(id: String) -> StepPanel {

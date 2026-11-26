@@ -44,6 +44,7 @@ merge conflict waiting to happen.
 **Data architecture**
 
 - [`datalib/backend/etl/README.md`](datalib/backend/etl/README.md) — the shared ingest machinery: keys, sidecars, volatile fields, **the doltlite pool rules**, schema changes and the migration ladder, the blob CAS. Read before opening any store.
+- [`datalib/backend/store_meta/README.md`](datalib/backend/store_meta/README.md) — the shape every store records and the one check every reader makes before it reads a row. **Start here** before changing a store's tables or indexes, or reading a store.
 - [`datalib/backend/etl/macros/README.md`](datalib/backend/etl/macros/README.md) — the four table derives.
 - [`docs/dev/data_architecture_ingestion.md`](docs/dev/data_architecture_ingestion.md), [`…_practices.md`](docs/dev/data_architecture_ingestion_practices.md) — download: principles, then how to build a provider. A provider's own quirks are in the `INGEST.md` beside its code, where it has one.
 - [`docs/dev/data_architecture_parse_and_render.md`](docs/dev/data_architecture_parse_and_render.md) — render: projection to `GridRow` + markdown, incrementality.
@@ -51,6 +52,7 @@ merge conflict waiting to happen.
 - [`docs/dev/latchkey.md`](docs/dev/latchkey.md) — how a web source signs in: the three kinds of latchkey service, who names an account, the keychain, the gateway. Read before touching a sign-in.
 - [`docs/dev/email_download_modes.md`](docs/dev/email_download_modes.md) — JMAP, Gmail API, mbox.
 - [`docs/dev/grid_rows.md`](docs/dev/grid_rows.md) — the `grid_rows` union table and how to add a column.
+- [`docs/dev/search.md`](docs/dev/search.md) — how search works: what it reads, what it does, its SQL and which index answers it, how to measure it. **Start here** before adding a search key or an index, or chasing a slow search.
 - [`docs/dev/time_series.md`](docs/dev/time_series.md) — numbers over time: a source's time-series store, the chunk encoding, UCUM units, the index that points at the stores. **Start here** for anything about time series.
 - [`docs/dev/contacts.md`](docs/dev/contacts.md) — who a handle is: handles, each source's record of a person (`NormalizedContact`), the contacts app, and the chips that draw them. **Start here** for anything about a person; read before adding a handle kind.
 - [`docs/dev/edges.md`](docs/dev/edges.md), [`docs/dev/entity_ids.md`](docs/dev/entity_ids.md) — cross-document edges; the one rule for minting a uuid (read before any `*_uuid` recipe).
@@ -75,7 +77,6 @@ merge conflict waiting to happen.
 - [`docs/dev/ci.md`](docs/dev/ci.md) — CI, its caches and BuildBuddy, and reading a run.
 - [`docs/dev/release_steps.md`](docs/dev/release_steps.md) — how a release is assembled, and testing its steps from a mac.
 - [`docs/dev/curl_impersonate.md`](docs/dev/curl_impersonate.md), [`runtime_fetch.md`](docs/dev/runtime_fetch.md), [`docker.md`](docs/dev/docker.md) — what ships beside the binaries: the Chrome-impersonating curl, the Node runtime, the container image.
-- [`docs/dev/qmd_behaviour.md`](docs/dev/qmd_behaviour.md) — measured facts about qmd; the shared model cache's path still follows it.
 - [`docs/dev/history.md`](docs/dev/history.md) — facts about the tree git cannot tell you. Add a paragraph when you learn one.
 - [`docs/dev/security_posture.md`](docs/dev/security_posture.md) — who we guard against, what stops them and what does not. **Start here** before changing a secret, a release job or a safety check, or adding anything a protected library writes outside its folder.
 
@@ -279,7 +280,7 @@ datalib/
                    `search_*` tables of the grid index's file, and the
                    inference cache: each document's chunks keyed by their
                    prompt's hash, and the vectors, holding no text
-                   (docs/dev/plans/search_index_from_ram.md).
+                   (docs/dev/plans/completed/search_index_from_ram.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
                    Metal on a mac, CUDA as a module on gnu Linux. Tested
@@ -310,6 +311,8 @@ datalib/
     uuid_text/     a uuid read however it is written (dashed or not,
                    either case, at the end of a slug or a link) and
                    written lowercase with dashes; the one reader. No deps.
+    store_dump/    a store's tables as the text of a golden, one row a
+                   line; only tests link it.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source
@@ -345,7 +348,7 @@ datalib/
                    `<root>/system/api-token`, send
                    `Authorization: Bearer <token>`.
     schema/        `grid_rows`/`edges`/`markdowns` row structs;
-    app_schema/    feedback, disk usage, remote media, runs; both derive
+    app_schema/    disk usage, remote media, runs; both derive
                    DDL via `#[derive(PortableTable)]`.
   ui/          Vue frontend; every grid is SlickGrid, kept behind a few
                files so it can be swapped (docs/dev/cards.md § The grid).
@@ -414,9 +417,11 @@ last run and success, each sink's version — is in
 config entry the loader cannot use costs that entry and nothing else;
 `datalib-pipeline check <config>` says what went and why. A config the app
 cannot serve anything from comes back as `app_ready: false` and the UI
-shows `ConfigErrorView`, live in both directions. The http server runs
-the loop `datalib-pipeline serve` runs, in-process (`dag/src/supervisor/serve.rs`,
-called from `http/src/supervisor.rs`), holding `runner-lock` for its life; a sync, a stop, a step turned off is a row it writes
+shows `ConfigErrorView`, live in both directions. The http server keeps
+`datalib-pipeline serve` running as a child for its life
+(`http/src/supervisor.rs`), which holds `runner-lock` and runs the loop
+(`dag/src/supervisor/serve.rs`), and hears what no store holds from the
+child's stderr; a sync, a stop, a step turned off is a row the server writes
 there (`POST /api/requests`, `/api/steps/<id>/turn_off`); the Manage tab
 edits the config; a root with no config gets the launcher and the
 first-run screen, which writes Datalib's starter config
@@ -468,7 +473,7 @@ never parses it back. Structured fields come from
 `grid_rows`. Per-section anchors come from the
 `<div id="m-{uuid}" data-section-uuid="{uuid}" class="msg …">` wrappers
 the renderer emits — those two attributes are load-bearing
-(`ui/src/feedback/context.ts::messageAncestor`). Where each message
+(`ui/src/cards/chatSections.js::messageAncestor`). Where each message
 begins comes from the projection too: a renderer hands its document over
 as `RenderedMarkdown::sections`, and the render store keeps their
 layout
@@ -867,11 +872,31 @@ one goes there and into the `deps` that take it, then
 `tools/repin_cargo.sh`; `//:lint_repo` refuses an entry no `BUILD.bazel`
 names.
 
-## Fallbacks: prefer failing loudly to succeeding quietly
+## No fallbacks, no workarounds: one way to do it
 
-**Avoid fallbacks.** The dangerous ones *succeed*: a correct answer
-reached the slow or lossy way raises no error. If you add one anyway,
-log when it fires.
+**No fallbacks, no workarounds. Wherever possible, just one way to do
+it.** A second path is a path the tests rarely take, and the dangerous
+ones *succeed*: a correct answer reached the slow or lossy way raises no
+error, and a read that should have failed returns less. When the input
+is not what the one way expects, fail loudly, naming what was found and
+what was wanted; do not branch around it.
+
+- **A store is in this build's shape or it is refused.** Nothing reads
+  around a table, a column or an index an older build left out: the
+  prepare pass brings every store to this build's shape before anything
+  reads it, and every open checks the shape `_datalib_meta` records
+  (`datalib/backend/store_meta/README.md`). A "no such table" or "no
+  such column" from a store whose shape was checked is a bug, not "an
+  older store".
+- **A statement names the index it relies on** (`INDEXED BY`): an index
+  is part of the store's shape, so it is there.
+- **One reader, one writer, one spelling.** Where two functions do one
+  job, delete one; where a value has two names, keep one and migrate the
+  other.
+
+The exception is input a **person** wrote, which keeps a compatibility
+path (§"Keep a forward path for existing data"), and upstream data,
+whose shape is not ours to choose.
 
 **An error or a warning about a record goes through `problems`, never
 only to the log.** A record a download could not fetch goes through

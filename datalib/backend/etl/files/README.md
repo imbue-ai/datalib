@@ -39,7 +39,9 @@ a directory tells you nothing about its parent.
 
 It lives at `$DATALIB_CACHE_DIR/fingerprints.sqlite`, else under
 `$XDG_CACHE_HOME/datalib`, else `~/Library/Caches/datalib` (macOS) or
-`~/.cache/datalib`. **A test names its own `DATALIB_CACHE_DIR`**, and under
+`~/.cache/datalib`. **A test names its own `DATALIB_CACHE_DIR`**, and
+names it in `DATALIB_CHILD_ENV` too, since a runner hands it to a step only
+then (`.bazelrc` does that for every bazel test). Under
 a bazel test (`TEST_TMPDIR` set, which the processes a test spawns inherit)
 `default_cache_path` refuses to fall through to the host's. A test scans a
 sandbox path that is gone by the next run, so in the host cache every one

@@ -160,6 +160,19 @@ async fn main() -> Result<()> {
         );
     }
     if check_only {
+        // Each step whose program takes `--check` is asked about its params,
+        // as the app's save asks; a refusal fails the check like a dropped
+        // entry does.
+        let asked = datalib_dag::check::check_params(&checked, &data_root, None).await;
+        let refused = asked.iter().any(|d| d.severity.drops_the_entry());
+        if !asked.is_empty() {
+            #[allow(clippy::disallowed_macros)]
+            {
+                for d in &asked {
+                    eprintln!("{}", d.render(&config_path, &checked.text));
+                }
+            }
+        }
         #[allow(clippy::disallowed_macros)]
         {
             println!(
@@ -178,7 +191,11 @@ async fn main() -> Result<()> {
         }
         // Same door as `PUT /api/config`: a warning drops nothing, so it
         // is printed above and does not fail the check.
-        std::process::exit(if checked.nothing_dropped() { 0 } else { 2 });
+        std::process::exit(if checked.nothing_dropped() && !refused {
+            0
+        } else {
+            2
+        });
     }
     let dropped_entries = checked.dropped();
     let cfg = checked.cfg;
@@ -603,27 +620,32 @@ fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
 
 /// `datalib-pipeline serve`: the loop until a signal stops it. Its events go
 /// to stderr as NDJSON, its own log lines to the run store as a `dag`
-/// process outside any run.
+/// process outside any run. A root with no config yet, or one it cannot
+/// read, is served all the same: the loop runs nothing until the file
+/// holds a config, the way the app's first-run screen needs.
 async fn serve(
     config_path: &Path,
     run: datalib_dag::cli::StepArgs,
     stop_tx: &Arc<tokio::sync::watch::Sender<bool>>,
     stop_rx: tokio::sync::watch::Receiver<bool>,
 ) -> Result<()> {
-    let (checked, data_root) = load_config(config_path)?;
-    if checked.is_fatal() {
-        bail!(
-            "{} is not a config: nothing in it could be read",
-            config_path.display()
-        );
-    }
+    let (checked, data_root) = if config_path.is_file() {
+        let (checked, data_root) = load_config(config_path)?;
+        (Some(checked).filter(|c| !c.is_fatal()), data_root)
+    } else {
+        let dir = config_path
+            .parent()
+            .filter(|p| p.is_dir())
+            .with_context(|| format!("{} is not in a directory", config_path.display()))?;
+        (None, std::path::absolute(dir)?)
+    };
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
 
     let commit = datalib_runs::git_hash_and_origin();
     let retention = checked
-        .cfg
-        .run_history
+        .as_ref()
+        .and_then(|c| c.cfg.run_history)
         .map(|h| h.retention())
         .unwrap_or_default();
     let log = datalib_runs::ProcessLogWriter::start(
@@ -635,7 +657,12 @@ async fn serve(
     .map(Arc::new);
     // stderr is the event stream, which a fmt layer would interleave
     // prose into; the lines go to the store alone.
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| checked.cfg.log_filter());
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        checked
+            .as_ref()
+            .map(|c| c.cfg.log_filter())
+            .unwrap_or_else(|| datalib_runs::filter_at(datalib_runs::DEFAULT_LEVEL))
+    });
     let _ = tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::new(&filter))
         .with(
@@ -698,7 +725,6 @@ async fn serve(
         binary_dir: run.binary_dir,
         now: run.now,
         parallelism: run.parallelism.map(|n| n.get()),
-        extra_env: Default::default(),
     };
     datalib_dag::supervisor::serve::run(&opts, emit, stop_rx).await;
     if let Some(log) = log {
@@ -849,7 +875,7 @@ async fn status_lines(store: &Store, data_root: &Path) -> Result<Vec<String>> {
     }
     // A running step's own queue says what is ahead of it now.
     let at_rest = |step: &str| running.iter().all(|inv| inv.step != step);
-    for owed in datalib_runs::latest_metric(data_root, datalib_metrics::OWED).await {
+    for owed in datalib_runs::latest_metric(data_root, datalib_metrics::OWED).await? {
         if owed.value > 0 && at_rest(&owed.step) {
             lines.push(format!(
                 "owed {}  {}  as of run {}",

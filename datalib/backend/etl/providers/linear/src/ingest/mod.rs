@@ -2,10 +2,10 @@
 //! API answers them, into one raw table per kind.
 //!
 //! A run is two parts. The workspace's small lists — teams, people,
-//! states, labels, cycles, projects, milestones, initiatives — are read
-//! whole every run: a few requests, and the only way to see the
-//! progress series Linear recomputes without moving a record's
-//! `updatedAt`. Then the big ones — issues with their history,
+//! states, labels, project statuses, cycles, projects, milestones,
+//! initiatives — are read whole every run: a few requests, and the only
+//! way to see the progress series Linear recomputes without moving a
+//! record's `updatedAt`. Then the big ones — issues with their history,
 //! comments, documents, project updates, attachments — are each walked
 //! newest first over what no earlier run has covered (`walk`), so a run
 //! after the first reads only what changed. INGEST.md has the whole
@@ -538,17 +538,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     };
     let mut s = FetchSummary::default();
     let result = phases(&mut ctx, &mut s).await;
-    // What failed may have struck between two writes that belong
-    // together, so it is rolled back; the batch frees the store's one
-    // connection either way before the run's record is written.
-    let Ctx { writes, .. } = ctx;
-    let result = match result {
-        Ok(()) => writes.finish().await,
-        Err(e) => {
-            drop(writes);
-            Err(e)
-        }
-    };
+    let result = ctx.writes.settle(result).await;
     s.requests = api.requests();
     run.finish(found.ended_early(), &result, &s).await;
     result.map(|()| s)
@@ -583,11 +573,19 @@ async fn phases(ctx: &mut Ctx<'_>, s: &mut FetchSummary) -> Result<()> {
                 ended.0
             ),
         ),
-        _ => RunProblem::phase(
+        LinearError::RateLimited(_) => RunProblem::phase(
             "rate_limit",
             format!(
-                "Linear's hourly request budget ran out, so the run stopped; the next run \
-                 carries on from where this one got to: {}",
+                "Linear's rate limit refused a request without saying how long to wait, so \
+                 the run stopped; the next run carries on from where this one got to: {}",
+                ended.0
+            ),
+        ),
+        _ => RunProblem::phase(
+            "gave_up",
+            format!(
+                "Linear kept failing, so the run stopped; the next run carries on from where \
+                 this one got to: {}",
                 ended.0
             ),
         ),

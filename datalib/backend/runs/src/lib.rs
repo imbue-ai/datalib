@@ -20,9 +20,10 @@ pub use datalib_runtime::build_id::{
 pub use query::{key_names, log_query, log_values, LogCursor, LogQuery, QueryError};
 pub use store::{
     after_every_write, canonical_labels, close_abandoned_run, latest_metric, latest_metrics,
-    log_after, log_line, metric_by_run, metric_history, new_process_id, open_or_create, process,
-    processes, runs, runs_of_steps, snapshot, snapshot_of, step_problem_lines, step_samples,
-    versions, ClosedRun, LogLine, LogSink, ProcessLogWriter, RunWriter, Snapshot, QUEUE_WINDOW,
+    log_after, log_line, metric_by_run, metric_history, new_process_id, open_or_create,
+    prepare_store, process, processes, runs, runs_of_steps, snapshot, snapshot_of,
+    step_problem_lines, step_samples, versions, ClosedRun, LogLine, LogSink, ProcessLogWriter,
+    RunWriter, Snapshot, QUEUE_WINDOW,
 };
 pub use tracing_layer::{default_filter, filter_at, StoreLayer, DEFAULT_LEVEL};
 
@@ -106,7 +107,7 @@ impl Default for Retention {
 /// Bumped whenever the tables change shape. A store at an older version
 /// climbs the rungs in `store.rs`'s `UPGRADES` in place; one at a version
 /// with no rung, newer ones included, is emptied and remade.
-pub const SCHEMA_VERSION: i32 = 13;
+pub const SCHEMA_VERSION: i32 = 15;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so
 /// a reader tailing "everything after N" needs no timestamp arithmetic;
@@ -116,8 +117,23 @@ pub const INDEXES: &[&str] = &[
     // For retention's "no line names this process".
     "CREATE INDEX IF NOT EXISTS log_by_process ON log (process_id)",
     PROCESSES_BY_RUN,
+    RUNS_BY_START,
+    METRICS_BY_NAME,
+    METRIC_SAMPLES_BY_NAME,
 ];
 
 /// For retention, which removes a run's processes with the run.
 pub const PROCESSES_BY_RUN: &str =
     "CREATE INDEX IF NOT EXISTS processes_by_run ON processes (run_id)";
+
+/// For the newest run, and for retention, which keeps the newest.
+pub const RUNS_BY_START: &str =
+    "CREATE INDEX IF NOT EXISTS runs_by_start ON runs (started_at_utc, run_id)";
+
+/// For Manage's reads of a few metrics, on every refresh. Both keys lead
+/// with `run_id`, so a read by name walked every run's series, and a read
+/// of three metrics in one run walked every sample that run took.
+pub const METRICS_BY_NAME: &str =
+    "CREATE INDEX IF NOT EXISTS metrics_by_name ON metrics (name, step, labels)";
+pub const METRIC_SAMPLES_BY_NAME: &str = "CREATE INDEX IF NOT EXISTS metric_samples_by_name \
+     ON metric_samples (name, run_id, step, labels, ts_utc)";

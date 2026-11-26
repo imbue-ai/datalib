@@ -45,6 +45,9 @@ pub enum Verb {
     Compact,
     /// Give back disk, keeping every version.
     Collect,
+    /// Before anything runs: say whether the step would run its params as
+    /// written, and write nothing.
+    Check,
 }
 
 impl Verb {
@@ -488,6 +491,11 @@ pub struct StepOutcome {
     /// for a run, and for a step with no store to shrink.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_bytes: Option<StoreBytes>,
+    /// Its answer to `--check`: what it would run as written but is
+    /// probably a mistake, such as a param that does nothing
+    /// (`step_protocol.md` § Check). Empty for a run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     /// How the step's process ended, when it was one (an in-process
     /// step has no exit).
     #[serde(default, skip_serializing_if = "Option::is_none")]

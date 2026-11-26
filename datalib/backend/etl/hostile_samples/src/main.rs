@@ -243,6 +243,7 @@ fn chat_common() -> Result<Vec<Document>> {
         problems: Vec::new(),
     };
     let reaction = |uuid: &str, emoji: String, who: String| NormalizedReaction {
+        count: 1,
         reaction_uuid: uuid.to_string(),
         reactor_handle: None,
         reactor_kind: AuthorKind::Named,

@@ -15,6 +15,7 @@ use sqlx::{Row, Sqlite, Transaction};
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::bulk::{bulk_upsert_entity_in_tx, bulk_upsert_in_tx};
 use datalib_etl::doltlite_raw::{self as dr, WirePayload};
+use datalib_etl::sweep::{self, Sweeps};
 use datalib_etl_claude_config::WhenDeletedUpstream;
 use datalib_etl_web::owed::{self, Listed};
 use datalib_time::IsoOffsetTimestamp;
@@ -53,9 +54,7 @@ pub struct ProjectUpsert {
     pub payload: String,
 }
 
-fn sweep_scope(key: &str) -> String {
-    format!("claude:sweep:{key}")
-}
+const SWEEPS: Sweeps = Sweeps::new("claude");
 
 impl RawDb {
     // ── users and orgs ───────────────────────────────────────────────
@@ -76,16 +75,7 @@ impl RawDb {
         key: &str,
         now: &IsoOffsetTimestamp,
     ) -> Result<Option<chrono::Duration>> {
-        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind(sweep_scope(key))
-            .fetch_optional(self.pool())
-            .await
-            .context("select claude sweep marker")?;
-        let Some(row) = row else { return Ok(None) };
-        let s: String = row
-            .try_get("last_seen_at_utc")
-            .context("read claude sweep timestamp")?;
-        Ok(Some(sweep_age_of(&s, now)?))
+        SWEEPS.age(self.pool(), key, now).await
     }
 
     /// How long before `now` each project's docs were last listed, by
@@ -94,7 +84,7 @@ impl RawDb {
         &self,
         now: &IsoOffsetTimestamp,
     ) -> Result<HashMap<String, chrono::Duration>> {
-        let prefix = sweep_scope("project_docs:");
+        let prefix = SWEEPS.scope("project_docs:");
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'",
         )
@@ -106,7 +96,7 @@ impl RawDb {
         for (scope, stamp) in rows {
             out.insert(
                 scope[prefix.len()..].to_string(),
-                sweep_age_of(&stamp, now)?,
+                sweep::age_of(&stamp, now)?,
             );
         }
         Ok(out)
@@ -369,7 +359,7 @@ impl RawDb {
     /// Scoped to one `org_uuid`, and that scope is load-bearing twice over.
     /// An org whose listing 403'd was never enumerated, so it must not be
     /// passed here at all. And rows with a NULL `org_uuid` are the ones
-    /// `claude_export` ingested — the two source types share this store, and
+    /// the `export` method ingested — the two methods share this store, and
     /// an API sync has no standing to say an export's conversations are
     /// gone.
     ///
@@ -699,33 +689,12 @@ pub async fn load_cowork_events_into(
     Ok(())
 }
 
-/// The marker's stamp is the run's pinned now, kept as UTC with the
-/// offset beside it, as `doltlite_raw::upsert_scope_state` keeps one.
 pub(crate) async fn record_sweep_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     key: &str,
     now: &IsoOffsetTimestamp,
 ) -> Result<()> {
-    let stamp = datalib_time::split_stamp(&now.to_rfc3339());
-    sqlx::query(
-        "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
-         ON CONFLICT(scope) DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc,
-            tz_offset = excluded.tz_offset",
-    )
-    .bind(sweep_scope(key))
-    .bind(&stamp.utc)
-    .bind(&stamp.tz_offset)
-    .execute(&mut **tx)
-    .await
-    .with_context(|| format!("record claude sweep marker {key}"))?;
-    Ok(())
-}
-
-fn sweep_age_of(stamp: &str, now: &IsoOffsetTimestamp) -> Result<chrono::Duration> {
-    let dt = datalib_time::parse_strict(stamp)
-        .with_context(|| format!("parse claude sweep timestamp {stamp:?}"))?
-        .inner();
-    Ok(now.inner() - dt)
+    SWEEPS.record(&mut **tx, key, now).await
 }
 
 /// The `file_uuid` of one `chat_messages[].files[]` object.

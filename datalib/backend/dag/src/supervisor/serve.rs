@@ -1,6 +1,6 @@
-//! The loop held for the whole life of the process that runs it:
-//! `datalib-pipeline serve`, and the app's server until it starts that as a
-//! child. It takes `runner-lock` (waiting while another process holds
+//! The loop held for the whole life of the process that runs it,
+//! `datalib-pipeline serve`, which the app's server starts as a child. It
+//! takes `runner-lock` (waiting while another process holds
 //! it), closes what a dead loop left, runs the prepare pass, then serves
 //! every request and wipe until told to stop. What a parent needs to
 //! hear and the stores do not hold, it says as [`ServeEvent`]s.
@@ -33,9 +33,6 @@ pub struct ServeOptions {
     pub now: Option<String>,
     /// At most this many steps at once; the runner's default when `None`.
     pub parallelism: Option<usize>,
-    /// Variables every step gets that its environment would not otherwise
-    /// carry; the config's `[env]` wins over them.
-    pub extra_env: BTreeMap<String, String>,
 }
 
 /// One thing the loop says to whoever started it, one NDJSON line each
@@ -109,6 +106,7 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     prepare(opts, &emit).await;
+    open_the_reruns(&store, root).await;
     emit(ServeEvent::PrepareDone);
     tracing::info!("supervisor: running the loop on {}", root.display());
     let mut periods = Periods {
@@ -125,8 +123,10 @@ pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
     let path = crate::config::root_config_path(root);
     if !path.is_file() {
         return Err(format!(
-            "no config at {} — create one from the Setup tab before syncing",
-            path.display()
+            "no config at {} — create one before syncing: in the app's Setup tab, or from \
+             a shell with `datalib-pipeline init {}`, then add a source to it",
+            path.display(),
+            root.display()
         ));
     }
     let (checked, _) = crate::config::load_graded(&path).map_err(|e| format!("{e:#}"))?;
@@ -179,7 +179,7 @@ async fn take_the_lock(
 /// takes `--prepare` to make what it stored usable, one at a time, before
 /// the loop takes any request: no render then reads a raw store in an old
 /// shape. What a step cannot bring up to date in place it answers
-/// `needs_rerun`, which the app offers to run; what a newer build wrote
+/// `needs_rerun`, which the loop then runs ([`open_the_reruns`]); what a newer build wrote
 /// it refuses, and the runner turns it off. A request opened meanwhile
 /// waits for the loop. A step that fails is reported and the rest go on.
 async fn prepare(opts: &ServeOptions, emit: &Emit) {
@@ -249,6 +249,45 @@ async fn prepare(opts: &ServeOptions, emit: &Emit) {
     }
 }
 
+/// Who opens the request that runs what the prepare pass could not bring
+/// up to date in place.
+pub const UPGRADE_REQUESTER: &str = "upgrade";
+
+/// Run what the prepare pass marked `needs_rerun`, without waiting to be
+/// asked: nothing reads a store in another shape, so what those steps
+/// wrote is not shown until they run, and none of them downloads. One
+/// request, unless one this requester opened is still open.
+async fn open_the_reruns(store: &Store, root: &Path) {
+    let Ok(checked) = load_config(root) else {
+        return;
+    };
+    let opened = async {
+        let record = store.load_record().await?;
+        let roots = crate::supervisor::round::rerun_offer(&checked.graph, &record);
+        if roots.is_empty() {
+            return anyhow::Ok(None);
+        }
+        let open = store.open_requests().await?;
+        if open.iter().any(|r| r.opened_by == UPGRADE_REQUESTER) {
+            return anyhow::Ok(None);
+        }
+        store
+            .open_request(&roots, UPGRADE_REQUESTER)
+            .await
+            .map(|id| Some((id, roots)))
+    }
+    .await;
+    match opened {
+        Ok(Some((id, roots))) => tracing::info!(
+            request = %id,
+            steps = %roots.join(", "),
+            "supervisor: running the steps the prepare pass could not bring up to date"
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::error!("supervisor: could not open the upgrade's re-runs: {e:#}"),
+    }
+}
+
 fn prepare_error(e: &PrepareError) -> String {
     match e {
         PrepareError::Refused(why) => {
@@ -258,25 +297,20 @@ fn prepare_error(e: &PrepareError) -> String {
     }
 }
 
-/// The environment every step of one run gets: the runner's, then
-/// `opts.extra_env` where the config's `[env]` does not name the variable.
+/// The environment every step of one run gets.
 fn steps_env(
     opts: &ServeOptions,
     cfg: &crate::config::DagConfig,
     now: &str,
     run_id: &str,
 ) -> anyhow::Result<host::StepEnv> {
-    let mut env = host::step_env(
+    host::step_env(
         cfg,
         opts.binary_dir.as_deref(),
         &extra_path(&opts.root),
         now,
         run_id,
-    )?;
-    for (key, value) in &opts.extra_env {
-        env.vars.entry(key.clone()).or_insert_with(|| value.clone());
-    }
-    Ok(env)
+    )
 }
 
 /// Where the loop's steps find the library's own programs, whether or not

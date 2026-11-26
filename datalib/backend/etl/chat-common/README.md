@@ -1,6 +1,6 @@
 # chat-common — one markdown layout for every chat provider
 
-Fourteen providers' render crates hand this crate a `NormalizedChat`
+Fifteen providers' render crates hand this crate a `NormalizedChat`
 and get back a rendered document plus the `grid_rows` that go with it
 (`claude_code` and `codex` through `agent_sessions_render`). This file covers
 the parts of that markdown you have to know about before changing it.
@@ -206,7 +206,7 @@ Slack is the one provider that sets it
 ## A chat's layout
 
 `RenderProfile::layout` says how a provider's documents are read. A
-messaging app's chats (Signal, WhatsApp, Messages, SMS, Beeper, Slack,
+messaging app's chats (Signal, WhatsApp, Messages, SMS, Beeper, Slack, Discord,
 Messenger, Google Chat and Voice, LinkedIn's messages) are `Chat`; an
 email thread or a post with its comments is `Conversation`, and an
 assistant's transcript `Transcript`, both drawn as they always were.
@@ -280,7 +280,7 @@ writes.** Every chat provider declares it through
 `RenderProcessor::render_params` (`layout_params()`, or
 `layout_params_with(…)` beside its own knobs), so one edit changes every
 provider's render params and the driver re-renders all of them. Bumping
-fourteen render versions by hand is the alternative, and the one you
+fifteen render versions by hand is the alternative, and the one you
 forget is the one that keeps serving the old layout forever.
 
 It stays out of the *stored* `render_version`, which is the provider's

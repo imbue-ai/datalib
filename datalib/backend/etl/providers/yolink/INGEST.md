@@ -25,8 +25,9 @@ its silence again. Each window's request begins `overlap_minutes`
 (default 5) before the window, so the newest few minutes of the last
 run, which a sensor may not have reported yet, are asked for again;
 re-fetched samples upsert over themselves. The walk stops at the next
-window when the step is told to stop, and the store is sealed after
-each device.
+window when the step is told to stop. After each device the store is
+sealed if the checkpoint interval has passed (or a stop was asked
+for), and always at the end of the run.
 
 Moving a device's `start` earlier is a gap below what it holds, walked
 on the next run; moving it later leaves what was fetched in place and

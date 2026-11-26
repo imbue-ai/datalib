@@ -14,7 +14,7 @@ complete config with every line commented.
 ```toml
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 
 [[locks]]
 name = "index"
@@ -94,7 +94,7 @@ The file then declares those two locks in `[[locks]]` entries
 step that holds an undeclared lock is dropped, and lists the verbs
 `datalib-step` takes in a `[[programs]]` entry. `datalib-step`'s own
 code for all of this is `datalib_step/src/step_entry.rs`, which the
-examples, `examples --append` and `check-params` share.
+examples and `examples --append` share.
 
 `[env]` is a table of variables handed to every step, below each
 step's own `env`. `datalib-step` reads three knobs from it:
@@ -183,7 +183,7 @@ package's programs by its path under the data root, in its `command`;
   many chunks (prompts the inference cache has no vector for) sends all
   of them to the person's own Modal account to be embedded on rented
   GPUs, and a run that owes fewer embeds them here; `0` sends every run.
-  `check-params` refuses anything else. What leaves and what guards it:
+  `datalib-pipeline check` refuses anything else. What leaves and what guards it:
   `docs/dev/security_posture.md` § "What leaves the machine for Modal";
   how the step does it: `docs/dev/plans/embed_on_modal.md`. What every
   such step shares is in `[env]`: `DATALIB_STEP_MODAL_MAX_SANDBOXES`,
@@ -213,9 +213,9 @@ its own `path`. Each type declares its own:
 
 | type | methods |
 |---|---|
-| baby_connect, garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
+| baby_connect, discord, garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
 | chatgpt, claude | `api`, `export` |
-| contacts | `fastmail`, `carddav`, `vcf` |
+| contacts | `google`, `fastmail`, `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox`, `apple_mail` |
 | calendar | `google`, `fastmail`, `caldav`, `calendly`, `ics` |
 | lightroom | `catalog`, `backups` |
@@ -267,7 +267,7 @@ naming one is refused as an unknown field.
 
 | method | keys, and unset | what the window bounds | a record the window leaves behind |
 |---|---|---|---|
-| slack `api` | `since`: everything | a message's time | stays |
+| discord `api`, slack `api` | `since`: everything | a message's time | stays |
 | claude `api`, chatgpt `api` | `since`: everything | a conversation's last update | stays |
 | email `gmail` | `since`: everything | `after:` on the listing walk | stays |
 | todoist `api` | `since`: the day the account joined | a task's completion time | stays |
@@ -331,15 +331,16 @@ holds its method alone; a complete one sets every option of its method
 and may also hold the method it pairs with (Gmail's shows its Takeout).
 A test loads and plans every stanza.
 
-`datalib-step check-params <config>` plans the params of every step
-that runs `datalib-step run` the way a sync would, and prints one JSON
-line per step it would refuse. The server links no provider, so it asks:
-`PUT /api/config` and `POST /api/config/check`
-(`http/src/params_check.rs`) refuse to write a config a sync would
-refuse a step of, and show each answer as an ordinary `rejected`
-diagnostic at the misspelled key's line. `datalib-pipeline check` does not
-ask: the runner knows no program, so it checks only what the runner
-itself reads. Another program's params are never asked about.
+Neither the runner nor the server can read a step's params: they
+belong to its program. So both ask, through the `--check` verb
+(`step_protocol.md` § Check): `datalib-pipeline check`, `PUT
+/api/config` and `POST /api/config/check` invoke every step whose
+program takes the verb, `datalib-step`'s included
+(`datalib/backend/dag/src/check.rs`). A step that would refuse its
+params is an ordinary `rejected` diagnostic at the misspelled key's
+line: the save is refused and the check exits 2. A warning it answers
+with, such as one of the keys below that no longer do anything, is a
+`warning` there.
 
 ## `Reach`: origin or local
 
@@ -381,13 +382,9 @@ it next reads the file, and `datalib-migrate-config` from a terminal
 
 Warnings: a group with nothing filed under it; an applet filed under an
 undeclared group; and a verb a `[[programs]]` entry lists that the
-runner does not know, which is ignored. The Manage screen's System row counts the config's
-warnings and names them on hover; a double-click opens the config.
-
-Warnings: a group with nothing filed under it, and an applet filed
-under an undeclared group. The Manage screen's System row counts the
-config's warnings and names them on hover; a double-click opens the
-config.
+runner does not know, which is ignored. The Manage screen's System row
+counts the config's warnings and names them on hover; a double-click
+opens the config.
 
 `datalib-step` drops a few keys from its params before parsing them,
 since they no longer do anything, and the step still runs: an ingest's
@@ -580,7 +577,7 @@ download …` command lines become groups and steps, retired type words become t
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Fifteen rewrites are made without asking,
+well enough to name the tool. Seventeen rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. They are listed, in this
 order, in `datalib_migrate_config::UNATTENDED`, which `datalib-http` runs
@@ -699,8 +696,8 @@ the next would put the first back:
 
 15. What the runner used to infer for `datalib-step`
     (`upgrade_explicit_steps`, `explicit_steps.rs`), the shape from
-    before the runner stopped knowing that program. It runs last, so it
-    reads the shape every rewrite above leaves. A file is in that shape
+    before the runner stopped knowing that program. It runs after every
+    rewrite above, so it reads the shape they leave. A file is in that shape
     when a step writes `group` or `function`; a step's `command` is
     `datalib-step` (or a path ending in `/datalib-step`) without `run`
     as its next word, or is missing; the file has a top-level
@@ -722,11 +719,32 @@ the next would put the first back:
     `DATALIB_STEP_MODAL_MAX_SANDBOXES` in place of `checkpoint_cadence`,
     `render_pages` and `[modal]`; `embed_contexts` and
     `embed_search_index`, which no step reads any more, go, with the
-    comments above them; a group loses its `source`. A WhatsApp or
-    Signal ingest gets the variable it reads its backup secret from
-    named in its params. Every step's fingerprint changes with its
-    `command`, so every step runs once at the next sync; a
-    `datalib-step` step does only what is new.
+    comments above them; a group loses its `source`. Every step's
+    fingerprint changes with its `command`, so every step runs once at
+    the next sync; a `datalib-step` step does only what is new.
+16. A backup secret's variable (`upgrade_backup_secrets`,
+    `backup_secrets.rs`): a `datalib-step run ingest whatsapp` or
+    `… signal` step whose `backup` params name no variable gets
+    `key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"` or
+    `aep_env_var = "SIGNAL_BACKUP_PASSPHRASE"`, the names `datalib-step`
+    falls back to. The runner hands a step only the variables its params
+    name, so without the line the step could not decrypt. A step whose
+    `backup` table is inline is refused, naming the step, for a person
+    to add the line.
+17. The `check` verb (`upgrade_check_verb`, `check_verb.rs`): a
+    `[[programs]]` entry for `datalib-step` whose `verbs` leave out
+    `check` gets it, so a save and `datalib-pipeline check` ask each of
+    its steps about its params. An entry with no `verbs` is left alone;
+    one whose `verbs` spans lines is refused, naming it.
+
+`datalib-migrate-config` is Datalib's own migration tool, and it may
+know `datalib-step`: most of its rewrites are about `datalib-step`'s
+steps and params. It is not a step program's protocol. Many rewrites
+need the whole file rather than one program's entries (the time-series
+steps add a group and its steps; the search locks edit `[[locks]]`),
+which a protocol where each program rewrites only its own entries could
+not express. A package that needs its entries rewritten has no way to
+ask for it yet.
 
 The wizard never gives a source `unified_index`,
 `unified_document_index`, `unified_grid_and_search_index` or

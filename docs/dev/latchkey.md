@@ -78,7 +78,7 @@ plus the URLs its credential is good for and how to get one.
 
 | kind | examples | where it comes from |
 |---|---|---|
-| **built-in** | `slack`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
+| **built-in** | `slack`, `discord`, `google-gmail`, `google-calendar`, `google-people`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
 | **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. Datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without Datalib's stamp is the person's own and is never touched. |
 | **registered** | `claude-ai`, `chatgpt`, `babyconnect` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
@@ -89,8 +89,8 @@ so a stale sibling can shadow the service you just signed in to.
 
 ## An OAuth client of your own
 
-Google's services (`google-gmail`, `google-calendar`, `google-drive`,
-`google-docs`, `google-sheets`, `google-slides`) sign in through an
+Google's services (`google-gmail`, `google-calendar`, `google-people`,
+`google-drive`, `google-docs`, `google-sheets`, `google-slides`) sign in through an
 OAuth client in a Google Cloud project, and latchkey ships none. Until
 a service has one, `auth browser` refuses at once with "requires
 preparation first", which the wizard reads as
@@ -107,7 +107,7 @@ commands store one:
 - **`auth prepare <service> '{"clientId":…,"clientSecret":…}'`**
   stores a client made some other way, with no browser. Nothing ties a
   client to one service, so a single client whose project has every
-  API turned on can be given to all six.
+  API turned on can be given to all seven.
 
 Each service is still its own sign-in, because latchkey asks for each
 one's scopes separately; only the client is shared.
@@ -156,7 +156,7 @@ login. `latchkey services info` says which, as
 
 | | browser login (`auth browser`) | pasted credential (`auth set`, `auth set-nocurl`) |
 |---|---|---|
-| **detects the login account** (Slack, Gmail, Fastmail, GitHub, Garmin, Linear, Todoist) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
+| **detects the login account** (Slack, Discord, Gmail, Fastmail, GitHub, Garmin, Linear, Todoist) | The service names the account: the login asks who you signed in as (an email, a workspace user) and stores the credential under that. `--account X` is accepted only when X is already stored, which refreshes it. A new name is refused before any browser opens. | Stored under the name you give. |
 | **does not** (every registered service, so Claude and ChatGPT; `openrouter`, `ngrok`) | You name it: `--account X` stores under X, a new name included. With none, the default account. | Stored under the name you give. |
 
 The flag describes a browser login, so it means nothing for a service

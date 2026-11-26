@@ -53,10 +53,11 @@ names! { LATCHKEY:
 /// big buffers holds gigabytes it no longer uses.
 pub const MALLOC_LARGE_CACHE: &str = "MallocLargeCache";
 
-names! { BACKUP_SECRET_KEYS:
-    WHATSAPP_BACKUP_DECRYPTION_KEY,
-    SIGNAL_BACKUP_PASSPHRASE,
-}
+/// The variables WhatsApp's and Signal's ingests read their backup secret
+/// from when their params name none. A step is handed them only when its
+/// params name them, as the wizard writes.
+pub const WHATSAPP_BACKUP_DECRYPTION_KEY: &str = "WHATSAPP_BACKUP_DECRYPTION_KEY";
+pub const SIGNAL_BACKUP_PASSPHRASE: &str = "SIGNAL_BACKUP_PASSPHRASE";
 
 /// Set by the desktop app on the server of a library in the protected
 /// folder, whose latchkey store a person's terminal cannot reach. Children
@@ -73,13 +74,15 @@ pub const DATALIB_CHILD_ENV: &str = "DATALIB_CHILD_ENV";
 pub const DATALIB_SQL_VALUES: &str = "DATALIB_SQL_VALUES";
 
 /// A folder `datalib_sql_work` records every statement a process runs in,
-/// with the file it ran on, for the fixture sync's scan check. Handed to
-/// every child.
+/// with the file it ran on, for the fixture sync's scan check. No child
+/// is handed it by default: the fixture sync names it in
+/// [`DATALIB_CHILD_ENV`], as every test names its own switches.
 pub const DATALIB_SQL_CENSUS: &str = "DATALIB_SQL_CENSUS";
 
 /// How many threads the embedder computes on where its caller leaves that
 /// to llama.cpp, which otherwise takes four on any machine. Tests set it
-/// (`.bazelrc`), since several of them share CI's cores.
+/// (`.bazelrc`), since several of them share CI's cores, and name it in
+/// [`DATALIB_CHILD_ENV`] for it to reach a step or an applet.
 pub const DATALIB_EMBED_THREADS: &str = "DATALIB_EMBED_THREADS";
 
 /// A child process, for what of this process's environment it is handed
@@ -142,7 +145,6 @@ const EVERY_CHILD: &[&str] = &[
     "DATALIB_GIT_HASH",
     "DATALIB_POOL_ACQUIRE_SECS",
     DATALIB_SQL_VALUES,
-    DATALIB_SQL_CENSUS,
     "DATALIB_MODELS_NO_FETCH",
     "DATALIB_QMD_MODELS_NO_FETCH",
     "DATALIB_NO_FETCH",
@@ -166,29 +168,6 @@ const LATCHKEY_ALSO: &[&str] = &[
     "DATALIB_CURL_ROUTER",
 ];
 
-/// What a step reads beyond what latchkey does: where the fingerprint
-/// cache is, replayed HTTP in tests, the URL prefix a Minds workspace
-/// routes some requests through, and how many threads `embed` takes.
-const STEP_ALSO: &[&str] = &[
-    "DATALIB_CACHE_DIR",
-    "DATALIB_HTTP_PLAYBACK",
-    "DATALIB_HTTP_PLAYBACK_DELAY_MS",
-    "DATALIB_HTTP_PLAYBACK_HOLD",
-    "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
-    "DATALIB_HTTP_PLAYBACK_OFFLINE",
-    "MINDS_VIA_DESKTOP_URL_PREFIX",
-    DATALIB_EMBED_THREADS,
-];
-
-/// What an applet reads beyond every child's: the search's pinned now,
-/// and whether it warms the search by meaning at launch, both for tests;
-/// how many threads its embedder takes.
-const APPLET_ALSO: &[&str] = &[
-    "DATALIB_SEARCH_NOW",
-    "DATALIB_SEARCH_NO_WARM",
-    DATALIB_EMBED_THREADS,
-];
-
 /// What Modal's SDK signs in with and is pointed by, beyond every child's.
 /// A step is not handed these: a sync's runner passes them on only when
 /// [`DATALIB_CHILD_ENV`] names them.
@@ -210,9 +189,9 @@ pub fn hands_down(name: &str, child: Child, also: &[String]) -> bool {
         || name.starts_with("LC_")
         || also.iter().any(|a| a == name)
         || match child {
-            Child::Step => latchkey(name) || STEP_ALSO.contains(&name),
+            Child::Step => latchkey(name),
             Child::Latchkey => latchkey(name),
-            Child::Applet => APPLET_ALSO.contains(&name),
+            Child::Applet => false,
             Child::Modal => MODAL_ALSO.contains(&name),
         }
 }
@@ -226,6 +205,23 @@ pub fn child_env_names(value: Option<&str>) -> Vec<String> {
         .filter(|n| !n.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// What the server keeps from the runner it starts, `datalib-pipeline
+/// serve`: its own API token and address, and the protected-library flag
+/// no child is handed. The runner gets the rest of the server's
+/// environment, the one a person's terminal would give it, because it is
+/// the runner that hands each step only what [`hands_down`] allows and
+/// the variables the step's params name, and a source added later may
+/// name any variable.
+const KEPT_FROM_THE_RUNNER: &[&str] = &["DATALIB_TOKEN", "DATALIB_BIND", DATALIB_PROTECTED_LIBRARY];
+
+/// Starts `cmd`, the server's runner, from this process's environment
+/// less [`KEPT_FROM_THE_RUNNER`].
+pub fn inherit_for_runner(cmd: &mut std::process::Command) {
+    for name in KEPT_FROM_THE_RUNNER {
+        cmd.env_remove(name);
+    }
 }
 
 /// Starts `cmd` from nothing but what [`hands_down`] lets `child` have
@@ -277,22 +273,28 @@ mod tests {
         assert!(!hands_down("LATCHKEY_ENCRYPTION_KEY", Child::Modal, &[]));
     }
 
-    /// The e2e suite turns the applet's launch warming off for its sandbox
-    /// backends; dropped on the way down, the variable would leave every
-    /// one of them loading the model at once.
+    /// A switch only tests set reaches no child of a real install: the
+    /// test that sets it names it in `DATALIB_CHILD_ENV`.
     #[test]
-    fn the_search_warming_switch_reaches_the_applet() {
-        assert!(hands_down("DATALIB_SEARCH_NO_WARM", Child::Applet, &[]));
-        assert!(!hands_down("DATALIB_SEARCH_NO_WARM", Child::Step, &[]));
-    }
-
-    /// Tests cap the embedder's threads; dropped on the way down, a step's
-    /// `embed` and the search applet would each spin four threads again.
-    #[test]
-    fn the_embedder_thread_cap_reaches_steps_and_applets() {
-        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
-        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Applet, &[]));
-        assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Latchkey, &[]));
+    fn a_test_s_switch_reaches_a_child_only_when_named() {
+        let switches = [
+            "DATALIB_HTTP_PLAYBACK",
+            "DATALIB_HTTP_PLAYBACK_HOLD",
+            "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
+            "DATALIB_HTTP_PLAYBACK_OFFLINE",
+            "DATALIB_HTTP_PLAYBACK_DELAY_MS",
+            "DATALIB_SEARCH_NOW",
+            "DATALIB_SEARCH_NO_WARM",
+            "DATALIB_CACHE_DIR",
+            DATALIB_EMBED_THREADS,
+            DATALIB_SQL_CENSUS,
+        ];
+        for name in switches {
+            for child in [Child::Step, Child::Applet, Child::Latchkey, Child::Modal] {
+                assert!(!hands_down(name, child, &[]), "{name} to {child:?}");
+                assert!(hands_down(name, child, &[name.to_string()]), "{name} named");
+            }
+        }
     }
 
     fn step_protocol_doc() -> String {
@@ -322,6 +324,28 @@ mod tests {
         assert_eq!(
             table, ours,
             "docs/dev/step_protocol.md's variable table and datalib_env::STEP_PROTOCOL disagree"
+        );
+    }
+
+    /// The server's runner keeps everything but the server's own token,
+    /// address and protected-library flag: it is the runner that filters
+    /// what each step gets.
+    #[test]
+    fn the_runner_is_kept_from_the_servers_own_variables_only() {
+        let mut cmd = std::process::Command::new("true");
+        inherit_for_runner(&mut cmd);
+        let removed: Vec<String> = cmd
+            .get_envs()
+            .filter(|(_, v)| v.is_none())
+            .map(|(k, _)| k.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            removed,
+            ["DATALIB_BIND", "DATALIB_PROTECTED_LIBRARY", "DATALIB_TOKEN"]
+        );
+        assert!(
+            cmd.get_envs().all(|(_, v)| v.is_none()),
+            "nothing is set or cleared"
         );
     }
 

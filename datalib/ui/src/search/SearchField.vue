@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The one search field: a single-line CodeMirror editor over the query
-// text, which stays the query (docs/dev/plans/search_autocomplete.md
-// § "The field"). Every search bar is one of these, given the table's
+// text, which stays the query: a chip is only drawn over it. CodeMirror
+// rather than a `contenteditable` of ours, for the caret, undo and input
+// methods WebKit gets wrong around one. Every search bar is one of these, given the table's
 // search to ask for keys and values. Its look is in `field.ts`'s theme,
 // which CodeMirror mounts in whatever root the field is in; a chip's is
 // the host's `chip.css`.

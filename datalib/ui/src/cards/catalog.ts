@@ -146,8 +146,8 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "person",
   },
   contactsView: {
-    title: "Your contacts",
-    description: "Every contact you have made, live from the contacts app: filter, open, link.",
+    title: "Contacts",
+    description: "The people you have added to your contacts: filter, open, merge.",
     icon: "contacts",
     gallery: "contactsView()",
   },
@@ -167,7 +167,7 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
   // Not in the gallery: it needs the node to show, which the Library opens.
   nodeView: {
     title: "Library node",
-    description: "What one place in your library holds, read beside a preview.",
+    description: "What is directly in one place of your library, read beside a preview.",
     icon: "book",
   },
   sourceView: {

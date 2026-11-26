@@ -101,6 +101,7 @@ pasted elsewhere still works:
 | a Slack user | `slack://user?team=T01&id=U02`, Slack's own deep link |
 | a LinkedIn member | `https://www.linkedin.com/in/<slug>`, their profile |
 | any other kind | `datalib:handle/<kind>/<value>`, the value percent-encoded but for its `/`s: `datalib:handle/github/data-soong`, `datalib:handle/facebook/name/Will%20Riker` |
+| none: an address-book card with no address and no full number | `datalib:contact_page/<page>`, the card's own page, as its heading |
 
 A handle is the URI's own spelling of it: `mailto:riker@enterprise.org`
 is the handle `email:riker@enterprise.org`, and `slack://user?team=T01&id=U02`
@@ -131,12 +132,16 @@ text, such as a signature's.
 
 `POST /applet/unified_grid_and_search_index/people` with
 `{"handles": ["email:riker@enterprise.org", "slack:T01/U02"]}` answers
-`{"people": {<handle>: [record, …]}}`: for each handle, every source's
+`{"people": {<handle>: [record, …]}, …}`: for each handle, every source's
 record of that person, best first: a source about people (an address
 book) ahead of a chat, then the chat where they wrote the most. A record
 has their names, their other handles, a photo where a source had one,
 and the source it came from. A handle no source mentions is absent from
-the answer. Ask for every handle on the page in one request.
+the answer. `"pages": ["<page>"]` beside the handles asks who each
+contact's page is about, answered in `pages`. `same_digits` holds, for a
+number, the cards that write it without its country code: a likely
+match, not a record of that person. Ask for every handle on the page in
+one request.
 
 Where the library keeps a contacts app, a person may also have linked
 handles into one contact of their own; the
@@ -184,7 +189,8 @@ and `+00:00` means the time really was on UTC's clock. (RFC 3339 spelled
 the first `-00:00`; read that the same way.) A message's time is written
 with `Z` when its source records only an instant: a Slack message (an
 author's profile names where they are now, not where they were when
-they wrote it), a phone backup's milliseconds (SMS, iMessage, Signal), a
+they wrote it), a Discord message (its id holds the instant), a phone
+backup's milliseconds (SMS, iMessage, Signal), a
 service stamping its own UTC (a Drive, Todoist, Notion, GitHub or
 GitLab comment). Show such a
 time on your reader's own clock rather than as UTC; Datalib's viewer

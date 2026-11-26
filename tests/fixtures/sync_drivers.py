@@ -39,7 +39,7 @@ POLL_SECS = 0.2
 # the runner gives `datalib-step` no verbs and no locks of its own.
 PROGRAM_AND_LOCKS = """[[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 
 [[locks]]
 name = "index"
@@ -167,7 +167,13 @@ class HttpDriver:
     """A `datalib-http` on the root for the life of the driver."""
 
     def __init__(
-        self, http_bin: Path, workspace: Path, bindir: Path, now: str, env: dict
+        self,
+        http_bin: Path,
+        pipeline_bin: Path,
+        workspace: Path,
+        bindir: Path,
+        now: str,
+        env: dict,
     ):
         self.workspace = workspace
         url_file = workspace.parent / f"{workspace.name}.url"
@@ -193,6 +199,8 @@ class HttpDriver:
                 "DATALIB_BIND": "127.0.0.1:0",
                 # Where the loop's steps find `datalib-step`.
                 "DATALIB_BINARY_DIR": str(bindir),
+                # The runner the server keeps as a child.
+                "DATALIB_PIPELINE_BIN": str(pipeline_bin),
             },
             stdin=subprocess.DEVNULL,
             stdout=self._log,

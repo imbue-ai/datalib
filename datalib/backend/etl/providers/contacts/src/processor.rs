@@ -1,7 +1,7 @@
 //! Program-A `DataProcessor`s for the contacts source. Contacts contributes
-//! a **download** processor ([`ContactsIngest`] — live CardDAV server sync
-//! or file-backed `.vcf` ingest, chosen by which method table is set) and a **render**
-//! processor ([`ContactsRender`]). [`plan_ingest`] / [`plan_render`] build the
+//! a **download** processor ([`ContactsIngest`] — Google's People API, live
+//! CardDAV server sync or file-backed `.vcf` ingest, chosen by which method
+//! table is set) and a **render** processor ([`ContactsRender`]). [`plan_ingest`] / [`plan_render`] build the
 //! per-wave processors the orchestrator drives, owning every contacts-specific decision (which
 //! download mode) so the orchestrator destructures nothing.
 
@@ -36,7 +36,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: `fastmail` or `carddav` → live CardDAV server; `vcf` →
+/// Ingest wave: `google` → the People API; `fastmail` or `carddav` → live CardDAV server; `vcf` →
 /// file mode (`.vcf` tree under its `path`, no account override).
 pub fn plan_ingest(
     ctx: PlanContext,
@@ -49,6 +49,10 @@ pub fn plan_ingest(
         .method()
         .with_context(|| format!("contacts source {name}"))?
     {
+        ContactsMethod::Google { labels } => DownloadMode::Google {
+            labels: labels.to_vec(),
+            blob_size_limit_bytes: config.common.blob_size_limit_bytes,
+        },
         ContactsMethod::Carddav {
             server_url,
             addressbooks,
@@ -71,6 +75,11 @@ pub fn plan_ingest(
 
 /// Which download path contacts takes for this source.
 enum DownloadMode {
+    /// Google's People API.
+    Google {
+        labels: Vec<String>,
+        blob_size_limit_bytes: Option<u64>,
+    },
     /// Live CardDAV server sync.
     Server {
         server_url: String,
@@ -105,6 +114,30 @@ impl DataProcessor for ContactsIngest {
         let pool = db.pool().clone();
         ctx.run_store(pool, None, |sealer| async {
             Ok(match &self.mode {
+                DownloadMode::Google {
+                    labels,
+                    blob_size_limit_bytes,
+                } => {
+                    let s = ingest::google::fetch(ingest::google::FetchOptions {
+                        db,
+                        labels: labels.clone(),
+                        blob_size_limit_bytes: *blob_size_limit_bytes,
+                        latchkey: self.latchkey.clone(),
+                        progress: ctx.progress.clone(),
+                        control: ctx.control.clone(),
+                        sealer: Some(sealer),
+                    })
+                    .await?;
+                    format!(
+                        "new={} updated={} deleted={} photos={} errors={} requests={}",
+                        s.contacts_new,
+                        s.contacts_updated,
+                        s.contacts_deleted,
+                        s.photos,
+                        s.errors,
+                        s.requests,
+                    )
+                }
                 DownloadMode::Server {
                     server_url,
                     addressbooks,

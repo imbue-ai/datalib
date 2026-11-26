@@ -2,7 +2,7 @@
 //! datalib wrote. An older build's reconcile would drop the columns it
 //! does not know, and take the rows with them (`doltlite_raw`'s
 //! drop-and-recreate), so the open is refused before anything touches
-//! the file. docs/dev/plans/completed/schema_migrations.md §3.4.
+//! the file.
 //!
 //! "Newer" is by `major.minor`: a patch release never changes a store's
 //! shape (`docs/dev/release_steps.md`), so a store written by 0.36.3
@@ -188,11 +188,11 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         let files = [
-            "system/feedback.doltlite_db",
+            "system/remote_media.doltlite_db",
             "system/runs/runs.sqlite",
             "system/disk_stats.sqlite",
             "system/disk_stats.sqlite-journal",
-            "system/feedback.doltlite_db.lock",
+            "system/remote_media.doltlite_db.lock",
             "system/api-token",
             "slack/ingest/entities.doltlite_db",
             "slack/ingest/blobs.sqlite",
@@ -218,7 +218,7 @@ mod tests {
                 "slack/ingest/entities.doltlite_db",
                 "slack/render_markdown/indexed_markdown.doltlite_db",
                 "system/disk_stats.sqlite",
-                "system/feedback.doltlite_db",
+                "system/remote_media.doltlite_db",
                 "system/runs/runs.sqlite",
                 "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
             ]
@@ -252,8 +252,7 @@ mod tests {
                 crate::write(
                     &pool,
                     crate::StoreKind::Raw,
-                    "h",
-                    crate::Versions::default(),
+                    &crate::Shape::of_tables("h".into()),
                 )
                 .await
                 .unwrap();

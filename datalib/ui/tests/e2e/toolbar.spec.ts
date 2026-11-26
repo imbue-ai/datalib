@@ -7,16 +7,15 @@ import {
   stubClipboard,
   tabLabels,
   typeInto,
+  PINNED,
   SEARCH_SETTLE,
 } from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
 // card on what was typed, and ⌘K (Ctrl+K) reaches it from anywhere;
 // the status bar's "Logs" reveals the log once. Each opens a tab of
-// its own. A new window opens on the Dashboard, the first of its three
+// its own. A new window opens on the Dashboard, the first of its
 // pinned tabs.
-
-const PINNED = ["Dashboard", "Search", "Sources"];
 
 const searchBox = (page: import("@playwright/test").Page) =>
   page.getByRole("searchbox", { name: "Search your data" });
@@ -169,7 +168,7 @@ test.describe("toolbar", () => {
       timeout: SEARCH_SETTLE,
     });
     await expect(shownTabName(page)).toHaveText("Search: warp");
-    await expect(tabLabels(page)).toHaveCount(4);
+    await expect(tabLabels(page)).toHaveCount(5);
     await expect(searchBox(page)).toHaveAttribute("data-query", "warp");
 
     // On one, what is typed waits for Enter, and then changes that tab.
@@ -187,7 +186,7 @@ test.describe("toolbar", () => {
     await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp core", {
       timeout: SEARCH_SETTLE,
     });
-    await expect(tabLabels(page), "changing a search adds no tab").toHaveCount(4);
+    await expect(tabLabels(page), "changing a search adds no tab").toHaveCount(5);
 
     // ⌘Enter keeps it and opens another.
     await typeInto(searchBox(page), "tea");
@@ -195,12 +194,12 @@ test.describe("toolbar", () => {
     const tea = cardOf(page, 'searchView({"q":"tea"})');
     await expect(tea).toBeVisible();
     await expect(shownTabName(page)).toHaveText("Search: tea");
-    await expect(tabLabels(page)).toHaveCount(5);
+    await expect(tabLabels(page)).toHaveCount(6);
 
     // The box is the box of the tab on screen, and empty on any other.
     await tabLabels(page).first().click();
     await expect(searchBox(page)).toHaveAttribute("data-query", "");
-    await tabLabels(page).nth(3).click();
+    await tabLabels(page).nth(4).click();
     await expect(searchBox(page)).toHaveAttribute("data-query", "warp core");
     // A search from elsewhere left the pinned Search tab as it was.
     await tabLabels(page).nth(1).click();
@@ -268,7 +267,7 @@ test.describe("toolbar", () => {
     await expect(cardOf(page, "logView()")).toHaveCount(1);
 
     await page.getByRole("button", { name: "Logs" }).click();
-    await expect(tabLabels(page)).toHaveCount(4);
+    await expect(tabLabels(page)).toHaveCount(5);
     await expect(cardOf(page, "logView()")).toHaveCount(1);
   });
 

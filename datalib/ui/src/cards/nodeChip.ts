@@ -25,8 +25,8 @@ export function nodeLook(uri: string, name: string, kind: string): ChipLook {
   };
 }
 
-/** What double-clicking it opens: the node's card, its children listed
- *  and, for a node that is a document, the document beside them. */
+/** What double-clicking it opens: the node's card, the search held to it,
+ *  led by its document when it is one. */
 export function nodeCardSource(uri: string, name: string, doc: string | null): string | null {
   const node = parseNode(uri);
   if (!node) return null;
@@ -37,8 +37,8 @@ export type NodeChipMenuId = "open" | "copy-id" | "copy-name" | "copy-both";
 export type NodeChipEntry = { id: NodeChipMenuId; label: string; separator?: boolean };
 
 /** The right-click menu: open it, then its copies, in the order
- *  `CHIP_ACTIONS` gives every chip's menu. No search names a node yet, so
- *  there is no "Everything in". */
+ *  `CHIP_ACTIONS` gives every chip's menu. Its card is the search held to
+ *  it, so there is no "Everything in". */
 export function nodeMenu(uri: string, name: string): NodeChipEntry[] {
   if (!parseNode(uri)) return [];
   return [

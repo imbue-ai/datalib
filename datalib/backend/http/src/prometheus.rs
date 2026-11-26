@@ -331,7 +331,7 @@ pub fn render(families: &[Family]) -> String {
     out
 }
 
-pub async fn get_metrics(State(s): State<AppState>) -> impl IntoResponse {
+pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse, crate::Refusal> {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let steps: Vec<StepEntry> = datalib_dag::written::entries_as_written(&text)
@@ -345,7 +345,9 @@ pub async fn get_metrics(State(s): State<AppState>) -> impl IntoResponse {
                 .collect()
         })
         .unwrap_or_default();
-    let metrics = datalib_runs::latest_metrics(&s.root).await;
+    let metrics = datalib_runs::latest_metrics(&s.root)
+        .await
+        .map_err(crate::unread)?;
     let records = match s.sync.mailbox().await {
         Ok(store) => store
             .load_record()
@@ -375,7 +377,7 @@ pub async fn get_metrics(State(s): State<AppState>) -> impl IntoResponse {
         disk: &disk,
         applets: &s.applets.memory(),
     }));
-    ([(header::CONTENT_TYPE, CONTENT_TYPE)], body)
+    Ok(([(header::CONTENT_TYPE, CONTENT_TYPE)], body))
 }
 
 #[cfg(test)]

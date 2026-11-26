@@ -120,7 +120,7 @@ bazelisk coverage \
     --noremote_upload_local_results \
     --test_env=LLVM_PROFDATA \
     --test_env=LLVM_COV \
-    --test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV
+    --test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV,DATALIB_EMBED_THREADS,DATALIB_CACHE_DIR
 
 # `bazelisk coverage` above has already built instrumented versions of
 # all the rust_binaries the test brings in as `data` deps, and the

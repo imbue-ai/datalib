@@ -1,7 +1,7 @@
 //! `DoltRepo` — production [`IndexRepo`](crate::repo::IndexRepo) backed
 //! by a `sqlx::SqlitePool` against the grid index on disk. Every request
-//! reads inside one read transaction: one commit, and the plain tables'
-//! indexes (`docs/dev/plans/paged_grids.md`, "Pinned and indexed").
+//! reads inside one read transaction, so it sees one state of the index
+//! (`docs/dev/grid_rows.md` § "Consumer side").
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,16 +10,14 @@ use async_trait::async_trait;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
-use crate::children::{
-    self, Anchor, Ask, ChildrenFailure, ChildrenPage, Key, NodeFacts, Only, RowFacts, Scope, Side,
-    Split, Via,
-};
+use crate::at_node::Arms;
 use crate::db::{build_where, matching_sql, vals_holding, ChatMeta, KEPT_DOCUMENTS, KEPT_ROWS};
 use crate::group::{
     group_sql, like_pattern, values_sql, where_within, GroupCount, Grouping, Within, MAX_GROUPS,
     MAX_VALUES,
 };
 use crate::hits::GridRowRef;
+use crate::places::{self, Key, Parent, Place, PlacesPage};
 use crate::problems::{Ids, ProblemsQuery};
 use crate::query::ParsedQuery;
 use crate::repo::{
@@ -27,8 +25,10 @@ use crate::repo::{
 };
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
+use datalib_contact_schema::{ContactKind, NormalizedContact, Seen};
 use datalib_core::repo::RepoError;
-use datalib_pin::{is_missing_table, missing_schema, open_reader, Missing};
+use datalib_handle::Handle;
+use datalib_pin::open_reader;
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
@@ -84,11 +84,10 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
         for u in chunk {
             query = query.bind(u);
         }
-        let rows = match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         for r in rows {
             let row = search_row_from(&r);
             by_uuid.insert(row.uuid.clone(), row);
@@ -108,6 +107,79 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
             .and_then(|d| titles.get(d).cloned());
     }
     Ok(uuids.iter().filter_map(|u| by_uuid.remove(u)).collect())
+}
+
+/// Each record of a person holding one of the handles in the JSON array
+/// `?1`, with what they wrote over every document that carries it.
+pub const PEOPLE_SQL: &str = "\
+    WITH seen AS MATERIALIZED ( \
+      SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
+             SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
+        FROM document_contacts INDEXED BY document_contacts_by_record \
+       WHERE record_id IN ( \
+         SELECT record_id FROM contact_record_handles \
+           INDEXED BY contact_record_handles_by_handle \
+          WHERE handle IN (SELECT value FROM json_each(?1))) \
+       GROUP BY record_id) \
+    SELECT h.handle, r.contact_json, s.items, s.last_at, s.credit \
+      FROM contact_record_handles h INDEXED BY contact_record_handles_by_handle \
+      JOIN seen s ON s.record_id = h.record_id \
+      JOIN contact_records r ON r.record_id = h.record_id \
+     WHERE h.handle IN (SELECT value FROM json_each(?1)) \
+     ORDER BY h.handle, h.record_id";
+
+/// Each record writing a number with no country code that ends in one of
+/// the last digits in the JSON array `?1`, as [`PEOPLE_SQL`] reads a
+/// record, its `handle` the number's digits.
+pub const SAME_DIGITS_SQL: &str = "\
+    WITH written AS MATERIALIZED ( \
+      SELECT record_id, digits FROM contact_record_numbers \
+        INDEXED BY contact_record_numbers_by_last_digits \
+       WHERE substr(digits, -7) IN (SELECT value FROM json_each(?1))), \
+    seen AS MATERIALIZED ( \
+      SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
+             SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
+        FROM document_contacts INDEXED BY document_contacts_by_record \
+       WHERE record_id IN (SELECT record_id FROM written) \
+       GROUP BY record_id) \
+    SELECT w.digits AS handle, r.contact_json, s.items, s.last_at, s.credit \
+      FROM written w \
+      JOIN seen s ON s.record_id = w.record_id \
+      JOIN contact_records r ON r.record_id = w.record_id \
+     ORDER BY w.digits, w.record_id";
+
+/// Every full number a source knows that ends in one of the last digits
+/// in the JSON array `?1`.
+pub const FULL_NUMBERS_SQL: &str = "\
+    SELECT DISTINCT handle FROM contact_record_handles \
+      INDEXED BY contact_record_handles_by_last_digits \
+     WHERE substr(handle, 1, 4) = 'tel:' \
+       AND substr(handle, -7) IN (SELECT value FROM json_each(?1)) \
+     ORDER BY handle";
+
+/// The record of each contact's own page in the JSON array `?1`, by the
+/// page's id.
+pub const CONTACT_PAGES_SQL: &str = "\
+    SELECT g.uuid AS handle, r.contact_json, NULL AS items, NULL AS last_at, 1 AS credit \
+      FROM grid_rows g \
+      JOIN document_contacts d ON d.markdown_uuid = g.markdown_uuid \
+      JOIN contact_records r ON r.record_id = d.record_id \
+     WHERE g.uuid IN (SELECT value FROM json_each(?1)) \
+       AND g.uuid = g.markdown_uuid AND g.contact IS NOT NULL";
+
+#[derive(sqlx::FromRow)]
+struct PersonRecord {
+    handle: String,
+    contact_json: String,
+    /// Null when no document counts what they wrote.
+    items: Option<i64>,
+    last_at: Option<String>,
+    credit: i64,
+}
+
+fn json_array(values: &[String]) -> Result<String, RepoError> {
+    serde_json::to_string(values)
+        .map_err(|e| RepoError::Internal(format!("encode a set of values: {e}")))
 }
 
 /// Each row in a conversation named by its people gets them, read from
@@ -133,12 +205,12 @@ async fn add_subject_people<'r>(
     let found: Vec<(String, String, Option<String>, Option<i64>)> = match sqlx::query_as(
         // A document's own row has the document's uuid; its supplied
         // terms are `[kind, value]` pairs.
-        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(c.name), MAX(c.seen_items) \
+        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), MAX(d.seen_items) \
            FROM grid_rows g, json_each(g.supplied_terms) t \
-           LEFT JOIN source_contact_handles h \
-             ON h.markdown_uuid = g.uuid AND h.handle = json_extract(t.value, '$[1]') \
-           LEFT JOIN source_contacts c \
-             ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
+           LEFT JOIN contact_record_handles h ON h.handle = json_extract(t.value, '$[1]') \
+           LEFT JOIN document_contacts d \
+             ON d.markdown_uuid = g.uuid AND d.record_id = h.record_id \
+           LEFT JOIN contact_records r ON r.record_id = d.record_id \
           WHERE g.uuid IN (SELECT value FROM json_each(?2)) \
             AND json_extract(t.value, '$[0]') = ?1 \
           GROUP BY g.uuid, person",
@@ -149,11 +221,6 @@ async fn add_subject_people<'r>(
     .await
     {
         Ok(found) => found,
-        Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
-        // An index an older build wrote, until `unified_grid_and_search_index` rebuilds it.
-        Err(e) if matches!(missing_schema(&e), Some(Missing::Column(c)) if c.ends_with("supplied_terms")) => {
-            return Ok(())
-        }
         Err(e) => return Err(RepoError::Internal(format!("read subject people: {e}"))),
     };
     let mut people: std::collections::HashMap<String, Vec<crate::search::SubjectPerson>> =
@@ -178,7 +245,8 @@ async fn add_subject_people<'r>(
 }
 
 /// Each contact's own row gets the handles its document's contact
-/// carries, so the Contact cell can be a chip by any of them.
+/// carries, so the Contact cell can be a chip by any of them, and its
+/// page where that contact is a person.
 async fn add_contact_handles<'r>(
     at: &mut At,
     rows: impl Iterator<Item = &'r mut SearchRow>,
@@ -196,22 +264,27 @@ async fn add_contact_handles<'r>(
     let docs: Vec<&String> = contacts.keys().collect();
     let wanted = serde_json::to_string(&docs)
         .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
-    let handles: Vec<(String, String)> = match sqlx::query_as(
-        "SELECT markdown_uuid, handle FROM source_contact_handles \
-          WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
-          ORDER BY markdown_uuid, handle",
+    let read: Vec<(String, String, Option<String>)> = match sqlx::query_as(
+        "SELECT d.markdown_uuid, r.contact_json ->> '$.kind', h.handle FROM document_contacts d \
+           JOIN contact_records r ON r.record_id = d.record_id \
+           LEFT JOIN contact_record_handles h ON h.record_id = d.record_id \
+          WHERE d.markdown_uuid IN (SELECT value FROM json_each(?)) \
+          ORDER BY d.markdown_uuid, h.handle",
     )
     .bind(wanted)
     .fetch_all(&mut *at.tx)
     .await
     {
-        Ok(handles) => handles,
-        Err(e) if is_missing_table(&e, "source_contact_handles") => return Ok(()),
+        Ok(read) => read,
         Err(e) => return Err(RepoError::Internal(format!("read contact handles: {e}"))),
     };
-    for (doc, handle) in handles {
+    for (doc, kind, handle) in read {
+        let person = ContactKind::parse(&kind) == Some(ContactKind::Person);
         for row in contacts.get_mut(&doc).into_iter().flatten() {
-            row.contact_handles.push(handle.clone());
+            row.contact_handles.extend(handle.clone());
+            if person && row.uuid == doc {
+                row.contact_page = Some(doc.clone());
+            }
         }
     }
     Ok(())
@@ -264,25 +337,6 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
 fn search_row_select() -> String {
     let names: Vec<&str> = SEARCH_ROW_COLUMNS.iter().map(|c| c.as_str()).collect();
     names.join(", ")
-}
-
-/// What `documents_with_pages` runs. The searchable documents are listed
-/// once, from the step's `markdowns_searchable`, never looked up per grid
-/// row: a correlated look-up read each row's whole `markdowns` row, seconds
-/// on a large library. `INDEXED BY` refuses rather than fall back to that.
-/// The grid side is left to the planner, since the search's filters decide
-/// which of its indexes fits.
-pub fn documents_with_pages_sql(
-    grid_rows: &str,
-    markdowns: &str,
-    where_sql: &str,
-    joiner: &str,
-) -> String {
-    format!(
-        "SELECT DISTINCT markdown_uuid, source_id FROM {grid_rows}{where_sql}{joiner} \
-         markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
-                           INDEXED BY markdowns_searchable WHERE searchable = 1)"
-    )
 }
 
 /// What `ordered_uuids` runs, with its parameters.
@@ -379,6 +433,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten(),
         contact_handles: Vec::new(),
+        contact_page: None,
         contact_ref: None,
         subject_people: Vec::new(),
         subject_ref: Vec::new(),
@@ -419,7 +474,8 @@ impl DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let (sql, params) = matching_sql(at.grid_rows, columns, q);
+        let q = at.read_at(q).await?;
+        let (sql, params) = matching_sql(at.grid_rows, columns, &q);
         // Audited: as `search` — a literal table name, literal columns, a
         // literal index name and `build_where`'s static column names;
         // every value is bound.
@@ -427,13 +483,10 @@ impl DoltRepo {
         for p in &params {
             query = query.bind(p);
         }
-        match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => Ok(rows),
-            Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "rows") => {
-                Ok(Vec::new())
-            }
-            Err(e) => Err(RepoError::Internal(e.to_string())),
-        }
+        query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))
     }
 
     /// The directory is created here, the file never is. The server's
@@ -452,14 +505,6 @@ impl DoltRepo {
         })
     }
 
-    /// The index at the generation it is at now, or `None` while the
-    /// `unified_grid_and_search_index` step has yet to create it — the same answer every read
-    /// gives for a missing table.
-    ///
-    /// A transaction on a read-only connection to the WAL file reads one
-    /// state of it for every statement, and the writer changes it one
-    /// whole source per transaction, so a request never sees a
-    /// half-written batch.
     /// [`pinned`](Self::pinned), with `problems` every step's problems:
     /// each read where its step keeps it (`datalib_step_problems::of_steps`),
     /// gathered into a table of this read's own, since no store holds them
@@ -508,6 +553,13 @@ impl DoltRepo {
         Ok(Some(at))
     }
 
+    /// The index at the generation it is at now, or `None` while the
+    /// `unified_grid_and_search_index` step has yet to create it.
+    ///
+    /// A transaction on a read-only connection to the WAL file reads one
+    /// state of it for every statement, and the writer changes it one
+    /// whole source per transaction, so a request never sees a
+    /// half-written batch.
     async fn pinned(&self) -> Result<Option<At>, RepoError> {
         let internal = |what: &str, e: sqlx::Error| RepoError::Internal(format!("{what}: {e}"));
         use std::os::unix::fs::MetadataExt;
@@ -541,6 +593,12 @@ impl DoltRepo {
         let Some(commit) = commit else {
             return Ok(None);
         };
+        // Every table and index this build reads is there, or the read is
+        // refused here, naming what to run: nothing below reads around a
+        // table an older build left out.
+        datalib_etl_render::grid_index::require_shape(&mut tx, &self.db_path)
+            .await
+            .map_err(RepoError::from_anyhow)?;
         Ok(Some(At {
             tx,
             commit,
@@ -613,164 +671,82 @@ fn grouping<R>(
     }
 }
 
-/// A read of the tree's tables from an index an older build wrote, which
-/// has none of them, until `unified_grid_and_search_index` rebuilds it: no children.
-fn older_than_the_tree(e: &sqlx::Error) -> bool {
-    match missing_schema(e) {
-        Some(Missing::Table(t)) => ["grid_rows", "data_nodes", "filings"].contains(&t.as_str()),
-        Some(Missing::Column(c)) => c.ends_with("parent_uuid") || c.ends_with("sort_key"),
-        None => false,
-    }
-}
-
 impl At {
-    async fn child_key(&mut self, scope: &Scope, uuid: &str) -> Result<Option<String>, RepoError> {
-        let parent = scope.parent.spelled();
-        // Audited: `child_key_sql` is built from literals alone; every
-        // value is bound.
-        match sqlx::query_scalar(sqlx::AssertSqlSafe(children::child_key_sql(scope)))
-            .bind(scope.parent.bound())
-            .bind(uuid)
-            .fetch_optional(&mut *self.tx)
-            .await
-        {
-            Ok(key) => Ok(key),
-            Err(e) if older_than_the_tree(&e) => Ok(None),
-            Err(e) => Err(RepoError::Internal(format!(
-                "find {uuid} among {parent}'s children: {e}"
-            ))),
-        }
-    }
-
-    async fn children_past(
+    /// The records `sql` reads for the strings in `of`.
+    async fn person_records(
         &mut self,
-        scope: &Scope,
-        via: Via,
-        side: Side,
-        split: &Split,
-    ) -> Result<Vec<children::Found>, RepoError> {
-        let want = match side {
-            Side::Before => split.before,
-            Side::After => split.after,
-        };
-        let parent = scope.parent.spelled();
-        let Some(sql) = children::children_sql(scope, via, side, split.at_is_after) else {
+        sql: &'static str,
+        of: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        if of.is_empty() {
             return Ok(Vec::new());
-        };
-        // Audited: `children_sql` is built from literals alone; every
-        // value is bound.
-        let read: Result<Vec<(String, String)>, _> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-            .bind(scope.parent.bound())
-            .bind(&split.at.sort_key)
-            .bind(&split.at.uuid)
-            .bind((want + 1) as i64)
+        }
+        let rows: Vec<PersonRecord> = sqlx::query_as(sql)
+            .bind(json_array(of)?)
             .fetch_all(&mut *self.tx)
-            .await;
-        match read {
-            Ok(rows) => Ok(rows
-                .into_iter()
-                .map(|(sort_key, uuid)| children::Found {
-                    key: Key { sort_key, uuid },
-                    via,
+            .await
+            .map_err(|e| RepoError::Internal(format!("read people: {e}")))?;
+        rows.into_iter()
+            .map(|row| {
+                let mut contact: NormalizedContact = serde_json::from_str(&row.contact_json)
+                    .map_err(|e| {
+                        RepoError::Internal(format!(
+                            "a source contact for {} will not read: {e}",
+                            row.handle
+                        ))
+                    })?;
+                contact.seen = row.items.map(|items| Seen {
+                    items: items.max(0) as u64,
+                    last_at: row.last_at,
+                });
+                Ok(crate::people::HandleRow {
+                    handle: row.handle,
+                    contact,
+                    credit: row.credit.max(0) as u64,
                 })
-                .collect()),
-            Err(e) if older_than_the_tree(&e) => Ok(Vec::new()),
-            Err(e) => Err(RepoError::Internal(format!(
-                "list {parent}'s children: {e}"
-            ))),
-        }
+            })
+            .collect()
     }
 
-    async fn child_facts(
-        &mut self,
-        keys: &[Key],
-    ) -> Result<
-        (
-            std::collections::HashMap<String, RowFacts>,
-            std::collections::HashMap<String, NodeFacts>,
-        ),
-        RepoError,
-    > {
-        if keys.is_empty() {
-            return Ok(Default::default());
+    /// Every full number a source knows ending in one of `last_digits`.
+    async fn full_numbers(&mut self, last_digits: &[String]) -> Result<Vec<Handle>, RepoError> {
+        if last_digits.is_empty() {
+            return Ok(Vec::new());
         }
-        let uuids: Vec<&str> = keys.iter().map(|k| k.uuid.as_str()).collect();
-        let wanted = serde_json::to_string(&uuids)
-            .map_err(|e| RepoError::Internal(format!("encode children: {e}")))?;
-        let internal = |e: sqlx::Error| RepoError::Internal(format!("describe children: {e}"));
-        type RowRead = (
-            String,
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        );
-        let rows: Vec<RowRead> = sqlx::query_as(children::ROW_FACTS_SQL)
-            .bind(&wanted)
+        let handles: Vec<String> = sqlx::query_scalar(FULL_NUMBERS_SQL)
+            .bind(json_array(last_digits)?)
             .fetch_all(&mut *self.tx)
             .await
-            .map_err(internal)?;
-        let nodes: Vec<(String, String, Option<String>)> =
-            match sqlx::query_as(children::NODE_FACTS_SQL)
-                .bind(&wanted)
-                .fetch_all(&mut *self.tx)
-                .await
-            {
-                Ok(nodes) => nodes,
-                Err(e) if older_than_the_tree(&e) => Vec::new(),
-                Err(e) => return Err(internal(e)),
-            };
-        let rows = rows
-            .into_iter()
-            .map(
-                |(uuid, kind, author, author_handle, created_at, preview, markdown_uuid)| {
-                    (
-                        uuid,
-                        RowFacts {
-                            kind,
-                            author,
-                            author_handle,
-                            created_at,
-                            preview,
-                            markdown_uuid,
-                        },
-                    )
-                },
-            )
-            .collect();
-        let nodes = nodes
-            .into_iter()
-            .map(|(uuid, kind, name)| (uuid, NodeFacts { kind, name }))
-            .collect();
-        Ok((rows, nodes))
+            .map_err(|e| RepoError::Internal(format!("read numbers by their digits: {e}")))?;
+        Ok(handles.iter().filter_map(|h| Handle::parse(h)).collect())
     }
 
-    /// Which of `keys` have places below them.
-    async fn places_below(
+    /// `q` with each `at:` told what puts a row there, read at this commit.
+    async fn read_at<'q>(
         &mut self,
-        keys: &[Key],
-    ) -> Result<std::collections::HashSet<String>, RepoError> {
-        if keys.is_empty() {
-            return Ok(Default::default());
+        q: &'q ParsedQuery,
+    ) -> Result<std::borrow::Cow<'q, ParsedQuery>, RepoError> {
+        let nodes = q.nodes();
+        if nodes.is_empty() {
+            return Ok(std::borrow::Cow::Borrowed(q));
         }
-        let uuids: Vec<&str> = keys.iter().map(|k| k.uuid.as_str()).collect();
-        let wanted = serde_json::to_string(&uuids)
-            .map_err(|e| RepoError::Internal(format!("encode places: {e}")))?;
-        match sqlx::query_scalar(children::PLACES_BELOW_SQL)
-            .bind(&wanted)
-            .fetch_all(&mut *self.tx)
-            .await
-        {
-            Ok(below) => Ok(below.into_iter().collect()),
-            Err(e) if older_than_the_tree(&e) => Ok(Default::default()),
-            Err(e) => Err(RepoError::Internal(format!("find places below: {e}"))),
+        let mut read = std::collections::HashMap::new();
+        for node in nodes {
+            let facts: Result<(bool, bool, bool), _> = sqlx::query_as(crate::at_node::FACTS_SQL)
+                .bind(&node)
+                .fetch_one(&mut *self.tx)
+                .await;
+            match facts {
+                Ok((held, filed, own)) => {
+                    read.insert(node, Arms { held, filed, own });
+                }
+                Err(e) => return Err(RepoError::Internal(format!("look at {node}: {e}"))),
+            }
         }
+        Ok(std::borrow::Cow::Owned(q.clone().with_arms(&read)))
     }
 
-    /// Runs [`ordered_sql`]; a table the index does not have yet holds no
-    /// rows.
+    /// Runs [`ordered_sql`].
     async fn ordered_keys<C: Column>(
         &mut self,
         table: &str,
@@ -795,11 +771,10 @@ impl At {
         for p in &params {
             query = query.bind(p);
         }
-        match query.fetch_all(&mut *self.tx).await {
-            Ok(keys) => Ok(keys),
-            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Ok(Vec::new()),
-            Err(e) => Err(RepoError::Internal(e.to_string())),
-        }
+        query
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))
     }
 
     /// The groups of the rows `where_sql` keeps in `table`, at most
@@ -817,11 +792,10 @@ impl At {
         for p in params {
             query = query.bind(p);
         }
-        let rows = match query.fetch_all(&mut *self.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = query
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         let n = by.len();
         let truncated = rows.len() > MAX_GROUPS;
         let groups = rows[..rows.len().min(MAX_GROUPS)]
@@ -859,7 +833,6 @@ impl At {
             .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, <C::Table as SearchTable>::TABLE) => Vec::new(),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -939,7 +912,6 @@ impl At {
             .await
         {
             Ok(rows) => Ok(rows.into_iter().collect()),
-            Err(e) if is_missing_table(&e, "markdowns") => Ok(std::collections::HashMap::new()),
             Err(e) => Err(RepoError::Internal(format!("read document titles: {e}"))),
         }
     }
@@ -966,7 +938,6 @@ impl At {
             }
             match query.fetch_all(&mut *self.tx).await {
                 Ok(rows) => out.extend(rows),
-                Err(e) if is_missing_table(&e, "grid_rows") => return Ok(out),
                 Err(e) => return Err(RepoError::Internal(e.to_string())),
             }
         }
@@ -974,8 +945,7 @@ impl At {
     }
 
     /// `SELECT * FROM problems` in this read, with the caller's clause,
-    /// as typed rows. An index built before the table existed reads as
-    /// empty; a row this build cannot parse is an error.
+    /// as typed rows; a row this build cannot parse is an error.
     async fn problem_rows(
         &mut self,
         where_sql: &str,
@@ -993,11 +963,11 @@ impl At {
         for p in params {
             query = query.bind(p.clone());
         }
-        let rows = match query.bind(limit as i64).fetch_all(&mut *self.tx).await {
-            Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "problems") => return Ok(Vec::new()),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let rows = query
+            .bind(limit as i64)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         rows.iter()
             .map(ProblemRow::from_row)
             .collect::<anyhow::Result<Vec<_>>>()
@@ -1011,39 +981,46 @@ impl IndexRepo for DoltRepo {
         Ok(self.pinned().await?.map(|at| at.commit))
     }
 
-    async fn children(
+    async fn places(
         &self,
-        scope: &Scope,
-        ask: &Ask,
+        parent: &Parent,
+        after: &Key,
         limit: usize,
-    ) -> Result<ChildrenPage, ChildrenFailure> {
+    ) -> Result<PlacesPage, RepoError> {
         let Some(mut at) = self.pinned().await? else {
-            return Ok(ChildrenPage::default());
+            return Ok(PlacesPage::default());
         };
-        let item_key = match ask {
-            Ask::Around(Anchor::Item(uuid)) => at.child_key(scope, uuid).await?,
-            _ => None,
-        };
-        let split = children::split(&scope.parent.spelled(), ask, item_key, limit)?;
-        let vias = scope.vias();
-        let mut before = Vec::with_capacity(vias.len());
-        let mut after = Vec::with_capacity(vias.len());
-        for via in vias {
-            before.push(at.children_past(scope, via, Side::Before, &split).await?);
-            after.push(at.children_past(scope, via, Side::After, &split).await?);
+        // Audited: `level_sql` is built from literals alone; every value
+        // is bound.
+        let read: Result<Vec<Place>, _> =
+            sqlx::query_as(sqlx::AssertSqlSafe(places::level_sql(parent)))
+                .bind(parent.bound())
+                .bind(&after.sort_key)
+                .bind(&after.uuid)
+                .bind((limit + 1) as i64)
+                .fetch_all(&mut *at.tx)
+                .await;
+        match read {
+            Ok(read) => Ok(places::page(read, limit, at.commit)),
+            Err(e) => Err(RepoError::Internal(format!(
+                "list the places in {parent:?}: {e}"
+            ))),
         }
-        let cut = children::window(&split, before, after);
-        let (rows, nodes) = at.child_facts(&cut.keys).await?;
-        let below = match scope.only {
-            Only::Places => Some(at.places_below(&cut.keys).await?),
-            Only::All => None,
+    }
+
+    async fn sources_with_places(&self) -> Result<Vec<String>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
         };
-        Ok(ChildrenPage {
-            children: children::describe(cut.keys, &rows, &nodes, below.as_ref()),
-            before: cut.before,
-            after: cut.after,
-            at: Some(at.commit),
-        })
+        match sqlx::query_scalar(places::SOURCES_WITH_PLACES_SQL)
+            .fetch_all(&mut *at.tx)
+            .await
+        {
+            Ok(sources) => Ok(sources),
+            Err(e) => Err(RepoError::Internal(format!(
+                "list the sources that hold places: {e}"
+            ))),
+        }
     }
 
     async fn source_ids(&self) -> Result<Vec<String>, RepoError> {
@@ -1057,7 +1034,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(sources) => Ok(sources),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Vec::new()),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1071,7 +1047,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        let uuids = at.ordered_keys("grid_rows", q, sort, within).await?;
+        let q = at.read_at(q).await?;
+        let uuids = at.ordered_keys("grid_rows", &q, sort, within).await?;
         Ok(Listing {
             uuids,
             at: Some(at.commit),
@@ -1088,7 +1065,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(0);
         };
-        let (where_sql, mut params) = where_within(q, within);
+        let q = at.read_at(q).await?;
+        let (where_sql, mut params) = where_within(&q, within);
         let joiner = if where_sql.is_empty() {
             " WHERE"
         } else {
@@ -1108,7 +1086,6 @@ impl IndexRepo for DoltRepo {
         }
         match query.fetch_one(&mut *at.tx).await {
             Ok(n) => Ok(usize::try_from(n).unwrap_or(0)),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(0),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1123,7 +1100,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Listing::default());
         };
-        let (where_sql, params) = where_within(q, within);
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = where_within(&q, within);
         let order = order_by(sort);
         let wanted = serde_json::to_string(uuids)
             .map_err(|e| RepoError::Internal(format!("encode uuids: {e}")))?;
@@ -1144,11 +1122,10 @@ impl IndexRepo for DoltRepo {
         for p in params.iter().chain([&wanted]) {
             query = query.bind(p);
         }
-        let kept = match query.fetch_all(&mut *at.tx).await {
-            Ok(found) => found,
-            Err(e) if is_missing_table(&e, "grid_rows") => Vec::new(),
-            Err(e) => return Err(RepoError::Internal(e.to_string())),
-        };
+        let kept = query
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(e.to_string()))?;
         let uuids = match order {
             Some(_) => kept,
             None => {
@@ -1181,7 +1158,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Grouping::default());
         };
-        let (mut where_sql, mut params) = where_within(q, &[]);
+        let q = at.read_at(q).await?;
+        let (mut where_sql, mut params) = where_within(&q, &[]);
         if let Some(uuids) = among {
             let joiner = if where_sql.is_empty() {
                 " WHERE"
@@ -1211,7 +1189,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let (where_sql, params) = where_within(q, &[]);
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = where_within(&q, &[]);
         at.value_counts(at.grid_rows, &where_sql, &params, column, typed)
             .await
     }
@@ -1229,7 +1208,8 @@ impl IndexRepo for DoltRepo {
         if kinds.is_empty() {
             return Ok(Vec::new());
         }
-        let (where_sql, params) = where_within(q, &[]);
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = where_within(&q, &[]);
         let (held, needle) = vals_holding("v.val_id", typed);
         let sql = term_values_sql(at.grid_rows, &where_sql, kinds, &held, by_name);
         // Audited: the kinds are the enum's codes, the table names are
@@ -1300,7 +1280,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(row) => row,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(None),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         let Some(r) = row else { return Ok(None) };
@@ -1408,7 +1387,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "markdowns") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -1439,7 +1417,6 @@ impl IndexRepo for DoltRepo {
         .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -1493,45 +1470,16 @@ impl IndexRepo for DoltRepo {
             .map_err(|e| RepoError::Internal(format!("decode a matching row: {e}")))
     }
 
-    async fn documents_with_pages(
-        &self,
-        q: &ParsedQuery,
-    ) -> Result<Vec<(String, String)>, RepoError> {
-        let (where_sql, params) = build_where(q);
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(Vec::new());
-        };
-        let joiner = if where_sql.is_empty() {
-            " WHERE"
-        } else {
-            " AND"
-        };
-        // Audited: as `matching` — literal table names and `build_where`'s
-        // static column names; every value is bound.
-        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(
-            documents_with_pages_sql(at.grid_rows, at.markdowns, &where_sql, joiner),
-        ));
-        for p in &params {
-            query = query.bind(p);
-        }
-        match query.fetch_all(&mut *at.tx).await {
-            Ok(rows) => Ok(rows),
-            Err(e) if is_missing_table(&e, "grid_rows") || is_missing_table(&e, "markdowns") => {
-                Ok(Vec::new())
-            }
-            Err(e) => Err(RepoError::Internal(e.to_string())),
-        }
-    }
-
     async fn documents_kept(
         &self,
         q: &ParsedQuery,
         markdown_uuids: &[String],
     ) -> Result<std::collections::HashSet<String>, RepoError> {
-        let (where_sql, params) = build_where(q);
         let Some(mut at) = self.pinned().await? else {
             return Ok(Default::default());
         };
+        let q = at.read_at(q).await?;
+        let (where_sql, params) = build_where(&q);
         let wanted = serde_json::to_string(markdown_uuids)
             .map_err(|e| RepoError::Internal(format!("encode document ids: {e}")))?;
         let among = "markdown_uuid IN (SELECT value FROM json_each(?))";
@@ -1551,7 +1499,6 @@ impl IndexRepo for DoltRepo {
         }
         match query.bind(wanted).fetch_all(&mut *at.tx).await {
             Ok(rows) => Ok(rows.into_iter().map(|(d,)| d).collect()),
-            Err(e) if is_missing_table(&e, "grid_rows") => Ok(Default::default()),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
     }
@@ -1579,7 +1526,6 @@ impl IndexRepo for DoltRepo {
         .await
         {
             Ok(rows) => rows,
-            Err(e) if is_missing_table(&e, "grid_rows") => return Ok(Vec::new()),
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
         Ok(rows
@@ -1594,43 +1540,43 @@ impl IndexRepo for DoltRepo {
             .collect())
     }
 
-    async fn people_for_handles(
+    async fn people(
         &self,
         handles: &[String],
-    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        pages: &[String],
+    ) -> Result<crate::people::PeopleRows, RepoError> {
         let Some(mut at) = self.pinned().await? else {
-            return Ok(Vec::new());
+            return Ok(Default::default());
         };
-        let wanted = serde_json::to_string(handles)
-            .map_err(|e| RepoError::Internal(format!("encode handles: {e}")))?;
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT h.handle, c.contact_json \
-               FROM source_contact_handles h \
-               JOIN source_contacts c \
-                 ON c.markdown_uuid = h.markdown_uuid AND c.contact_key = h.contact_key \
-              WHERE h.handle IN (SELECT value FROM json_each(?))",
-        )
-        .bind(wanted)
-        .fetch_all(&mut *at.tx)
-        .await
-        .map_err(|e| RepoError::Internal(format!("read people by handle: {e}")))?;
-        rows.into_iter()
-            .map(|(handle, json)| {
-                let contact = serde_json::from_str(&json).map_err(|e| {
-                    RepoError::Internal(format!("a source contact for {handle} will not read: {e}"))
-                })?;
-                Ok(crate::people::HandleRow { handle, contact })
-            })
-            .collect()
+        let holding = at.person_records(PEOPLE_SQL, handles).await?;
+        let numbers: Vec<Handle> = handles.iter().filter_map(|h| Handle::parse(h)).collect();
+        let ends: Vec<String> = numbers
+            .iter()
+            .filter_map(|h| h.last_digits().map(str::to_string))
+            .collect();
+        let same_digits = at.person_records(SAME_DIGITS_SQL, &ends).await?;
+        let pages = at.person_records(CONTACT_PAGES_SQL, pages).await?;
+        let ends: std::collections::BTreeSet<String> = [&holding, &same_digits, &pages]
+            .into_iter()
+            .flatten()
+            .flat_map(|r| &r.contact.handles)
+            .filter_map(|h| h.home_digits())
+            .map(|d| datalib_handle::last_digits(&d).to_string())
+            .collect();
+        let ends: Vec<String> = ends.into_iter().collect();
+        let full_numbers = at.full_numbers(&ends).await?;
+        Ok(crate::people::PeopleRows {
+            holding,
+            same_digits: crate::people::for_each_number(&numbers, same_digits),
+            pages,
+            full_numbers,
+        })
     }
 
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {
         // LEFT JOIN so that an edge with a dangling FK (destination no
         // longer in `markdowns`) still surfaces — the UI can show the
         // raw uuid and the user at least learns the link exists.
-        // The edges table may not exist on older data roots; treat any
-        // SQL error as "no edges" so the chat endpoint doesn't blow up
-        // mid-render.
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
@@ -1652,7 +1598,7 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(rs) => rs,
-            Err(_) => return Ok(Vec::new()),
+            Err(e) => return Err(RepoError::Internal(format!("read outgoing edges: {e}"))),
         };
         let mut out: Vec<EdgeRowOut> = Vec::with_capacity(rows.len());
         for r in rows {
@@ -1707,13 +1653,6 @@ impl IndexRepo for DoltRepo {
             .await
         {
             Ok(rows) => rows,
-            // A root whose index has never run has no tables yet: nothing
-            // rendered, not a failure.
-            Err(e)
-                if is_missing_table(&e, "markdowns") || is_missing_table(&e, "source_cursors") =>
-            {
-                return Ok(out)
-            }
             Err(e) => {
                 return Err(RepoError::Internal(format!(
                     "read where documents are kept: {e}"

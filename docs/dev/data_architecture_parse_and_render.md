@@ -35,9 +35,7 @@ of its own (`calendar_render/src/occurrences/README.md`). Everything
 below is about documents.
 
 §2, §3's U-rules and §5 describe the tree as it is. §3's P-rules and
-§4's rules are partly aspiration: each says where the tree stands, and
-the retrofit plan is
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
+§4's rules are partly aspiration: each says where the tree stands.
 
 ## 1. Where the neighbouring material lives
 
@@ -133,7 +131,8 @@ database per source, at
     `NormalizedContact`, `contact_schema/`), and the handles that reach
     them. chat-common adds one per author handle with no provider code;
     contact-common adds a card's own. Like edges they belong to the
-    document, and the index answers "who is this handle" from them
+    document, and the index, which keeps each distinct record once
+    ([`contacts.md`](contacts.md)), answers "who is this handle" from them
     (`unified_grid_and_search_index`'s `POST /people`).
   - `problems` — what render could not do getting there (§4).
   - `render_inputs` and `render_cursor` — what each render unit was rendered
@@ -215,9 +214,7 @@ commit sees that commit's text. Search draws a document's text from the
 store (`IndexedMarkdownStore::index_docs`); the document view and
 `datalib-step markdown` spell it (`IndexedMarkdownStore::document`). A
 hit lands on the item the search index names, by its id, and its quote
-reads only what that item says (`IndexedMarkdownStore::item_texts`). Files an earlier build wrote beside
-the store are deleted the next time the source renders
-(`datalib_step/src/old_markdown.rs`).
+reads only what that item says (`IndexedMarkdownStore::item_texts`).
 
 The *contract* holds as before: render emits a human artifact and a
 separate machine-readable projection, and the index reads the
@@ -387,7 +384,7 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
 - **Only the box answers to a message's id.** What answers to an id is
   the outermost element naming it (`sectionEl` in `chatSections.js`),
   and every lookup by id goes through it: a selection, an edge, a
-  problem's jump, the 🔗 button, the feedback menu. A copy of another
+  problem's jump, the 🔗 button, the right-click menu. A copy of another
   message's wrapper inside a message sits in that message's box, so it
   is left as written and never found first. A keyed piece in no box
   answers by its own wrapper, where it draws one.
@@ -450,7 +447,7 @@ Backpointers and outlinks are first-class in the projection schema.
   as out.
 
 The `uuid` recipe is [`entity_ids.md`](entity_ids.md) and it is not
-optional: anything durably keyed on a row — feedback today,
+optional: anything durably keyed on a row — a link handed out today,
 annotations and labels later — rests on it staying stable across a
 re-render. A content-hash identity would orphan every such reference
 on the first edit.
@@ -562,12 +559,6 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-The tree does not yet follow this rule for timestamps: seven of the 28
-render crates (`baby_connect`, `calendar`, `chatgpt`, `garmin`,
-`lightroom`, `linkedin`, `perseus`) call `chrono` directly
-rather than going through `datalib-time` alone. The retrofit is in
-[`data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
-
 **P4 — Parse reads the raw store and nothing else** (§2). Parse is
 where the temptation appears: a file-backed provider's `input_path` is
 *download's* input, not parse's.
@@ -577,7 +568,7 @@ one.** The seam matters. `render/parse.rs` deserializes into types that
 look like *that provider's* data, with its own vocabulary and its own
 optionality. Projecting onto a shared schema is render's job. Keeping
 the two apart is what lets a provider's oddities stay in one file
-instead of leaking into a type fourteen providers depend on — and it is
+instead of leaking into a type fifteen providers depend on — and it is
 why the unification rules below are all about render.
 
 ### Unification and fidelity, and how the tension resolves
@@ -703,9 +694,6 @@ The fetch-stage rows are the download side's; the rule for writing
 one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
 and where they are read is [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
 
-The audit that produced them is
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
-
 Several of the rules below are phrased after the `data-pipeline-builder`
 skill in
 [`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534).
@@ -822,13 +810,10 @@ rewriting that history and then running `dolt_gc()` does
 [Removing a source](data_architecture_ingestion_practices.md#removing-a-source)).
 The *stating* half is not blocked.
 
-**A reclaim mechanism is deliberately deferred.** A derived store is
-cheap to reclaim by hand — delete it and rebuild, which costs a
-re-render and never a re-fetch — and while schemas change often enough
-that derived stores are rebuilt anyway, a mechanism would automate what
-the churn already does. Once a derived store starts living a long time,
-it needs building. The raw store is not covered by that argument: it is
-the copy we cannot re-fetch. Documents a source no longer produces are
+**A render store's history is given back on request**, by its step's
+`--compact` ([`step_protocol.md`](step_protocol.md)), never by a run on
+its own. The raw store's history is kept: it is the copy we cannot
+re-fetch. Documents a source no longer produces are
 not part of the problem — §5's sweep removes them in the run that stops producing them; only the store's *history* of
 them stays.
 
@@ -1087,12 +1072,12 @@ with one bound JSON array each (`etl/README.md` §"Binding a set of
 values"), renders it, and declares the page's render units before reading
 the next, so nothing about a render unit outlives its page. Only the small
 tables every render unit looks up (users, channels, accounts, mailboxes)
-are read whole, up front. Email and Slack render this way, and so do
+are read whole, up front. Email renders this way, and so do Slack and
+Discord (`datalib_etl_chat_common::render_paged`) and
 Claude Code and Codex (`datalib_etl_agent_sessions_render::render_paged`),
 which size a page by how many records it holds, counted from the index
 without reading one. The other renders still read their rows whole
-([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
-lists them).
+([#1959](https://github.com/imbue-ai/datalib/issues/1959) lists them).
 
 Blob bytes are the larger part of most stores, and a render that still
 reads its rows whole can at least leave them where they are until they
@@ -1128,7 +1113,9 @@ mostly the writer: doltlite holds each table's pending edits in memory
 until they reach 64 MB or the SQL transaction commits, and each
 connection keeps a 64 MiB page cache. Committing the SQL transaction
 more often trims the peak but leaves more pages that later checkpoints
-pin on disk; the audit has the numbers.
+pin on disk, so the writer does not: committing every 32 MB of documents
+took that store's peak from 949 MB to 835 MB and its file from 6.9 GB to
+10.4 GB, and a 16 MiB page cache as well took it to 726 MB.
 
 ### Rendering the delta itself
 
@@ -1224,8 +1211,6 @@ For these `created_at` is **null**, and `before:`/`after:` exclude the row — t
 
 ## See also
 
-- [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
-  — the audit and retrofit plan for §4.
 - [`plans/completed/one_mode.md`](plans/completed/one_mode.md) — the rule every step's
   writes follow, of which §5's sweep is the render-side half.
 - [`step_protocol.md`](step_protocol.md) — where R2's third category

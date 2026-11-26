@@ -20,12 +20,16 @@ use crate::hits::SearchHit;
 /// A ranked document and its hit.
 pub type DocumentHit = (String, SearchHit);
 
-async fn open(root: &Path) -> Result<Option<Reader>> {
-    Reader::open(
-        &layout::grid_index_db(root),
-        &layout::inference_cache_db(root),
-    )
-    .await
+/// The search index, once the grid index that holds its tables is in this
+/// build's shape (`grid_index::open_for_reading`): the one way anything
+/// outside the index step reads it.
+pub async fn open(root: &Path) -> Result<Option<Reader>> {
+    let index = layout::grid_index_db(root);
+    let Some(grid) = datalib_etl_render::grid_index::open_for_reading(&index).await? else {
+        return Ok(None);
+    };
+    grid.close().await;
+    Reader::open(&index, &layout::inference_cache_db(root)).await
 }
 
 /// The documents `words` find, of `sources`, within the rows `kept` keeps,
@@ -145,15 +149,6 @@ impl HeldVectors {
         Ok(Some(vectors))
     }
 
-    /// The documents with at least one chunk embedded. `None` when no step
-    /// has written the index.
-    pub async fn documents(&self, root: &Path) -> Result<Option<HashSet<String>>> {
-        Ok(self
-            .current(root)
-            .await?
-            .map(|held| held.embedded().map(|d| d.markdown_uuid.clone()).collect()))
-    }
-
     /// The `limit` documents nearest `query` by cosine, each at its nearest
     /// chunk, of `sources` (all when `None`) and of what `among` keeps of
     /// each (all when `None`). `None` when no step has written the index.
@@ -201,7 +196,7 @@ impl HeldVectors {
                     },
                 };
                 let best = (0..d.chunks.len())
-                    .filter(|&c| kept.is_none_or(|k| d.covered(c).any(|u| k.contains(u))))
+                    .filter(|&c| kept.is_none_or(|k| d.covered_rows(c).any(|u| k.contains(u))))
                     .map(|c| {
                         (
                             datalib_search_index::half::dot(d.vector(c), query) / norm,

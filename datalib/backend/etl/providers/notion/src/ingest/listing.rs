@@ -535,7 +535,7 @@ impl Ctx<'_> {
             }
             match page.end {
                 Some(Ended::CutShort) => {
-                    self.found.listing(
+                    self.found.listing_cut_off(
                         "search",
                         format!(
                             "the search stopped at max_pages after {} pages, so older edits \
@@ -567,7 +567,7 @@ impl Ctx<'_> {
                 break;
             }
             if self.opts.max_pages.is_some_and(|m| s.listed >= m) {
-                self.found.listing(
+                self.found.listing_cut_off(
                     "roots",
                     format!(
                         "the walk stopped at max_pages after {} pages, so the rest of the \

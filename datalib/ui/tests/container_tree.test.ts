@@ -11,7 +11,7 @@ import {
   move,
   parseTree,
   pinnedTabs,
-  predatesPins,
+  pinsGiven,
   remove,
   rename,
   resetTo,
@@ -365,13 +365,17 @@ describe("pinned tabs", () => {
     expect(root.selected).toBe("mine");
   });
 
-  it("only a stored tree that says nothing of pins predates them", () => {
-    const stored = JSON.parse(JSON.stringify(fixture())) as { children: { pinned?: boolean }[] };
-    expect(predatesPins(stored)).toBe(false);
+  it("a stored tree says how many of the default pins it was given", () => {
+    const stored = JSON.parse(JSON.stringify(fixture())) as {
+      children: { pinned?: boolean }[];
+      pinsGiven?: number;
+    };
     expect(parseTree(stored)?.children.map((c) => c.pinned)).toEqual([false, false]);
+    expect(pinsGiven(stored), "from before the count, the first three").toBe(3);
     for (const c of stored.children) delete c.pinned;
-    expect(predatesPins(stored)).toBe(true);
-    expect(predatesPins(null)).toBe(false);
+    expect(pinsGiven(stored), "from before a tab could be pinned").toBe(0);
+    expect(pinsGiven({ ...stored, pinsGiven: 4 })).toBe(4);
+    expect(pinsGiven(null)).toBe(0);
   });
 
   it("a stored pin is read back", () => {

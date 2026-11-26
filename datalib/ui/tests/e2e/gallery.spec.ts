@@ -16,9 +16,9 @@ test.describe("new-card gallery (outside edit mode)", () => {
     await expect(page.locator(".ct-source")).toHaveCount(0);
     await page.locator(".ct-main .ct-add").click();
 
-    // The gallery card appears, builtins listed with Dashboard first.
+    // The gallery card appears, builtins listed by title.
     const galleryRows = page.locator(".gv-row");
-    await expect(galleryRows.first()).toContainText("Dashboard");
+    await expect(galleryRows.first()).toContainText("Contacts");
     await expect(cardOf(page, "galleryView()")).toHaveCount(1);
 
     // Pick "Markdown Document" → the gallery card becomes the document picker.

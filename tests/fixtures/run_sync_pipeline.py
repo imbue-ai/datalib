@@ -102,7 +102,11 @@ Args (positional):
                       path is to the .json file itself; the images it
                       names sit beside it). `datalib-step synthesize
                       google_drive` expands it into playback fixtures.
-    31: datalib-http binary, optional. Given, every sync goes through a
+    31: discord_tng   What a Discord account can be answered
+                      (`world.json`) and its messages' files.
+                      `datalib-step synthesize discord` expands it into
+                      playback fixtures.
+    32: datalib-http binary, optional. Given, every sync goes through a
                       server on the root, driven over its API the way
                       the web client drives it (`sync_drivers.py`);
                       absent, through `datalib-pipeline`.
@@ -266,7 +270,8 @@ def prepare(argv: list[str]) -> Prepared:
     codex_fx = Path(argv[28]).resolve()
     calendar_fx = Path(argv[29]).resolve()
     google_drive_spec = Path(argv[30]).resolve()
-    http_bin = Path(argv[31]).resolve() if len(argv) > 31 else None
+    discord_fx = Path(argv[31]).resolve()
+    http_bin = Path(argv[32]).resolve() if len(argv) > 32 else None
 
     data_root.mkdir(parents=True, exist_ok=True)
     # The DAG config + playback fixtures + per-source input dirs all
@@ -291,6 +296,10 @@ def prepare(argv: list[str]) -> Prepared:
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
         "DATALIB_MODELS_NO_FETCH": "1",
         "DATALIB_SQL_CENSUS": str(census),
+        # The runner and the server hand a step only the variables they
+        # list, and they list a test's own switches only when this names
+        # them.
+        "DATALIB_CHILD_ENV": "DATALIB_CACHE_DIR,DATALIB_EMBED_THREADS,DATALIB_SQL_CENSUS,DATALIB_HTTP_PLAYBACK",
     }
     _stage_embed_model(workspace)
 
@@ -439,6 +448,8 @@ def prepare(argv: list[str]) -> Prepared:
         # The synth input is the spec file; the ingest replays the tapes
         # it wrote. The path is unused (the method is `api`).
         "google-drive": ("google_drive", google_drive_spec, google_drive_spec),
+        # The same: replayed, its path unused.
+        "discord": ("discord", discord_fx, discord_fx),
     }
 
     # ── Synth: build HTTP playback fixtures per source. ─────────────
@@ -503,7 +514,7 @@ def prepare(argv: list[str]) -> Prepared:
     ) -> str:
         """A `[[steps]]` header and its keys, as `datalib-step examples`
         writes one: the id, the command, and the `reads` and `locks` the
-        runner no longer infers (docs/dev/plans/dag_and_step_decoupling.md)."""
+        runner does not infer (docs/dev/config_model.md)."""
         text = f'[[steps]]\nid = "{group}/{function}"\ncommand = "{command}"'
         if reads:
             text += f'\nreads = "{reads}"'
@@ -717,7 +728,8 @@ inputs = [{grid_list}]"""
 
     print(f"[run_sync_pipeline] pipeline → {data_root}", flush=True)
     # `DATALIB_HTTP_PLAYBACK` redirects every provider transport to
-    # the playback tree (steps inherit the runner's env); the fixture
+    # the playback tree (the runner hands it on, as `DATALIB_CHILD_ENV`
+    # names it); the fixture
     # AEP/root key let the signal/whatsapp extractors decrypt the
     # snapshots generated above. The playback path is a link, so the
     # second capture can replace the first under a running server.
@@ -758,7 +770,7 @@ def main() -> int:
         (workspace / "config_body.toml").write_text(root_text)
 
     driver = (
-        HttpDriver(fx.http_bin, workspace, fx.bindir, fx.now, fx.env)
+        HttpDriver(fx.http_bin, fx.dag_bin, workspace, fx.bindir, fx.now, fx.env)
         if fx.http_bin
         else CliDriver(fx.dag_bin, workspace, fx.bindir, fx.now, fx.env)
     )
@@ -1086,6 +1098,11 @@ def _source_config(
         # The spec holds the native JSON and nothing converted, so no
         # export is asked for.
         source["api"] = {"exports": []}
+    elif type_str == "discord":
+        # Two of the account's three servers. The limit is under the size
+        # of one file, which is left out and said to be.
+        source["api"] = {"servers": ["USS Enterprise", "Starfleet Academy"]}
+        source["common"] = {"blob_size_limit_bytes": 1_000_000}
     else:
         source["api"] = {}
     return source

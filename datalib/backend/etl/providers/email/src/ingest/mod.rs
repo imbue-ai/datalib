@@ -197,8 +197,8 @@ const BLOB_TIMEOUT: Duration = Duration::from_secs(180);
 /// phase when the config leaves `blob_download_concurrency` unset. JMAP
 /// has no bulk-download method, so concurrency is the only lever for a
 /// large initial backfill; this value is a polite-but-useful fan-out
-/// against the download endpoint. Override per-source in the `sync:`
-/// block; set `1` to restore strictly-serial fetching.
+/// against the download endpoint. Override per-source with the `jmap`
+/// table's `blob_download_concurrency`; `1` fetches one at a time.
 const DEFAULT_BLOB_CONCURRENCY: usize = 8;
 
 /// Envelope-only `Email/get` properties, and the server's `preview` for

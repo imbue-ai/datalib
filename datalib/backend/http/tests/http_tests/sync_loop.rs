@@ -44,7 +44,11 @@ async fn call(
     let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
         .await
         .unwrap();
-    assert!(status.is_success(), "{method} {uri}: {status}");
+    assert!(
+        status.is_success(),
+        "{method} {uri}: {status}: {}",
+        String::from_utf8_lossy(&bytes)
+    );
     if status == StatusCode::NO_CONTENT {
         return serde_json::Value::Null;
     }
@@ -584,7 +588,7 @@ async fn a_stop_takes_a_step_that_will_not_stop_and_its_child_with_it() {
     })
     .await;
     let run = done["last_run_id"].as_str().expect("the row names its run");
-    let snapshot = datalib_runs::snapshot_of(root, Some(run)).await;
+    let snapshot = datalib_runs::snapshot_of(root, Some(run)).await.unwrap();
     let live: Vec<&str> = snapshot
         .steps
         .iter()
@@ -620,7 +624,10 @@ async fn a_config_the_loop_cannot_read_refuses_the_request_and_says_why() {
     }
     let open = call(&state, "GET", "/api/requests", None).await;
     assert_eq!(open, serde_json::json!([]));
-    assert!(datalib_runs::runs(&root, None, 10).await.is_empty());
+    assert!(datalib_runs::runs(&root, None, 10)
+        .await
+        .unwrap()
+        .is_empty());
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 

@@ -183,7 +183,7 @@ pub struct FetchSummary {
     pub non_chat_orgs: usize,
     pub forbidden_orgs: usize,
     /// Conversations an org's complete listing did not name — deleted on
-    /// claude.ai. Never counts rows a `claude_export` ingest wrote (those
+    /// claude.ai. Never counts rows an `export` ingest wrote (those
     /// carry a NULL `org_uuid` and are out of an API sync's scope).
     pub pruned: usize,
     /// Conversations a complete listing did not name, kept because

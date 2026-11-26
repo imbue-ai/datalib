@@ -6,12 +6,11 @@ import DocCard from "../DocCard.ce.vue";
 import ChatBody from "../ChatBody.ce.vue";
 import ChipMenu from "../ChipMenu.ce.vue";
 import DocTitleBar from "../DocTitleBar.ce.vue";
-import HandlePopover from "../HandlePopover.ce.vue";
 import chipCss from "../chip.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
 
-const STYLES = { styleSources: [ChatBody, ChipMenu, DocTitleBar, HandlePopover, chipCss] };
+const STYLES = { styleSources: [ChatBody, ChipMenu, DocTitleBar, chipCss] };
 
 export function documentView(
   markdownUuid?: string | null,

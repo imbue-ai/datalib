@@ -45,7 +45,7 @@ pub enum Provider {
     ClaudeCode,
     /// Codex CLI sessions — the terminal and IDE rollouts.
     Codex,
-    /// CardDAV address books.
+    /// Address books: Google, CardDAV (Fastmail, iCloud, …) or `.vcf` files.
     Contacts,
     /// Not an upstream provider: datalib describing a source's own
     /// mirror. The per-source storage report is tagged this way rather
@@ -53,6 +53,8 @@ pub enum Provider {
     /// the same render unit as the data it measures.
     /// See `datalib_step::introspect`.
     Datalib,
+    /// Discord: the channels, threads and direct messages an account reads.
+    Discord,
     /// All three download modes — JMAP, Gmail API, mbox — write this
     /// one tag. Named for the thing, not for whichever protocol a
     /// particular mirror happens to use.
@@ -113,6 +115,7 @@ impl Provider {
             Provider::Codex => "Codex",
             Provider::Contacts => "Contacts",
             Provider::Datalib => "datalib",
+            Provider::Discord => "Discord",
             Provider::Email => "Email",
             Provider::Facebook => "Facebook",
             Provider::Garmin => "Garmin",

@@ -379,6 +379,7 @@ async fn parse_async(
             .entry(parent.clone())
             .or_default()
             .push(NormalizedReaction {
+                count: 1,
                 reaction_uuid: id.uuid,
                 reactor_handle: reactor.as_deref().and_then(|j| names.handle(j)),
                 reactor_kind,
@@ -546,10 +547,10 @@ fn build_item(
     //   9  document
     //  13  animated gif
     //  20  sticker
-    //  >50 system events (chat_renamed etc.)
-    // For the first cut: treat 1/2/3/9/13/20 + any attachment-present
-    // case as Attachment; non-zero-without-attachment + system-range
-    // codes as System; everything else as Text.
+    //  50+ system events (chat_renamed etc.)
+    // A message with a `message_media` row is an Attachment whatever its
+    // type; without one, a type of 50 or more is System and every other
+    // type, a media type included, is Text.
     let kind = if !attachments.is_empty() {
         ItemKind::Attachment
     } else {

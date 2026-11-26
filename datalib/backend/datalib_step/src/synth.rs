@@ -53,6 +53,9 @@ pub fn run(
         Some(SourceType::Slack) => Box::new(datalib_etl_slack::synthesize::SlackSynth::new(
             input.clone(),
         )),
+        Some(SourceType::Discord) => Box::new(datalib_etl_discord::synthesize::DiscordSynth::new(
+            input.clone(),
+        )),
         Some(SourceType::Github) => Box::new(datalib_etl_github::synthesize::GithubSynth::new(
             input.clone(),
         )),

@@ -1751,8 +1751,8 @@ fn facts_of(graph: &Graph, state: &Record) -> Facts {
 }
 
 /// The steps that answered a launch's `--migrate` with `needs_rerun` and
-/// have not succeeded since, turned-off ones aside: what the app offers to
-/// run after an upgrade.
+/// have not succeeded since, turned-off ones aside: what the loop runs
+/// after an upgrade's pass, and what the app waits on.
 pub fn rerun_offer(graph: &Graph, state: &Record) -> Vec<StepId> {
     graph
         .steps

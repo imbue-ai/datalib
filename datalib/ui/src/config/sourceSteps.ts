@@ -25,8 +25,9 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { expandInputs, namesStep, patternFunction } from "./inputPattern";
-import { catalogForStep } from "./catalog";
+import { catalogForStep, packageLockSlots } from "./catalog";
 import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
+import type { PackageCommand } from "@/api";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
@@ -225,7 +226,7 @@ export type ConfiguredPackage = {
 export const DATALIB_STEP = "datalib-step";
 
 /// The verbs `datalib-step` takes, as its `[[programs]]` entry lists them.
-export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect"];
+export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect", "check"];
 
 /// The first word of a command, split shell-style as the runner splits
 /// it: the program it starts, which a `[[programs]]` entry names.
@@ -681,8 +682,13 @@ function paramEntries(
   for (const field of fieldsFor(entry, phase)) {
     if (!fieldIsActive(field, values)) continue;
     const value = values[field.target];
-    if (!isSet(field, value)) continue;
-    out.push({ target: field.target, value, field });
+    if (isSet(field, value)) {
+      out.push({ target: field.target, value, field });
+    } else if (field.kind === "text" && field.envVar) {
+      // The runner hands a step only the variables its params name
+      // (docs/dev/step_protocol.md), so the default is written out.
+      out.push({ target: field.target, value: field.envVar.default, field });
+    }
   }
   return out;
 }
@@ -967,7 +973,8 @@ export function buildStep(opts: {
     fn: functionOf(phase),
     type: entry.type,
     inputs: opts.inputs,
-    command: entry.package && command ? inPackage(entry.package.dir, command) : undefined,
+    command: entry.package && command ? inPackage(entry.package.dir, command.command) : undefined,
+    scheduling: command,
     params: paramsToml(entry, values, phase),
   });
 }
@@ -986,18 +993,29 @@ const LOCK_OF_FUNCTION: Record<string, string> = {
 /// `[[locks]]` entry declares.
 export const LOCK_SLOTS: Record<string, number> = { embedder: 1, index: 2 };
 
-/// `reads` and `locks` for a step, by the rules `datalib-http`'s config
-/// upgrade writes (docs/dev/plans/dag_and_step_decoupling.md §"Existing
-/// configs"). A `datalib-step` step other than `ingest` gets both whether
-/// or not its inputs are empty yet (a fan-in's are, until a source is
+/// `reads` and `locks` for a step. A package's step takes what its
+/// manifest's command says, and `reads = "pinned"` once it has inputs
+/// where the manifest says nothing. A `datalib-step` step follows the
+/// rules `datalib-http`'s config upgrade writes (docs/dev/config_model.md
+/// §"The retired shapes"): one other than `ingest` gets both whether or
+/// not its inputs are empty yet (a fan-in's are, until a source is
 /// added); any other step only once it has inputs.
 function schedulingLines(opts: {
   fn: string;
   type: string | null;
   inputs: string[] | undefined;
   builtin: boolean;
+  scheduling?: PackageCommand;
 }): string[] {
-  const { fn, type, inputs, builtin } = opts;
+  const { fn, type, inputs, builtin, scheduling } = opts;
+  if (scheduling) {
+    const reads = scheduling.reads ?? ((inputs ?? []).length > 0 ? "pinned" : null);
+    const locks = scheduling.locks ?? [];
+    return [
+      ...(reads ? [`reads = ${quote(reads)}`] : []),
+      ...(locks.length ? [`locks = [${locks.map(quote).join(", ")}]`] : []),
+    ];
+  }
   const reads = builtin ? fn !== "ingest" : (inputs ?? []).length > 0;
   if (!reads) return [];
   const readsFiles =
@@ -1025,6 +1043,9 @@ export function stepToml(opts: {
   inputs?: string[];
   /// What it runs; `datalib-step run …` when absent.
   command?: string;
+  /// A package step's command as its manifest has it, whose `reads` and
+  /// `locks` the step takes.
+  scheduling?: PackageCommand;
   params?: string;
 }): string {
   const { fn, type, inputs } = opts;
@@ -1034,7 +1055,13 @@ export function stepToml(opts: {
     `id = ${quote(`${opts.group}/${fn}`)}`,
     `command = ${quote(command)}`,
     ...(inputs !== undefined ? [`inputs = [${inputs.map(quote).join(", ")}]`] : []),
-    ...schedulingLines({ fn, type, inputs, builtin: isDatalibStep(command) }),
+    ...schedulingLines({
+      fn,
+      type,
+      inputs,
+      builtin: isDatalibStep(command),
+      scheduling: opts.scheduling,
+    }),
   ];
   const params = opts.params ?? "";
   return `${lines.join("\n")}${params ? `\n${params}` : ""}`.trimEnd();
@@ -1281,7 +1308,8 @@ export function setTimeSeriesStep(
         group,
         fn: "render_time_series",
         type,
-        command: pkg && command ? inPackage(pkg.dir, command) : undefined,
+        command: pkg && command ? inPackage(pkg.dir, command.command) : undefined,
+        scheduling: command,
         inputs: [stepIdFor(group, "download")],
       }),
     );
@@ -1489,7 +1517,8 @@ export function insertEntries(text: string, body: string): string {
 /// `text` with the top-level entries its steps need and it lacks: a
 /// `[[programs]]` entry for each spelling of `datalib-step` a step runs,
 /// listing the verbs it takes, and a `[[locks]]` entry for each lock of
-/// `LOCK_SLOTS` a step holds. Without the first the runner sends
+/// `LOCK_SLOTS` or of a package's manifest (`packageLockSlots`) a step
+/// holds. Without the first the runner sends
 /// `datalib-step` no verb; without the second it refuses the step. They
 /// go after the file's last `[[packages]]`, `[[programs]]` or `[[locks]]`
 /// entry, else above its first table. Unchanged text when nothing is
@@ -1505,6 +1534,7 @@ export function withDeclarations(text: string): string {
     entries(root.programs).map((p) => (typeof p.command === "string" ? p.command.trim() : "")),
   );
   const locks = new Set(entries(root.locks).map((l) => l.name));
+  const slots: Record<string, number> = { ...packageLockSlots(), ...LOCK_SLOTS };
   const blocks: string[] = [];
   const seen = new Set<string>();
   for (const step of steps) {
@@ -1521,10 +1551,10 @@ export function withDeclarations(text: string): string {
   }
   for (const step of steps) {
     for (const name of Array.isArray(step.locks) ? step.locks : []) {
-      if (typeof name !== "string" || !(name in LOCK_SLOTS)) continue;
+      if (typeof name !== "string" || !(name in slots)) continue;
       if (locks.has(name) || seen.has(`lock:${name}`)) continue;
       seen.add(`lock:${name}`);
-      blocks.push(`[[locks]]\nname = ${quote(name)}\nslots = ${LOCK_SLOTS[name]}`);
+      blocks.push(`[[locks]]\nname = ${quote(name)}\nslots = ${slots[name]}`);
     }
   }
   if (blocks.length === 0) return text;

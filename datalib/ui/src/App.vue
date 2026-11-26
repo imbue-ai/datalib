@@ -8,13 +8,14 @@ import FirstRunView from "@/views/FirstRunView.vue";
 import ConfigErrorView from "@/views/ConfigErrorView.vue";
 import NewerRootView from "@/views/NewerRootView.vue";
 import PassIndicator from "@/components/PassIndicator.vue";
-import RerenderDialog from "@/components/RerenderDialog.vue";
+import UpgradingView from "@/views/UpgradingView.vue";
 import { fetchConfig, openRequest, type ConfigResponse } from "@/api";
 import { newestAnswer, subscribeLive } from "@/live";
 import CommandBox from "@/components/CommandBox.vue";
 import LibraryCrumb from "@/components/LibraryCrumb.vue";
 import { isDesktopApp } from "@/desktop";
-import { freeSpaceView, upgradeView } from "@/pass";
+import { freeSpaceView, upgradeView, upgrading } from "@/pass";
+import { showDataSources } from "@/surface";
 
 // The app window has no browser chrome, so it draws the two buttons a
 // tab would have; the browser keeps its own.
@@ -29,15 +30,27 @@ const underTitleBar = desktop && /Mac/.test(navigator.platform);
 const config = ref<ConfigResponse | null>(null);
 const checked = ref(false);
 
-const gate = computed<"first-run" | "newer-root" | "config-error" | null>(() => {
+// Lifted for this page by "Open Sources" on the upgrade screen, so a
+// source whose re-run fails can be fixed or turned off.
+const upgradeLifted = ref(false);
+
+const gate = computed<"first-run" | "newer-root" | "config-error" | "upgrading" | null>(() => {
   const c = config.value;
   if (!c) return null;
   // A refused root comes first: with no store open, "no config" and
   // "not ready" are both consequences of it, not states of their own.
   if (c.newer_root) return "newer-root";
   if (!c.exists) return "first-run";
-  return c.app_ready ? null : "config-error";
+  if (!c.app_ready) return "config-error";
+  // Nothing reads a store in another shape, so until the upgrade is done
+  // the cards would show refusals; the server re-runs what it needs.
+  return upgrading(c.upgrade) && !upgradeLifted.value ? "upgrading" : null;
 });
+
+function openSourcesThroughTheUpgrade() {
+  upgradeLifted.value = true;
+  showDataSources();
+}
 
 /// Set once the cards have been shown. From then on the gate hides
 /// them rather than unmounting them: a config broken for a moment (an
@@ -74,23 +87,8 @@ function onInitialized() {
   refresh();
 }
 
-// The launch's re-render offer, asked once per page: a launch of the
-// desktop app is a page load, and the next launch asks again while the
-// steps have not run. A step the pass could not ask does not open it on
-// its own: that is a failed run on the step's row and in its log.
-const rerenderAnswered = ref(false);
-const rerenderAsked = computed(() => {
-  const u = config.value?.upgrade;
-  if (!u || gate.value || rerenderAnswered.value) return false;
-  return u.rerender.length > 0;
-});
-
-async function onRerender(yes: boolean) {
-  rerenderAnswered.value = true;
-  if (yes && config.value) await openRequest(config.value.upgrade.rerender, "upgrade");
-}
-
-// The toolbar's pills. A failed upgrade comes back on the next page load;
+// The toolbar's pills. A failed upgrade, or steps the launch found in a
+// shape this version does not read, come back on the next page load;
 // a finished "Free up disk space" stays dismissed, by its id, in this
 // browser, or it would greet every reload until the server restarts.
 const upgradeDismissed = ref(false);
@@ -136,12 +134,12 @@ onUnmounted(() => stop?.());
 </script>
 
 <template>
-  <main class="datalib-shell" data-feedback-root>
+  <main class="datalib-shell">
     <!-- The toolbar: the app and library names, and the search box. The
          first-run screen keeps the names, which are the way back to the
          other libraries; there is nothing yet to sync or search. -->
     <nav
-      v-if="!gate || gate === 'first-run'"
+      v-if="!gate || gate === 'first-run' || gate === 'upgrading'"
       class="datalib-toolbar"
       :class="{ 'datalib-toolbar--titlebar': underTitleBar }"
       aria-label="App"
@@ -156,6 +154,7 @@ onUnmounted(() => stop?.());
             :view="upgradePill"
             testid="upgrade-pill"
             @dismiss="upgradeDismissed = true"
+            @act="(steps) => openRequest(steps, 'upgrade')"
           />
           <PassIndicator
             :view="freeSpacePill"
@@ -182,11 +181,15 @@ onUnmounted(() => stop?.());
         :config="config"
         @saved="refresh"
       />
+      <UpgradingView
+        v-else-if="gate === 'upgrading' && config"
+        :upgrade="config.upgrade"
+        @open-sources="openSourcesThroughTheUpgrade"
+      />
     </div>
     <div v-if="cardsShown" v-show="!gate" class="datalib-cards">
       <RouterView />
     </div>
-    <RerenderDialog v-if="rerenderAsked && config" :upgrade="config.upgrade" @answer="onRerender" />
     <ToastStack />
     <!-- Agent hand-off instructions dialog; opened via handoff.ts from
          the card surface and the config editor. -->

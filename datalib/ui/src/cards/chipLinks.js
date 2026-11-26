@@ -12,6 +12,7 @@ const KINDS = new Set([
   "email",
   "tel",
   "slack",
+  "discord",
   "signal_aci",
   "facebook",
   "linkedin",
@@ -95,6 +96,10 @@ function readHandle(href) {
       // A model's id (`Handle::ai_model`): no whitespace, lowercase.
       return value !== "" && !/\s/.test(value) ? `ai_model:${value.toLowerCase()}` : null;
     }
+    if (kind === "discord") {
+      // A snowflake's digits (`Handle::discord`).
+      return /^\d{1,20}$/.test(value) ? `discord:${value}` : null;
+    }
     if (kind === "whatsapp") {
       // A linked id's digits (`Handle::whatsapp_lid`).
       return /^\d+$/.test(value) ? `whatsapp:${value}` : null;
@@ -137,6 +142,7 @@ export function uriFromHandle(handle) {
   if (kind === "facebook") return `datalib:handle/facebook/${percentEncode(value)}`;
   if (kind === "linkedin") return `https://www.linkedin.com/in/${percentEncode(value)}`;
   if (
+    kind === "discord" ||
     kind === "google" ||
     kind === "github" ||
     kind === "gitlab" ||
@@ -320,9 +326,26 @@ export function contactFromUri(href) {
   return m ? m[1] : null;
 }
 
+/** The page of a contact a `datalib:contact_page/<id>` URI names, or null.
+ *  Mirrors `datalib_contact_schema::contact_page_uri`.
+ *  @param {string} href
+ *  @returns {string | null} */
+export function contactPageFromUri(href) {
+  const m = /^datalib:contact_page\/([^/?#]+)$/.exec(href.trim());
+  return m ? m[1] : null;
+}
+
+/** The URI naming a contact's page; `contactPageFromUri` reads it back.
+ *  @param {string} page
+ *  @returns {string} */
+export function writeContactPage(page) {
+  return `datalib:contact_page/${page}`;
+}
+
 /** The markdown-it plugin: an explicit link whose href names a handle
  *  gets `class="chip"` and `data-handle`; one naming a group or a step,
- *  `class="chip"` and `data-entity` (its URI). A link linkify made from a bare
+ *  `class="chip"` and `data-entity` (its URI); one naming a contact's page,
+ *  `class="chip"` and `data-contact-page`. A link linkify made from a bare
  *  address in running text is left alone — its token says so — so a
  *  signature's address stays an address. With `env.chipMark`, each mark
  *  is signed with it in `data-chip-mark`, for the sanitizer to tell this
@@ -349,10 +372,12 @@ export function chipLinks(md) {
     if (token.markup !== "linkify" && typeof href === "string") {
       const handle = handleFromUri(href);
       const entity = handle ? null : entityFromUri(href);
-      if (handle || entity) {
+      const page = contactPageFromUri(href);
+      if (handle || entity || page) {
         token.attrJoin("class", "chip");
         if (handle) token.attrSet("data-handle", handle);
-        else token.attrSet("data-entity", href.trim());
+        else if (entity) token.attrSet("data-entity", href.trim());
+        else token.attrSet("data-contact-page", page);
         if (typeof env?.chipMark === "string") token.attrSet("data-chip-mark", env.chipMark);
       }
     }

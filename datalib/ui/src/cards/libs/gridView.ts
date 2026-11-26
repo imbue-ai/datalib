@@ -38,7 +38,7 @@ export type GridOpts = {
   placeholder?: string;
 };
 
-const STYLES = { styleSources: [SearchList, slickCss, tableGridCss, chipCss] };
+export const STYLES = { styleSources: [SearchList, slickCss, tableGridCss, chipCss] };
 
 export function searchView(opts?: SearchOpts): CardRender {
   return vueCard(

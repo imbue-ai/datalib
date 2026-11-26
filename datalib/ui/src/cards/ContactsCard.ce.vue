@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // `contactsView()`: every contact in the contacts app, read straight from
 // it (`GET /applet/datalib_contacts/contacts`), so an edit made anywhere
-// shows at once. The person is a chip, as in any grid: a click links it,
-// a double-click on a row opens the person card, a right-click offers
+// shows at once. The person is a chip, as in any grid: a double-click on
+// a row opens the person card, a right-click offers
 // the card, everything with them, copying the name, merging the selected
 // rows into the one clicked, and deleting. A new contact is made from the
 // box at the top. Review switches to what agents proposed
@@ -16,14 +16,13 @@ import { subscribeLive } from "@/live";
 import { CONTACT } from "@/search/queryText";
 import { pushToast } from "@/toasts";
 import type { ColumnSpec } from "@/api";
-import { personSource, searchSource } from "./cardSources";
-import { isBrowserClick } from "./chatLink";
+import { contactSubject, personSource, searchSource } from "./cardSources";
 import {
   CONTACTS_APPLET,
-  canLinkHandles,
   contactsById,
   createContact,
   deleteContact,
+  isAbsent,
   mergeContacts,
   movesPeople,
   people,
@@ -32,25 +31,23 @@ import {
 import { filterContacts, mergeInto, rowHandle, type ContactRow } from "./contactsTable";
 import type { ReviewRow } from "./contactsReview";
 import ContactsReview from "./ContactsReview.ce.vue";
-import HandlePopover from "./HandlePopover.ce.vue";
 import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
 import type { CardCtx } from "./types";
 
 const props = defineProps<{ ctx: CardCtx }>();
-props.ctx.setTitle("Your contacts");
+props.ctx.setTitle("Contacts");
 props.ctx.setHelp(`
-<p>Every contact you have made in the contacts app, read from it as it
-is now: a link or a new contact shows here at once. A contact is drawn
-by its first working address or number, pale blue because it is yours.
-A contact with no handle yet is drawn as itself. Double-click a row to
-open the person card: your contact and what every source says about
-them. Right-click for everything with them, or to delete the contact.
-To merge duplicates, select them all and right-click the one to keep.</p>
+<p>The people you have added, and nobody else: no source fills this list.
+To add someone, double-click them anywhere and choose <em>Add to
+contacts</em>, or type a new name above. Double-click a row for the
+person's page: your contact, and what every source says about them.
+Right-click for everything with them, or to delete the contact. To merge
+duplicates, select them all and right-click the one to keep.</p>
 <p><b>Review</b> lists what agents proposed: contacts they made, handles
-they linked, and whether each person or sender is <i>real</i>, which is
-to say not spam. A label is in, out, or not decided. Confirm agrees with the agent; Reject unlinks what it
-linked and flips its labels, and both are written down so no agent
+they put on one, and whether each person or sender is <i>real</i>, which is
+to say not spam. A label is in, out, or not decided. Confirm agrees with the agent; Reject takes off the
+handles it put on and flips its labels, and both are written down so no agent
 proposes the same again. Select many rows to act on them at once.</p>
 `);
 
@@ -60,6 +57,8 @@ const waitingReview = ref<number | null>(null);
 const columns = ref<ColumnSpec[]>([]);
 const rows = ref<ContactRow[]>([]);
 const error = ref<string | null>(null);
+/// This library's config has no contacts app.
+const absent = ref(false);
 const filter = ref("");
 const newName = ref("");
 const creating = ref(false);
@@ -73,6 +72,8 @@ async function load() {
   try {
     const r = await fetch(`${CONTACTS_APPLET}/contacts`);
     const text = await r.text();
+    if (mine === asked) absent.value = isAbsent(r.status, text);
+    if (absent.value) return;
     if (!r.ok) throw new Error(`contacts → ${r.status}: ${text}`);
     const t = JSON.parse(text) as { columns: ColumnSpec[]; rows: ContactRow[] };
     if (mine !== asked) return;
@@ -113,9 +114,8 @@ async function create() {
 }
 
 function openPerson(row: ContactRow) {
-  const handle = rowHandle(row);
-  if (handle) props.ctx.host.openCards(personSource(handle, { seenIn: null }));
-  else pushToast(`${row.contact_ref.label} has no handle yet; link one to open their card`, "info");
+  const subject = rowHandle(row) ?? contactSubject(row.key);
+  props.ctx.host.openCards(personSource(subject, { seenIn: null }));
 }
 
 function everythingWith(row: ContactRow) {
@@ -137,7 +137,7 @@ async function merge(into: ContactRow, from: ContactRow[]) {
 
 async function remove(rows: ContactRow[]) {
   const what = rows.length === 1 ? `“${rows[0].contact_ref.label}”` : `${rows.length} contacts`;
-  if (!(await confirmAction(`Delete ${what}? Their handles will be linked to nobody.`))) return;
+  if (!(await confirmAction(`Delete ${what}? Their handles will be nobody’s.`))) return;
   try {
     for (const r of rows) await deleteContact(r.key);
   } catch (e) {
@@ -151,8 +151,7 @@ function menu(row: ContactRow, targets: ContactRow[]): MenuEntry[] {
   const others = mergeInto(row, targets);
   return [
     {
-      name: "Open person card",
-      disabled: rowHandle(row) ? null : "This contact has no handle yet.",
+      name: "Open",
       action: () => openPerson(row),
     },
     { name: `Everything with ${name}`, action: () => everythingWith(row) },
@@ -184,36 +183,8 @@ function menu(row: ContactRow, targets: ContactRow[]): MenuEntry[] {
   ];
 }
 
-// ── A chip's click: link it, never follow its mailto: ───────────────
-
-type Popover = {
-  handle: string;
-  shownAs: string;
-  resolved: NormalizedContact | null;
-  x: number;
-  y: number;
-};
-const popover = ref<Popover | null>(null);
-
-function onChipClick(ev: MouseEvent) {
-  const t = ev.target;
-  const chip = t instanceof Element ? t.closest<HTMLElement>("a.chip[data-handle]") : null;
-  if (!chip || isBrowserClick(ev)) return;
-  ev.preventDefault();
-  if (ev.detail > 1 || !canLinkHandles()) return;
-  const handle = chip.dataset.handle ?? "";
-  popover.value = {
-    handle,
-    shownAs: chip.dataset.shownAs ?? "",
-    resolved: people.get(handle)?.mine ?? null,
-    x: ev.clientX,
-    y: ev.clientY,
-  };
-}
-
 const chips = {
   who: (handle: string) => people.lookup(handle),
-  canLink: () => canLinkHandles(),
   contact: (id: string) => contactsById.lookup(id),
 };
 
@@ -240,8 +211,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="cardEl" class="contacts-card" @click.capture="onChipClick">
-    <div class="contacts-modes" role="tablist">
+  <div ref="cardEl" class="contacts-card">
+    <p v-if="absent" class="contacts-absent">
+      This library has no contacts app. Add it from <b>Sources</b>, under <b>Add source</b>.
+    </p>
+    <div v-if="!absent" class="contacts-modes" role="tablist">
       <button
         role="tab"
         class="contacts-mode"
@@ -260,11 +234,11 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <ContactsReview
-      v-if="mode === 'review'"
+      v-if="!absent && mode === 'review'"
       :ctx="props.ctx"
       @waiting="(n) => (waitingReview = n)"
     />
-    <template v-else>
+    <template v-else-if="!absent">
       <div class="contacts-bar">
         <input
           v-model="filter"
@@ -285,7 +259,7 @@ onBeforeUnmount(() => {
             aria-label="New contact's name"
           />
           <button type="submit" class="contacts-button" :disabled="creating || !newName.trim()">
-            Create
+            Add
           </button>
         </form>
       </div>
@@ -304,13 +278,6 @@ onBeforeUnmount(() => {
         />
       </div>
     </template>
-    <HandlePopover
-      v-if="popover"
-      :key="popover.handle"
-      v-bind="popover"
-      @close="popover = null"
-      @changed="load"
-    />
   </div>
 </template>
 
@@ -323,6 +290,10 @@ onBeforeUnmount(() => {
   color: var(--datalib-fg);
   background: var(--datalib-bg);
   font-size: var(--datalib-font-size);
+}
+.contacts-absent {
+  padding: 0.75rem;
+  color: var(--datalib-muted);
 }
 .contacts-modes {
   display: flex;

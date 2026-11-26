@@ -346,7 +346,8 @@ first either way, but a stage that ends gives your app a seal and a
 of guessing how far a long backfill has reached.
 
 This works for any source whose `since` backfills: Slack, Claude and
-ChatGPT, Gmail, Todoist and Garmin
+ChatGPT, Gmail, Todoist (its completed tasks only: open tasks, projects
+and comments always come whole) and Garmin
 ([config_model.md](../dev/config_model.md) § "Time windows"). A calendar
 is the exception: a windowed one is listed whole every run, and an event
 outside the window goes. The steps below use Gmail; for another source
@@ -667,7 +668,7 @@ your app's own calls can be refused.
   (5000 by default, of the 6000 a minute Google allows one user), so
   about 1000 a minute are left for your app. Lower it in the source's
   `[steps.params.gmail]` to leave more.
-- **Google Calendar and CalDAV** have no such setting; a refusal is
+- **Google Calendar, Google Contacts and CalDAV** have no such setting; a refusal is
   retried with backoff.
 
 ## Changing the config while a sync runs

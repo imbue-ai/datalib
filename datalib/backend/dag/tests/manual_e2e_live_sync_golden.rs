@@ -18,6 +18,7 @@ use std::sync::OnceLock;
 use datalib_contacts::{ContactKind, Store};
 use datalib_dag::RunState;
 use datalib_handle::Handle;
+use datalib_store_dump::{cell_value, open_readonly, store_as_jsonl, Keep};
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;
@@ -244,7 +245,7 @@ fn is_storage_row(map: &serde_json::Map<String, Value>) -> bool {
 }
 
 /// Per-TABLE volatile columns: `(table, keys)` redacted only in rows of that
-/// table. Applied in [`dump_store`], which knows the table name for
+/// table. Applied in [`redact_row`], which knows the table name for
 /// certain — no shape-sniffing required.
 const TABLE_VOLATILE_KEYS: &[(&str, &[&str])] = &[
     // The store's record of which build wrote it: the stamp is the wall
@@ -298,6 +299,8 @@ const ROW_COUNT_ONLY_STEPS: &[(&str, &str)] = &[
 ///   out of the golden as files; the tables must not let them back in.
 ///   Linear's lists of people, teams, states, labels, statuses and
 ///   initiatives are the same: read whole whatever projects are chosen.
+///   So are Discord's channels, threads and roles of a server, whatever
+///   channels are chosen.
 /// - A sensor series (`airvisual_samples`, `garmin_daily`) is thousands
 ///   of rows whose values the provider's own fixtures pin; here the
 ///   count says the step read the files, and the rendered plots say
@@ -332,6 +335,10 @@ const ROW_COUNT_ONLY_TABLES: &[(&str, &str)] = &[
     ("linear", "project_statuses_bookkeeping"),
     ("linear", "initiatives"),
     ("linear", "initiatives_bookkeeping"),
+    ("discord", "channels"),
+    ("discord", "channels_bookkeeping"),
+    ("discord", "roles"),
+    ("discord", "roles_bookkeeping"),
     ("airvisual", "airvisual_samples"),
     ("garmin", "garmin_daily"),
     ("garmin", "garmin_daily_bookkeeping"),
@@ -1134,29 +1141,6 @@ fn short_cell(v: &Value) -> String {
     }
 }
 
-async fn open_readonly(path: &Path) -> sqlx::SqlitePool {
-    use std::str::FromStr;
-
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-
-    // A plain SQLite file has to say so to the doltlite-linked engine,
-    // which would otherwise take it for a doltlite store.
-    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
-        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
-    } else {
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
-    }
-    .create_if_missing(false)
-    .read_only(true);
-    SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await
-        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()))
-}
-
 /// The tables whose rows are the source's content: every user table but
 /// the `*_bookkeeping` sidecars and [`NON_CONTENT_TABLES`].
 async fn content_table_names(pool: &sqlx::SqlitePool) -> Vec<String> {
@@ -1218,6 +1202,7 @@ fn run_pipeline(
         // The run's own fingerprint cache, so run 1 is cold on every host
         // and the host cache never sees this test.
         .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
+        .env("DATALIB_CHILD_ENV", "DATALIB_CACHE_DIR")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-pipeline");
@@ -1968,7 +1953,7 @@ enum SnapValue {
 /// File → snapshot payload. JSONL and JSON are parsed, sorted and stripped of
 /// volatile fields; markdown is text with frontmatter redactions; a store —
 /// `.doltlite_db`, or a plain `.sqlite` like the blob CAS — is dumped a row a
-/// line by [`store_as_jsonl`] so the goldens carry the actual raw payloads.
+/// line by `store_as_jsonl` so the goldens carry the actual raw payloads.
 /// Anything else becomes a size marker.
 fn summarize_file(path: &Path) -> SnapValue {
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -2133,52 +2118,6 @@ fn dump_store(path: &Path) -> Value {
 }
 
 async fn dump_store_async(path: &Path) -> Value {
-    use std::str::FromStr;
-
-    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-    use sqlx::{Column, Row};
-
-    // JSON-bearing TEXT columns: parse to Value rather than leaving as
-    // an embedded string. Everything else passes through verbatim.
-    const JSON_TEXT_COLUMNS: &[&str] = &[
-        "payload",
-        "config",
-        "summary",
-        "example_headers",
-        "example_envelope_skeleton",
-    ];
-
-    // A plain SQLite file has to say so to the doltlite-linked engine,
-    // which would otherwise take it for a doltlite store.
-    let opts = if path.extension().is_some_and(|e| e == "sqlite") {
-        SqliteConnectOptions::new().filename(datalib_runtime::plain_sqlite::uri(path))
-    } else {
-        SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display())).expect("sqlite uri")
-    }
-    .create_if_missing(false)
-    .read_only(true);
-    let pool = SqlitePoolOptions::new()
-        .max_connections(1)
-        .idle_timeout(None)
-        .max_lifetime(None)
-        .connect_with(opts)
-        .await
-        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
-
-    // Tables to walk, in alphabetical order so the snapshot is stable.
-    let table_rows = sqlx::query(
-        "SELECT name FROM sqlite_master \
-         WHERE type='table' AND name NOT LIKE 'sqlite_%' \
-         ORDER BY name",
-    )
-    .fetch_all(&pool)
-    .await
-    .expect("list tables");
-    let tables: Vec<String> = table_rows
-        .iter()
-        .map(|r| r.try_get::<String, _>(0).unwrap_or_default())
-        .collect();
-
     let stanza = stanza_of(path).unwrap_or_default();
     let step = step_of(path).unwrap_or_default();
     let store_counts_only = ROW_COUNT_ONLY_STEPS
@@ -2189,256 +2128,32 @@ async fn dump_store_async(path: &Path) -> Value {
             .iter()
             .any(|(s, table)| *table == t && (*s == "*" || *s == stanza))
     };
-
-    let mut out = serde_json::Map::new();
-    for t in tables {
-        if store_counts_only || table_counts_only(&t) {
-            // Golden-test dump: `t` is a table name this test just read out
-            // of the store's own `sqlite_master`.
-            let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM \"{t}\"")))
-                .fetch_one(&pool)
-                .await
-                .unwrap_or_else(|e| panic!("count {t}: {e}"))
-                .get(0);
-            out.insert(t, Value::String(format!("{n} rows")));
-            continue;
+    let mut dump =
+        datalib_store_dump::dump(path, |t| match store_counts_only || table_counts_only(t) {
+            true => Keep::Count,
+            false => Keep::Rows,
+        })
+        .await;
+    for (table, rows) in dump.as_object_mut().into_iter().flatten() {
+        for row in rows.as_array_mut().into_iter().flatten() {
+            redact_row(table, row);
         }
-        // Pull column names so we know whether to wrap `payload` in
-        // `json(...)` and which column to ORDER BY.
-        // Golden-test dump: `t` is a table name this test just read out of the
-        // store's own `sqlite_master`.
-        let info = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info(\"{t}\")")))
-            .fetch_all(&pool)
-            .await
-            .expect("table_info");
-        let columns: Vec<String> = info
-            .iter()
-            .map(|r| r.try_get::<String, _>("name").unwrap_or_default())
-            // `volatile_payload` holds churn by definition — that is why
-            // it was split off the content payload. Snapshotting it would
-            // make the golden non-deterministic.
-            .filter(|c| c != "volatile_payload")
-            .collect();
-
-        let select_list = columns
-            .iter()
-            .map(|c| {
-                if c == "payload" {
-                    "json(payload) AS payload".to_string()
-                } else {
-                    format!("\"{c}\"")
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        // A table's primary key is its identity, so ordering by it keeps
-        // a row in place across bakes and lets a content change read as a
-        // change rather than as a delete plus an insert somewhere else.
-        // `grid_rows`, `markdowns` and `source_measurements` all land here
-        // — none of them has an `id` column, so before this they were
-        // dumped in whatever order the store handed back.
-        let mut pk_cols: Vec<(i64, String)> = info
-            .iter()
-            .filter_map(|r| {
-                let pos = r.try_get::<i64, _>("pk").unwrap_or(0);
-                let name = r.try_get::<String, _>("name").expect("table_info name");
-                (pos > 0 && name != "volatile_payload").then_some((pos, name))
-            })
-            .collect();
-        pk_cols.sort();
-        let order_by = if !pk_cols.is_empty() {
-            format!(
-                "ORDER BY {}",
-                pk_cols
-                    .iter()
-                    .map(|(_, c)| format!("\"{c}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        } else if columns.iter().any(|c| c == "id") {
-            "ORDER BY id".to_string()
-        } else if columns.iter().any(|c| c == "run_id") {
-            "ORDER BY run_id".to_string()
-        } else if columns.iter().any(|c| c == "scope") {
-            "ORDER BY scope".to_string()
-        } else if columns.iter().any(|c| c == "endpoint") {
-            "ORDER BY endpoint".to_string()
-        } else {
-            String::new()
-        };
-        let q = format!("SELECT {select_list} FROM \"{t}\" {order_by}");
-        // Same: `select_list` is built from the columns just introspected and
-        // `order_by` is one of a closed set of literals.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(q))
-            .fetch_all(&pool)
-            .await
-            .unwrap_or_else(|e| panic!("select {t}: {e}"));
-
-        let mut row_vals = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let mut obj = serde_json::Map::new();
-            for col in row.columns() {
-                let name = col.name();
-                let value = cell_value(row, name, JSON_TEXT_COLUMNS.contains(&name));
-                obj.insert(name.to_string(), value);
-            }
-            row_vals.push(Value::Object(obj));
-        }
-        // No key to order by — lightroom's `Ag*` tables, mirrored from
-        // Adobe's catalog, declare none. Sort by the rendered row so the
-        // dump is at least a function of the contents rather than of the
-        // order the store happened to return them in.
-        if order_by.is_empty() {
-            row_vals.sort_by_cached_key(|v| v.to_string());
-        }
-
-        // Table-scoped redaction, applied here because this is the one place
-        // that knows the table name for certain (see `TABLE_VOLATILE_KEYS`).
-        if let Some((_, keys)) = TABLE_VOLATILE_KEYS.iter().find(|(name, _)| *name == t) {
-            for row in row_vals.iter_mut() {
-                if let Value::Object(map) = row {
-                    for k in *keys {
-                        if let Some(slot) = map.get_mut(*k) {
-                            *slot = Value::String(REDACTED.into());
-                        }
-                    }
-                }
-            }
-        }
-        if t == "_datalib_meta" {
-            for row in row_vals.iter_mut() {
-                if let Value::Object(map) = row {
-                    if map.get("key").and_then(Value::as_str) == Some("git_hash") {
-                        map.insert("value".into(), Value::String(REDACTED.into()));
-                    }
-                }
-            }
-        }
-        out.insert(t, Value::Array(row_vals));
     }
-    Value::Object(out)
+    dump
 }
 
-/// A row whose one-line form is longer than this is indented instead. Two
-/// of this golden's 45,631 rows are whole Claude conversations, and a
-/// 4.5 MB line is one no diff viewer will render; at this width 23 rows
-/// spill and nothing else is touched.
-const SPILL_WIDTH: usize = 64 * 1024;
-
-/// A store dump as text: a `# <table>: N rows` header, then one row a line.
-///
-/// Not JSON indented one line per column, because that made the line count
-/// the product of rows and columns: four columns arriving on `grid_rows`
-/// added 13,044 lines to one source's snapshot without a byte of its raw
-/// store changing. A row a line also makes a changed row read as one
-/// changed line.
-///
-/// Read a changed row with `git diff --word-diff`, which is why the
-/// separators carry a space: a compact object is a single word to git's
-/// tokenizer, so a one-field change would read as a whole-line rewrite.
-fn store_as_jsonl(dump: &Value) -> String {
-    let Value::Object(tables) = dump else {
-        return format!("{dump}\n");
+fn redact_row(table: &str, row: &mut Value) {
+    let Value::Object(map) = row else {
+        return;
     };
-    let mut out = String::new();
-    for (table, value) in tables {
-        match value {
-            Value::Array(rows) => {
-                out.push_str(&format!("# {table}: {} rows\n", rows.len()));
-                for row in rows {
-                    let line = spaced_json(row);
-                    if line.len() <= SPILL_WIDTH {
-                        out.push_str(&line);
-                    } else {
-                        out.push_str(&serde_json::to_string_pretty(row).expect("pretty row"));
-                    }
-                    out.push('\n');
-                }
-            }
-            // A table the `ROW_COUNT_ONLY_*` lists keep to a count: the
-            // count is the whole dump, and it is already `"<n> rows"`.
-            other => {
-                let said = other
-                    .as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| other.to_string());
-                out.push_str(&format!("# {table}: {said}\n"));
-            }
+    let volatile = TABLE_VOLATILE_KEYS.iter().find(|(name, _)| *name == table);
+    for k in volatile.into_iter().flat_map(|(_, keys)| *keys) {
+        if let Some(slot) = map.get_mut(*k) {
+            *slot = Value::String(REDACTED.into());
         }
     }
-    out
-}
-
-/// Compact JSON with a space after every `,` and `:` — see
-/// [`store_as_jsonl`] on why the spaces are load-bearing.
-fn spaced_json(v: &Value) -> String {
-    use serde::Serialize;
-    struct Spaced;
-    impl serde_json::ser::Formatter for Spaced {
-        fn begin_array_value<W: ?Sized + std::io::Write>(
-            &mut self,
-            w: &mut W,
-            first: bool,
-        ) -> std::io::Result<()> {
-            if first {
-                Ok(())
-            } else {
-                w.write_all(b", ")
-            }
-        }
-        fn begin_object_key<W: ?Sized + std::io::Write>(
-            &mut self,
-            w: &mut W,
-            first: bool,
-        ) -> std::io::Result<()> {
-            if first {
-                Ok(())
-            } else {
-                w.write_all(b", ")
-            }
-        }
-        fn begin_object_value<W: ?Sized + std::io::Write>(
-            &mut self,
-            w: &mut W,
-        ) -> std::io::Result<()> {
-            w.write_all(b": ")
-        }
-    }
-    let mut buf = Vec::new();
-    let mut ser = serde_json::Serializer::with_formatter(&mut buf, Spaced);
-    v.serialize(&mut ser).expect("serialize row");
-    String::from_utf8(buf).expect("row is utf-8")
-}
-
-/// One cell as JSON, typed by the cell's own storage class. The
-/// *column*'s declared type cannot be trusted: an aliased function
-/// result (`json(payload) AS payload`) has none and would fall through
-/// to NULL. `parse_json` turns a JSON-bearing TEXT into a Value.
-fn cell_value(row: &sqlx::sqlite::SqliteRow, name: &str, parse_json: bool) -> Value {
-    use sqlx::{Row, TypeInfo, ValueRef};
-
-    let raw = row.try_get_raw(name).expect("try_get_raw");
-    if raw.is_null() {
-        return Value::Null;
-    }
-    let type_info = raw.type_info().into_owned();
-    match type_info.name() {
-        "TEXT" => {
-            let s: String = row.try_get(name).expect("TEXT decodes as String");
-            if parse_json {
-                serde_json::from_str::<Value>(&s).unwrap_or(Value::String(s))
-            } else {
-                Value::String(s)
-            }
-        }
-        "INTEGER" => Value::from(row.try_get::<i64, _>(name).expect("INTEGER decodes as i64")),
-        "REAL" => serde_json::Number::from_f64(row.try_get(name).expect("REAL decodes as f64"))
-            .map_or(Value::Null, Value::Number),
-        "BLOB" => {
-            let b: Vec<u8> = row.try_get(name).expect("BLOB decodes as bytes");
-            Value::String(format!("<bytes {}>", b.len()))
-        }
-        _ => Value::Null,
+    if table == "_datalib_meta" && map.get("key").and_then(Value::as_str) == Some("git_hash") {
+        map.insert("value".into(), Value::String(REDACTED.into()));
     }
 }
 
@@ -2548,58 +2263,5 @@ fn strip_volatile_for_incrementality(v: &mut Value) {
         // out of the preserved per-source `stats` line.
         Value::String(s) => *s = scrub_commit(&normalize_str(s)),
         _ => {}
-    }
-}
-
-#[cfg(test)]
-mod store_dump_tests {
-    use super::*;
-
-    /// A table's rows go one a line, with a header naming the count, and
-    /// the separators carry a space so `git diff --word-diff` can tell a
-    /// one-field change from a rewritten row.
-    #[test]
-    fn a_table_dumps_one_row_a_line_with_spaced_separators() {
-        let dump = serde_json::json!({
-            "grid_rows": [
-                {"uuid": "a", "h3": null, "kind": "Photo"},
-                {"uuid": "b", "h3": 644, "kind": "Photo"},
-            ],
-            "tree": "53988 rows",
-        });
-        assert_eq!(
-            store_as_jsonl(&dump),
-            "# grid_rows: 2 rows\n\
-             {\"h3\": null, \"kind\": \"Photo\", \"uuid\": \"a\"}\n\
-             {\"h3\": 644, \"kind\": \"Photo\", \"uuid\": \"b\"}\n\
-             # tree: 53988 rows\n"
-        );
-    }
-
-    /// A row too wide for one line is indented instead, so a store holding
-    /// whole conversations cannot put a multi-megabyte line in the golden.
-    #[test]
-    fn a_row_wider_than_the_spill_width_is_indented() {
-        let wide = "x".repeat(SPILL_WIDTH + 1);
-        let dump = serde_json::json!({"conversations": [{"payload": wide}]});
-        let out = store_as_jsonl(&dump);
-        assert!(
-            out.starts_with("# conversations: 1 rows\n{\n  \"payload\": \""),
-            "{}",
-            &out[..40]
-        );
-        assert!(
-            out.lines().all(|l| l.len() <= SPILL_WIDTH + 16),
-            "a spilled row still produced a line of {}",
-            out.lines().map(str::len).max().unwrap_or(0)
-        );
-    }
-
-    /// An empty table still says so: a table that lost its rows has to read
-    /// as a change, not as an absence.
-    #[test]
-    fn an_empty_table_keeps_its_header() {
-        let dump = serde_json::json!({"edges": []});
-        assert_eq!(store_as_jsonl(&dump), "# edges: 0 rows\n");
     }
 }

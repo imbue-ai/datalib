@@ -34,9 +34,15 @@ step_protocol = 1                 # the step protocol it was written against
 aarch64-apple-darwin     = { url = "weather-1.2.0-aarch64-apple-darwin.tar.gz", sha256 = "…", size = 3141592 }
 x86_64-unknown-linux-gnu = { url = "weather-1.2.0-x86_64-unknown-linux-gnu.tar.gz", sha256 = "…" }
 
+[locks]                           # locks its steps hold, and their slots
+noaa = 1
+
 [[sources]]                       # a source type it adds to "Add source"
 type = "weather"                  # the group `type` such a source gets
-commands = { ingest = "bin/fetch-weather", render_markdown = "bin/render-weather" }
+probe = "bin/probe-weather"       # answers "Check connection"; optional
+[sources.commands]                # the command each function's step runs
+ingest = { command = "bin/fetch-weather", locks = ["noaa"] }
+render_markdown = "bin/render-weather"
 [sources.wizard]                  # its add-source form
 label = "Weather station"
 blurb = "Hourly observations from a NOAA station."
@@ -61,7 +67,21 @@ command = "bin/weather-chart"
   the store the indexes read, exactly as a built-in source's does
   (§"Rendering"). The first word of a command is a path inside the
   unpacked archive. What each program must do is the step protocol
-  (`step_protocol.md`).
+  (`step_protocol.md`). A command is either the command alone or a
+  table: `command`, `reads` (`"pinned"` or `"files"`, as in a
+  `[[steps]]` entry, `config_model.md`) and `locks`, the names of the
+  locks the step holds. The wizard writes `reads` and `locks` on the
+  step as the table gives them; with no `reads`, a step that has inputs
+  gets `reads = "pinned"`.
+- **`locks`**: each lock a command names, with its slots. A lock a
+  command names and `locks` does not is refused. Adding a source writes
+  a `[[locks]]` entry with these slots for each lock its steps hold that
+  the config does not declare yet; a config that already declares one
+  keeps its own slots.
+- **`sources.probe`**: the command that answers "Check connection" and a
+  picker's "Load" for a source of this type (`step_protocol.md`
+  §"Probe"), its first word a path inside the package. Without one the
+  form has no "Check connection".
 - **`sources.wizard`**: the add-source form, written as a `CatalogEntry`
   (`datalib/ui/src/config/catalog.ts`) without `type`: the same
   `label`, `blurb`, `sections`, `fields`, `before` and the rest that a
@@ -176,12 +196,14 @@ the indexes asks a store which type or provider wrote it.
 These stores are Datalib's own formats, not a published interface. A
 writer has to match them exactly:
 
-1. **The tables, byte for byte.** `unified_grid_and_search_index` reads a render store only
-   when its `_datalib_meta.schema_hash` (blake3 over the `CREATE`
-   statements) equals the one this build computes
-   (`datalib/backend/etl/render/src/indexed_markdown.rs`, `schema_hash`). A release
-   that changes a render table therefore hides every package's
-   documents until the package ships a build with the new tables.
+1. **The tables and indexes, byte for byte.** `unified_grid_and_search_index` reads a
+   render store only when the shape its `_datalib_meta` records
+   (`schema_hash`, blake3 over the `CREATE TABLE` statements;
+   `index_hash`, over its lookup indexes; and its ladder positions)
+   equals the one this build computes
+   (`datalib/backend/etl/render/src/indexed_markdown.rs`, `shape`). A release
+   that changes a render table or index therefore hides every package's
+   documents until the package ships a build with the new shape.
 2. **The doltlite writer rules.** Write on the `datalib_writer` branch
    and move `main` to it when a run ends; readers only look at `main`
    (`datalib/backend/etl/src/doltlite_raw.rs`, `commit_run`).

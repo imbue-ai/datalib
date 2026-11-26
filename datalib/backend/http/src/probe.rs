@@ -81,36 +81,16 @@ pub async fn start_probe(
     Json(req): Json<ProbeRequest>,
 ) -> Result<Json<ProbeStatus>, (StatusCode, Json<Value>)> {
     let source_type = validated_type(&req.source_type)?;
-    let step_bin = crate::binaries::resolve_step_bin().ok_or_else(|| {
-        err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "no `datalib-step` binary found (set $DATALIB_STEP_BIN or $DATALIB_BINARY_DIR). \
-             Checking a connection runs the provider's own probe, so it needs the step binary \
-             the pipeline uses.",
-        )
-    })?;
-    let params = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
-    // The wizard's typed credentials are in here; an owner-only file
-    // keeps them off argv, where `ps` would show them to every user.
-    let params_file = datalib_dag::subprocess::write_params_file(
-        &s.root,
-        &format!("probe_{source_type}"),
-        &params,
-    )
-    .map_err(|e| {
-        err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("params file: {e:#}"),
-        )
-    })?;
-
-    let mut cmd = Command::new(step_bin);
-    cmd.arg("probe").arg(&source_type);
+    let mut cmd = probe_command(&s.root, &source_type)?;
     if let Some(list) = req.list {
         cmd.arg("--list").arg(list.as_str());
     }
-    cmd.arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
-        .arg(params_file.path())
+    let params = serde_json::to_string(&req.params).unwrap_or_else(|_| "{}".to_string());
+    // In the environment, as the runner hands a step its params: the
+    // wizard's typed credentials are in here, and argv is readable by
+    // every user on the machine.
+    cmd.env(datalib_env::DATALIB_DAG_PARAMS, &params)
+        .current_dir(s.root.as_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -135,11 +115,79 @@ pub async fn start_probe(
         .expect("probe jobs mutex")
         .insert(id, slot.clone());
     tokio::spawn(async move {
-        // Held until the step exits: dropping it deletes the file.
-        let _params_file = params_file;
         run(child, &slot, &source_type).await;
     });
     Ok(Json(status))
+}
+
+/// The probe of `source_type`: the `probe` command of the package in the
+/// config that offers the type, when one does, as "Add source" draws a
+/// package's form before a built-in one; else `datalib-step`'s.
+fn probe_command(
+    root: &std::path::Path,
+    source_type: &str,
+) -> Result<Command, (StatusCode, Json<Value>)> {
+    let text =
+        std::fs::read_to_string(datalib_dag::config::root_config_path(root)).unwrap_or_default();
+    let installed: Vec<(String, datalib_packages::Manifest)> =
+        datalib_dag::config::check_text(&text)
+            .cfg
+            .packages
+            .iter()
+            .filter_map(|p| Some((p.dir_rel(), datalib_packages::installed(root, &p.sha256)?)))
+            .collect();
+    if let Some(command) = package_probe(&installed, source_type)? {
+        let argv = shlex::split(&command)
+            .filter(|a| !a.is_empty())
+            .ok_or_else(|| {
+                err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("the probe command {command:?} has unbalanced quoting"),
+                )
+            })?;
+        let mut cmd = Command::new(root.join(&argv[0]));
+        cmd.args(&argv[1..]);
+        return Ok(cmd);
+    }
+    let step_bin = crate::binaries::resolve_step_bin().ok_or_else(|| {
+        err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no `datalib-step` binary found (set $DATALIB_STEP_BIN or $DATALIB_BINARY_DIR). \
+             Checking a connection runs the provider's own probe, so it needs the step binary \
+             the pipeline uses.",
+        )
+    })?;
+    let mut cmd = Command::new(step_bin);
+    cmd.arg("probe").arg(source_type);
+    Ok(cmd)
+}
+
+/// The probe command, relative to the data root, of the first package of
+/// `installed` (each with its directory) that offers `source_type`;
+/// `None` when none does. A package that offers the type with no probe is
+/// refused rather than handed to the built-in probe of the same name,
+/// which would ask a service that package's steps may never reach.
+fn package_probe(
+    installed: &[(String, datalib_packages::Manifest)],
+    source_type: &str,
+) -> Result<Option<String>, (StatusCode, Json<Value>)> {
+    let offer = installed.iter().find_map(|(dir, m)| {
+        let source = m.sources.iter().find(|s| s.source_type == source_type)?;
+        Some((dir, m, source))
+    });
+    let Some((dir, m, source)) = offer else {
+        return Ok(None);
+    };
+    match source.probe.as_deref() {
+        Some(probe) => Ok(Some(format!("{dir}/{}", probe.trim_start()))),
+        None => Err(err(
+            StatusCode::NOT_FOUND,
+            &format!(
+                "the package {:?} offers {source_type:?} sources and has no probe for them",
+                m.name
+            ),
+        )),
+    }
 }
 
 /// Wait for the step, keeping the slot's progress current from its

@@ -248,10 +248,12 @@ impl RunProblem {
         )
     }
 
-    /// A listing the service cuts off however it is asked, so a stretch of
-    /// it is out of reach. A warning: every request was answered, and
-    /// nothing failed that a later attempt could mend, but what it would
-    /// not list is not in the mirror.
+    /// A listing that was answered and still is not the whole: the service
+    /// cuts it off however it is asked, the config limits it, or it names
+    /// something it does not identify. A warning, where a listing that
+    /// failed is an error and ends the step `incomplete`: nothing failed
+    /// that a later attempt could mend, but what it would not list is not
+    /// in the mirror.
     pub fn listing_cut_off(name: &str, detail: impl Into<String>) -> Self {
         use datalib_problems::{Reason, Severity};
         Self::new(
@@ -554,15 +556,18 @@ pub(crate) async fn apply(
     let mut earlier: HashMap<String, ProblemRow> = HashMap::new();
     let mut gone: Vec<String> = Vec::new();
     for sweep in sweeps {
-        // `INSTR(x, ?) = 1` rather than `LIKE`: `_` in a value is a
-        // wildcard to LIKE.
-        let swept =
-            sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1")
-                .bind(ScopeKind::Entity.as_str())
-                .bind(&sweep.prefix)
-                .fetch_all(&mut *tx)
-                .await
-                .with_context(|| format!("read the last run's {} problems", sweep.prefix))?;
+        let end = crate::key_range::prefix_end(&sweep.prefix)
+            .with_context(|| format!("no key follows the prefix {:?}", sweep.prefix))?;
+        let swept = sqlx::query(
+            "SELECT * FROM problems INDEXED BY problems_by_scope \
+             WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?",
+        )
+        .bind(ScopeKind::Entity.as_str())
+        .bind(&sweep.prefix)
+        .bind(&end)
+        .fetch_all(&mut *tx)
+        .await
+        .with_context(|| format!("read the last run's {} problems", sweep.prefix))?;
         for r in &swept {
             let row = ProblemRow::from_row(r)?;
             let key = row.scope_key.clone();

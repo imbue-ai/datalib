@@ -1417,7 +1417,7 @@ const signInWhere = computed<SignInWhere>(() => {
 /// filter matches only what emails are filed in, never a Gmail flag,
 /// which is why `mailboxes` is narrower than `labels`.
 const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
-  labels: ["mailbox", "keyword"],
+  labels: ["mailbox", "keyword", "label"],
   mailboxes: ["mailbox"],
   conversations: ["conversation"],
   channels: ["channel"],
@@ -1425,6 +1425,7 @@ const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
   addressbooks: ["address_book"],
   teams: ["team"],
   projects: ["project"],
+  servers: ["server"],
 };
 
 /// What a `probe:` field should offer, given what its list loaded.
@@ -2429,7 +2430,10 @@ function submit() {
                         <small class="wiz-help">
                           Set this variable to your {{ f.envVar.holds }} before the first sync.
                         </small>
-                        <details class="wiz-sub" :open="!!values[f.target]">
+                        <details
+                          class="wiz-sub"
+                          :open="!!values[f.target] && values[f.target] !== f.envVar.default"
+                        >
                           <summary>Use a different variable name</summary>
                           <input
                             class="wiz-input"

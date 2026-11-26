@@ -8,14 +8,13 @@ doing more jobs than it looks like:
   document, and its **`conversation_uuid`**;
 - the **`data-section-uuid` anchor** the renderer bakes into the
   markdown body, which the UI scrolls to and highlights;
-- the value **`feedback.target_uuids`** stores, unqualified, forever;
 - half of a **`/chat/{...}` URL** that has been handed out;
 - the **primary key the render store and the index sort by**, which
   decides how many leaves a sync rewrites.
 
-An id that turns out to mean two things breaks the first five at once,
-and the feedback and the URL are not recoverable after the fact — a
-filed feedback row is a bare string with no provider column beside it.
+An id that turns out to mean two things breaks the first four at once,
+and a URL handed out is not recoverable after the fact: it is a bare
+string with no provider beside it.
 
 This document is the rule for minting them. The implementation is
 [`datalib/backend/id/src/lib.rs`](../../datalib/backend/id/src/lib.rs).
@@ -88,7 +87,7 @@ that is anything else fails there. Two consequences:
 **A document row carries no stamp.** chat-common sets a document's
 `created_at` to its earliest item, so the value is derived and moves
 when an older message arrives; a re-keyed document orphans its `/chat/`
-URL and every feedback row filed against it. Documents are also
+URL. Documents are also
 rewritten every sync their chat is touched, wherever their first message
 fell, so a time prefix buys them no adjacency — clustering at the left
 edge does. The same goes for a page Datalib composes (a source's
@@ -298,6 +297,7 @@ back by render as the natural key.
 | contacts | none — keyed on `addressbook#uid` | none — a card has no creation event |
 | email | `account_id` — the JMAP account, the Gmail address, or the mbox's configured id | emails |
 | facebook | none — keyed on the raw row id (`fbid` where the record has one, else a hash of it) | posts, comments, reactions, photos |
+| discord | none — a snowflake is unique across the service; a channel as a place and its conversation are two kinds | messages, reactions — the instant in the message's id |
 | garmin | none — the page keyed on the source id, a device on Garmin's id | none |
 | github, gitlab | none — the repository / project leads the key: `{repo}#{number}` | PRs, MRs, comments, reviews, notes — the record's own `created_at` |
 | google_takeout | none — a Chat message id names its space, a Voice row id is the ingest's | messages, a Chat message's earlier versions |
@@ -363,8 +363,8 @@ backup, and expect a re-key when you do:
 
 ### What a re-key costs an existing data root
 
-Ids change, so anything holding one breaks. Filed feedback pointing at
-old `grid_rows.uuid`s does not survive, and that is not recoverable.
+Ids change, so anything holding one breaks. A link handed out naming
+an old `grid_rows.uuid` does not survive, and that is not recoverable.
 
 What *is* handled — neither needs a human to delete anything:
 

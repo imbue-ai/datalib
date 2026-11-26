@@ -46,9 +46,15 @@ async fn write(root: &Path, docs: &[(IndexDoc, [f32; 3])]) {
     cache.close().await;
 }
 
-/// `docs` in the keyword index and cut into chunks in the cache, which
-/// is handed back open.
+/// `docs` in the keyword index, in the grid index's file as its step
+/// makes it, and cut into chunks in the cache, which is handed back open.
 async fn index_and_cut(root: &Path, docs: &[IndexDoc]) -> InferenceCache {
+    let grid = datalib_etl_render::grid_index::open_index(&layout::grid_index_db(root))
+        .await
+        .unwrap();
+    datalib_etl_render::grid_index::close_index(grid)
+        .await
+        .unwrap();
     let index = Index::open(&layout::grid_index_db(root)).await.unwrap();
     index.put(docs).await.unwrap();
     index.close().await;
@@ -141,6 +147,56 @@ async fn a_chunk_covering_no_kept_message_does_not_rank_its_document() {
             .unwrap()
             .unwrap();
         assert_eq!(hits.len(), found, "{kept:?}");
+    }
+}
+
+/// A page's body, which is no row's, and a comment on it, each its own
+/// chunk. A filter that keeps the page's own row and the comment ranks
+/// the page by its body; one that keeps only the comment does not. Before,
+/// a filter that kept a comment dropped every chunk of the page's body.
+#[tokio::test]
+async fn a_chunk_of_text_that_is_no_rows_is_its_documents_row() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let page = IndexDoc {
+        source_id: "drive".into(),
+        markdown_uuid: "page".into(),
+        content_hash: "h-page".into(),
+        title: "page".into(),
+        head: None,
+        sections: [(None, "the warp core design"), (Some("c1"), "a comment")]
+            .into_iter()
+            .map(|(uuid, text): (Option<&str>, &str)| IndexSection {
+                uuid: uuid.map(str::to_string),
+                text: format!("{text}\n"),
+                lead: uuid.map(|u| format!("**{u}** wrote")),
+            })
+            .collect(),
+    };
+    let chunks = page.prompted(&four_bytes_a_token).unwrap();
+    assert_eq!(chunks.len(), 2, "the comment starts a chunk of its own");
+    let cache = index_and_cut(root, std::slice::from_ref(&page)).await;
+    let vectors = vec![
+        (chunks[0].hash.clone(), vec![1.0, 0.0, 0.0]),
+        (chunks[1].hash.clone(), vec![0.0, 1.0, 0.0]),
+    ];
+    cache.put(&model_key(), &vectors).await.unwrap();
+    cache.close().await;
+
+    let held = HeldVectors::default();
+    let query = [1.0, 0.0, 0.0];
+    for (rows, want) in [(vec!["c1", "page"], 1.0), (vec!["c1"], 0.0)] {
+        let kept = HashMap::from([(
+            "page".to_string(),
+            Kept::Sections(rows.iter().map(|r| r.to_string()).collect()),
+        )]);
+        let hits = held
+            .nearest(root, &query, None, Some(&kept), 10)
+            .await
+            .unwrap()
+            .unwrap();
+        let score = hits[0].1.score;
+        assert!((score - want).abs() < 1e-3, "keeping {rows:?}: {score}");
     }
 }
 
@@ -279,7 +335,7 @@ async fn a_write_that_changes_no_document_reads_none_again() {
         )
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE grid_rows (uuid TEXT)")
+    sqlx::query("UPDATE store_generation SET generation = generation + 1")
         .execute(&grid)
         .await
         .unwrap();

@@ -318,6 +318,7 @@ export async function startWorld(internet, options) {
     DATALIB_TOKEN: API_TOKEN,
     DATALIB_PARENT_PIPE: "0",
     DATALIB_STEP_BIN: need("DATALIB_STEP_BIN"),
+    DATALIB_PIPELINE_BIN: need("DATALIB_PIPELINE_BIN"),
     DATALIB_RUNTIME_DIR: runtime ? need("DATALIB_TEST_AUTH_RUNTIME_DIR") : path.join(dir, "no-runtime"),
     DATALIB_CACHE_DIR: path.join(dir, "cache"),
     DATALIB_TEST_AUTH_SPY_LOG: spyLog,
@@ -348,10 +349,12 @@ export async function startWorld(internet, options) {
   // latchkey refuses a browser login on Linux with no display named,
   // though the headless browser above never opens one.
   if (process.platform === "linux" && !env.DISPLAY && !env.WAYLAND_DISPLAY) env.DISPLAY = ":0";
-  // The server hands its children only the variables it lists, and
-  // fake_node.mjs, run as latchkey's node, reads these.
+  // The server hands its children only the variables it lists:
+  // fake_node.mjs, run as latchkey's node, reads the DATALIB_TEST_AUTH_
+  // ones, and a step reads the other two.
   env.DATALIB_CHILD_ENV = Object.keys(env)
     .filter((k) => k.startsWith("DATALIB_TEST_AUTH_"))
+    .concat(["DATALIB_CACHE_DIR", "DATALIB_EMBED_THREADS"])
     .join(",");
 
   const urlFile = path.join(dir, "url");

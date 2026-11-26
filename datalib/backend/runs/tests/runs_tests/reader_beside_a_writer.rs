@@ -40,7 +40,9 @@ async fn a_read_is_answered_while_a_writer_holds_the_lock() {
     sqlx::raw_sql("ROLLBACK").execute(&mut *held).await.unwrap();
     drop(held);
     writer.close().await;
-    let parts = read.expect("the read waited on the writer's lock");
+    let parts = read
+        .expect("the read waited on the writer's lock")
+        .expect("the read answered");
     assert!(!parts.is_empty(), "the read came back empty: {parts:?}");
 }
 
@@ -105,4 +107,46 @@ async fn a_store_in_the_old_journal_mode_turns_to_wal_and_keeps_its_lines() {
             "{msg:?} is missing from {msgs:?}"
         );
     }
+}
+
+/// A store whose recorded shape is not this build's is refused by every
+/// reader, naming the store, where each once answered as if it were
+/// empty; the next writer's open brings it to this build's shape, and
+/// it reads again.
+#[tokio::test]
+async fn a_store_in_another_shape_is_refused_not_read_as_empty() {
+    let td = tempfile::tempdir().unwrap();
+    let write_a_line = || {
+        let server =
+            ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).unwrap();
+        server.log(LogRow {
+            ts_utc: "2026-08-31T10:00:00+01:00".into(),
+            level: "info".into(),
+            msg: "a line".into(),
+            ..Default::default()
+        });
+        server
+    };
+    let server = write_a_line();
+    server.flush().await;
+    drop(server);
+    assert!(!versions(td.path()).await.unwrap().is_empty());
+
+    let pool = open_or_create(&runs_path(td.path())).await.unwrap();
+    sqlx::query("UPDATE _datalib_meta SET value = 'another' WHERE key = 'schema_hash'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let refused = versions(td.path()).await.unwrap_err();
+    let other = datalib_store_meta::other_shape(&refused).expect("an OtherShape");
+    assert_eq!(other.store, runs_path(td.path()));
+    assert!(datalib_runs::processes(td.path(), None, None, 10)
+        .await
+        .is_err());
+
+    let server = write_a_line();
+    server.flush().await;
+    drop(server);
+    assert!(!versions(td.path()).await.unwrap().is_empty());
 }

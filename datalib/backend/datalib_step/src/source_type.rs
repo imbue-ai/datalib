@@ -67,9 +67,11 @@ pub enum SourceType {
     /// machine. Its own type for the reason `claude_code` is: a Codex
     /// thread and a ChatGPT chat never overlap.
     Codex,
-    /// Contacts over CardDAV, or from `.vcf` files. Served by the
+    /// Contacts from Google, over CardDAV, or from `.vcf` files. Served by the
     /// `contacts` provider crate (its config crate is still `contacts_config`).
     Contacts,
+    /// Discord, over the API its own app uses, signed in as a person.
+    Discord,
     Email,
     /// A "Download your information" export, unpacked. The JSON flavour;
     /// the HTML one is not read.
@@ -129,6 +131,7 @@ impl SourceType {
                 | SourceType::Contacts
                 | SourceType::Chatgpt
                 | SourceType::Claude
+                | SourceType::Discord
                 | SourceType::Email
                 | SourceType::Garmin
                 | SourceType::Github

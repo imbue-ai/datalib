@@ -41,6 +41,12 @@ test --zip_undeclared_test_outputs=true
 # took 44 s at two against 50 s at four.
 # datalib/backend/embedder/README.md § "Threads" has the numbers.
 test --test_env=DATALIB_EMBED_THREADS=2
+# The runner and the server hand a step or an applet only the variables
+# they list, and list these two only where DATALIB_CHILD_ENV names them: the thread cap above, and
+# the fingerprint cache a test points into its own sandbox
+# (datalib/backend/etl/files/README.md). A test that sets
+# DATALIB_CHILD_ENV itself names them there too.
+test --test_env=DATALIB_CHILD_ENV=DATALIB_EMBED_THREADS,DATALIB_CACHE_DIR
 
 # Every bazel action inherits a fixed PATH, not the developer's host
 # PATH. Build and test actions resolve `npx`, `perl`, etc. against

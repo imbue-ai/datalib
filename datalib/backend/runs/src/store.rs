@@ -13,7 +13,8 @@ use sqlx::{Row, SqlitePool};
 
 use crate::redact::Redactor;
 use crate::{
-    is_terminal, runs_path, LiveState, Retention, INDEXES, PROCESSES_BY_RUN, SCHEMA_VERSION,
+    is_terminal, runs_path, LiveState, Retention, INDEXES, METRICS_BY_NAME, METRIC_SAMPLES_BY_NAME,
+    PROCESSES_BY_RUN, RUNS_BY_START, SCHEMA_VERSION,
 };
 use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
@@ -102,6 +103,26 @@ pub(crate) async fn open_existing(path: &Path) -> Result<SqlitePool, sqlx::Error
         .await
 }
 
+/// The store, open for reading in this build's shape; `None` before any
+/// process has made it. A store in another shape is refused: the next
+/// writer's open brings it to this one ([`open_or_recreate`]).
+pub(crate) async fn open_reader(data_root: &Path) -> anyhow::Result<Option<SqlitePool>> {
+    let path = runs_path(data_root);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let pool = open_existing(&path).await?;
+    let checked = match datalib_store_meta::read(&pool).await {
+        Ok(meta) => datalib_store_meta::require(&path, None, meta.as_ref(), &shape()),
+        Err(e) => Err(e),
+    };
+    if let Err(e) = checked {
+        pool.close().await;
+        return Err(e);
+    }
+    Ok(Some(pool))
+}
+
 /// Where the claim on *deciding about* the store lives. Not one of the
 /// store's own sidecars.
 fn open_lock_path(path: &Path) -> PathBuf {
@@ -134,6 +155,14 @@ async fn hold_open_lock(path: &Path) -> Option<FileLock> {
             }
         }
     }
+}
+
+/// Make the store under `data_root` in this build's shape, and close it:
+/// for a process that will read it while another writes, so neither
+/// meets a file half made.
+pub async fn prepare_store(data_root: &Path) -> Result<(), sqlx::Error> {
+    open_or_recreate(&runs_path(data_root)).await?.close().await;
+    Ok(())
 }
 
 /// Open the store and make sure its schema is there, emptying a file
@@ -197,6 +226,12 @@ fn emptying_for(head: &[u8]) -> Emptying {
     }
 }
 
+/// Opens a second descriptor of the file and closes it, which drops every
+/// POSIX lock this process holds on the file, SQLite's included
+/// (fcntl(2); `datalib_dag::supervisor::announce` was bitten by it). Safe
+/// only because [`open_or_recreate`] calls it with no connection to the
+/// file open in this process: its own pools are closed, every reader
+/// opens and closes its own, and each process's one writer is the caller.
 fn emptying_of(path: &Path) -> Result<Emptying, sqlx::Error> {
     use std::io::Read;
     let mut head = Vec::with_capacity(16);
@@ -330,26 +365,29 @@ async fn set_reset_database(
     Ok(())
 }
 
+/// The shape this build writes the store in.
+fn shape() -> datalib_store_meta::Shape {
+    datalib_store_meta::Shape {
+        tables: datalib_store_meta::schema_hash(
+            app_schema::runs::ddl()
+                .into_iter()
+                .chain(INDEXES.iter().copied()),
+        ),
+        indexes: None,
+        versions: datalib_store_meta::Versions {
+            schema: SCHEMA_VERSION as u32,
+            shared: 0,
+        },
+    }
+}
+
 /// Which build wrote this file, beside its tables. The ladder position
 /// is `SCHEMA_VERSION` itself: this store already has one, and
 /// `PRAGMA user_version` stays what `schema_matches` reads.
 async fn write_meta(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let hash = datalib_store_meta::schema_hash(
-        app_schema::runs::ddl()
-            .into_iter()
-            .chain(INDEXES.iter().copied()),
-    );
-    datalib_store_meta::write(
-        pool,
-        datalib_store_meta::StoreKind::Runs,
-        &hash,
-        datalib_store_meta::Versions {
-            schema: SCHEMA_VERSION as u32,
-            shared: 0,
-        },
-    )
-    .await
-    .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
+    datalib_store_meta::write(pool, datalib_store_meta::StoreKind::Runs, &shape())
+        .await
+        .map_err(|e| sqlx::Error::Protocol(format!("_datalib_meta: {e:#}")))?;
     Ok(())
 }
 
@@ -372,6 +410,8 @@ const UPGRADES: &[(i32, &[&str])] = &[
         ],
     ),
     (12, &[PROCESSES_BY_RUN]),
+    (13, &[RUNS_BY_START]),
+    (14, &[METRICS_BY_NAME, METRIC_SAMPLES_BY_NAME]),
 ];
 
 /// `true` when the file carries this build's schema, climbing the
@@ -474,46 +514,38 @@ pub struct Snapshot {
     pub queue_history: Vec<MetricSampleRow>,
 }
 
-pub async fn snapshot(data_root: &Path) -> Snapshot {
+pub async fn snapshot(data_root: &Path) -> anyhow::Result<Snapshot> {
     snapshot_of(data_root, None).await
 }
 
 /// One run by id, or the newest when `run_id` is `None`.
-pub async fn snapshot_of(data_root: &Path, run_id: Option<&str>) -> Snapshot {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Snapshot::default();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Snapshot::default();
+pub async fn snapshot_of(data_root: &Path, run_id: Option<&str>) -> anyhow::Result<Snapshot> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Snapshot::default());
     };
-    let out = read_snapshot(&pool, run_id).await.unwrap_or_default();
+    let out = read_snapshot(&pool, run_id).await;
     pool.close().await;
-    out
+    Ok(out?)
 }
 
 /// How many times each part of the store has been written, for a
 /// watcher that saw the file move and wants to know which readers to
 /// wake. Empty for a missing store; a part never written is absent.
-pub async fn versions(data_root: &Path) -> BTreeMap<StorePart, i64> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return BTreeMap::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return BTreeMap::new();
+pub async fn versions(data_root: &Path) -> anyhow::Result<BTreeMap<StorePart, i64>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(BTreeMap::new());
     };
     let rows = sqlx::query("SELECT what, version FROM store_changes")
         .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
+        .await;
     pool.close().await;
-    rows.iter()
+    Ok(rows?
+        .iter()
         .filter_map(|r| {
             let what: String = r.get("what");
             Some((StorePart::parse(&what)?, r.get::<i64, _>("version")))
         })
-        .collect()
+        .collect())
 }
 
 /// The processes the store holds, newest first: the server's launches,
@@ -525,13 +557,9 @@ pub async fn processes(
     run: Option<&str>,
     kind: Option<&str>,
     limit: i64,
-) -> Vec<ProcessRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+) -> anyhow::Result<Vec<ProcessRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     let rows = sqlx::query(
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
@@ -545,21 +573,17 @@ pub async fn processes(
     .bind(kind)
     .bind(limit)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter().map(process_row_from).collect()
+    let rows = rows?;
+    Ok(rows.iter().map(process_row_from).collect())
 }
 
 /// Recent runs, newest first. With `step`, only the runs that step took
 /// part in — how a reader finds the run a step's log is in.
-pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> anyhow::Result<Vec<RunRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     let rows = sqlx::query(
         "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset, r.kind, r.reason \
@@ -572,10 +596,11 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
     .bind(step)
     .bind(limit)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter()
+    let rows = rows?;
+    Ok(rows
+        .iter()
         .map(|r| RunRow {
             run_id: r.get("run_id"),
             started_at_utc: r.get("started_at_utc"),
@@ -584,40 +609,37 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> Vec<RunRo
             kind: r.get("kind"),
             reason: r.get("reason"),
         })
-        .collect()
+        .collect())
 }
 
 /// The newest sample of one metric series per step, across every run
 /// the store keeps: what a step last counted, and in which run. A
 /// step that has never reported the series is absent — the reader
 /// draws "not counted", never a false zero.
-pub async fn latest_metric(data_root: &Path, name: &str) -> Vec<MetricRow> {
+pub async fn latest_metric(data_root: &Path, name: &str) -> anyhow::Result<Vec<MetricRow>> {
     newest_per_series(data_root, Some(name)).await
 }
 
 /// One metric's value in each run the store keeps, per (step, labels):
 /// for a running total, what each run came to. Oldest run first within a
 /// series.
-pub async fn metric_by_run(data_root: &Path, name: &str) -> Vec<MetricRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+pub async fn metric_by_run(data_root: &Path, name: &str) -> anyhow::Result<Vec<MetricRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     let rows = sqlx::query(
         "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
-         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+         FROM metrics m INDEXED BY metrics_by_name JOIN runs r ON r.run_id = m.run_id \
          WHERE m.name = ?1 \
          ORDER BY m.step, m.labels, r.started_at_utc, r.rowid",
     )
     .bind(name)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter()
+    let rows = rows?;
+    Ok(rows
+        .iter()
         .map(|r| MetricRow {
             run_id: r.get("run_id"),
             step: r.get("step"),
@@ -627,39 +649,42 @@ pub async fn metric_by_run(data_root: &Path, name: &str) -> Vec<MetricRow> {
             updated_at_utc: r.get("updated_at_utc"),
             tz_offset: r.get("tz_offset"),
         })
-        .collect()
+        .collect())
 }
 
 /// The newest sample of every series every step has reported, across
 /// every run the store keeps: what `GET /metrics` serves.
-pub async fn latest_metrics(data_root: &Path) -> Vec<MetricRow> {
+pub async fn latest_metrics(data_root: &Path) -> anyhow::Result<Vec<MetricRow>> {
     newest_per_series(data_root, None).await
 }
 
-async fn newest_per_series(data_root: &Path, name: Option<&str>) -> Vec<MetricRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+async fn newest_per_series(data_root: &Path, name: Option<&str>) -> anyhow::Result<Vec<MetricRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     // Every sample, newest run first within a (step, name, labels)
     // series; the first of each is the answer. Two runs
     // started in the same instant — a test, or two ticks of a wall
     // clock at second resolution — fall back to the order the store
     // recorded them in.
-    let rows = sqlx::query(
-        "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
-         FROM metrics m JOIN runs r ON r.run_id = m.run_id \
-         WHERE ?1 IS NULL OR m.name = ?1 \
-         ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
-    )
-    .bind(name)
+    let rows = match name {
+        Some(name) => sqlx::query(
+            "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+             FROM metrics m INDEXED BY metrics_by_name JOIN runs r ON r.run_id = m.run_id \
+             WHERE m.name = ?1 \
+             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
+        )
+        .bind(name),
+        None => sqlx::query(
+            "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
+             FROM metrics m JOIN runs r ON r.run_id = m.run_id \
+             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
+        ),
+    }
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
+    let rows = rows?;
     let mut out: Vec<MetricRow> = Vec::new();
     for r in &rows {
         let step: String = r.get("step");
@@ -681,7 +706,7 @@ async fn newest_per_series(data_root: &Path, name: Option<&str>) -> Vec<MetricRo
             tz_offset: r.get("tz_offset"),
         });
     }
-    out
+    Ok(out)
 }
 
 /// One metric series per (step, labels), across every run the store
@@ -689,31 +714,34 @@ async fn newest_per_series(data_root: &Path, name: Option<&str>) -> Vec<MetricRo
 /// series that has not moved inside the window still has the value it
 /// held there. Oldest first within a series; compacted, so a reader
 /// carries each value forward rather than assuming an interval.
-pub async fn metric_history(data_root: &Path, name: &str, since_utc: &str) -> Vec<MetricSampleRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+pub async fn metric_history(
+    data_root: &Path,
+    name: &str,
+    since_utc: &str,
+) -> anyhow::Result<Vec<MetricSampleRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     let rows = sqlx::query(
         "SELECT run_id, step, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE name = ?1 AND ts_utc <= ?2) \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
+           WHERE name = ?1 AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
          SELECT run_id, step, labels, ts_utc, tz_offset, value \
-           FROM metric_samples WHERE name = ?1 AND ts_utc > ?2 \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
+           WHERE name = ?1 AND ts_utc > ?2 \
          ORDER BY step, labels, ts_utc",
     )
     .bind(name)
     .bind(since_utc)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter()
+    let rows = rows?;
+    Ok(rows
+        .iter()
         .map(|r| MetricSampleRow {
             run_id: r.get("run_id"),
             step: r.get("step"),
@@ -723,19 +751,31 @@ pub async fn metric_history(data_root: &Path, name: &str, since_utc: &str) -> Ve
             tz_offset: r.get("tz_offset"),
             value: r.get("value"),
         })
-        .collect()
+        .collect())
 }
 
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
-    let Some(run) = sqlx::query(
-        "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs \
-         WHERE ? IS NULL OR run_id = ? ORDER BY started_at_utc DESC LIMIT 1",
-    )
-    .bind(run_id)
-    .bind(run_id)
-    .fetch_optional(pool)
-    .await?
-    else {
+    let run = match run_id {
+        Some(run_id) => {
+            sqlx::query(
+                "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason \
+                 FROM runs WHERE run_id = ?",
+            )
+            .bind(run_id)
+            .fetch_optional(pool)
+            .await?
+        }
+        None => {
+            sqlx::query(
+                "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason \
+                 FROM runs INDEXED BY runs_by_start \
+                 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1",
+            )
+            .fetch_optional(pool)
+            .await?
+        }
+    };
+    let Some(run) = run else {
         return Ok(Snapshot::default());
     };
     let run_id: String = run.get("run_id");
@@ -807,10 +847,12 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     let queue_history = sqlx::query(
         "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
-           FROM metric_samples WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
+           WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
          WHERE rn = 1 \
          UNION ALL \
-         SELECT step, name, labels, ts_utc, tz_offset, value FROM metric_samples \
+         SELECT step, name, labels, ts_utc, tz_offset, value \
+           FROM metric_samples INDEXED BY metric_samples_by_name \
            WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc > ?2 \
          ORDER BY step, name, labels, ts_utc",
     )
@@ -849,10 +891,14 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
 
 /// Recent runs that any of `steps` took part in, newest first: the runs
 /// a group's dashboard can show.
-pub async fn runs_of_steps(data_root: &Path, steps: &[String], limit: i64) -> Vec<RunRow> {
+pub async fn runs_of_steps(
+    data_root: &Path,
+    steps: &[String],
+    limit: i64,
+) -> anyhow::Result<Vec<RunRow>> {
     let mut out: Vec<RunRow> = Vec::new();
     for step in steps {
-        for r in runs(data_root, Some(step), limit).await {
+        for r in runs(data_root, Some(step), limit).await? {
             if !out.iter().any(|x| x.run_id == r.run_id) {
                 out.push(r);
             }
@@ -860,18 +906,18 @@ pub async fn runs_of_steps(data_root: &Path, steps: &[String], limit: i64) -> Ve
     }
     out.sort_by(|a, b| b.started_at_utc.cmp(&a.started_at_utc));
     out.truncate(limit.max(0) as usize);
-    out
+    Ok(out)
 }
 
 /// Every sample of every series one step reported in one run, oldest
 /// first within a series.
-pub async fn step_samples(data_root: &Path, run_id: &str, step: &str) -> Vec<MetricSampleRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+pub async fn step_samples(
+    data_root: &Path,
+    run_id: &str,
+    step: &str,
+) -> anyhow::Result<Vec<MetricSampleRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     let rows = sqlx::query(
         "SELECT name, labels, ts_utc, tz_offset, value FROM metric_samples \
@@ -880,10 +926,11 @@ pub async fn step_samples(data_root: &Path, run_id: &str, step: &str) -> Vec<Met
     .bind(run_id)
     .bind(step)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter()
+    let rows = rows?;
+    Ok(rows
+        .iter()
         .map(|r| MetricSampleRow {
             run_id: run_id.to_string(),
             step: step.to_string(),
@@ -893,7 +940,7 @@ pub async fn step_samples(data_root: &Path, run_id: &str, step: &str) -> Vec<Met
             tz_offset: r.get("tz_offset"),
             value: r.get("value"),
         })
-        .collect()
+        .collect())
 }
 
 /// When each `warn` and `error` line one step wrote in one run was
@@ -902,13 +949,9 @@ pub async fn step_problem_lines(
     data_root: &Path,
     run_id: &str,
     step: &str,
-) -> Vec<(String, String)> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+) -> anyhow::Result<Vec<(String, String)>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     let rows = sqlx::query(
         "SELECT level, ts_utc FROM log \
@@ -917,21 +960,20 @@ pub async fn step_problem_lines(
     .bind(run_id)
     .bind(step)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter()
+    let rows = rows?;
+    Ok(rows
+        .iter()
         .map(|r| (r.get::<String, _>("level"), r.get::<String, _>("ts_utc")))
-        .collect()
+        .collect())
 }
 
 /// One line by its `seq`, with what its process says about it.
-pub async fn log_line(data_root: &Path, seq: i64) -> Option<LogLine> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return None;
-    }
-    let pool = open_existing(&path).await.ok()?;
+pub async fn log_line(data_root: &Path, seq: i64) -> anyhow::Result<Option<LogLine>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(None);
+    };
     // Audited: the column list is this module's own constant.
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
         "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
@@ -939,20 +981,17 @@ pub async fn log_line(data_root: &Path, seq: i64) -> Option<LogLine> {
     )))
     .bind(seq)
     .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
+    .await;
     pool.close().await;
-    row.as_ref().map(log_line_from)
+    let row = row?;
+    Ok(row.as_ref().map(log_line_from))
 }
 
 /// One process by id.
-pub async fn process(data_root: &Path, process_id: &str) -> Option<ProcessRow> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return None;
-    }
-    let pool = open_existing(&path).await.ok()?;
+pub async fn process(data_root: &Path, process_id: &str) -> anyhow::Result<Option<ProcessRow>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(None);
+    };
     let row = sqlx::query(
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
@@ -960,11 +999,10 @@ pub async fn process(data_root: &Path, process_id: &str) -> Option<ProcessRow> {
     )
     .bind(process_id)
     .fetch_optional(&pool)
-    .await
-    .ok()
-    .flatten();
+    .await;
     pool.close().await;
-    row.as_ref().map(process_row_from)
+    let row = row?;
+    Ok(row.as_ref().map(process_row_from))
 }
 
 fn process_row_from(r: &sqlx::sqlite::SqliteRow) -> ProcessRow {
@@ -994,7 +1032,7 @@ pub async fn log_after(
     step: Option<&str>,
     after_seq: i64,
     limit: i64,
-) -> Vec<LogLine> {
+) -> anyhow::Result<Vec<LogLine>> {
     log_where(data_root, Some(run_id), step, after_seq, limit).await
 }
 
@@ -1004,13 +1042,9 @@ async fn log_where(
     step: Option<&str>,
     after_seq: i64,
     limit: i64,
-) -> Vec<LogLine> {
-    let path = runs_path(data_root);
-    if !path.exists() {
-        return Vec::new();
-    }
-    let Ok(pool) = open_existing(&path).await else {
-        return Vec::new();
+) -> anyhow::Result<Vec<LogLine>> {
+    let Some(pool) = open_reader(data_root).await? else {
+        return Ok(Vec::new());
     };
     // Audited: the column list is this module's own constant.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
@@ -1025,10 +1059,10 @@ async fn log_where(
     .bind(step)
     .bind(limit)
     .fetch_all(&pool)
-    .await
-    .unwrap_or_default();
+    .await;
     pool.close().await;
-    rows.iter().map(log_line_from).collect()
+    let rows = rows?;
+    Ok(rows.iter().map(log_line_from).collect())
 }
 
 /// A log line as a reader sees it: the row, with what its process says
@@ -1655,21 +1689,36 @@ async fn begin_run(
     .await?;
     let cutoff = age_cutoff(retention, &run.started_at_utc);
     let mut gone: Vec<String> = sqlx::query_scalar(
-        "DELETE FROM runs WHERE started_at_utc < ? AND run_id != ? RETURNING run_id",
+        "DELETE FROM runs INDEXED BY runs_by_start \
+         WHERE started_at_utc < ? AND run_id != ? RETURNING run_id",
     )
     .bind(&cutoff)
     .bind(&run.run_id)
     .fetch_all(&mut **tx)
     .await?;
-    gone.extend(
-        sqlx::query_scalar::<_, String>(
-            "DELETE FROM runs WHERE run_id NOT IN \
-             (SELECT run_id FROM runs ORDER BY started_at_utc DESC LIMIT ?) RETURNING run_id",
+    // The run being begun and the newest `max_runs - 1` others stay. It is
+    // counted apart because a pinned clock can stamp it like older runs.
+    let others = i64::from(retention.max_runs.max(1)) - 1;
+    let over_count = if others == 0 {
+        sqlx::query_scalar("DELETE FROM runs WHERE run_id != ? RETURNING run_id")
+            .bind(&run.run_id)
+            .fetch_all(&mut **tx)
+            .await?
+    } else {
+        sqlx::query_scalar(
+            "DELETE FROM runs INDEXED BY runs_by_start \
+             WHERE run_id != ?1 AND (started_at_utc, run_id) < \
+               (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start \
+                WHERE run_id != ?1 \
+                ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) \
+             RETURNING run_id",
         )
-        .bind(retention.max_runs.max(1) as i64)
+        .bind(&run.run_id)
+        .bind(others - 1)
         .fetch_all(&mut **tx)
-        .await?,
-    );
+        .await?
+    };
+    gone.extend(over_count);
     if !gone.is_empty() {
         delete_rows_of_runs(tx, &gone).await?;
     }
@@ -1839,12 +1888,14 @@ async fn bump(
 /// that age with no run and no line left to name it.
 async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sqlx::Error> {
     let cutoff = cutoff_days_ago(retention.process_log_days);
-    sqlx::query("DELETE FROM log WHERE run_id IS NULL AND ts_utc < ?")
+    // Marked: each counts every line it keeps, once per open
+    // (`datalib_sql_work::judge::BY_DESIGN`).
+    sqlx::query("DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND ts_utc < ?")
         .bind(&cutoff)
         .execute(pool)
         .await?;
     sqlx::query(
-        "DELETE FROM log WHERE run_id IS NULL AND seq < \
+        "DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND seq < \
          (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
     )
     .bind(retention.process_log_lines.max(1) as i64 - 1)

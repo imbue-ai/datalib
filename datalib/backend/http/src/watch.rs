@@ -15,6 +15,7 @@ use std::time::Duration;
 use datalib_runs::StorePart;
 use notify::{EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
+use strum::VariantArray;
 use tokio::sync::broadcast;
 use tokio::time::Instant;
 
@@ -276,6 +277,15 @@ fn tables_of(part: StorePart) -> &'static [Table] {
 /// write counters. `seen` is updated in place. A store that was
 /// replaced — a schema bump remakes the file — reads as every part
 /// moving, which is right: everything a reader held is gone.
+/// The run store's write counters; `None`, said in the log, when they
+/// could not be read.
+async fn run_store_versions(root: &Path) -> Option<BTreeMap<StorePart, i64>> {
+    datalib_runs::versions(root)
+        .await
+        .inspect_err(|e| tracing::warn!("read the run store's write counters: {e:#}"))
+        .ok()
+}
+
 fn moved_parts(
     now: &BTreeMap<StorePart, i64>,
     seen: &mut BTreeMap<StorePart, i64>,
@@ -305,7 +315,7 @@ struct Seen {
 impl Seen {
     async fn now(root: &Path) -> Seen {
         Seen {
-            runs: datalib_runs::versions(root).await,
+            runs: run_store_versions(root).await.unwrap_or_default(),
             index_head: index_head(root).await.unwrap_or(None),
             time_series_head: time_series_head(root).await.unwrap_or(None),
             curated_heads: curated_heads(root).await,
@@ -531,7 +541,15 @@ async fn expand(
                 out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
-                for part in moved_parts(&datalib_runs::versions(root).await, &mut seen.runs) {
+                let parts = match run_store_versions(root).await {
+                    Some(now) => moved_parts(&now, &mut seen.runs),
+                    // Every reader asks again, and says what it could not read.
+                    None => {
+                        seen.runs.clear();
+                        StorePart::VARIANTS.to_vec()
+                    }
+                };
+                for part in parts {
                     let into = if part == StorePart::ProcessLog {
                         &mut server_log
                     } else {
@@ -620,8 +638,9 @@ impl Nudge {
         let _ = self.0.send(Moved::Curated);
     }
 
-    /// A run-store writer in this process wrote: the server's own log,
-    /// or the loop's runs (`datalib_runs::after_every_write`).
+    /// A run-store writer wrote: the server's own log
+    /// (`datalib_runs::after_every_write`), or the runner, as its
+    /// `run_store_written` event says.
     pub fn the_run_store_moved(&self) {
         let _ = self.0.send(Moved::RunStore);
     }
@@ -1177,7 +1196,6 @@ mod tests {
     /// The wire spelling is what `ui/src/live.ts` switches on.
     #[test]
     fn table_names_agree_between_strum_and_serde() {
-        use strum::VariantArray;
         for &t in Table::VARIANTS {
             assert_eq!(
                 serde_json::to_string(&t).unwrap(),
@@ -1276,7 +1294,7 @@ mod tests {
     fn the_stores_beside_the_runner_record_are_not_the_runner_record() {
         let root = Path::new("/data");
         for quiet in [
-            "system/feedback.doltlite_db",
+            "system/remote_media.doltlite_db",
             "system/disk_stats.sqlite",
             "system/disk_stats.sqlite-journal",
             "system/api-token",

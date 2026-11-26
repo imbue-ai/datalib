@@ -421,7 +421,7 @@ it came from, so it gets its own section.
 ### What guards it
 
 - **Off by default, per source, in the config the person writes.** Nothing
-  in the wizard or the app turns it on; `check-params` refuses a value
+  in the wizard or the app turns it on; `datalib-pipeline check` refuses a value
   that is not a whole number, so a typo fails the check rather than
   sending everything (a misspelled name is refused too).
 - **The driver is handed a named environment**
@@ -434,9 +434,9 @@ it came from, so it gets its own section.
   source; no test greps the log for prompt text.
 - **What is stored of the remote work is how much of it there was**: the
   vectors, the step's log, and the run's counts as metrics (chunks sent,
-  Sandboxes and their seconds by GPU, an estimated cost). No prompt, no
-  Sandbox's id and no job to resume, so a stopped run leaves no record
-  of what went where.
+  Sandboxes and their seconds by GPU, an estimated cost). The log names
+  each Sandbox by its id, so a run can be held against Modal's own list;
+  no prompt and no job to resume are kept.
 - **The SDK is pinned** by a lockfile with integrity hashes and no
   install scripts (`third-party/modal/runtime/`), like latchkey's.
 
@@ -476,9 +476,18 @@ code before repeating it as current.
 | A message's remote image tells its sender you read it | a stranger | Remote media is fetched only for an allowed sender or document, through the server | `http/src/remote_media.rs` |
 | A crafted file or export breaks a sync or reaches SQL | a stranger | Values are bound and names quoted; where a parser's work is wrapped in `catching_panics`, a panic costs that one record, not the step | AGENTS.md §"Dynamic SQL needs `AssertSqlSafe` and a reason", `etl/src/run_problems.rs` |
 | A crafted mail or PDF takes over the parser that reads it, in the docker image | a stranger | Nothing in the image runs as root: everything runs as uid 1000, which owns only the data root, the credential store and the demo, and cannot write the binaries. Reasoned, not measured: no exploit was tried | [`docker.md`](docker.md) § "Permissions and signals" |
-| A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL | `datalib/backend/env/src/lib.rs` |
+| A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL. The one exception is the server's runner, `datalib-pipeline serve`, which gets the server's environment but its token, its address and the protected-library flag, as it would from a terminal: it is the runner that hands each step only its named environment and the variables the step's params name, and a source added later may name any variable | `datalib/backend/env/src/lib.rs` (`inherit_for_runner`) |
 | A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |
 | Datalib reports on you without saying so | us, or a dependency | Nothing we ship sends telemetry: every `latchkey` we start, or that a person runs from our launcher, has its usage count off. A check of the real package, not a scan for others | `latchkey_counting_test`, `README.md` §"Read this before you point an agent at it" |
 | A source's text goes to Modal without the person choosing it | us, by a bug | Only an `embed` step with `embed_on_modal_from_n_chunks` set sends anything, and only what it owes | § "What leaves the machine for Modal" above |
 | A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime and CUDA module fetches and the embedding models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
 | A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |
+
+Two guards were considered against script from outside and not built:
+
+- **Letting only the bearer token, and never the page's cookie, change a
+  step's `command`.** It limits what the next script bug could do rather
+  than preventing one, and it costs the config editor its command
+  editing. Revisit it if another such bug turns up.
+- **Running a card's code in a sandboxed frame.** A card's source is
+  data, so there is no code to contain.

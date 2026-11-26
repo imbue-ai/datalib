@@ -140,12 +140,17 @@ const runId = computed(() => scope.value.run);
 const runs = ref<RunInfo[]>([]);
 /// The server's launches, newest first.
 const launches = ref<ProcessInfo[]>([]);
+/// The runner's processes, newest first: the server's `datalib-pipeline
+/// serve` child, whose own lines between runs are its, and a terminal's.
+const runners = ref<ProcessInfo[]>([]);
 /// The app's pages — one per load in a tab — newest first.
 const pages = ref<ProcessInfo[]>([]);
 /// The launch or page picked, when one is.
 const launch = computed(() =>
   launchId.value
-    ? ([...launches.value, ...pages.value].find((x) => x.process_id === launchId.value) ?? null)
+    ? ([...launches.value, ...runners.value, ...pages.value].find(
+        (x) => x.process_id === launchId.value,
+      ) ?? null)
     : null,
 );
 /// The processes of the run on screen: its runner and its steps'
@@ -488,9 +493,10 @@ function onQueryInput(q: string) {
 
 async function loadRuns() {
   try {
-    [runs.value, launches.value, pages.value] = await Promise.all([
+    [runs.value, launches.value, runners.value, pages.value] = await Promise.all([
       fetchRuns({ step: props.step ?? undefined, limit: 30 }),
       fetchProcesses({ process: "http", limit: 20 }),
+      fetchProcesses({ process: "dag", limit: 20 }),
       fetchProcesses({ process: "ui", limit: 20 }),
     ]);
   } catch {
@@ -592,6 +598,13 @@ function launchLabel(l: ProcessInfo): string {
   const state = l.finished_at_utc == null ? "running" : "ended";
   const mine = l.process_id === healthSnapshot()?.process_id ? " · this server" : "";
   return `server started ${when} · ${state}${mine}`;
+}
+
+/// How a runner reads: when it started, and whether it still runs.
+function runnerLabel(r: ProcessInfo): string {
+  const when = pickerWhen(r.started_at_utc);
+  const state = r.finished_at_utc == null ? "running" : "ended";
+  return `runner started ${when} · ${state}`;
 }
 
 /// How a page reads: when it opened, whether it is still open, and
@@ -964,7 +977,7 @@ function chipUnderMenu(args: MenuFromCellCallbackArgs): Chip | null {
 /// The chip's own menu, as it is everywhere.
 function chipEntries(chip: Chip): MenuEntry[] {
   const host = { openCard: (source: string) => emit("open-card", source) };
-  return asMenuEntries(chipMenuOf(chip, false), (id) => void runChipAction(id, chip, host));
+  return asMenuEntries(chipMenuOf(chip), (id) => void runChipAction(id, chip, host));
 }
 
 /// The menu for the cell under the right-click: its chip's entries, then
@@ -1239,6 +1252,11 @@ onUnmounted(() => {
             {{ launchLabel(l) }}
           </option>
         </optgroup>
+        <optgroup v-if="runners.length" label="The runner">
+          <option v-for="r in runners" :key="r.process_id" :value="LAUNCH_PREFIX + r.process_id">
+            {{ runnerLabel(r) }}
+          </option>
+        </optgroup>
         <optgroup v-if="pages.length" label="Pages of the app">
           <option v-for="p in pages" :key="p.process_id" :value="LAUNCH_PREFIX + p.process_id">
             {{ pageLabel(p) }}
@@ -1269,6 +1287,7 @@ onUnmounted(() => {
       <template v-if="query.trim()">Nothing matches the query.</template>
       <template v-else>
         Nothing logged yet<span v-if="launch?.process === 'ui'"> by this page</span
+        ><span v-else-if="launch?.process === 'dag'"> by this runner</span
         ><span v-else-if="launchId"> by this server</span
         ><span v-else-if="currentProcess"> by this process</span
         ><span v-else-if="runId"> for this run</span>.

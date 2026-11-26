@@ -197,10 +197,7 @@ fn stores() -> Vec<(&'static str, Vec<String>)> {
                 datalib_schema::source_photos::DDL,
             ]),
         ),
-        (
-            "system",
-            portable(&[app_schema::feedback::DDL, app_schema::DISK_STATS_DDL]),
-        ),
+        ("system", portable(&[app_schema::DISK_STATS_DDL])),
         // The one store under `datalib_curated/`: what a person wrote.
         (
             "datalib_curated/contacts",

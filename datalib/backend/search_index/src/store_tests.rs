@@ -185,54 +185,6 @@ async fn the_files_hold_no_copy_of_the_text() {
     }
 }
 
-/// The index shares the grid index's file: a change of the index's shape
-/// empties its own tables and leaves every other table in the file as it
-/// was, and the file's own shape and kind are the grid's to write.
-#[tokio::test]
-async fn an_index_in_another_shape_empties_only_its_own_tables() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("db.sqlite");
-    let index = Index::open(&path).await.unwrap();
-    index.put(&[thread("h1")]).await.unwrap();
-    for sql in [
-        "CREATE TABLE grid_rows (uuid TEXT)",
-        "INSERT INTO grid_rows VALUES ('m1')",
-    ] {
-        sqlx::query(sql).execute(index.pool()).await.unwrap();
-    }
-    index.close().await;
-
-    let index = Index::open(&path).await.unwrap();
-    assert_eq!(index.indexed("mail").await.unwrap().len(), 1);
-    sqlx::query(
-        "UPDATE _datalib_meta SET value = 'an older shape' \
-          WHERE key = 'search_index_schema_hash'",
-    )
-    .execute(index.pool())
-    .await
-    .unwrap();
-    index.close().await;
-
-    let index = Index::open(&path).await.unwrap();
-    assert!(index.indexed("mail").await.unwrap().is_empty());
-    assert!(hits(&index, "lunch").await.is_empty());
-    assert_eq!(count(&index, "grid_rows").await, 1);
-    let mut conn = index.pool().acquire().await.unwrap();
-    let recorded = datalib_store_meta::part_schema_hash_in(
-        &mut conn,
-        datalib_store_meta::StoreKind::SearchIndex,
-    )
-    .await
-    .unwrap();
-    assert_eq!(recorded, Some(shape()));
-    drop(conn);
-    let file = datalib_store_meta::read(index.pool()).await.unwrap();
-    assert_eq!(
-        file, None,
-        "the file's own shape is the grid index's to write"
-    );
-}
-
 /// A write that changes what the index holds raises its generation; a put
 /// of what it already holds does not, so a reader keeps what it read.
 #[tokio::test]

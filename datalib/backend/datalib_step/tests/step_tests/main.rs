@@ -2,7 +2,7 @@
 //! behaviour.
 
 mod calendar_split;
-mod check_params;
+mod check_verb;
 mod clear_before_ingest;
 mod compact;
 mod documents_from_the_store;
@@ -12,6 +12,7 @@ mod final_message;
 mod index_text;
 mod interrupt;
 mod item_table;
+mod lost_listing;
 mod markdown_command;
 mod no_op_ingest;
 mod offline;

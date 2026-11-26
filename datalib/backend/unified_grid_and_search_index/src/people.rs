@@ -5,19 +5,105 @@
 //! the most. The contacts app's own answer ranks above all of these, and
 //! is joined in by the UI, never here.
 //!
-//! A chat's record of a person is one row per document, and its name is
-//! decided across all of them by how much was written under each, so one
+//! A chat describes a person once per document, and its name is decided
+//! across all of them by how much was written under each, so one
 //! message, forged or not, cannot rename the person everywhere.
 
 use std::collections::BTreeMap;
 
 use datalib_contact_schema::{NormalizedContact, Seen};
 use datalib_handle::Handle;
+use serde::Serialize;
 
-/// One `source_contacts` row reached through one of its handles.
+/// One of the index's contact records reached through one of its handles,
+/// its `seen` summed over the documents that carry it.
 pub struct HandleRow {
     pub handle: String,
     pub contact: NormalizedContact,
+    /// What its first name is credited with: what was written in each
+    /// document that carries it, and at least one for a document that
+    /// only names them.
+    pub credit: u64,
+}
+
+/// What the index read about some people, one row per distinct record.
+#[derive(Default)]
+pub struct PeopleRows {
+    /// The records holding each handle.
+    pub holding: Vec<HandleRow>,
+    /// The records that write a number asked about without its country
+    /// code, for that number: a likely match, by its digits alone.
+    pub same_digits: Vec<HandleRow>,
+    /// The record of each contact's page, for the page's id.
+    pub pages: Vec<HandleRow>,
+    /// Every full number any of these records' numbers may be.
+    pub full_numbers: Vec<Handle>,
+}
+
+/// Who each handle and each contact's page is, as `POST /people` answers.
+#[derive(Debug, Default, Serialize)]
+pub struct People {
+    /// Each handle's records, ranked. One no source mentions is absent.
+    pub people: BTreeMap<String, Vec<NormalizedContact>>,
+    /// Each number's records that write it without its country code.
+    pub same_digits: BTreeMap<String, Vec<NormalizedContact>>,
+    /// Each contact's page, by its id.
+    pub pages: BTreeMap<String, NormalizedContact>,
+    /// Each number a record above writes without its country code, as it
+    /// wrote it, with the full numbers a source knows that it may be.
+    pub full_numbers: BTreeMap<String, Vec<Handle>>,
+}
+
+impl People {
+    pub fn of(rows: PeopleRows) -> Self {
+        let mut full_numbers = BTreeMap::new();
+        for row in [&rows.holding, &rows.same_digits, &rows.pages]
+            .into_iter()
+            .flatten()
+        {
+            for h in &row.contact.handles {
+                let Some(digits) = h.home_digits() else {
+                    continue;
+                };
+                let may_be: Vec<Handle> = rows
+                    .full_numbers
+                    .iter()
+                    .filter(|full| full.may_be(&digits))
+                    .cloned()
+                    .collect();
+                if !may_be.is_empty() {
+                    full_numbers.insert(h.value.clone(), may_be);
+                }
+            }
+        }
+        Self {
+            people: merge_and_rank(rows.holding),
+            same_digits: merge_and_rank(rows.same_digits),
+            pages: merge_and_rank(rows.pages)
+                .into_iter()
+                .filter_map(|(page, contacts)| Some((page, contacts.into_iter().next()?)))
+                .collect(),
+            full_numbers,
+        }
+    }
+}
+
+/// The records reached by digits a number ends in, each given the handles
+/// of `numbers` its own digits may be, less any the record holds outright.
+pub fn for_each_number(numbers: &[Handle], by_digits: Vec<HandleRow>) -> Vec<HandleRow> {
+    by_digits
+        .iter()
+        .flat_map(|row| {
+            numbers
+                .iter()
+                .filter(|number| number.may_be(&row.handle) && !row.contact.holds(number))
+                .map(|number| HandleRow {
+                    handle: number.as_str().to_string(),
+                    contact: row.contact.clone(),
+                    credit: row.credit,
+                })
+        })
+        .collect()
 }
 
 struct Merged {
@@ -26,14 +112,15 @@ struct Merged {
     weight: BTreeMap<String, u64>,
 }
 
-/// Rows for the same handle, source and person — one per document that
-/// mentioned them — become one source contact; then each handle's are
-/// ranked.
-pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContact>> {
+/// Records for the same handle, source and person — a chat's differ by
+/// the names it showed — become one source contact; then each handle's
+/// are ranked.
+fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContact>> {
     let mut merged: BTreeMap<(String, String, String), Merged> = BTreeMap::new();
     for HandleRow {
         handle,
         mut contact,
+        credit,
     } in rows
     {
         contact.names = own_names(&handle, &contact);
@@ -46,7 +133,7 @@ pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedCo
             },
             weight: BTreeMap::new(),
         });
-        add(entry, contact);
+        add(entry, contact, credit);
     }
     let mut out: BTreeMap<String, Vec<NormalizedContact>> = BTreeMap::new();
     for (
@@ -74,14 +161,12 @@ pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedCo
     out
 }
 
-/// One document's account of the person. Its names come most used first
-/// (chat-common's `baseline_contacts`), so its first is credited with
-/// everything the person wrote there, and at least one, for a document
-/// they are only named in; the rest are kept, credited nothing.
-fn add(into: &mut Merged, other: NormalizedContact) {
-    let items = other.seen.as_ref().map_or(0, |s| s.items);
+/// One record of the person. Its names come most used first (chat-common's
+/// `baseline_contacts`), so its first takes the credit; the rest are kept,
+/// credited nothing.
+fn add(into: &mut Merged, other: NormalizedContact, credit: u64) {
     for (i, name) in other.names.into_iter().enumerate() {
-        let credit = if i == 0 { items.max(1) } else { 0 };
+        let credit = if i == 0 { credit } else { 0 };
         *into.weight.entry(name).or_insert(0) += credit;
     }
     into.contact.seen = match (into.contact.seen.take(), other.seen) {
@@ -140,6 +225,7 @@ mod tests {
     fn row(handle: &str, c: NormalizedContact) -> HandleRow {
         HandleRow {
             handle: handle.to_string(),
+            credit: c.seen.as_ref().map_or(0, |s| s.items).max(1),
             contact: c,
         }
     }

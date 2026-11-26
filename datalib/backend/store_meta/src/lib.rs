@@ -3,15 +3,17 @@
 //!
 //! Three facts, in order of use: the build (`datalib_version`,
 //! `git_hash`) is what a downgrade guard reads and a bug report needs;
-//! the shape (`schema_hash`, blake3 over the DDL the owner opened with)
-//! is what detects a change and cannot be forgotten, because it is
-//! derived; the ladder positions order migrations: `schema_version` on
+//! the shape (`schema_hash`, blake3 over the DDL the owner opened with,
+//! and `index_hash` over the indexes it keeps apart from it) is what
+//! detects a change and cannot be forgotten, because it is derived, and
+//! what every reader checks before it reads a row ([`shape::require`]);
+//! the ladder positions order migrations: `schema_version` on
 //! the owner's ladder, `0` until a store has one, and
 //! `shared_schema_version` on the framework's ladder for the tables every
 //! store shares (`problems`). The owner writes on every open,
 //! upserting only the rows whose value moved, so `written_at_utc` is when
 //! this build first wrote the store rather than when it last opened it.
-//! docs/dev/plans/completed/schema_migrations.md §3.1 is the design.
+//! README.md beside this crate has the check.
 
 use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};
@@ -19,8 +21,10 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 pub mod guard;
 pub mod ladder;
+pub mod shape;
 pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
 pub use ladder::{Ladder, Migration};
+pub use shape::{other_shape, require, step_of, OtherShape, Shape};
 
 pub const TABLE: &str = "_datalib_meta";
 
@@ -53,17 +57,10 @@ pub enum StoreKind {
     TimeSeriesIndex,
     /// The grid index (`unified_grid_and_search_index/unified_grid_and_search_index`).
     GridIndex,
-    /// Every source's keyword index and embeddings, keyed by document,
-    /// holding no text (`unified_grid_and_search_index/search_index`). Plain SQLite.
-    SearchIndex,
     /// Each chunk's vector under the model that made it and the hash of
-    /// its prompt (`unified_grid_and_search_index/search_index`). Plain SQLite.
+    /// its prompt, and where each embedded document's chunks fall
+    /// (`unified_grid_and_search_index/search_index`). Plain SQLite.
     InferenceCache,
-    /// Where each embedded document's chunks fall and their prompts'
-    /// hashes, which each source's `embed` cuts: a part of the inference
-    /// cache's file.
-    SearchChunks,
-    Feedback,
     /// `system/disk_stats.sqlite`: bytes under each tree of the root, and
     /// the free space on its disk, over time. Plain SQLite.
     DiskStats,
@@ -80,11 +77,27 @@ pub enum StoreKind {
     /// `datalib_curated/datalib_problem_mutes/mutes.doltlite_db`: the
     /// problem rows a person muted.
     ProblemMutes,
+    /// `<step>/problems.sqlite`: the problems of a step that keeps no
+    /// store of its own. Plain SQLite.
+    StepProblems,
 }
 
 impl StoreKind {
     pub fn as_str(self) -> &'static str {
         self.into()
+    }
+    /// Whether a store of this kind holds a `problems` table, in the shape
+    /// its `shared_schema_version` names.
+    pub fn holds_problems(self) -> bool {
+        matches!(
+            self,
+            StoreKind::Raw
+                | StoreKind::Render
+                | StoreKind::TimeSeries
+                | StoreKind::Occurrences
+                | StoreKind::GridIndex
+                | StoreKind::StepProblems
+        )
     }
     /// `None` for a spelling this build does not know.
     pub fn parse(s: &str) -> Option<Self> {
@@ -99,6 +112,7 @@ enum Key {
     GitHash,
     DoltliteVersion,
     SchemaHash,
+    IndexHash,
     SchemaVersion,
     SharedSchemaVersion,
     StoreKind,
@@ -120,6 +134,8 @@ pub struct Meta {
     /// SQLite test build, or the plain-SQLite run store).
     pub doltlite_version: Option<String>,
     pub schema_hash: String,
+    /// `None` for a store that keeps every index in `schema_hash`.
+    pub index_hash: Option<String>,
     pub schema_version: u32,
     pub shared_schema_version: u32,
     /// `None` for a kind this build does not know.
@@ -149,21 +165,17 @@ pub struct Versions {
 }
 
 /// Create the table if it is missing and bring every row up to what this
-/// build would write. Returns whether any row changed, so an owner that
-/// commits can commit exactly when there is something to commit.
-pub async fn write(
-    pool: &SqlitePool,
-    kind: StoreKind,
-    schema_hash: &str,
-    versions: Versions,
-) -> Result<bool> {
+/// build would write: `shape` is the store as its owner just made it.
+/// Returns whether any row changed, so an owner that commits can commit
+/// exactly when there is something to commit.
+pub async fn write(pool: &SqlitePool, kind: StoreKind, shape: &Shape) -> Result<bool> {
     sqlx::query(DDL)
         .execute(pool)
         .await
         .context("create _datalib_meta")?;
     let doltlite_version = doltlite_version(pool).await;
     let git_hash = datalib_runtime::build_id::git_hash().unwrap_or_else(|| UNKNOWN.to_string());
-    let wanted: [(Key, String); 7] = [
+    let mut wanted: Vec<(Key, String)> = vec![
         (
             Key::DatalibVersion,
             datalib_runtime::build_id::DATALIB_VERSION.to_string(),
@@ -173,11 +185,14 @@ pub async fn write(
             Key::DoltliteVersion,
             doltlite_version.unwrap_or_else(|| UNKNOWN.to_string()),
         ),
-        (Key::SchemaHash, schema_hash.to_string()),
-        (Key::SchemaVersion, versions.schema.to_string()),
-        (Key::SharedSchemaVersion, versions.shared.to_string()),
+        (Key::SchemaHash, shape.tables.clone()),
+        (Key::SchemaVersion, shape.versions.schema.to_string()),
+        (Key::SharedSchemaVersion, shape.versions.shared.to_string()),
         (Key::StoreKind, kind.as_str().to_string()),
     ];
+    if let Some(indexes) = &shape.indexes {
+        wanted.push((Key::IndexHash, indexes.clone()));
+    }
     let current = rows(pool).await?;
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let mut changed = false;
@@ -200,6 +215,14 @@ pub async fn write(
         .with_context(|| format!("write _datalib_meta.{}", key.as_str()))?;
         changed = true;
     }
+    if shape.indexes.is_none() && current.contains_key(Key::IndexHash.as_str()) {
+        sqlx::query("DELETE FROM _datalib_meta WHERE key = ?")
+            .bind(Key::IndexHash.as_str())
+            .execute(pool)
+            .await
+            .context("clear _datalib_meta.index_hash")?;
+        changed = true;
+    }
     Ok(changed)
 }
 
@@ -207,10 +230,20 @@ pub async fn write(
 /// `_datalib_meta` — one written before the table existed. Reads the
 /// working set, which for a store an owner has opened is HEAD.
 pub async fn read(pool: &SqlitePool) -> Result<Option<Meta>> {
-    if !table_exists(pool).await? {
+    let mut conn = pool
+        .acquire()
+        .await
+        .context("acquire to read _datalib_meta")?;
+    read_in(&mut conn).await
+}
+
+/// [`read`] on one connection, inside whatever transaction it holds: a
+/// reader that pins a snapshot checks the shape of that snapshot.
+pub async fn read_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<Meta>> {
+    if !table_exists(&mut *conn).await? {
         return Ok(None);
     }
-    let rows = rows(pool).await?;
+    let rows = rows(conn).await?;
     let get = |k: Key| rows.get(k.as_str()).map(|(v, _)| v.clone());
     let Some(datalib_version) = get(Key::DatalibVersion) else {
         return Ok(None);
@@ -226,6 +259,7 @@ pub async fn read(pool: &SqlitePool) -> Result<Option<Meta>> {
         git_hash: known(get(Key::GitHash)),
         doltlite_version: known(get(Key::DoltliteVersion)),
         schema_hash: get(Key::SchemaHash).unwrap_or_default(),
+        index_hash: get(Key::IndexHash),
         schema_version: get(Key::SchemaVersion)
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
@@ -237,84 +271,23 @@ pub async fn read(pool: &SqlitePool) -> Result<Option<Meta>> {
     }))
 }
 
-async fn table_exists(pool: &SqlitePool) -> Result<bool> {
+async fn table_exists(conn: &mut sqlx::SqliteConnection) -> Result<bool> {
     let n: i64 =
         sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
             .bind(TABLE)
-            .fetch_one(pool)
+            .fetch_one(conn)
             .await
             .context("probe _datalib_meta")?;
     Ok(n > 0)
 }
 
-/// The shape a store records, read inside a caller's transaction: an owner
-/// that rebuilds a store in another shape checks again under its write
-/// lock, so two openers do not both rebuild it. `None` when nothing is
-/// recorded, and creates the table if it is missing.
-pub async fn schema_hash_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<String>> {
-    sqlx::query(DDL)
-        .execute(&mut *conn)
-        .await
-        .context("create _datalib_meta")?;
-    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
-        .bind(Key::SchemaHash.as_str())
-        .fetch_optional(conn)
-        .await
-        .context("read _datalib_meta.schema_hash")
-}
-
-/// A store that shares another's file keeps its shape in that file's
-/// `_datalib_meta` under a key of its own, so each owner empties only its
-/// own tables when its shape moves: the search index in the grid index's
-/// file. Read inside the caller's transaction, as [`schema_hash_in`].
-pub async fn part_schema_hash_in(
-    conn: &mut sqlx::SqliteConnection,
-    part: StoreKind,
-) -> Result<Option<String>> {
-    sqlx::query(DDL)
-        .execute(&mut *conn)
-        .await
-        .context("create _datalib_meta")?;
-    sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = ?")
-        .bind(part_key(part))
-        .fetch_optional(conn)
-        .await
-        .with_context(|| format!("read _datalib_meta.{}", part_key(part)))
-}
-
-/// Records `part`'s shape, inside the caller's transaction.
-pub async fn write_part_schema_hash(
-    conn: &mut sqlx::SqliteConnection,
-    part: StoreKind,
-    schema_hash: &str,
-) -> Result<()> {
-    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
-        "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
-         written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset \
-         WHERE value <> excluded.value",
-    )
-    .bind(part_key(part))
-    .bind(schema_hash)
-    .bind(&now)
-    .bind(&tz_offset)
-    .execute(conn)
-    .await
-    .with_context(|| format!("write _datalib_meta.{}", part_key(part)))?;
-    Ok(())
-}
-
-/// The `_datalib_meta` key a part's shape is kept under, for a reader
-/// that may not write the table [`part_schema_hash_in`] creates.
-pub fn part_key(part: StoreKind) -> String {
-    format!("{}_{}", part.as_str(), Key::SchemaHash.as_str())
-}
-
 /// key → (value, written_at_utc).
-async fn rows(pool: &SqlitePool) -> Result<std::collections::BTreeMap<String, (String, String)>> {
+async fn rows<'c, E>(conn: E) -> Result<std::collections::BTreeMap<String, (String, String)>>
+where
+    E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
+{
     let rows = sqlx::query("SELECT key, value, written_at_utc FROM _datalib_meta")
-        .fetch_all(pool)
+        .fetch_all(conn)
         .await
         .context("read _datalib_meta")?;
     rows.into_iter()
@@ -382,38 +355,6 @@ mod tests {
         assert_eq!(a.len(), 64);
     }
 
-    /// A part sharing a file records its shape under its own key and
-    /// leaves the owner's shape and kind alone.
-    #[tokio::test]
-    async fn a_part_keeps_its_shape_apart_from_the_owners() {
-        let td = tempfile::tempdir().unwrap();
-        let p = pool(&td.path().join("s.db")).await;
-        let owner = schema_hash(["CREATE TABLE grid (x INT)"]);
-        write(&p, StoreKind::GridIndex, &owner, Versions::default())
-            .await
-            .unwrap();
-        let mut conn = p.acquire().await.unwrap();
-        let part = StoreKind::SearchIndex;
-        assert_eq!(part_schema_hash_in(&mut conn, part).await.unwrap(), None);
-        write_part_schema_hash(&mut conn, part, "one")
-            .await
-            .unwrap();
-        write_part_schema_hash(&mut conn, part, "two")
-            .await
-            .unwrap();
-        assert_eq!(
-            part_schema_hash_in(&mut conn, part)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some("two")
-        );
-        drop(conn);
-        let meta = read(&p).await.unwrap().unwrap();
-        assert_eq!(meta.schema_hash, owner);
-        assert_eq!(meta.store_kind, Some(StoreKind::GridIndex));
-    }
-
     /// A store with no table reads as `None`, not as an error: every
     /// store written before this crate existed is that store.
     #[tokio::test]
@@ -432,7 +373,7 @@ mod tests {
         let p = pool(&td.path().join("s.db")).await;
         let hash1 = schema_hash(["CREATE TABLE t (x INT)"]);
 
-        assert!(write(&p, StoreKind::Raw, &hash1, Versions::default())
+        assert!(write(&p, StoreKind::Raw, &Shape::of_tables(hash1.clone()))
             .await
             .unwrap());
         let first = read(&p).await.unwrap().expect("rows");
@@ -453,7 +394,7 @@ mod tests {
                 .unwrap();
         assert!(!stored.is_empty());
 
-        assert!(!write(&p, StoreKind::Raw, &hash1, Versions::default())
+        assert!(!write(&p, StoreKind::Raw, &Shape::of_tables(hash1.clone()))
             .await
             .unwrap());
         assert_eq!(read(&p).await.unwrap().unwrap(), first);
@@ -468,10 +409,13 @@ mod tests {
         assert!(write(
             &p,
             StoreKind::Raw,
-            &hash2,
-            Versions {
-                schema: 1,
-                shared: 0
+            &Shape {
+                tables: hash2.clone(),
+                indexes: None,
+                versions: Versions {
+                    schema: 1,
+                    shared: 0
+                },
             }
         )
         .await
@@ -493,13 +437,35 @@ mod tests {
         }
     }
 
+    /// A store that keeps indexes apart records their hash and reads it
+    /// back in its shape, and loses the row when its owner keeps none
+    /// apart.
+    #[tokio::test]
+    async fn the_index_hash_is_part_of_the_shape_read_back() {
+        let td = tempfile::tempdir().unwrap();
+        let p = pool(&td.path().join("s.db")).await;
+        let with = Shape {
+            tables: "t".into(),
+            indexes: Some("i".into()),
+            versions: Versions::default(),
+        };
+        write(&p, StoreKind::Render, &with).await.unwrap();
+        assert_eq!(read(&p).await.unwrap().unwrap().shape(), with);
+        let without = Shape {
+            indexes: None,
+            ..with
+        };
+        assert!(write(&p, StoreKind::Render, &without).await.unwrap());
+        assert_eq!(read(&p).await.unwrap().unwrap().index_hash, None);
+    }
+
     /// A kind or a hash written by a newer build reads as `None` /
     /// verbatim rather than as a guess.
     #[tokio::test]
     async fn a_newer_builds_spelling_is_none_not_a_guess() {
         let td = tempfile::tempdir().unwrap();
         let p = pool(&td.path().join("s.db")).await;
-        write(&p, StoreKind::DiskStats, "h", Versions::default())
+        write(&p, StoreKind::DiskStats, &Shape::of_tables("h".into()))
             .await
             .unwrap();
         sqlx::query("UPDATE _datalib_meta SET value = 'holodeck' WHERE key = 'store_kind'")

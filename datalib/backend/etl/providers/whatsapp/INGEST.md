@@ -167,9 +167,12 @@ without `Media/` leaves them as they were.
 ## What render does with it
 
 `whatsapp_render/src/render/parse.rs` loads `jid`, `chat`, `message`,
-`message_media` ⋈ `wa_media_files`, and `message_add_on` ⋈
-`message_add_on_reaction` off the pinned commit and resolves the rowid
-graph in memory. The incremental scan (`render.rs`) asks
+`message_media` ⋈ `wa_media_files`, `message_add_on` ⋈
+`message_add_on_reaction`, and for names `lid_display_name`, `jid_map`
+and `wa_db_contacts`, off the pinned commit and resolves the rowid
+graph in memory. A message's body is `message.text_data` alone:
+`message_text` and `message_media.media_caption` are not rendered.
+The incremental scan (`render.rs`) asks
 `dolt_diff_<table>` for each table's changed rows, walks them up to a
 `chat._id` — at HEAD for a row that still exists, at the previous
 commit for one that was removed, since a rowid is the same row at
@@ -192,6 +195,7 @@ id = "whatsapp/ingest"
 command = "datalib-step run ingest whatsapp"
 [steps.params.backup]
 path = "~/backups/WhatsApp"      # holds Databases/msgstore.db.crypt15 and Media/
+key_env_var = "WHATSAPP_BACKUP_DECRYPTION_KEY"  # the variable holding the key
 
 [[steps]]
 id = "whatsapp/render_markdown"
@@ -200,8 +204,9 @@ inputs = ["whatsapp/ingest"]
 reads = "pinned"
 ```
 
-The key comes from `WHATSAPP_BACKUP_DECRYPTION_KEY` (or the env var
-named by `key_env_var`); how to get it is in
+The key comes from the environment variable `key_env_var` names, which
+the wizard sets to `WHATSAPP_BACKUP_DECRYPTION_KEY`; the runner hands a
+step only the variables its params name. How to get it is in
 [`getting_your_data.md`](/docs/user/getting_your_data.md#whatsapp-backups).
 
 ## Measuring a backup

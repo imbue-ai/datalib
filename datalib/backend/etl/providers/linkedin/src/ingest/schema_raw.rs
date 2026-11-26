@@ -30,14 +30,14 @@ pub struct KnownFile {
 /// the walker, but enumerated in [`KNOWN_FILES`] like everything else.
 pub const ARTICLES_TABLE: &str = "articles";
 
-/// Raw table of `Connections.csv`, keyed by [`connection_key`]: the rows
-/// the stored photos and their prune join on.
+/// Raw table of `Connections.csv`, keyed by [`connection_key`].
 pub const CONNECTIONS_TABLE: &str = "connections";
 
 /// Every file a complete LinkedIn export can contain, as of the
-/// 06-2026 "Complete" export format. Adding a row here is documentation;
-/// the walker already ingests unlisted CSVs (with a WARN). Keep this
-/// sorted by `table` for easy scanning.
+/// 06-2026 "Complete" export format. A row here gives its file a natural
+/// key (`id_cols`) and, when `message_shaped`, a chat render; an unlisted
+/// CSV is still ingested (with a WARN), keyed by row hash, and rendered by
+/// nothing. Keep this sorted by `table` for easy scanning.
 pub const KNOWN_FILES: &[KnownFile] = &[
     KnownFile { table: "ad_targeting", export_name: "Ad_Targeting.csv", id_cols: &[], message_shaped: false, note: "Ad-targeting attributes LinkedIn inferred about you." },
     KnownFile { table: "ads_clicked", export_name: "Ads Clicked.csv", id_cols: &[], message_shaped: false, note: "Sponsored posts/ads you clicked, with timestamps." },
@@ -97,7 +97,7 @@ pub fn known_file(table: &str) -> Option<&'static KnownFile> {
 
 /// The raw `connections.id`: the member's profile URL, the export's
 /// one stable field for a connection, so the same connection keeps
-/// one row across re-exports and the stored photos join on it.
+/// one row across re-exports.
 pub fn connection_key(url: &str) -> String {
     url.to_string()
 }

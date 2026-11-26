@@ -369,7 +369,7 @@ pub struct AppletEntry {
     /// step's is.
     pub command: String,
     /// Arbitrary applet parameters, forwarded verbatim as the JSON in the
-    /// applet's `--params-file`.
+    /// applet's `DATALIB_DAG_PARAMS`.
     #[serde(default)]
     pub params: Option<toml::Value>,
     /// Extra environment for the child process.
@@ -695,8 +695,8 @@ pub fn to_specs(cfg: &DagConfig) -> Result<Vec<StepSpec>> {
     Ok(accepted.steps.into_iter().map(|(_, spec)| spec).collect())
 }
 
-/// A step's `params` subtree as the JSON the child reads from its
-/// `--params-file`.
+/// A step's or an applet's `params` subtree as the JSON the child reads
+/// from `DATALIB_DAG_PARAMS`.
 ///
 /// Walks the tree rather than serializing through serde, because TOML's
 /// date/time types have no JSON counterpart and the `toml` crate smuggles
@@ -1336,7 +1336,7 @@ fn accept_programs(
                     Severity::Warning,
                     format!(
                         "[[programs]] {command:?}: {word:?} is not a verb this runner sends \
-                         (reset, prepare, compact, collect); it is ignored"
+                         (reset, prepare, compact, collect, check); it is ignored"
                     ),
                 )),
             }

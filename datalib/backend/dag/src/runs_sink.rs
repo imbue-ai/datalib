@@ -722,7 +722,7 @@ mod tests {
                 sink.emit(e);
             }
         } // dropping the sink drops the writer, which flushes and joins
-        let snap = snapshot(td.path()).await;
+        let snap = snapshot(td.path()).await.unwrap();
         (td, snap)
     }
 
@@ -778,7 +778,7 @@ mod tests {
             },
         ])
         .await;
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
         let levels: Vec<&str> = lines.iter().map(|l| l.level.as_str()).collect();
         assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
         assert_eq!(
@@ -830,7 +830,7 @@ mod tests {
             },
         ])
         .await;
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
         let levels: Vec<&str> = lines.iter().map(|l| l.level.as_str()).collect();
         assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
         assert_eq!(
@@ -859,13 +859,14 @@ mod tests {
         .await;
         let runner = processes(td.path(), None, None, 10)
             .await
+            .unwrap()
             .into_iter()
             .find(|p| p.process == "dag")
             .expect("the runner is a process of the run");
         assert_eq!(runner.run_id.as_deref(), Some("run-1"));
         assert_eq!(runner.git_hash.as_deref(), Some("ae2d52f0"));
         assert_eq!(snap.run_id.as_deref(), Some("run-1"));
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].process_id, runner.process_id);
         assert_eq!(lines[0].process.as_deref(), Some("dag"));
@@ -921,7 +922,7 @@ mod tests {
             log("tools/backfill", None),
         ])
         .await;
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
         let groups: Vec<(Option<&str>, Option<&str>)> = lines
             .iter()
             .map(|l| (l.step.as_deref(), l.group_id.as_deref()))
@@ -972,6 +973,7 @@ mod tests {
         .await;
         let mut passes: Vec<_> = processes(td.path(), None, Some("step"), 10)
             .await
+            .unwrap()
             .into_iter()
             .filter(|p| p.step.as_deref() == Some("unified_grid_and_search_index/grid"))
             .collect();
@@ -1018,7 +1020,9 @@ mod tests {
         ])
         .await;
         assert_eq!(snap.steps[0].state, "succeeded");
-        let log = log_after(td.path(), "run-1", Some("evals/score"), 0, 100).await;
+        let log = log_after(td.path(), "run-1", Some("evals/score"), 0, 100)
+            .await
+            .unwrap();
         let errors: Vec<(&str, Option<&str>)> = log
             .iter()
             .filter(|l| l.level == "error")
@@ -1068,6 +1072,7 @@ mod tests {
         .await;
         let mut attempts: Vec<_> = processes(td.path(), None, None, 10)
             .await
+            .unwrap()
             .into_iter()
             .filter(|p| p.process == "step")
             .collect();
@@ -1123,6 +1128,7 @@ mod tests {
         .await;
         let mut attempts: Vec<_> = processes(td.path(), None, None, 10)
             .await
+            .unwrap()
             .into_iter()
             .filter(|p| p.process == "step")
             .collect();
@@ -1138,7 +1144,7 @@ mod tests {
             "an attempt that names no commit is not given the runner's"
         );
         assert_eq!(attempts[1].exit_code, Some(0));
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await;
+        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
         let piped = lines
             .iter()
             .find(|l| l.msg == "from the pipe")
@@ -1277,6 +1283,7 @@ mod tests {
         async fn owed(root: &std::path::Path) -> Vec<(String, i64, String)> {
             datalib_runs::latest_metric(root, OWED)
                 .await
+                .unwrap()
                 .into_iter()
                 .map(|m| (m.step, m.value, m.run_id))
                 .collect()
@@ -1296,7 +1303,7 @@ mod tests {
                 finish("tools/backfill", RunState::Succeeded),
             ],
         );
-        let snap = snapshot(td.path()).await;
+        let snap = snapshot(td.path()).await.unwrap();
         assert_eq!(
             metric_value(&snap, "slack/ingest", QUEUED),
             Some(0),
@@ -1446,7 +1453,9 @@ mod tests {
             metric_value(&snap, "slack/raw", "api_requests_total"),
             Some(2)
         );
-        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100).await;
+        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100)
+            .await
+            .unwrap();
         let warned: Vec<&str> = log
             .iter()
             .filter(|l| l.level == "warn")
@@ -1487,7 +1496,7 @@ mod tests {
         .expect("start the store");
         sink.emit(&plan(&["slack/raw", "slack/rendered_md"]));
         sink.writer.flush().await;
-        let snap = snapshot(td.path()).await;
+        let snap = snapshot(td.path()).await.unwrap();
         drop(sink);
 
         assert_eq!(snap.steps.len(), 2);
@@ -1560,7 +1569,9 @@ mod tests {
         assert_eq!(s.msg.as_deref(), Some("conversations.list"));
         assert_eq!(s.error.as_deref(), Some("boom"));
         assert!(s.started_at_utc.is_some() && s.finished_at_utc.is_some());
-        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100).await;
+        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100)
+            .await
+            .unwrap();
         assert_eq!(log.len(), 1, "{log:?}");
         assert_eq!(
             (log[0].level.as_str(), log[0].msg.as_str()),
@@ -1585,7 +1596,7 @@ mod tests {
             },
         ])
         .await;
-        let log = log_after(td.path(), "run-1", None, 0, 100).await;
+        let log = log_after(td.path(), "run-1", None, 0, 100).await.unwrap();
         assert_eq!(log.len(), 1, "a clean finish logs nothing: {log:?}");
         assert_eq!(log[0].level, "warn");
     }
@@ -1635,7 +1646,9 @@ mod tests {
             metric_value(&snap, "slack/raw", datalib_metrics::CHECKPOINTS),
             Some(1)
         );
-        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100).await;
+        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100)
+            .await
+            .unwrap();
         assert_eq!(log.len(), 3, "{log:?}");
         assert_eq!(log[0].level, "warn");
         assert_eq!(

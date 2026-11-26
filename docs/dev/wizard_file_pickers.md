@@ -85,9 +85,8 @@ back a sandboxed `File` and never a filesystem path, and
 necessarily local: it is a path on the machine running the *backend*,
 which in the browser-served case need not be the user's machine at all.
 
-The fix is a server-side browse endpoint (`GET /api/fs/browse`,
-sketched in [`source_wizard.md`](plans/source_wizard.md)) — the backend
-enumerating its own filesystem, which is the only party that can. It
+The fix is a server-side browse endpoint (`GET /api/fs/browse`) — the
+backend enumerating its own filesystem, which is the only party that can. It
 is not built. Until it is, a browser user types the path, and
 `pickPath` returns `unavailable` rather than pretending.
 

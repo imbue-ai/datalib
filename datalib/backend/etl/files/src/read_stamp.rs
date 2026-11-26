@@ -84,7 +84,12 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        for ddl in std::iter::once(datalib_etl::doltlite_raw::PROBLEMS_DDL).chain(
+        for ddl in [
+            crate::file_checkpoint::INGESTED_FILES_DDL,
+            datalib_etl::doltlite_raw::PROBLEMS_DDL,
+        ]
+        .into_iter()
+        .chain(
             datalib_etl::doltlite_raw::SHARED_LOOKUP_INDEXES
                 .iter()
                 .copied(),
