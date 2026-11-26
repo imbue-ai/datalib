@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -19,6 +19,7 @@ use crate::scheduler::{PrepareError, Runner};
 use crate::supervisor::announce::Listener;
 use crate::supervisor::host;
 use crate::supervisor::pass::PassState;
+use crate::supervisor::period::{PeriodSink, RunPeriods};
 use crate::supervisor::reload::ConfigFile;
 use crate::supervisor::store::{RequestOutcome, Store};
 
@@ -109,13 +110,60 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
     open_the_reruns(&store, root).await;
     emit(ServeEvent::PrepareDone);
     tracing::info!("supervisor: running the loop on {}", root.display());
-    let mut periods = Periods {
+    let periods = Periods {
         opts,
-        emit: &emit,
-        stop: &stop,
+        emit: emit.clone(),
+        record: Arc::new(PeriodSink::default()),
+        open: Mutex::new(None),
     };
-    host::run_idle(&store, &mut listener, &mut periods, &mut stop.clone()).await;
+    while !*stop.borrow() {
+        let failed = match load_config(root) {
+            Ok(checked) => run_the_loop(opts, &checked, &store, &periods, &stop).await,
+            Err(why) => Err(why),
+        };
+        let Err(why) = failed else { break };
+        // Its requests would otherwise be taken on at once, and fail the
+        // same way; the next change to the store or the config is the
+        // next try.
+        periods.close_any();
+        fail_open_requests(&store, &why).await;
+        if let Err(e) = host::take_over(&store, root).await {
+            tracing::error!("supervisor: could not close the failed run: {e:#}");
+        }
+        tokio::select! {
+            _ = listener.next() => {}
+            _ = stop.changed() => {}
+        }
+    }
     store.close().await;
+}
+
+/// The loop on `checked`'s graph, until `stop` or an error it cannot go
+/// on from. It re-reads the config as it goes.
+async fn run_the_loop(
+    opts: &ServeOptions,
+    checked: &ConfigCheck,
+    store: &Store,
+    periods: &Periods<'_>,
+    stop: &watch::Receiver<bool>,
+) -> Result<(), String> {
+    let root = opts.root.as_path();
+    let mut runner = Runner::new(root)
+        .sink(periods.record.clone())
+        .stop_on(stop.clone())
+        .reload_from(Arc::new(ConfigFile::new(crate::config::root_config_path(
+            root,
+        ))));
+    if let Some(n) = opts.parallelism {
+        runner = runner.parallelism(n);
+    }
+    runner
+        .run_forever(&checked.graph, store, periods)
+        .await
+        .map_err(|e| {
+            tracing::error!("supervisor: the loop failed: {e:#}");
+            format!("the sync failed: {e:#}")
+        })
 }
 
 /// The config as the loop would run it, or why it cannot.
@@ -324,111 +372,60 @@ fn now(opts: &ServeOptions) -> String {
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
 }
 
+/// Each busy period recorded in the run store, and said to the parent.
 struct Periods<'a> {
     opts: &'a ServeOptions,
-    emit: &'a Emit,
-    stop: &'a watch::Receiver<bool>,
+    emit: Emit,
+    /// The runner's sink: the open period's record, or nothing.
+    record: Arc<PeriodSink>,
+    /// The run id of the period open now.
+    open: Mutex<Option<String>>,
 }
 
-impl host::Periods for Periods<'_> {
-    async fn busy_period(&mut self, store: &Store) {
-        serve_period(self.opts, self.emit, self.stop, store).await;
-    }
-
-    async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
-        settle(&self.opts.root, store).await
-    }
-}
-
-/// One tick with nothing open, so a step turned off or on while the loop
-/// is idle reaches the record, and so do the steps a dead loop left
-/// running.
-async fn settle(root: &Path, store: &Store) -> Option<BTreeMap<String, String>> {
-    let checked = match load_config(root) {
-        Ok(checked) => checked,
-        Err(why) => {
-            tracing::warn!("supervisor: cannot settle the record: {why}");
-            return None;
-        }
-    };
-    match Runner::new(root).settle(&checked.graph, store).await {
-        Ok(turned_off) => Some(turned_off),
-        Err(e) => {
-            tracing::error!("supervisor: could not settle the record: {e:#}");
-            None
+impl Periods<'_> {
+    /// A loop that failed may have left its period open.
+    fn close_any(&self) {
+        let open = self.open.lock().expect("the open period's lock").clone();
+        if let Some(run_id) = open {
+            self.close(&run_id);
         }
     }
 }
 
-/// One busy period: a run opened, and the loop served until no request
-/// it can place is open. The loop re-reads the config as it goes; the
-/// step environment is the one built here.
-async fn serve_period(
-    opts: &ServeOptions,
-    emit: &Emit,
-    stop: &watch::Receiver<bool>,
-    store: &Store,
-) {
-    let root = opts.root.as_path();
-    let checked = match load_config(root) {
-        Ok(checked) => checked,
-        Err(why) => return fail_open_requests(store, &why).await,
-    };
-    let run_id = crate::scheduler::new_run_id();
-    let now = now(opts);
-    let env = match steps_env(opts, &checked.cfg, &now, &run_id) {
-        Ok(env) => env,
-        Err(e) => return fail_open_requests(store, &format!("{e:#}")).await,
-    };
-    let open = store.open_requests().await.unwrap_or_default();
-    let wiping = store.open_wipes().await.unwrap_or_default();
-    let started = host::period_start(&open, &wiping);
-    let sink: Arc<dyn EventSink> = match host::start_record(
-        root,
-        &checked.cfg,
-        &run_id,
-        &now,
-        started,
-    ) {
-        Some(record) => Arc::new(record),
-        None => {
-            tracing::warn!(run = %run_id, "supervisor: run store unavailable; nothing recorded this run");
-            Arc::new(NoopSink)
+impl RunPeriods for Periods<'_> {
+    fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
+        let root = self.opts.root.as_path();
+        let checked = load_config(root)?;
+        let run_id = crate::scheduler::new_run_id();
+        let now = now(self.opts);
+        let env =
+            steps_env(self.opts, &checked.cfg, &now, &run_id).map_err(|e| format!("{e:#}"))?;
+        match host::start_record(root, &checked.cfg, &run_id, &now, start) {
+            Some(record) => drop(self.record.point_at(Some(Arc::new(record)))),
+            None => tracing::warn!(
+                run = %run_id,
+                "supervisor: run store unavailable; nothing recorded this run"
+            ),
         }
-    };
-    let mut runner = Runner::new(root)
-        .sink(sink)
-        .child_env(env.vars)
-        .stop_on(stop.clone())
-        .reload_from(Arc::new(ConfigFile::new(crate::config::root_config_path(
-            root,
-        ))));
-    if let Some(n) = opts.parallelism {
-        runner = runner.parallelism(n);
+        *self.open.lock().expect("the open period's lock") = Some(run_id.clone());
+        (self.emit)(ServeEvent::SyncStarted {
+            run_id: run_id.clone(),
+        });
+        tracing::info!(run = %run_id, "supervisor: a sync started");
+        Ok(env.vars)
     }
 
-    emit(ServeEvent::SyncStarted {
-        run_id: run_id.clone(),
-    });
-    tracing::info!(run = %run_id, "supervisor: a sync started");
-    let served = runner.serve(&checked.graph, store).await;
-    // The run store's record closes when its sink goes, which is the
-    // runner's; before the loop says it is over, so no one reads "over"
-    // before it is.
-    drop(runner);
-    if let Err(e) = served {
-        tracing::error!(run = %run_id, "supervisor: the loop failed: {e:#}");
-        // Its requests would otherwise start the next busy period at once,
-        // and fail the same way.
-        fail_open_requests(store, &format!("the sync failed: {e:#}")).await;
-        if let Err(e) = host::take_over(store, root).await {
-            tracing::error!("supervisor: could not close the failed run: {e:#}");
-        }
+    /// The run store's record closes when its sink is dropped, here:
+    /// before the loop says the sync is over, so no one reads "over"
+    /// before it is.
+    fn close(&self, run_id: &str) {
+        drop(self.record.point_at(None));
+        *self.open.lock().expect("the open period's lock") = None;
+        (self.emit)(ServeEvent::SyncOver {
+            run_id: run_id.to_string(),
+        });
+        tracing::info!(run = %run_id, "supervisor: the sync is over");
     }
-    emit(ServeEvent::SyncOver {
-        run_id: run_id.clone(),
-    });
-    tracing::info!(run = %run_id, "supervisor: the sync is over");
 }
 
 /// Close every open request: the loop cannot run them, for `why`.

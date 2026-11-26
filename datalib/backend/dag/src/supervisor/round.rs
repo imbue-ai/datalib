@@ -1,6 +1,7 @@
-//! The supervisor's loop: every open request ticked until it closes. The
-//! facts come from the record in `system/supervisor.sqlite` and go back to
-//! it, and the events are the ones the run store and the server read.
+//! The supervisor's loop: every open request ticked until it closes, and
+//! the record kept true while none is open. The facts come from the record
+//! in `system/supervisor.sqlite` and go back to it, and the events are the
+//! ones the run store and the server read.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -11,6 +12,7 @@ use tokio::task::JoinSet;
 use super::announce::{Listener, CONFIG_CHANGED};
 use super::inputs;
 use super::pass::PassState;
+use super::period::RunPeriods;
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{RequestOutcome, Store, WipeKind, WipeRow};
 use super::tick::{
@@ -188,6 +190,18 @@ struct Open {
     request: Request,
 }
 
+/// One busy period: from the first request or wipe the loop takes on with
+/// none open, to the moment none is left and nothing runs. Only the run
+/// store's grouping, and what its summary compares against.
+struct Period {
+    run_id: String,
+    /// The same clock its steps get in `DATALIB_DAG_NOW`.
+    clock: datalib_time::RunClock,
+    /// Each step's version as the period began: the summary says whether
+    /// the period as a whole moved a step's output.
+    at_start: HashMap<String, Option<String>>,
+}
+
 /// A request for every source, served until it closes: what a test that
 /// is not about requests wants of the loop.
 #[cfg(test)]
@@ -209,8 +223,35 @@ impl Runner {
 
 impl Runner {
     /// Every request open in the store, and any opened while this runs,
-    /// until none is left. The caller holds `runner-lock`.
+    /// until none is left: one busy period, its steps given the runner's
+    /// own environment and its events its own sink. The caller holds
+    /// `runner-lock`.
     pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
+        let report = self.drive(graph, store, None).await?;
+        Ok(report.expect("a loop that serves until idle ends the period it opened"))
+    }
+
+    /// The loop for a host holding `runner-lock` until `stop`: every
+    /// request and wipe served as it comes, and the record brought to the
+    /// switches and the config while nothing runs. Each stretch with work
+    /// open is a busy period, which `periods` records.
+    pub async fn run_forever(
+        &self,
+        graph: &Graph,
+        store: &Store,
+        periods: &dyn RunPeriods,
+    ) -> Result<()> {
+        self.drive(graph, store, Some(periods)).await.map(|_| ())
+    }
+
+    /// `periods` is `None` for [`Runner::serve`], which opens one period
+    /// at once and returns its report when it ends.
+    async fn drive(
+        &self,
+        graph: &Graph,
+        store: &Store,
+        periods: Option<&dyn RunPeriods>,
+    ) -> Result<Option<RunReport>> {
         let mut mailbox = Mailbox {
             store,
             seen: None,
@@ -218,38 +259,13 @@ impl Runner {
             deferred: BTreeMap::new(),
             stopped: Vec::new(),
         };
-        let plan: Vec<PlannedStep> = graph
-            .topo
-            .iter()
-            .map(|&i| PlannedStep::of(&graph.steps[i]))
-            .collect();
-        self.sink.emit(&Event::RunPlan { steps: plan });
         let mut record = Recorded::load(store).await?;
         let mut state = record.saved.clone();
-
-        // One clock and one id for the round: the same values the steps get
-        // in `DATALIB_DAG_NOW` and `DATALIB_DAG_RUN_ID`.
-        let started_at = self
-            .child_env
-            .get(crate::subprocess::ENV_NOW)
-            .cloned()
-            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-        let clock = datalib_time::RunClock::starting_at(
-            datalib_time::parse_strict(&started_at)
-                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
-        );
-        let run_id = self
-            .child_env
-            .get(crate::subprocess::ENV_RUN_ID)
-            .cloned()
-            .unwrap_or_else(new_run_id);
-        state.current_run = Some(CurrentRun {
-            run_id,
-            started_at,
-            finished_at: None,
-            states: Default::default(),
-        });
-        record.save(&state).await?;
+        let mut period = match periods {
+            None => Some(self.open_period(graph, &mut record, &mut state).await?),
+            Some(_) => None,
+        };
+        let mut report = None;
 
         // Made before the first look at the mailbox, so a row written
         // after that look is heard.
@@ -267,21 +283,18 @@ impl Runner {
         let mut wipes: Vec<WipeRow> = Vec::new();
         let mut seq = 0u64;
         let mut slots: Vec<Slot> = graph.steps.iter().map(|_| Slot::default()).collect();
-        // A step may seal and end several passes in one round; the summary
-        // says whether the round as a whole moved its output.
-        let at_start: HashMap<String, Option<String>> = state
-            .steps
-            .iter()
-            .map(|(id, s)| (id.clone(), s.version.clone()))
-            .collect();
         let mut queue = QueueLedger::new(graph.steps.len());
         let mut cancelled = false;
+        // Whether the loop takes on what the mailbox brings: not once it is
+        // told to stop, nor, for `serve`, once its one period is over.
+        let mut taking = true;
         let mut stop_rx = self.stop.clone();
         let mut disk = DiskWatch::default();
 
         self.refresh(
             graph,
             &mut mailbox,
+            period.is_some(),
             &mut open,
             &mut turned_off,
             &mut wipes,
@@ -295,14 +308,14 @@ impl Runner {
         let mut set: JoinSet<Done> = JoinSet::new();
 
         loop {
-            if !cancelled && std::mem::take(&mut config_moved) {
+            if taking && std::mem::take(&mut config_moved) {
                 // One that does not load is waited out on the graph the
                 // loop has; the Manage screen already says it is broken.
                 if let Some(Ok(next)) = self.reload.as_ref().map(|s| s.load()) {
                     next_graph = Some(next);
                 }
             }
-            if let Some(next) = next_graph.take().filter(|_| !cancelled) {
+            if let Some(next) = next_graph.take().filter(|_| taking) {
                 let roots: BTreeSet<usize> = open
                     .iter()
                     .flat_map(|o| o.request.roots.iter().copied())
@@ -390,7 +403,7 @@ impl Runner {
                     // this graph has is taken on now.
                     mailbox.seen = None;
                     let mut added = Vec::new();
-                    for (i, o) in from_old.iter().enumerate() {
+                    for (i, o) in from_old.iter().enumerate().filter(|_| period.is_some()) {
                         let id = &graph.steps[i].id;
                         match o {
                             None => {
@@ -409,10 +422,11 @@ impl Runner {
                 }
             }
             let graph = &current;
-            if !cancelled {
+            if taking {
                 self.refresh(
                     graph,
                     &mut mailbox,
+                    period.is_some(),
                     &mut open,
                     &mut turned_off,
                     &mut wipes,
@@ -420,6 +434,36 @@ impl Runner {
                     &mut slots,
                 )
                 .await?;
+                if let Some(periods) = periods.filter(|_| period.is_none()) {
+                    if !open.is_empty() || !wipes.is_empty() {
+                        let start = super::host::period_start(
+                            &store.open_requests().await?,
+                            &store.open_wipes().await?,
+                        );
+                        match periods.open(start) {
+                            Ok(env) => {
+                                self.set_steps_env(env.into());
+                                period =
+                                    Some(self.open_period(graph, &mut record, &mut state).await?);
+                                // What it took on was read with no period
+                                // open, as strictly as a period's first read.
+                                mailbox.started = true;
+                                facts = facts_of(graph, &state);
+                                queue = QueueLedger::new(graph.steps.len());
+                            }
+                            Err(why) => {
+                                tracing::warn!("supervisor: cannot sync: {why}");
+                                for o in open.drain(..) {
+                                    store
+                                        .close_request(&o.id, RequestOutcome::Failed, None)
+                                        .await?;
+                                }
+                                // Read again when the store next moves.
+                                wipes.clear();
+                            }
+                        }
+                    }
+                }
                 let opened = self
                     .carry_out_wipes(
                         graph,
@@ -439,6 +483,7 @@ impl Runner {
                     self.refresh(
                         graph,
                         &mut mailbox,
+                        period.is_some(),
                         &mut open,
                         &mut turned_off,
                         &mut wipes,
@@ -615,7 +660,7 @@ impl Runner {
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
-                let child_env = self.child_env.clone();
+                let child_env = self.steps_env();
                 let id = graph.steps[i].id.clone();
                 set.spawn(async move {
                     let (attempts, res) =
@@ -669,10 +714,34 @@ impl Runner {
                     continue;
                 }
                 if wipes.is_empty() {
-                    break;
+                    if let Some(p) = period.take() {
+                        report = Some(
+                            self.end_period(
+                                graph,
+                                &mut record,
+                                &mut state,
+                                &mut slots,
+                                &mut queue,
+                                &facts,
+                                cancelled,
+                                p,
+                                periods,
+                            )
+                            .await?,
+                        );
+                        mailbox.started = false;
+                        facts = facts_of(graph, &state);
+                        taking &= periods.is_some();
+                        // The next tick, with nothing open, is the record
+                        // at rest.
+                        continue;
+                    }
+                    if !taking {
+                        break;
+                    }
                 }
             }
-            let listening = !cancelled;
+            let listening = taking;
             anyhow::ensure!(
                 !set.is_empty() || listening,
                 "the round is open with nothing running and nothing to start: {:?}",
@@ -696,6 +765,7 @@ impl Runner {
                     // new. The store's requests and wipes stay open, for
                     // whoever runs the loop next.
                     cancelled = true;
+                    taking = false;
                     open.clear();
                     wipes.clear();
                 }
@@ -703,7 +773,7 @@ impl Runner {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 _ = tokio::time::sleep(DISK_LOOK_EVERY),
-                    if listening && graph.disk_floor.is_some() => {}
+                    if listening && period.is_some() && graph.disk_floor.is_some() => {}
                 // Empty while the disk holds every step back.
                 joined = set.join_next(), if !set.is_empty() => {
                     // Seals before joins: a step sends its seal before its
@@ -740,35 +810,82 @@ impl Runner {
             }
         }
 
-        let graph = &current;
+        Ok(report)
+    }
+
+    /// The period's record opened: its plan said, its run id and "now"
+    /// recorded as the record's current run. The steps' environment
+    /// carries both.
+    async fn open_period(
+        &self,
+        graph: &Graph,
+        record: &mut Recorded<'_>,
+        state: &mut Record,
+    ) -> Result<Period> {
+        let child_env = self.steps_env();
+        let plan: Vec<PlannedStep> = graph
+            .topo
+            .iter()
+            .map(|&i| PlannedStep::of(&graph.steps[i]))
+            .collect();
+        self.sink.emit(&Event::RunPlan { steps: plan });
+        let started_at = child_env
+            .get(crate::subprocess::ENV_NOW)
+            .cloned()
+            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
+        let clock = datalib_time::RunClock::starting_at(
+            datalib_time::parse_strict(&started_at)
+                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
+        );
+        let run_id = child_env
+            .get(crate::subprocess::ENV_RUN_ID)
+            .cloned()
+            .unwrap_or_else(new_run_id);
+        state.current_run = Some(CurrentRun {
+            run_id: run_id.clone(),
+            started_at,
+            finished_at: None,
+            states: Default::default(),
+        });
+        record.save(state).await?;
+        let at_start = state
+            .steps
+            .iter()
+            .map(|(id, s)| (id.clone(), s.version.clone()))
+            .collect();
+        Ok(Period {
+            run_id,
+            clock,
+            at_start,
+        })
+    }
+
+    /// Nothing is open and nothing runs: each step the period reached
+    /// finished, the record's run closed, and the summary sent. A step no
+    /// request reached took no part, and has no line.
+    #[allow(clippy::too_many_arguments)]
+    async fn end_period(
+        &self,
+        graph: &Graph,
+        record: &mut Recorded<'_>,
+        state: &mut Record,
+        slots: &mut [Slot],
+        queue: &mut QueueLedger,
+        facts: &Facts,
+        cancelled: bool,
+        period: Period,
+        periods: Option<&dyn RunPeriods>,
+    ) -> Result<RunReport> {
         for (i, s) in slots.iter_mut().enumerate() {
             if let Some(e) = s.ended.take() {
-                self.finish_ended(graph, &mut state, s, i, e);
+                self.finish_ended(graph, state, s, i, e);
             }
-            self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
+            self.settle_row(graph, state, queue, s, i, cancelled);
         }
-        let at_rest = Intent {
-            requests: Vec::new(),
-            turned_off: turned_off.keys().copied().collect(),
-        };
-        let t = tick(&shape, &at_rest, &facts);
-        record_states(
-            graph,
-            &shape,
-            &mut state,
-            &t,
-            &vec![None; slots.len()],
-            &turned_off,
-            None,
-            |_| Vec::new(),
-        );
-        record_deferred(graph, &mut state, &mailbox.deferred);
         if let Some(run) = state.current_run.as_mut() {
-            run.finished_at = Some(clock.now().to_rfc3339_micros());
+            run.finished_at = Some(period.clock.now().to_rfc3339_micros());
         }
-        record.save(&state).await?;
-
-        // A step no request reached took no part, and has no line.
+        record.save(state).await?;
         let steps = graph
             .topo
             .iter()
@@ -777,10 +894,10 @@ impl Runner {
                 let now = facts.sinks[i]
                     .clone()
                     .unwrap_or_else(|| UNKNOWN.to_string());
-                let before = at_start.get(&graph.steps[i].id).cloned().flatten();
+                let before = period.at_start.get(&graph.steps[i].id).cloned().flatten();
                 let changed = facts.sinks[i].is_some() && facts.sinks[i] != before;
                 // A pass's own `changed` is against the seal before it; the
-                // run's is against where the run started.
+                // period's is against where the period started.
                 let status = match slots[i].status.clone()? {
                     StepStatus::Succeeded { .. } => StepStatus::Succeeded {
                         changed: changed as usize,
@@ -801,6 +918,12 @@ impl Runner {
         self.sink.emit(&Event::RunSummary {
             steps: report.steps.iter().map(step_summary).collect(),
         });
+        if let Some(periods) = periods {
+            periods.close(&period.run_id);
+        }
+        for s in slots.iter_mut() {
+            *s = Slot::default();
+        }
         Ok(report)
     }
 
@@ -812,6 +935,7 @@ impl Runner {
         &self,
         graph: &Graph,
         mailbox: &mut Mailbox<'_>,
+        in_period: bool,
         open: &mut Vec<Open>,
         turned_off: &mut BTreeMap<usize, String>,
         wipes: &mut Vec<WipeRow>,
@@ -844,10 +968,11 @@ impl Runner {
                 if *seen == Some(version) {
                     return Ok(());
                 }
-                // Open before this loop loaded its graph, or so near it
-                // that the config it names cannot be newer than the one
-                // loaded.
-                let first = !std::mem::replace(started, true);
+                // Read with no period open, or the first read of one: the
+                // config it names cannot be newer than the graph the loop
+                // has, so a step this graph lacks does not exist.
+                let first = !*started;
+                *started |= in_period;
                 *seen = Some(version);
                 let (rows, all_turned_off) = store.mailbox().await?;
                 deferred.retain(|id, _| {
@@ -1084,37 +1209,6 @@ impl Runner {
             wipe::by_cause(&failed)
         );
         Ok(())
-    }
-
-    /// One tick with no request open, its states saved: for a host whose
-    /// loop is idle when a step is turned off or on, or that has just taken
-    /// the lock from a loop that died with steps running.
-    /// The switches it recorded, as the store held them: a host compares
-    /// the switches it finds later with these, not with any it read before.
-    pub async fn settle(&self, graph: &Graph, store: &Store) -> Result<BTreeMap<String, String>> {
-        let mut record = Recorded::load(store).await?;
-        let mut state = record.saved.clone();
-        let all = store.turned_off().await?;
-        let turned_off = turned_off_of(graph, &all);
-        let intent = Intent {
-            requests: Vec::new(),
-            turned_off: turned_off.keys().copied().collect(),
-        };
-        let shape = shape_of(graph, &self.lock_slots);
-        let t = tick(&shape, &intent, &facts_of(graph, &state));
-        let held = vec![None; graph.steps.len()];
-        record_states(
-            graph,
-            &shape,
-            &mut state,
-            &t,
-            &held,
-            &turned_off,
-            None,
-            |_| Vec::new(),
-        );
-        record.save(&state).await?;
-        Ok(all)
     }
 
     fn note(&self, step: &str, msg: String) {
@@ -2583,33 +2677,186 @@ mod tests {
         assert_eq!(a.last_run.unwrap().status, "stopped");
     }
 
-    /// A turn-off landing while no loop runs reaches the rows only through a
-    /// tick; `settle` is that tick, with no request open.
+    /// What a host's loop told its periods, in order.
+    #[derive(Default)]
+    struct Told(std::sync::Mutex<Vec<String>>);
+
+    impl RunPeriods for Told {
+        fn open(
+            &self,
+            start: datalib_runs::RunStart,
+        ) -> std::result::Result<BTreeMap<String, String>, String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push(format!("open: {}", start.reason));
+            Ok(BTreeMap::new())
+        }
+        fn close(&self, _run_id: &str) {
+            self.0.lock().unwrap().push("close".into());
+        }
+    }
+
+    impl Told {
+        fn said(&self) -> Vec<String> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    /// A host's loop, on its own task, stopped by the sender it returns.
+    fn forever(
+        f: &Fixture,
+        told: Arc<Told>,
+    ) -> (watch::Sender<bool>, tokio::task::JoinHandle<Result<()>>) {
+        let (stop, rx) = watch::channel(false);
+        let runner = Runner::new(f.root.path()).stop_on(rx);
+        let graph = f.graph.clone();
+        let root = f.root.path().to_path_buf();
+        let task = tokio::spawn(async move {
+            let store = Store::open(&root).await?;
+            let ran = runner.run_forever(&graph, &store, &*told).await;
+            store.close().await;
+            ran
+        });
+        (stop, task)
+    }
+
+    async fn state_of(root: &std::path::Path, step: &str) -> StepRecord {
+        let recorded = crate::supervisor::record::recorded(root).await;
+        recorded.steps.get(step).cloned().unwrap_or_default()
+    }
+
+    /// The loop does not end when nothing is open. A turn-off or turn-on
+    /// while it is idle reaches the record with no request and no period;
+    /// a request opens a period, which closes once the request is done.
+    /// Before the loop never exited, the idle side needed `settle`, a
+    /// second way to run a tick, to do the first of these.
     #[tokio::test]
-    async fn a_turn_off_while_the_loop_is_idle_reads_once_settled() {
+    async fn the_loop_keeps_the_record_while_idle_and_opens_a_period_per_stretch_of_work() {
         let f = fixture();
-        let store = Store::open(f.root.path()).await.unwrap();
-        let runner = Runner::new(f.root.path());
-        store.turn_off("a/raw", "claude").await.unwrap();
-        runner.settle(&f.graph, &store).await.unwrap();
-        let a = crate::supervisor::record::recorded(f.root.path())
-            .await
-            .steps["a/raw"]
-            .clone();
-        assert_eq!(a.state, Some(StateKind::Off));
+        let other = Store::open(f.root.path()).await.unwrap();
+        let told = Arc::new(Told::default());
+        let (stop, task) = forever(&f, told.clone());
+
+        other.turn_off("a/raw", "claude").await.unwrap();
+        let root = f.root.path();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while state_of(root, "a/raw").await.state != Some(StateKind::Off) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the turn-off never reached the record"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let a = state_of(root, "a/raw").await;
         assert_eq!(a.turned_off_by.as_deref(), Some("claude"));
         assert_eq!(a.state_detail.as_deref(), Some("turned off by claude"));
-
-        store.turn_on("a/raw").await.unwrap();
-        runner.settle(&f.graph, &store).await.unwrap();
-        let a = crate::supervisor::record::recorded(f.root.path())
-            .await
-            .steps["a/raw"]
-            .clone();
-        assert_eq!(
-            (a.state, a.turned_off_by, a.state_detail),
-            (Some(StateKind::Stale), None, None)
+        other.turn_on("a/raw").await.unwrap();
+        while state_of(root, "a/raw").await.state != Some(StateKind::Stale) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the turn-on never reached the record"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            told.said().is_empty(),
+            "a switch opened a period: {:?}",
+            told.said()
         );
+
+        f.go.store(true, Ordering::SeqCst);
+        let id = other.open_request(&["b/raw".into()], "ui").await.unwrap();
+        while other.request(&id).await.unwrap().unwrap().closed.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        until("the period to close", || told.said().len() == 2).await;
+        assert_eq!(
+            told.said(),
+            ["open: a sync asked for by ui: b/raw", "close"],
+            "one period for the one request"
+        );
+        assert!(!task.is_finished(), "the loop ended with nothing open");
+
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+        assert_eq!(f.runs[1].load(Ordering::SeqCst), 1);
+    }
+
+    /// A request asked to stop before the loop took it on is closed where
+    /// it stands, and opens no period.
+    #[tokio::test]
+    async fn a_request_stopped_before_the_loop_took_it_opens_no_period() {
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        other.request_stop(&id, "ui").await.unwrap();
+        let told = Arc::new(Told::default());
+        let (stop, task) = forever(&f, told.clone());
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while other.request(&id).await.unwrap().unwrap().closed.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            other.request(&id).await.unwrap().unwrap().closed,
+            Some(Some(RequestOutcome::Stopped))
+        );
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+        assert!(told.said().is_empty(), "{:?}", told.said());
+        assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
+    }
+
+    /// A host that cannot open a period fails the requests that wanted
+    /// one, and the loop goes on.
+    #[tokio::test]
+    async fn a_period_that_cannot_open_fails_its_requests() {
+        struct Broken;
+        impl RunPeriods for Broken {
+            fn open(
+                &self,
+                _: datalib_runs::RunStart,
+            ) -> std::result::Result<BTreeMap<String, String>, String> {
+                Err("no config".into())
+            }
+            fn close(&self, _: &str) {
+                unreachable!("no period opened")
+            }
+        }
+        let f = fixture();
+        let other = Store::open(f.root.path()).await.unwrap();
+        let (stop, rx) = watch::channel(false);
+        let runner = Runner::new(f.root.path()).stop_on(rx);
+        let graph = f.graph.clone();
+        let root = f.root.path().to_path_buf();
+        let task = tokio::spawn(async move {
+            let store = Store::open(&root).await.unwrap();
+            runner.run_forever(&graph, &store, &Broken).await
+        });
+        let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while other.request(&id).await.unwrap().unwrap().closed.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            other.request(&id).await.unwrap().unwrap().closed,
+            Some(Some(RequestOutcome::Failed))
+        );
+        assert!(!task.is_finished());
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
     }
 
     /// A loop with nowhere to re-read its graph cannot take on a source

@@ -5,8 +5,8 @@ The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
-own tool. Untouched: items 2, 3 and 8 (item 8 is decided), and the
-reconciler in section 10. Item 9 is half done.
+own tool. Untouched: items 2, 3 and 8 (item 8 is decided). Of the
+reconciler in section 10, step 1 is done. Item 9 is half done.
 
 ## The end state
 
@@ -473,9 +473,13 @@ or shows as Running.
 
 Each step ships alone, and the harness stays green throughout.
 
-1. **One loop.** Merge `serve` and `run_idle` into a loop that does
-   not exit. Keep the busy period only as the run store's grouping for
-   now. This removes `settle`, `Periods` and the at-rest tick.
+1. **One loop (done).** `serve` and `run_idle` are one loop that does
+   not exit, `Runner::run_forever`. The busy period is kept only as the
+   run store's grouping, which the host records through
+   `supervisor::period::RunPeriods`. `settle`, `run_idle`, the old
+   `Periods` trait and the at-rest tick are gone. The CLI's sync still
+   serves one period and exits (`Runner::serve`), until step 3 makes it
+   a client.
 2. **Key by step id.** This removes the remap code.
 3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
    and add prepare, with its progress in `job_steps` instead of the
