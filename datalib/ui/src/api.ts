@@ -146,9 +146,6 @@ export type QueryEcho = {
   search_index_missing?: boolean;
   // What part of the search could not answer, when the rest did.
   partial?: string | null;
-  // How many documents the search could find have no vectors; on a search
-  // by meaning's first page.
-  without_vectors?: { total: number; by_source: [string, number][] } | null;
   [key: string]: unknown;
 };
 

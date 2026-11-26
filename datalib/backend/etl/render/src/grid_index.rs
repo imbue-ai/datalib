@@ -552,11 +552,9 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
 pub(crate) const AUTHORS_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
 
-/// What the search applet lists a search's searchable documents from, for
-/// its count of those search by meaning cannot reach
-/// (`DoltRepo::documents_with_pages`, which names `markdowns_searchable`).
-/// Without them it read every grid row and its document's whole
-/// `markdowns` row, seconds on a large library, on every search.
+/// For listing a search's searchable documents from indexes alone. No
+/// statement reads by them now: they are kept for a count of the documents
+/// search by meaning cannot reach, which no answer may wait for.
 pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS markdowns_searchable ON markdowns (searchable, markdown_uuid)",
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",

@@ -549,9 +549,8 @@ besides components:
   it from the query and writes it back, so what was clicked is what could have been
   typed. Free text has one answer, whichever view shows it: the search
   terms, the keyword index and the vectors merged by the server. A line
-  above the results says what the search could not reach: a part that
-  could not answer, and how many candidates have no vectors, with their
-  sources on hover (`grid/searchCoverage.ts`, from `query_echo`). A **Sort** control beside the views' tabs orders either view
+  above the results says what part of the search could not answer
+  (`grid/searchCoverage.ts`, from `query_echo`). A **Sort** control beside the views' tabs orders either view
   (best match, newest, oldest, largest, smallest, author, title;
   `grid/searchSort.ts`). The card keeps one order, its `sort` state,
   which the control and the table's headers both write and both views

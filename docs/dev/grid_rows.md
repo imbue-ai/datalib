@@ -470,8 +470,7 @@ caption is a `caption:` term.
 **A document can be in the grid and not in the search index.** One its
 renderer hands over with `RenderedMarkdown::searchable` false has its rows
 and opens like any other, and is stored with `markdowns.searchable` false,
-which the keyword index, the source's `embed` and the "without vectors"
-count read. Use it for a document that only repeats what others say, so
+which the keyword index and the source's `embed` read. Use it for a document that only repeats what others say, so
 a free-text search does not return it and nothing embeds it: Notion's
 table of contents is the one. Its row is still found by its own
 columns.

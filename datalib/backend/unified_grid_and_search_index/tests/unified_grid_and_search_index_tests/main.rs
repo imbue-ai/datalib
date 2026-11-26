@@ -11,4 +11,3 @@ mod people;
 mod places;
 mod planner_facts;
 mod search_index;
-mod searchable_documents;

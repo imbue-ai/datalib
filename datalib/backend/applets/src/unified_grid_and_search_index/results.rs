@@ -6,7 +6,6 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use datalib_unified_grid_and_search_index::group::Within;
-use datalib_unified_grid_and_search_index::hits::index_state::IndexStamp;
 use datalib_unified_grid_and_search_index::hits::SearchHit;
 use datalib_unified_grid_and_search_index::sort::Sort;
 
@@ -140,46 +139,6 @@ impl Keyed {
     }
 }
 
-/// How many of the documents a search could find have no vectors, so search
-/// by meaning cannot reach them, in all and by source, most first.
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
-pub struct WithoutVectors {
-    pub total: u64,
-    pub by_source: Vec<(String, u64)>,
-}
-
-impl WithoutVectors {
-    /// `candidates` are `(document, source)`; a document filed under two
-    /// sources counts once.
-    pub fn among(candidates: &[(String, String)], with_vectors: &HashSet<String>) -> Self {
-        let mut seen: HashSet<&str> = HashSet::new();
-        let mut by_source: HashMap<&str, u64> = HashMap::new();
-        for (document, source) in candidates {
-            if !with_vectors.contains(document) && seen.insert(document) {
-                *by_source.entry(source).or_default() += 1;
-            }
-        }
-        let mut by_source: Vec<(String, u64)> = by_source
-            .into_iter()
-            .map(|(source, n)| (source.to_string(), n))
-            .collect();
-        by_source.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        WithoutVectors {
-            total: seen.len() as u64,
-            by_source,
-        }
-    }
-}
-
-/// The documents with vectors, as counting [`WithoutVectors`] last read
-/// them, until the search index moves. The count itself is read again for
-/// every search: what a search's terms keep can move with the clock
-/// (`after:-7d`) as well as with the index.
-#[derive(Default)]
-pub struct VectorCoverage {
-    pub with_vectors: Option<(Vec<IndexStamp>, Arc<HashSet<String>>)>,
-}
-
 /// A search's terms, written out, and the commit they were read at.
 pub type KeyedKey = (String, Option<String>);
 
@@ -298,34 +257,6 @@ mod tests {
         assert_eq!(reaching(&l, 0, 2, Some("gone")), 2, "a row the list lacks");
         assert_eq!(reaching(&l, 0, 2, None), 2);
         assert_eq!(reaching(&l, 0, MAX_PAGE + 1, None), MAX_PAGE);
-    }
-
-    /// A person sees one number above the results and which sources hold it,
-    /// so a source with its embed step off is plain from the rest.
-    #[test]
-    fn it_counts_the_candidates_without_vectors_by_source() {
-        let candidates: Vec<(String, String)> = [
-            ("embedded", "slack"),
-            ("a", "slack"),
-            ("b", "notion"),
-            ("c", "notion"),
-            ("c", "datalib"),
-        ]
-        .iter()
-        .map(|(d, s)| (d.to_string(), s.to_string()))
-        .collect();
-        let with_vectors = HashSet::from(["embedded".to_string()]);
-        assert_eq!(
-            WithoutVectors::among(&candidates, &with_vectors),
-            WithoutVectors {
-                total: 3,
-                by_source: vec![("notion".to_string(), 2), ("slack".to_string(), 1)],
-            }
-        );
-        assert_eq!(
-            WithoutVectors::among(&[], &with_vectors),
-            WithoutVectors::default()
-        );
     }
 
     /// An offset past the end is an empty last page, not a panic: the list

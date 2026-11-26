@@ -83,11 +83,8 @@ A source's words are searchable once `unified_grid_and_search_index` has run
 after its render; until then words to rank by, and the quoted, `+` and `-`
 filters, find nothing there, and the answer says why. A source that step's `not_searched` lists is never searched. Meaning covers
 a source only once its own `embed` step has run, so a source with that step
-turned off is found by its words alone. A line above the results
-says how many of the documents the search could have found have no vectors,
-and hovering says which sources they are in; from a shell or the API it is
-`query_echo.without_vectors`. While a sync is writing the index, meaning and
-that line answer from what the search last read, so a search stays quick; what
+turned off is found by its words alone. While a sync is writing the index,
+meaning answers from what the search last read, so a search stays quick; what
 the sync added counts once the index has been still for half a minute.
 
 A turned-off source does not re-render, so it can drop out of search when an
