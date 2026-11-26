@@ -28,7 +28,9 @@ driver, the generators, and the tests over the result.
 | sync it from scratch and check it | `bazelisk test //tests/fixtures:ingested_tng_test` |
 
 `dev_tng` builds a data root from the corpus in a temporary directory
-and opens the app on it. Browsing and search work. Syncing a source
+and opens the app on it, with Picard's curated contacts and mutes
+([`curated/`](curated/)) in its contacts app. Browsing, search and
+curating work. Syncing a source
 does not: the root holds the rendered documents but not the raw stores
 they came from.
 

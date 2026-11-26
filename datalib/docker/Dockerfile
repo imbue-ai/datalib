@@ -239,7 +239,9 @@ FROM app
 # Seven file-backed sources over the Star Trek: TNG fixtures, staged
 # into the build context by datalib/docker/stage_demo.sh, ingested and
 # rendered here so `datalib-http /opt/datalib/demo` has something to
-# show the moment the container starts. docs/user/docker.md walks a
+# show the moment the container starts, with Picard's curated contacts
+# and mutes (tests/fixtures/curated/) laid over it before the sync, as a
+# person's own would be. docs/user/docker.md walks a
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
@@ -255,6 +257,7 @@ FROM app
 COPY --chown=datalib:datalib demo/ /opt/datalib/demo-sources/
 RUN set -eux; \
     mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
+    mv /opt/datalib/demo-sources/datalib_curated /opt/datalib/demo/datalib_curated; \
     datalib-pipeline sync /opt/datalib/demo; \
     datalib-pipeline check /opt/datalib/demo; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
