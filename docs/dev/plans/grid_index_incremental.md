@@ -1,6 +1,7 @@
 # The grid index pays only for what changed
 
-*Proposal (2026-11-26); nothing here is built. Every number comes from
+*Proposal (2026-11-26). Order step 1, the keywords as their own part,
+is built (`grid_index::Part`); steps 2 and 3 are not. Every number comes from
 one real library's rebuild that day: 21 sources, 257k documents, 1.23M
 grid rows. The step's own statement counts (`sql_*_total` in
 `runs.sqlite`, `docs/dev/logging.md`) and its "sealed the index" lines
@@ -123,7 +124,11 @@ keyword pass already reads a source whole when `read_at` is `None`.
 
 ### Questions to settle first
 
-- **Is dropping a part's tables fast?** The file is deleted today
+- **Is dropping a part's tables fast?** *Measured on a synthetic file
+  (2026-11-26), not yet on a real library: dropping 1.2 GB of FTS5 and
+  section tables, 288k pages of a 2.75 GB WAL file with incremental
+  auto-vacuum, took 9.5 s from a cold cache and grew the WAL by 4.6 MB.
+  The keyword part stays in the grid index's file.* The file is deleted today
   because dropping its tables one by one, then giving their pages back
   to the disk, took eleven minutes on a 5.8 GB index. Measure
   `DROP TABLE` alone, leaving the freed pages in the file for the refill

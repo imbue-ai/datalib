@@ -41,6 +41,16 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     if standing == Standing::IndexesOnly {
         reopen(env.function, &tree, &store).await?;
     }
+    // Only some of the grid index's parts moved: they are emptied now, so
+    // the parts that did not stay readable while the rerun fills them.
+    if env.function == Function::UnifiedGridAndSearchIndex && standing == Standing::Other {
+        emitter
+            .progress()
+            .set_message("emptying the parts of the search index this build changed");
+        if datalib_etl_render::grid_index::empty_moved_parts(&store).await? {
+            tracing::info!(step = %env.step, "prepare: emptied the index's moved parts; the rest stays readable");
+        }
+    }
     let readable = matches!(standing, Standing::Current | Standing::IndexesOnly);
     if env.function == Function::UnifiedGridAndSearchIndex
         && readable
@@ -793,6 +803,7 @@ mod tests {
             shared_schema_version: 0,
             store_kind: None,
             written_at_utc: "2369-04-15T00:00:00Z".into(),
+            parts: Default::default(),
         };
         assert_eq!(
             opened_by_this_build(&mine),
@@ -1201,6 +1212,25 @@ mod tests {
             meta.map(|m| m.shape()),
             Some(datalib_etl_render::grid_index::shape())
         );
+
+        // Only the keyword tables moved: prepare empties them, and the grid
+        // reads again at once while the rerun fills them.
+        edit(
+            "UPDATE _datalib_meta SET value = 'older' \
+             WHERE key IN ('schema_hash', 'schema_hash.keywords')",
+        )
+        .await;
+        assert!(ask().await, "the step fills the keyword tables again");
+        let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
+        assert_eq!(
+            meta.map(|m| m.shape()),
+            Some(datalib_etl_render::grid_index::shape())
+        );
+        let grid = datalib_etl_render::grid_index::open_for_reading(&db)
+            .await
+            .unwrap()
+            .expect("the grid reads while its keyword tables are filled again");
+        grid.close().await;
 
         written_by_an_older_build(&db).await;
         assert!(ask().await, "an older build's shape");

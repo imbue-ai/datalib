@@ -496,6 +496,90 @@ async fn record_unreadable_store(
     Ok(())
 }
 
+/// The parts of the grid index's file whose tables move alone. A build
+/// that changes one part's tables empties that part, and the step fills it
+/// again from the render stores; the other part keeps its rows, and its
+/// readers keep reading them. Each part records the hash of its tables in
+/// the file's `_datalib_meta` beside the whole file's [`shape`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
+#[strum(serialize_all = "snake_case")]
+pub enum Part {
+    /// Every table but the keyword index's: the rows, documents, edges,
+    /// nodes, filings, photos, contacts, problems, cursors and terms.
+    Grid,
+    /// The keyword index's `search_*` tables, which the step's keyword
+    /// pass fills and keyword search reads (`datalib_search_index`).
+    Keywords,
+}
+
+impl Part {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    /// The hash of this part's tables, as its writer records it.
+    pub fn tables(self) -> String {
+        match self {
+            Part::Grid => {
+                datalib_store_meta::schema_hash(grid_ddl().chain([TERMS_SHAPE, nodes::NODES_SHAPE]))
+            }
+            Part::Keywords => datalib_store_meta::schema_hash(datalib_search_index::KEYWORD_DDL),
+        }
+    }
+
+    /// Whether `table` is this part's, by its name: the keyword index's
+    /// tables, an older build's included, all start with its prefix.
+    fn holds(self, table: &str) -> bool {
+        table.starts_with(datalib_search_index::TABLE_PREFIX) == (self == Part::Keywords)
+    }
+
+    /// The shape a reader of only this part requires: its tables, kept in
+    /// line by the writer alone, with no ladder and no indexes apart.
+    fn shape(self) -> datalib_store_meta::Shape {
+        datalib_store_meta::Shape::of_tables(self.tables())
+    }
+}
+
+fn parts() -> Vec<(&'static str, String)> {
+    <Part as strum::VariantArray>::VARIANTS
+        .iter()
+        .map(|p| (p.as_str(), p.tables()))
+        .collect()
+}
+
+/// What opening a file that records `meta` must do to bring it to this
+/// build's tables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Refill {
+    Nothing,
+    /// Empty these parts, which the step then fills again.
+    Parts(Vec<Part>),
+    /// Delete the file: every part moved, or it records no parts (written
+    /// before they were recorded, or by no build at all).
+    Whole,
+}
+
+fn refill(meta: Option<&datalib_store_meta::Meta>) -> Refill {
+    let Some(meta) = meta else {
+        return Refill::Whole;
+    };
+    if meta.schema_hash == shape().tables {
+        return Refill::Nothing;
+    }
+    let all = <Part as strum::VariantArray>::VARIANTS;
+    let moved: Vec<Part> = all
+        .iter()
+        .copied()
+        .filter(|p| meta.parts.get(p.as_str()) != Some(&p.tables()))
+        .collect();
+    // No part moved and yet the whole did: the parts it records do not
+    // explain it, so nothing in it is kept.
+    if moved.is_empty() || moved.len() == all.len() {
+        return Refill::Whole;
+    }
+    Refill::Parts(moved)
+}
+
 /// The grid index's shape: what its writer records and every reader
 /// requires before it reads a row. Its indexes are kept apart from its
 /// tables, so adding one costs creating it rather than a rebuild.
@@ -546,6 +630,9 @@ async fn record_shape(pool: &SqlitePool, shape: &datalib_store_meta::Shape) -> R
     datalib_store_meta::write(pool, StoreKind::GridIndex, shape)
         .await
         .context("write _datalib_meta for the grid index")?;
+    datalib_store_meta::write_parts(pool, &parts())
+        .await
+        .context("write the grid index's parts to _datalib_meta")?;
     Ok(())
 }
 
@@ -582,8 +669,14 @@ pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",
 ];
 
-/// The grid index's tables, and the terms' with their indexes.
+/// The grid index's tables, and the terms' with their indexes, then the
+/// keyword index's.
 fn index_ddl() -> impl Iterator<Item = &'static str> {
+    grid_ddl().chain(datalib_search_index::KEYWORD_DDL)
+}
+
+/// [`Part::Grid`]'s tables.
+fn grid_ddl() -> impl Iterator<Item = &'static str> {
     GRID_ROWS_DDL
         .iter()
         .map(|(_table, ddl)| *ddl)
@@ -598,7 +691,6 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(std::iter::once(datalib_etl::pin::GENERATION_DDL))
         .chain(TERMS_DDL.iter().copied())
-        .chain(datalib_search_index::KEYWORD_DDL)
 }
 
 /// Create whatever of the index is missing: on a new file, all of it;
@@ -833,6 +925,42 @@ pub async fn require_shape(conn: &mut sqlx::SqliteConnection, db_path: &Path) ->
     datalib_store_meta::require(db_path, Some(&step()), meta.as_ref(), &shape())
 }
 
+/// Refuses the keyword index's tables in the file on `conn` unless they
+/// are this build's: all keyword search reads, so it waits on nothing the
+/// grid's part does, such as a rebuild of the grid.
+async fn require_keywords(conn: &mut sqlx::SqliteConnection, db_path: &Path) -> Result<()> {
+    let meta = datalib_store_meta::read_in(conn).await?;
+    let part = Part::Keywords;
+    let have = meta
+        .as_ref()
+        .and_then(|m| m.parts.get(part.as_str()))
+        .map(|tables| datalib_store_meta::Shape::of_tables(tables.clone()));
+    datalib_store_meta::require_recorded(db_path, Some(&step()), have, &part.shape())
+}
+
+/// Whether the keyword index's tables can be read: the file is made and
+/// they are in this build's shape, whatever the grid's part is doing.
+/// `false` before the first pass; another shape is refused, saying what to
+/// run.
+pub async fn keywords_readable(db_path: &Path) -> Result<bool> {
+    if !db_path.exists() {
+        return Ok(false);
+    }
+    let pool = datalib_etl::pin::open_reader(db_path)
+        .await
+        .with_context(|| format!("open the grid index {}", db_path.display()))?;
+    let checked = async {
+        if datalib_etl::pin::generation(&pool).await?.is_none() {
+            return anyhow::Ok(false);
+        }
+        require_keywords(&mut *pool.acquire().await?, db_path).await?;
+        anyhow::Ok(true)
+    }
+    .await;
+    pool.close().await;
+    checked
+}
+
 /// The grid index read-only, once its first pass has made it and only in
 /// this build's [`shape`]: the one way to open it for reading outside the
 /// search applet's repo, which checks the same shape inside each read.
@@ -867,18 +995,30 @@ pub async fn open_for_reading(db_path: &Path) -> Result<Option<SqlitePool>> {
 /// (`etl/README.md` § "Connection pools"). A reader that looks before the
 /// generation row is made reads the index as not built yet.
 ///
-/// An index written in another shape is deleted and made new: every row
-/// in it is a function of a render store, so a rebuild costs one local
-/// read of them, where altering it in place would leave a new column
-/// empty in the rows the cursors never revisit. The keyword index's
-/// tables are part of this shape, and go with the rest.
+/// A [`Part`] written in another shape loses its tables and is made new:
+/// every row in it is a function of a render store, so refilling it costs
+/// one local read of them, where altering it in place would leave a new
+/// column empty in the rows the cursors never revisit. Its cursors are its
+/// own tables and go with it, so the step's next pass reads every source
+/// whole for that part alone. When every part moved the file is deleted
+/// instead, which is quicker than dropping each table.
 pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     if let Some(dir) = db_path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    remove_if_another_shape(db_path).await?;
+    let refill = refill_of(db_path).await?;
+    if refill == Refill::Whole {
+        remove_index_files(db_path)?;
+    }
     let pool = connect(db_path).await?;
-    match set_up(&pool).await {
+    let made = async {
+        if let Refill::Parts(parts) = &refill {
+            empty_parts(&pool, parts).await?;
+        }
+        set_up(&pool).await
+    }
+    .await;
+    match made {
         Ok(()) => Ok(pool),
         Err(e) => {
             pool.close().await;
@@ -887,29 +1027,38 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
     }
 }
 
-/// Deletes the file, its write-ahead log and its shared-memory file when
-/// the file was written in another shape. Every table in it goes either
-/// way, and dropping them one by one, then handing their pages back to the
-/// disk, took eleven minutes on a 5.8 GB index. One process writes the
-/// index at a time (the step, or its `--prepare` before the loop starts);
-/// a reader with the old file open reads it until it opens the new one.
-async fn remove_if_another_shape(db_path: &Path) -> Result<()> {
+/// Opens the index as its owner when some of its parts are in another
+/// shape and the rest are this build's, which empties the moved parts and
+/// keeps the rest readable while the step fills them again: what the
+/// launch's prepare pass does before it asks for that run. Whether it did.
+pub async fn empty_moved_parts(db_path: &Path) -> Result<bool> {
+    if !matches!(refill_of(db_path).await?, Refill::Parts(_)) {
+        return Ok(false);
+    }
+    close_index(open_index(db_path).await?).await?;
+    Ok(true)
+}
+
+/// What [`open_index`] has to do to the file at `db_path`.
+async fn refill_of(db_path: &Path) -> Result<Refill> {
     if !db_path.exists() {
-        return Ok(());
+        return Ok(Refill::Nothing);
     }
     let pool = datalib_etl::pin::open_reader(db_path)
         .await
         .with_context(|| format!("open the grid index {}", db_path.display()))?;
-    let have = datalib_store_meta::read(&pool).await;
+    let meta = datalib_store_meta::read(&pool).await;
     pool.close().await;
-    let have = have
-        .context("read the grid index's shape")?
-        .map(|m| m.schema_hash);
-    // A file that records no shape is in none: an index from before
-    // `_datalib_meta`, or a new file with nothing in it.
-    if have.as_deref() == Some(shape().tables.as_str()) {
-        return Ok(());
-    }
+    Ok(refill(
+        meta.context("read the grid index's shape")?.as_ref(),
+    ))
+}
+
+/// Deletes the file, its write-ahead log and its shared-memory file. One
+/// process writes the index at a time (the step, or its `--prepare` before
+/// the loop starts); a reader with the old file open reads it until it
+/// opens the new one.
+fn remove_index_files(db_path: &Path) -> Result<()> {
     tracing::info!(
         file = %db_path.display(),
         "the grid index was written in another shape; deleting it to build it again"
@@ -926,6 +1075,69 @@ async fn remove_if_another_shape(db_path: &Path) -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+/// Drops every table of `parts`, an older build's included, in one
+/// transaction; [`set_up`] then makes them in this build's shape. Their
+/// pages stay in the file, for the refill to take back: handing them to the
+/// disk is what made dropping a whole index's tables take eleven minutes.
+/// A grid kept whole has its generation raised, since what its keyword
+/// filter reads went.
+async fn empty_parts(pool: &SqlitePool, parts: &[Part]) -> Result<()> {
+    let started = Instant::now();
+    let mut conn = pool.acquire().await?;
+    sql!("etl.render.grid.begin_emptying_parts", "BEGIN IMMEDIATE")
+        .query()
+        .execute(&mut *conn)
+        .await
+        .context("begin emptying the grid index's moved parts")?;
+    let emptied = async {
+        // Virtual tables first, so their shadow tables go with them.
+        for virtual_only in [true, false] {
+            let names: Vec<String> = sql!(
+                "etl.render.grid.list_tables_to_empty",
+                "SELECT name FROM sqlite_master WHERE type = 'table' \
+                   AND name NOT LIKE 'sqlite_%' AND name <> '_datalib_meta' \
+                   AND (NOT ? OR sql LIKE 'CREATE VIRTUAL TABLE%')"
+            )
+            .query_scalar()
+            .bind(virtual_only)
+            .fetch_all(&mut *conn)
+            .await
+            .context("list the grid index's tables")?;
+            for name in names.iter().filter(|n| parts.iter().any(|p| p.holds(n))) {
+                let quoted = datalib_etl::doltlite_raw::quote_ident(name);
+                // Audited: the name is quoted.
+                Sql::dynamic(
+                    sql_id!("etl.render.grid.drop_table_of_moved_part"),
+                    format!("DROP TABLE IF EXISTS {quoted}"),
+                )
+                .query()
+                .execute(&mut *conn)
+                .await
+                .with_context(|| format!("drop {name}"))?;
+            }
+        }
+        if !parts.contains(&Part::Grid) {
+            bump_generation(&mut conn).await?;
+        }
+        anyhow::Ok(())
+    }
+    .await;
+    let end = match emptied {
+        Ok(()) => sql!("etl.render.grid.commit_emptied_parts", "COMMIT"),
+        Err(_) => sql!("etl.render.grid.roll_back_emptying_parts", "ROLLBACK"),
+    };
+    let ended = end.query().execute(&mut *conn).await;
+    emptied?;
+    ended.context("commit the emptied parts")?;
+    tracing::info!(
+        parts = %parts.iter().map(|p| p.as_str()).collect::<Vec<_>>().join(", "),
+        took_ms = started.elapsed().as_millis() as u64,
+        "the grid index's tables of these parts were in another shape; \
+         emptied them for the step to fill again, keeping the rest"
+    );
     Ok(())
 }
 
@@ -3361,30 +3573,266 @@ mod shape_tests {
         }
     }
 
-    /// The keyword index's tables are part of the grid index's shape: a
-    /// change of it makes them new with the grid's, and every source's
-    /// keyword pass indexes it again.
+    fn meta_with(whole: &str, parts: &[(&str, String)]) -> datalib_store_meta::Meta {
+        datalib_store_meta::Meta {
+            datalib_version: String::new(),
+            git_hash: None,
+            doltlite_version: None,
+            schema_hash: whole.into(),
+            index_hash: None,
+            schema_version: 0,
+            shared_schema_version: 0,
+            store_kind: None,
+            written_at_utc: String::new(),
+            parts: parts
+                .iter()
+                .map(|(p, h)| (p.to_string(), h.clone()))
+                .collect(),
+        }
+    }
+
+    /// What an open empties, from what the file records: nothing when
+    /// its tables are this build's, the parts that moved when others did
+    /// not, and the whole file when every part moved or none is recorded.
+    #[test]
+    fn an_open_empties_only_the_parts_that_moved() {
+        use crate::grid_index::{refill, shape, Part, Refill};
+        let whole = shape().tables;
+        let (grid, keywords) = (Part::Grid.tables(), Part::Keywords.tables());
+        assert_ne!(grid, keywords);
+        let both = [("grid", grid.clone()), ("keywords", keywords.clone())];
+        assert_eq!(refill(None), Refill::Whole);
+        assert_eq!(refill(Some(&meta_with(&whole, &both))), Refill::Nothing);
+        assert_eq!(refill(Some(&meta_with(&whole, &[]))), Refill::Nothing);
+        assert_eq!(refill(Some(&meta_with("older", &[]))), Refill::Whole);
+        let older = |part: &str| {
+            both.iter()
+                .map(|(p, h)| {
+                    (
+                        *p,
+                        if *p == part {
+                            "older".into()
+                        } else {
+                            h.clone()
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            refill(Some(&meta_with("older", &older("keywords")))),
+            Refill::Parts(vec![Part::Keywords])
+        );
+        assert_eq!(
+            refill(Some(&meta_with("older", &older("grid")))),
+            Refill::Parts(vec![Part::Grid])
+        );
+        let none_kept = [("grid", "older".into()), ("keywords", "older".into())];
+        assert_eq!(refill(Some(&meta_with("older", &none_kept))), Refill::Whole);
+        assert_eq!(refill(Some(&meta_with("older", &both))), Refill::Whole);
+    }
+
+    /// The whole file's hash is still a hash over every statement, so a
+    /// build that moves no part's tables keeps a file an earlier build
+    /// wrote; and every table the file makes belongs to exactly one part.
+    #[test]
+    fn the_parts_split_the_whole() {
+        use crate::grid_index::{grid_ddl, index_ddl, Part};
+        let keywords: Vec<&str> = datalib_search_index::KEYWORD_DDL.to_vec();
+        assert_eq!(
+            index_ddl().collect::<Vec<_>>(),
+            grid_ddl()
+                .chain(keywords.iter().copied())
+                .collect::<Vec<_>>()
+        );
+        for ddl in index_ddl() {
+            let mut words = ddl.split_whitespace();
+            if !words.by_ref().take(4).any(|w| w == "TABLE") {
+                continue;
+            }
+            let Some(name) = words.find(|w| !matches!(*w, "IF" | "NOT" | "EXISTS")) else {
+                continue;
+            };
+            let name = name.split('(').next().unwrap();
+            assert_eq!(
+                Part::Keywords.holds(name),
+                keywords.contains(&ddl),
+                "{name} is in the wrong part"
+            );
+            assert_ne!(Part::Grid.holds(name), Part::Keywords.holds(name));
+        }
+    }
+
+    /// Every part moving takes the keyword index with the rest: the file
+    /// is new, and every source's keyword pass indexes it again.
     #[tokio::test]
-    async fn a_change_of_the_grids_shape_takes_the_keyword_index_with_it() {
+    async fn a_change_of_every_part_takes_the_keyword_index_with_it() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("db.sqlite");
         let pool = holding_one_document(&db).await;
         let search = datalib_search_index::Index::open(&db).await.unwrap();
         search.put(&[search_doc("md-1")]).await.unwrap();
         search.close().await;
-        test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
-            .query()
-            .execute(&pool)
-            .await
-            .unwrap();
+        recorded_by_another_build(&pool, &["", ".grid", ".keywords"]).await;
         crate::grid_index::close_index(pool).await.unwrap();
 
         let pool = open_index(&db).await.unwrap();
         assert_eq!(documents(&pool).await, 0);
         crate::grid_index::close_index(pool).await.unwrap();
-        let search = datalib_search_index::Index::open(&db).await.unwrap();
-        assert!(search.indexed("claude_web").await.unwrap().is_empty());
+        assert!(keyword_documents(&db).await.is_empty());
+    }
+
+    /// Records each of `keys` (`schema_hash` and a suffix) as another
+    /// build's: what a file looks like to a build that changed those parts'
+    /// tables.
+    async fn recorded_by_another_build(pool: &SqlitePool, suffixes: &[&str]) {
+        for suffix in suffixes {
+            test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash' || ?")
+                .query()
+                .bind(suffix)
+                .execute(pool)
+                .await
+                .unwrap();
+        }
+    }
+
+    async fn keyword_documents(db: &Path) -> Vec<String> {
+        let search = datalib_search_index::Index::open(db).await.unwrap();
+        let held = search.indexed("claude_web").await.unwrap();
         search.close().await;
+        held.into_keys().collect()
+    }
+
+    async fn generation(pool: &SqlitePool) -> i64 {
+        test_sql!("SELECT generation FROM store_generation WHERE id = 1")
+            .query_scalar()
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// A build that changes only the keyword index's tables empties them
+    /// and keeps every grid row, in the same file: the grid stays whole
+    /// while every source's keyword pass fills them again. Its generation
+    /// moves, since what a keyword filter in the grid reads went.
+    #[tokio::test]
+    async fn a_change_of_the_keyword_tables_keeps_the_grid() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        search.put(&[search_doc("md-1")]).await.unwrap();
+        search.set_read_at("claude_web", Some("c1")).await.unwrap();
+        search.close().await;
+        let before = generation(&pool).await;
+        recorded_by_another_build(&pool, &["", ".keywords"]).await;
+        crate::grid_index::close_index(pool).await.unwrap();
+        let kept = inode(&db);
+
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(inode(&db), kept, "the file was replaced");
+        assert_eq!(documents(&pool).await, 1, "the grid's rows went");
+        assert_eq!(generation(&pool).await, before + 1);
+        let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+        assert_eq!(meta.shape(), crate::grid_index::shape());
+        crate::grid_index::close_index(pool).await.unwrap();
+        assert!(keyword_documents(&db).await.is_empty());
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        assert_eq!(search.read_at("claude_web").await.unwrap(), None);
+        search.close().await;
+    }
+
+    /// A build that changes only the grid's tables empties them, cursors
+    /// and all, and keeps the keyword index and where each source's keyword
+    /// pass last read.
+    #[tokio::test]
+    async fn a_change_of_the_grid_tables_keeps_the_keywords() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        test_sql!(
+            "INSERT INTO source_cursors (source_id, store_commit, indexed_at_utc, documents_applied) \
+             VALUES ('claude_web', 'c1', '2026-11-26T00:00:00Z', 1)"
+        )
+        .query()
+        .execute(&pool)
+        .await
+        .unwrap();
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        search.put(&[search_doc("md-1")]).await.unwrap();
+        search.set_read_at("claude_web", Some("c1")).await.unwrap();
+        search.close().await;
+        recorded_by_another_build(&pool, &["", ".grid"]).await;
+        crate::grid_index::close_index(pool).await.unwrap();
+
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(documents(&pool).await, 0);
+        let cursors: i64 = test_sql!("SELECT count(*) FROM source_cursors")
+            .query_scalar()
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            cursors, 0,
+            "a cursor kept would read nothing into the new grid"
+        );
+        crate::grid_index::close_index(pool).await.unwrap();
+        assert_eq!(keyword_documents(&db).await, ["md-1"]);
+        let search = datalib_search_index::Index::open(&db).await.unwrap();
+        assert_eq!(
+            search.read_at("claude_web").await.unwrap().as_deref(),
+            Some("c1")
+        );
+        search.close().await;
+    }
+
+    /// A file written before the parts were recorded, in this build's
+    /// tables, is kept and has its parts recorded: the same statements made
+    /// it, part by part.
+    #[tokio::test]
+    async fn a_file_from_before_the_parts_in_this_shape_is_kept() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        test_sql!("DELETE FROM _datalib_meta WHERE key LIKE 'schema_hash.%'")
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+        let kept = inode(&db);
+        let pool = open_index(&db).await.unwrap();
+        assert_eq!(inode(&db), kept);
+        assert_eq!(documents(&pool).await, 1);
+        let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
+        assert_eq!(meta.parts.len(), 2, "{:?}", meta.parts);
+        crate::grid_index::close_index(pool).await.unwrap();
+    }
+
+    /// Keyword search reads while the grid is rebuilt: a build into an
+    /// empty grid records the grid without its indexes, which a grid reader
+    /// waits for and a keyword reader does not. Keyword tables in another
+    /// shape are refused, naming the step.
+    #[tokio::test]
+    async fn a_keyword_reader_waits_only_for_the_keyword_tables() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("db.sqlite");
+        let pool = holding_one_document(&db).await;
+        crate::grid_index::record_shape(&pool, &crate::grid_index::shape_without_indexes())
+            .await
+            .unwrap();
+        assert!(crate::grid_index::keywords_readable(&db).await.unwrap());
+        let grid = crate::grid_index::open_for_reading(&db).await.unwrap_err();
+        assert!(datalib_store_meta::other_shape(&grid).is_some(), "{grid:#}");
+
+        recorded_by_another_build(&pool, &[".keywords"]).await;
+        let e = crate::grid_index::keywords_readable(&db).await.unwrap_err();
+        let refused = datalib_store_meta::other_shape(&e).expect("refused for its shape");
+        assert_eq!(
+            refused.step.as_deref(),
+            Some(crate::grid_index::step().as_str())
+        );
+        crate::grid_index::close_index(pool).await.unwrap();
     }
 
     /// A grid batch takes the file's write lock when it starts. One that

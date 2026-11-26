@@ -18,9 +18,9 @@ use sqlx::SqliteConnection;
 use crate::IndexDoc;
 use datalib_sql::sql;
 
-/// The keyword index's tables. They are part of the grid index's shape
-/// (`grid_index::shape`), whose writer makes them and empties them with
-/// its own; [`Index::open`] makes any that are missing.
+/// The keyword index's tables: a part of the grid index's file
+/// (`grid_index::Part::Keywords`), whose writer makes them, and empties
+/// them alone when they move; [`Index::open`] makes any that are missing.
 pub const DDL: [&str; 6] = [
     // `conversation`: its pieces are messages, each its own utterance, so a
     // word search needs one to hold every word; otherwise it is a page,
