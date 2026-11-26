@@ -209,7 +209,7 @@ Prefer measurements over adjectives, and say which input you measured on
 so the next person can reproduce the number rather than wonder whether
 it went stale.
 
-Not every provider meets this yet: `contacts`, `linkedin`, `perseus`
+Not every provider meets this yet: `linkedin`, `perseus`
 and `sms_backup_restore` have no `INGEST.md`, and only a few
 render crates have a `TRANSLATE.md`. `ls
 datalib/backend/etl/providers/*/*.md` is the current state. Adding one

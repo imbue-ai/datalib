@@ -1,5 +1,7 @@
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
 import {
+  actOnRowByUuid,
+  contextMenuRowByUuid,
   EVERY_ROW,
   GRID,
   openRowByUuid,
@@ -8,6 +10,8 @@ import {
   MENU_DISABLED,
   menuEntry,
   searchAndSettle,
+  searchMenuItem,
+  selectRowByUuid,
   shownCards,
   typeInto,
 } from "./grid-helpers";
@@ -16,7 +20,7 @@ import {
 // playwright.config.ts). Riker appears under two handles from two
 // sources in the TNG fixture: a Slack user in the Slack source, an email
 // address in the Google Takeout chats. A person makes a contact from one
-// chip in a document, links the other handle to it from a chip in
+// chip in a document, adds the other handle to it from a chip in
 // another source's document, and from then on both chips, in documents
 // and in the grid's Author column, show the contact rather than what
 // either source called him (docs/dev/chips.md). An edit made outside
@@ -59,46 +63,56 @@ const gridChip = (page: Page, handle: string) =>
   page.locator(`.grid-box .slick-cell a.chip[data-handle="${handle}"]`).first();
 
 /// The chip for `handle` in the open document, once the document has
-/// asked the contacts app about it: linkable when no contact holds it.
+/// asked the contacts app about it: unresolved when no contact holds it.
 async function chipIn(page: Page, handle: string) {
   return (await inDocFrame(page, `a.chip[data-handle="${handle}"]`)).first();
 }
 
-test("two handles from two sources linked to one contact show it in documents and the grid", async ({
+test("two handles from two sources on one contact show it in documents and the grid", async ({
   page,
   request,
 }) => {
   test.setTimeout(120_000);
-  const popover = page.locator(".handle-popover");
+  const card = page.locator(".person");
+  const noContact = async (handle: string) => {
+    const r = await request.post("/applet/datalib_contacts/resolve", {
+      data: { handles: [handle] },
+    });
+    return (await r.json()) as { resolved: Record<string, unknown> };
+  };
 
-  // 1. Riker's Slack message: the chip offers a link, and a new contact
-  //    takes the Slack handle. The grid beside the document, open the
-  //    whole time, draws the link without being reloaded.
+  // 1. Riker's Slack message: a click on his chip does nothing, and a
+  //    double-click opens his page, where Enter adds him under the name
+  //    typed. Opening adds nobody. The grid beside the document, open the
+  //    whole time, draws the change without being reloaded.
   await openMessageBy(page, request, SLACK);
   await expect(gridChip(page, SLACK)).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
   const slackChip = await chipIn(page, SLACK);
-  await expect(slackChip).toHaveClass(/handle-linkable/, { timeout: 15_000 });
-  await slackChip.click();
-  await expect(popover).toBeVisible();
-  await popover.getByLabel("Contact name").fill(CONTACT);
-  await popover.getByRole("button", { name: `New contact “${CONTACT}”` }).click();
-  await expect(popover).toBeHidden();
+  await expect(slackChip).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
+  await slackChip.dblclick();
+  const add = card.getByRole("button", { name: "Add to contacts" });
+  await expect(add).toBeFocused({ timeout: 15_000 });
+  expect((await noContact(SLACK)).resolved, "opening the page adds nobody").toEqual({});
+  await card.getByLabel("Name for a new contact").fill(CONTACT);
+  await page.keyboard.press("Enter");
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
   await expect(slackChip).toHaveClass(/handle-resolved/);
   await expect(slackChip).toHaveText(new RegExp(`${CONTACT}$`));
   await expect(gridChip(page, SLACK)).toHaveClass(/handle-resolved/);
   await expect(gridChip(page, SLACK)).toHaveText(new RegExp(`${CONTACT}$`));
 
   // 2. Riker's Google Chat message, in another source: the email handle
-  //    is not anyone's yet, and the popover finds the contact to link it to.
+  //    is not anyone's yet, and its page finds the contact to add it to,
+  //    reached this time from the chip's menu.
   await openMessageBy(page, request, EMAIL);
   await expect(gridChip(page, EMAIL)).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
   const emailChip = await chipIn(page, EMAIL);
-  await expect(emailChip).toHaveClass(/handle-linkable/, { timeout: 15_000 });
-  await emailChip.click();
-  await expect(popover).toBeVisible();
-  await popover.getByLabel("Contact name").fill("Number");
-  await popover.getByRole("button", { name: `Link to ${CONTACT}` }).click();
-  await expect(popover).toBeHidden();
+  await expect(emailChip).toHaveClass(/handle-unresolved/, { timeout: 15_000 });
+  await emailChip.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Add to contacts…" }).click();
+  await card.getByLabel("Name for a new contact").fill("Number");
+  await card.getByRole("button", { name: `Add to ${CONTACT}` }).click();
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
   await expect(emailChip).toHaveClass(/handle-resolved/);
   await expect(emailChip).toHaveText(new RegExp(`${CONTACT}$`));
   await expect(gridChip(page, EMAIL)).toHaveClass(/handle-resolved/);
@@ -132,6 +146,54 @@ test("two handles from two sources linked to one contact show it in documents an
   expect(renamed.ok()).toBeTruthy();
   await expect(gridChip(page, EMAIL)).toHaveText(/Will Riker$/, { timeout: 15_000 });
   await expect(await chipIn(page, EMAIL)).toHaveText(/Will Riker$/);
+});
+
+/// A handle taken off a contact from its menu, and one marked as no longer
+/// working, whose date is then typed over. A click on the chip does
+/// neither. Made-up handles, which no other test touches.
+test("a handle's menu on its contact's page takes it off and marks it as old", async ({
+  page,
+  request,
+}) => {
+  const n = Date.now();
+  const home = `email:wesley.${n}@earth.test`;
+  const school = `email:crusher.${n}@academy.test`;
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Wesley", handles: [home, school] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const holders = async () => {
+    const r = await request.post("/applet/datalib_contacts/resolve", {
+      data: { handles: [home, school] },
+    });
+    type Who = { handles: { handle: string; stopped_working_by: string | null }[] };
+    return ((await r.json()) as { resolved: Record<string, Who> }).resolved;
+  };
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(home)}, {})`)}`);
+  const card = page.locator(".person");
+  const chip = (h: string) => card.locator(`.person-mine a.chip[data-handle="${h}"]`);
+  await expect(chip(school)).toHaveClass(/handle-resolved/, { timeout: 15_000 });
+
+  await chip(school).click();
+  await chip(school).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "No longer works" }).click();
+  const by = card.getByTitle("2019, 2019-06 or 2019-06-14; empty when it works again");
+  await expect(by).toHaveValue(/^\d{4}-\d{2}-\d{2}$/);
+  await by.fill("2364");
+  await by.press("Enter");
+  await expect
+    .poll(async () => (await holders())[home]?.handles.find((h) => h.handle === school))
+    .toMatchObject({ stopped_working_by: "2364" });
+
+  await chip(school).click({ button: "right" });
+  await page.getByRole("menuitem", { name: "Not theirs" }).click();
+  await expect(chip(school)).toHaveCount(0);
+  await expect.poll(async () => Object.keys(await holders())).toEqual([home]);
+  const down = (await (await request.get("/applet/datalib_contacts/not_linked")).json()) as {
+    not_linked: { handle: string; agent: string | null }[];
+  };
+  expect(down.not_linked).toContainEqual(expect.objectContaining({ handle: school, agent: null }));
 });
 
 /// One of your contacts in the search bar: `@` and a few letters of its
@@ -292,7 +354,7 @@ test("the person card edits a contact through a draft and refuses a stale save",
   // 1. The edit autosaves to the draft, and nothing is published.
   await card.getByRole("button", { name: "Edit", exact: true }).click();
   await card.getByLabel("Name", { exact: true }).fill("Counselor Troi");
-  await card.getByLabel("Add a field").selectOption("title");
+  await card.getByLabel("Add a detail").selectOption("title");
   await card.getByLabel("Title", { exact: true }).fill("Ship's counselor");
   await card.getByLabel("Note", { exact: true }).fill("Chocolate.");
   await expect
@@ -386,8 +448,8 @@ const PNG_1PX =
 
 /// Copying what a source says into your contact: the address book's
 /// record of Geordi offers each value, a copied address that nobody holds
-/// offers to be linked, and the saved field remembers where it came from.
-test("a source's values copy into the contact, and a copied address links in one click", async ({
+/// offers to be added, and the saved field remembers where it came from.
+test("a source's values copy into the contact, and a copied address is added in one click", async ({
   page,
   request,
 }) => {
@@ -416,9 +478,9 @@ test("a source's values copy into the contact, and a copied address links in one
   // The address book's record holds his second address too.
   const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
   await book.locator(".person-copy summary").click();
-  await book.getByRole("button", { name: "Copy Title “Chief Engineer”" }).click();
+  await book.getByRole("button", { name: "Use Title “Chief Engineer”" }).click();
   await book
-    .getByRole("button", { name: "Copy Email (work) “laforge@enterprise.starfleet”" })
+    .getByRole("button", { name: "Use Email (work) “laforge@enterprise.starfleet”" })
     .click();
   letDraftOpen();
   await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
@@ -426,8 +488,8 @@ test("a source's values copy into the contact, and a copied address links in one
     "Title “Chief Engineer”in your contact",
   );
 
-  // The copied address is linked to nobody; one click links it here.
-  await card.getByRole("button", { name: "Link it" }).click();
+  // The copied address is on nobody; one click adds it here.
+  await card.getByRole("button", { name: "Add it", exact: true }).click();
   await expect
     .poll(async () => {
       const r = await request.post("/applet/datalib_contacts/resolve", {
@@ -437,7 +499,7 @@ test("a source's values copy into the contact, and a copied address links in one
         ?.key;
     })
     .toBe(id);
-  await expect(card.getByRole("button", { name: "Link it" })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Add it", exact: true })).toHaveCount(0);
 
   await card.getByRole("button", { name: "Save", exact: true }).click();
   await expect(card.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
@@ -452,4 +514,173 @@ test("a source's values copy into the contact, and a copied address links in one
     }),
     expect.objectContaining({ kind: "email", value: "laforge@enterprise.starfleet" }),
   ]);
+});
+
+/// The handles each of `handles`' contacts holds, by handle.
+async function heldWith(request: APIRequestContext, handles: string[]) {
+  const r = await request.post("/applet/datalib_contacts/resolve", { data: { handles } });
+  expect(r.ok()).toBeTruthy();
+  type Contact = { key: string; names: string[]; handles: { handle: string | null }[] };
+  const { resolved } = (await r.json()) as { resolved: Record<string, Contact> };
+  return Object.fromEntries(
+    Object.entries(resolved).map(([h, c]) => [
+      h,
+      { id: c.key, name: c.names[0], handles: c.handles.map((x) => x.handle).sort() },
+    ]),
+  );
+}
+
+async function deleteContacts(request: APIRequestContext, ids: string[]) {
+  for (const id of new Set(ids)) {
+    const r = await request.delete(`/applet/datalib_contacts/contact/${id}`);
+    expect(r.ok(), await r.text()).toBeTruthy();
+  }
+}
+
+/// Worf's address-book card lists an address and a number. Opened from the
+/// number, his page offers both, ticked; what is unticked is left out, and
+/// the page then offers the rest of what the card says.
+test("adding someone takes every ticked handle a source says is theirs", async ({
+  page,
+  request,
+}) => {
+  const tel = "tel:+12025550102";
+  const address = "email:worf@enterprise.starfleet";
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(tel)}, {})`)}`);
+  const card = page.locator(".person");
+  const offers = card.getByRole("list", { name: "Handles to add" });
+  const box = (shown: string) => offers.getByRole("checkbox", { name: shown });
+  await expect(box("+12025550102")).toBeChecked({ timeout: 15_000 });
+  await expect(box("worf@enterprise.starfleet")).toBeChecked();
+
+  await box("worf@enterprise.starfleet").uncheck();
+  await card.getByRole("button", { name: "Add to contacts" }).click();
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
+  await expect(offers).toHaveCount(0);
+  let held = await heldWith(request, [tel, address]);
+  expect(held[tel]?.handles).toEqual([tel]);
+  expect(held[address]).toBeUndefined();
+
+  await card
+    .getByRole("button", { name: /^Add its other handle/ })
+    .first()
+    .click();
+  await expect
+    .poll(async () => (await heldWith(request, [address]))[address]?.handles)
+    .toContain(tel);
+  held = await heldWith(request, [tel]);
+  await deleteContacts(request, [held[tel].id]);
+});
+
+/// Sonya Gomez's card holds one number, written without its country code, so
+/// it has no handle. Its heading still opens her page, which offers the full
+/// number a Google Voice caller has, and the caller's page shows her card.
+test("a card with no handle opens its person, by the number with the same digits", async ({
+  page,
+  request,
+}) => {
+  const full = "tel:+12025550147";
+  const r = await request.get(
+    `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent("with:(202)555-0147 source:tng_contacts")}&limit=5`,
+  );
+  const { rows } = (await r.json()) as { rows: Row[] };
+  expect(rows.length, "the fixture has Sonya's card").toBe(1);
+  await page.goto(`/${encodeURIComponent(`documentView(${JSON.stringify(rows[0].uuid)})`)}`);
+  const heading = (await inDocFrame(page, "h1 a.chip[data-contact-page]")).first();
+  await expect(heading).toHaveText(/Sonya Gomez$/);
+  await heading.dblclick();
+
+  const card = page.locator(".person");
+  const offered = card.getByRole("checkbox", { name: "+12025550147" });
+  await expect(offered).toBeChecked({ timeout: 15_000 });
+  await expect(card.locator(".person-offers")).toContainText("written (202) 555-0147");
+  await expect(card.getByRole("button", { name: "Add to contacts" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
+  const held = await heldWith(request, [full]);
+  expect(held[full]).toMatchObject({ name: "Sonya Gomez", handles: [full] });
+  await expect(heading).toHaveClass(/handle-resolved/);
+  await deleteContacts(request, [held[full].id]);
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(full)}, {})`)}`);
+  const book = card.locator(".person-section", { hasText: "same digits" }).last();
+  await expect(book).toContainText("Sonya Gomez", { timeout: 15_000 });
+  await expect(card.getByLabel("Name for a new contact")).toHaveValue("Sonya Gomez");
+});
+
+/// Several rows of an address book become contacts in one go, a group among
+/// them left out and named, and adding them again adds nobody.
+test("the selected cards of an address book are added to contacts", async ({ page, request }) => {
+  const cards = {
+    "Seven of Nine": "email:seven.of.nine@unimatrix01.borg",
+    Hugh: "email:third.of.five@unimatrix01.borg",
+  };
+  const listed = await request.get(
+    `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent("source:tng_contacts is:document")}&limit=50`,
+  );
+  type CardRow = { uuid: string; contact: string | null };
+  const { rows } = (await listed.json()) as { rows: CardRow[] };
+  const uuid = (name: string) => {
+    const row = rows.find((x) => x.contact === name);
+    expect(row, `the fixture has ${name}`).toBeTruthy();
+    return row!.uuid;
+  };
+
+  const toasts = page.locator(".datalib-toast");
+  const selectAndAdd = async () => {
+    await page.goto(GRID);
+    await searchAndSettle(page, "source:tng_contacts");
+    await gridSettled(page);
+    await selectRowByUuid(page, uuid("Seven of Nine"));
+    for (const name of ["Hugh", "Senior Staff"]) {
+      await actOnRowByUuid(page, uuid(name), (row) =>
+        row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
+      );
+    }
+    await contextMenuRowByUuid(page, uuid("Hugh"));
+    await searchMenuItem(page, "Add to contacts (3)").click();
+  };
+  await selectAndAdd();
+  await expect(
+    toasts.filter({
+      hasText: "Added 2 people to contacts; Senior Staff skipped: a group is not a person",
+    }),
+  ).toBeVisible();
+  const held = await heldWith(request, Object.values(cards));
+  for (const [name, handle] of Object.entries(cards)) expect(held[handle]?.name).toBe(name);
+  expect(held[cards["Seven of Nine"]].handles, "every handle on the card").toContain(
+    "email:annika.hansen@raven.fed",
+  );
+
+  await selectAndAdd();
+  await expect(toasts.filter({ hasText: "2 already there" })).toBeVisible();
+  await deleteContacts(
+    request,
+    Object.values(held).map((c) => c.id),
+  );
+});
+
+/// A contact with no handle has a page like any other: its row opens it, and
+/// so does its chip.
+test("a contact with no handle has a page", async ({ page, request }) => {
+  const name = `Mot ${Date.now()}`;
+  const made = await request.post("/applet/datalib_contacts/contacts", { data: { name } });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+  await page.goto("/contactsView()");
+  const list = page.locator(".contacts-card");
+  await list.getByLabel("Filter contacts").fill(name);
+  await list.locator(`.slick-row[data-key="${id}"] a.chip[data-contact="${id}"]`).dblclick();
+  const card = page.locator(".person");
+  await expect(card.locator(".person-name")).toHaveText(new RegExp(`${name}$`), {
+    timeout: 15_000,
+  });
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
+  await card.getByRole("button", { name: "Edit", exact: true }).click();
+  await card.getByLabel("Name", { exact: true }).fill(`${name} the barber`);
+  await card.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(card.locator(".person-name")).toHaveText(/the barber$/);
+
+  await deleteContacts(request, [id]);
+  await expect(card).toContainText("This contact is no longer in your contacts.");
 });

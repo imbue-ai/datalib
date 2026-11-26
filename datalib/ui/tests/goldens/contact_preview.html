@@ -1134,9 +1134,10 @@ code.hljs {
    (docs/dev/chips.md). Shared by the document frame and the
    grid's cells, so both draw the same chip; each includes this file
    in its own root, since neither sees the page's styles. */
-/* A handle the contacts app can name: a chip. One it cannot yet: the
-   source's own text, marked as clickable to link it. */
 .handle-chip {
+  /* A click on one selects its row or does nothing; it is not a link to
+     follow. */
+  cursor: default;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -1163,16 +1164,12 @@ code.hljs {
   direction: ltr;
   unicode-bidi: isolate;
 }
-.handle-resolved,
-.handle-linkable {
-  cursor: pointer;
-}
-/* A person chip says at a glance whether it is linked to one of your
-   contacts: pale blue when it is, grey while it is not (theme.css's
+/* A person chip says at a glance whether they are in your contacts:
+   pale blue when they are, grey when they are not (theme.css's
    `--datalib-chip-*`). A chip link not yet drawn (the render preview, or
    before the answer lands) is the grey; `:where` keeps that rule from
    outranking the blue. */
-:where(a.chip[data-handle]),
+:where(a.chip[data-handle], a.chip[data-contact-page]),
 .handle-unresolved,
 .handle-resolved {
   border-radius: 999px;
@@ -1221,11 +1218,6 @@ a.chip.handle-resolved,
   max-height: none;
   flex-shrink: 0;
   opacity: 0.6;
-}
-.handle-linkable::after {
-  content: "+";
-  font-weight: 400;
-  color: var(--datalib-muted, #94a3b8);
 }
 .handle-chip:hover {
   outline: 1px solid var(--datalib-border, #d8d8d8);
@@ -1334,10 +1326,6 @@ time.date-from-t0 {
 .chip-group > a.chip.chip-bare {
   padding: 0;
   background: none;
-}
-/* Between names a "+" reads as part of the list; a click still links. */
-.chip-group > .handle-linkable::after {
-  content: none;
 }
 
 
@@ -1796,7 +1784,7 @@ time.date-from-t0 {
 <div class="chat-body markdown-body"><div class="diff-removed">
 <div class="contact-head" data-page-title-uuid="00000000-0000-819d-aad9-cb628fc3bec0">
 <div class="contact-who">
-<h1>Kalita</h1>
+<h1><a href="datalib:contact_page/00000000-0000-819d-aad9-cb628fc3bec0" title="No address or full number" class="chip" data-contact-page="00000000-0000-819d-aad9-cb628fc3bec0">Kalita</a></h1>
 <p class="contact-role">Maquis pilot</p>
 </div>
 </div>
@@ -1881,7 +1869,20 @@ time.date-from-t0 {
 </div>
 </section>
 <section class="preview-source" id="src-tng-contacts">
-<h2 class="preview-source-name">tng_contacts <span class="preview-count">9 documents</span></h2>
+<h2 class="preview-source-name">tng_contacts <span class="preview-count">10 documents</span></h2>
+<div class="preview-doc">
+<h3 class="preview-name">tng_contacts/00000000-0000-8139-9794-990c3029c5e1.md</h3>
+<div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8139-9794-990c3029c5e1">
+<div class="contact-who">
+<h1><a href="datalib:contact_page/00000000-0000-8139-9794-990c3029c5e1" title="No address or full number" class="chip" data-contact-page="00000000-0000-8139-9794-990c3029c5e1">Sonya Gomez</a></h1>
+<p class="contact-role">Engineer</p>
+</div>
+</div>
+<dl class="contact-fields">
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd>(202) 555-0147</dd>
+</dl>
+</div>
+</div>
 <div class="preview-doc">
 <h3 class="preview-name">tng_contacts/00000000-0000-8140-88d9-42badf1b195b.md</h3>
 <div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-8140-88d9-42badf1b195b">
@@ -2042,6 +2043,7 @@ time.date-from-t0 {
 <p><a href="mailto:laforge@enterprise.starfleet" title="laforge@enterprise.starfleet" class="chip" data-handle="email:laforge@enterprise.starfleet">laforge@enterprise.starfleet</a></p>
 </dd>
 <dt>Phone <span class="contact-qualifier">work</span></dt><dd>+1-555-WARP-FAC</dd>
+<dt>Phone <span class="contact-qualifier">cell</span></dt><dd>(202) 555-0153</dd>
 <dt>Note</dt><dd>If we modulate the deflector array we should be able to render this contact correctly.</dd>
 </dl>
 </div>
@@ -2111,7 +2113,7 @@ time.date-from-t0 {
 <h3 class="preview-name">zz-synthetic-contacts/00000000-0000-4000-8000-000000000003.md</h3>
 <div class="chat-body markdown-body"><div class="contact-head" data-page-title-uuid="00000000-0000-4000-8000-000000000003">
 <div class="contact-who">
-<h1>Q</h1>
+<h1><a href="datalib:contact_page/00000000-0000-4000-8000-000000000003" title="No address or full number" class="chip" data-contact-page="00000000-0000-4000-8000-000000000003">Q</a></h1>
 </div>
 </div>
 <dl class="contact-fields">

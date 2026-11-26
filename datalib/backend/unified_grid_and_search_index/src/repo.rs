@@ -196,15 +196,6 @@ pub trait IndexRepo: Send + Sync {
     ) -> Result<Vec<(String, String, bool)>, RepoError>;
 
     /// Which of `markdown_uuids` hold a row `q`'s structured terms match.
-    /// The documents holding a row `q` keeps that have a page the search could
-    /// index, each with the source it is filed under. A row with no page,
-    /// a photo's, has nothing to embed, and a page filed for the grid alone
-    /// (`markdowns.searchable`) is left out on purpose.
-    async fn documents_with_pages(
-        &self,
-        q: &ParsedQuery,
-    ) -> Result<Vec<(String, String)>, RepoError>;
-
     async fn documents_kept(
         &self,
         q: &ParsedQuery,
@@ -221,14 +212,16 @@ pub trait IndexRepo: Send + Sync {
         Ok(Vec::new())
     }
 
-    /// Every source's account of whoever holds each of `handles`, one
-    /// row per distinct record of them; `people::merge_and_rank` makes
-    /// them one account per source.
-    async fn people_for_handles(
+    /// Every source's records of whoever holds each of `handles`, and of
+    /// the person each contact's page in `pages` is about, with the
+    /// numbers that may be theirs; `people::People::of` makes them one
+    /// account per source.
+    async fn people(
         &self,
         _handles: &[String],
-    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
-        Ok(Vec::new())
+        _pages: &[String],
+    ) -> Result<crate::people::PeopleRows, RepoError> {
+        Ok(Default::default())
     }
 
     /// List rendered documents (the `markdowns` table), newest first,

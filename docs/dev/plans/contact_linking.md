@@ -36,19 +36,18 @@ hold here. One more:
 
 A new kind is not a rules change; the reference lists the places
 one touches (§"Changing the rules"). Phone numbers written without a
-country code have no handle today; giving them one needs a default
-region, a setting of the applet that the render reads through the
-step's params.
+country code have no handle, and no setting gives them one: they are
+matched by their digits (the reference, §"A number without its country
+code").
 
 ## Which rows name a handle: the search terms
 
 Which rows name which handle, and in what role, is the person kinds of
-the search terms ([`search_tabs.md`](search_tabs.md) §"The search terms"):
-`from`, `to`, `cc`, `bcc`, `participant`, `mention`, `reactor`. That
-section has the rules for which rows carry a person and what it
-costs. The search terms hold handles and never contacts; the triage grid
+the search terms: `from`, `to`, `cc`, `bcc`, `participant`, `mention`.
+[`../grid_rows.md`](../grid_rows.md) §"`supplied_terms`" has the rules for
+which rows carry a person. The search terms hold handles and never contacts; the triage grid
 counts them, and a `contact:` value is matched against them
-([`search_autocomplete.md`](search_autocomplete.md)).
+([`../contacts.md`](../contacts.md) §"Searching for a person").
 
 ## Linking
 
@@ -136,8 +135,8 @@ searchable gets a snapshot step and rows with a `live_view`.
 
 A contact is searched as a value of a person key, `with:contact:<id>`
 or `from:contact:<id>`, expanded into the contact's handles when the
-search runs: [`search_autocomplete.md`](search_autocomplete.md)
-§"Contacts: expanded when the search runs". It follows a link at once
+search runs ([`../contacts.md`](../contacts.md) §"Searching for a
+person"). It follows a link at once
 and needs nothing above. The snapshot is what makes a contact a row of
 its own, found by its name or its note.
 
@@ -194,16 +193,14 @@ the search terms' `vals` table does.
 ## Order of work
 
 Phases 1 to 3 (handles end to end, the store and its applet and chips,
-`NormalizedContact` and the source contacts) are built, but for the two
-pieces of phase 1 above: the person kinds in the search terms
-(`search_tabs.md` step 4), and mentions outside Slack.
+`NormalizedContact` and the source contacts) are built, but for mentions
+in the sources [`../contacts.md`](../contacts.md) §"Not built" lists.
 
 4. **Linking.** Groups and members, the triage grid, adopting
    a source's handles. The contact card, undo and the export are
    [`contact_editing.md`](contact_editing.md)'s.
 5. **Contacts as rows.** The snapshot step and `live_view`. The
-   `contact:` value in search is
-   [`search_autocomplete.md`](search_autocomplete.md)'s.
+   `contact:` value in search is built.
 6. **Later.** Suggestions, on a branch of the store, so nothing
    automatic reaches `main` without a person accepting it; Lightroom
    face tags; a distinguished "Me" contact seeded from each source's

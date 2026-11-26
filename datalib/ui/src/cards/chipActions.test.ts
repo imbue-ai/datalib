@@ -17,6 +17,7 @@ import {
   chipMenuOf,
   chipOf,
   everythingWith,
+  justOpened,
   runChipAction,
   type Chip,
   type ChipAction,
@@ -42,6 +43,8 @@ const RIKER: Chip = {
   shownAs: "Will Riker",
 };
 const CONTACT: Chip = { ref: { kind: "contact", id: "c1" }, shownAs: "Will Riker" };
+/** A card with no handle, named by its page. */
+const CARD: Chip = { ref: { kind: "page", page: "p-1" }, shownAs: "Sonya Gomez" };
 const LOG_PAGE = "6c8f2f43-1d3c-4a5e-9b5e-0d3f6a1b2c3d";
 const LOG: Chip = {
   ref: { kind: "document", uri: `datalib:doc/${LOG_PAGE}` },
@@ -67,17 +70,8 @@ describe("chipMenuOf", () => {
   /** The grid draws a chip's entries in fixed slots of `CHIP_ACTIONS`, so
    *  a menu out of that order would lose entries there. */
   it("lists every kind's entries in the one order", () => {
-    for (const [chip, canLink] of [
-      [SLACK, false],
-      [INGEST, false],
-      [RIKER, false],
-      [RIKER, true],
-      [CONTACT, false],
-      [LOG, false],
-      [AWAY, false],
-      [BRIDGE, false],
-    ] as const) {
-      const ids = chipMenuOf(chip, canLink).map((e) => e.id);
+    for (const chip of [SLACK, INGEST, RIKER, CONTACT, CARD, LOG, AWAY, BRIDGE]) {
+      const ids = chipMenuOf(chip).map((e) => e.id);
       const order = ids.map((id) => CHIP_ACTIONS.indexOf(id as ChipAction));
       expect(order).toEqual([...order].sort((a, b) => a - b));
       expect(new Set(ids).size).toBe(ids.length);
@@ -85,10 +79,10 @@ describe("chipMenuOf", () => {
   });
 
   it("opens first wherever the chip has a card", () => {
-    expect(chipMenuOf(SLACK, false)[0].id).toBe("open");
-    expect(chipMenuOf(INGEST, false)[0].id).toBe("open");
-    expect(chipMenuOf(RIKER, false)[0].id).toBe("open");
-    expect(chipMenuOf(LOG, false)[0].id).toBe("open");
+    expect(chipMenuOf(SLACK)[0].id).toBe("open");
+    expect(chipMenuOf(INGEST)[0].id).toBe("open");
+    expect(chipMenuOf(RIKER)[0].id).toBe("open");
+    expect(chipMenuOf(LOG)[0].id).toBe("open");
   });
 });
 
@@ -164,7 +158,8 @@ describe("runChipAction", () => {
       [sourceSource({ group: "slack", step: "slack/ingest" })],
       [logSource({ step: "slack/ingest", jumpToEnd: true })],
     ]);
-    expect(chipCardSource(CONTACT.ref, null)).toBeNull();
+    expect(chipCardSource(CONTACT.ref, null)).toBe('personView("contact:c1", {"seenIn":null})');
+    expect(chipCardSource(CARD.ref, "book")).toBe('personView("page:p-1", {"seenIn":"book"})');
     const doc = host();
     await runChipAction("open", LOG, doc);
     expect(doc.openCard.mock.calls).toEqual([[documentSource(LOG_PAGE)]]);
@@ -225,11 +220,17 @@ describe("runChipAction", () => {
     );
   });
 
-  it("links a handle only where the surface hosts the popover", async () => {
-    const editLink = vi.fn();
-    await runChipAction("edit", RIKER, host({ editLink }));
-    expect(editLink).toHaveBeenCalledOnce();
-    await expect(runChipAction("edit", RIKER, host())).resolves.toBeUndefined();
+  /** Adding is the page's to do, so the entry adds nobody: it opens the
+   *  page, which takes the keyboard. */
+  it("opens a person's page to add them, and says which page takes the keyboard", async () => {
+    const h = host();
+    await runChipAction("add", RIKER, h);
+    expect(h.openCard.mock.calls).toEqual([
+      [personSource("email:riker@enterprise.org", { seenIn: null })],
+    ]);
+    expect(justOpened.value).toEqual({ subject: "email:riker@enterprise.org" });
+    await runChipAction("open", SLACK, host());
+    expect(justOpened.value).toBeNull();
   });
 });
 
@@ -320,7 +321,7 @@ describe("T0 from a date chip", () => {
     const chip: Chip = { ref: { kind: "date", datetime: at }, shownAs: "" };
     await runChipAction("use-t0", chip, host());
     expect(timeView.value.t0).toEqual({ ms: Date.parse(at), offsetMin: 120 });
-    expect(chipMenuOf(chip, false).map((e) => e.id)).toContain("clear-t0");
+    expect(chipMenuOf(chip).map((e) => e.id)).toContain("clear-t0");
     await runChipAction("clear-t0", chip, host());
     expect(timeView.value.t0).toBeNull();
   });

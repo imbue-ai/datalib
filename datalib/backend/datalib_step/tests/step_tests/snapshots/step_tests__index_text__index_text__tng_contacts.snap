@@ -2,6 +2,17 @@
 source: datalib/backend/datalib_step/tests/step_tests/index_text.rs
 expression: text
 ---
+=== tng_contacts 00000000-0000-8139-9794-990c3029c5e1 Sonya Gomez
+--- chunk 0
+title: Sonya Gomez | text: Source: Contacts
+Group: Engineering
+
+# Sonya Gomez
+
+Engineer
+
+Phone cell: (202) 555-0147
+
 === tng_contacts 00000000-0000-8140-88d9-42badf1b195b drone.4.of.12@unimatrix01.borg
 --- chunk 0
 title: drone.4.of.12@unimatrix01.borg | text: Source: Contacts
@@ -93,9 +104,12 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#addressbooks` |  | 3 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contact_categories` |  | 4 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contact_group_members` |  | 2 rows | `00000000` |
-| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 9 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 10 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_contact_groups` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_people` |  | 0 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_photos` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#ingested_files` |  | 3 rows | `00000000` |
 
 === tng_contacts 00000000-0000-8acb-9e72-ef58e1a96813 Seven of Nine
@@ -176,6 +190,7 @@ Email work:
 laforge@enterprise.starfleet
 
 Phone work: +1-555-WARP-FAC
+Phone cell: (202) 555-0153
 Note: If we modulate the deflector array we should be able to render this contact correctly.
 
 === tng_contacts 00000000-0000-8f5b-ab9b-f6b9fbf217b5 Locutus of Borg

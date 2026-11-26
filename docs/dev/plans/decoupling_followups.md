@@ -1,13 +1,11 @@
-# What is left after the runner stops knowing datalib-step
+# What is left after the runner stopped knowing datalib-step
 
 **Status: notes, partly built; checked against the tree 2026-11-20.**
-The step protocol redesign
-([`completed/dag_and_step_decoupling.md`](completed/dag_and_step_decoupling.md),
-#1894) took `datalib-step` out of the runner. This file lists what that
-redesign left alone on purpose, so it is not forgotten. Done: items 1,
-5a, 5b and 6, and of item 7 all but one constant; item 5 is closed as
-not a coupling. Untouched: items 2 to 4 and 8, and the reconciler in
-section 10. Item 9 is half done.
+The step protocol redesign (#1894) took `datalib-step` out of the
+runner. This file lists what that redesign left alone on purpose, so it
+is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
+constant; item 5 is closed as not a coupling. Untouched: items 2 to 4
+and 8, and the reconciler in section 10. Item 9 is half done.
 
 ## The end state
 
@@ -104,7 +102,8 @@ set by anything Datalib ships:
   it; without it the cache goes under `XDG_CACHE_HOME` or `HOME`, which
   every step gets.
 - `DATALIB_EMBED_THREADS` caps the embedder's threads, and only
-  `.bazelrc` sets it.
+  `.bazelrc` sets it. The server handed it to every applet as well
+  (`APPLET_ALSO`), and no longer does.
 - `MINDS_VIA_DESKTOP_URL_PREFIX` was a URL prefix minds published for
   some requests. minds no longer publishes it and the route behind it is
   gone, so the code that read it is deleted.

@@ -146,8 +146,8 @@ export const BUILTIN_META: Record<keyof ViewLibs, BuiltinMeta> = {
     icon: "person",
   },
   contactsView: {
-    title: "Your contacts",
-    description: "Every contact you have made, live from the contacts app: filter, open, link.",
+    title: "Contacts",
+    description: "The people you have added to your contacts: filter, open, merge.",
     icon: "contacts",
     gallery: "contactsView()",
   },

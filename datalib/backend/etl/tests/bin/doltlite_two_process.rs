@@ -630,7 +630,8 @@ async fn watch(args: &Args) -> Result<Value> {
     Ok(json!({ "role": "watch", "samples": samples }))
 }
 
-/// The search applet's snapshot (`docs/dev/plans/paged_grids.md`): a
+/// A held read transaction as a snapshot (`docs/dev/doltlite.md`
+/// § "Three ways to read one commit"): a
 /// read-only connection on `main` holding a transaction for `--hold-ms`,
 /// then `COMMIT; BEGIN` onto whatever `main` is by then. Every sample is
 /// tagged with its transaction, so the test can check each one read a

@@ -85,6 +85,10 @@
   ],
   "contacts": [
     {
+      "path": "google",
+      "reach": "origin"
+    },
+    {
       "path": "fastmail",
       "reach": "origin"
     },

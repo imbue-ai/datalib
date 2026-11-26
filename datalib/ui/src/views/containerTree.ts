@@ -73,6 +73,9 @@ export type CardNode = Common & {
 
 export type BoxNode = Common & {
   kind: "box";
+  // On the outermost container: how many of the default pinned tabs it
+  // has been given (`pinsGiven`).
+  pinsGiven?: number;
   layout: Layout;
   // Which way a Split shares its space; kept, unused, by the others, so
   // switching back to Split finds it.
@@ -620,14 +623,16 @@ export function parseTree(v: unknown): BoxNode | null {
   return node?.kind === "box" ? node : null;
 }
 
-// Whether a stored tree was written by a build that could not pin a
-// tab: none of its tabs says whether it is pinned. Such a tree is given
-// the default pinned tabs once; a tree written since says `pinned` on
-// every tab, so tabs a person unpinned stay unpinned.
-export function predatesPins(v: unknown): boolean {
-  const children = (v as { children?: unknown } | null)?.children;
-  if (!Array.isArray(children)) return false;
-  return children.every((c) => typeof c !== "object" || c === null || !("pinned" in c));
+// How many of the default pinned tabs a stored tree has been given, each
+// once, so a default a person unpinned or closed stays that way. A tree
+// says so itself (`BoxNode.pinsGiven`). One from a build that did not
+// count was given the first three, or none if it says `pinned` on no tab,
+// since that build could not pin one.
+export function pinsGiven(v: unknown): number {
+  const tree = v as { children?: unknown; pinsGiven?: unknown } | null;
+  if (typeof tree?.pinsGiven === "number") return tree.pinsGiven;
+  const tabs = Array.isArray(tree?.children) ? tree.children : [];
+  return tabs.some((c) => typeof c === "object" && c !== null && "pinned" in c) ? 3 : 0;
 }
 
 export function parseComposites(v: unknown): Record<string, BoxNode> {

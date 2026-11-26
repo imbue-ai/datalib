@@ -1,5 +1,5 @@
 #!/bin/bash
-# Step 1 of docs/dev/plans/paged_grids.md, at full size: does a reader
+# At full size: does a reader
 # holding a read transaction as its snapshot cost the writer anything on
 # a real-sized store?
 #

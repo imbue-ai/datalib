@@ -13,7 +13,7 @@
 //! store shares (`problems`). The owner writes on every open,
 //! upserting only the rows whose value moved, so `written_at_utc` is when
 //! this build first wrote the store rather than when it last opened it.
-//! docs/dev/plans/completed/schema_migrations.md §3.1 is the design.
+//! README.md beside this crate has the check.
 
 use anyhow::{Context, Result};
 use sqlx::{Row, SqlitePool};

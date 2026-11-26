@@ -34,6 +34,16 @@ impl Work {
     }
 }
 
+/// In a statement's text, says it walks many rows for few because that is
+/// its job (a retention cap has to count what it keeps), so its work is no
+/// sign of a missing index. Only for what runs once per open, never for an
+/// answer somebody waits for.
+pub const BY_DESIGN: &str = "/* walks by design */";
+
+pub fn walks_by_design(sql: &str) -> bool {
+    sql.contains(BY_DESIGN)
+}
+
 /// Whether a statement's work says anything about how it reads. A
 /// `CREATE INDEX` or a `PRAGMA` does its work by design.
 pub fn reads_or_writes_rows(sql: &str) -> bool {
@@ -86,5 +96,14 @@ mod tests {
         assert!(!reads_or_writes_rows("CREATE INDEX i ON t (a)"));
         assert!(!reads_or_writes_rows("PRAGMA incremental_vacuum"));
         assert!(!reads_or_writes_rows("COMMIT"));
+    }
+
+    #[test]
+    fn only_a_marked_statement_walks_by_design() {
+        assert!(walks_by_design(
+            "DELETE FROM log /* walks by design */ WHERE a"
+        ));
+        assert!(!walks_by_design("DELETE FROM log WHERE a"));
+        assert!(!walks_by_design("DELETE FROM log /* keep the newest */"));
     }
 }

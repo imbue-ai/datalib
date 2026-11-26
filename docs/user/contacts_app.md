@@ -17,8 +17,8 @@ What a link gets you:
   and nothing is indexed again, so a link costs nothing to make or undo.
 
 The app also holds **labels** on people and senders (`real`: in when
-the person or sender is not spam, out when it is) and every link a person
-turned down. Nothing can rebuild it from the sources, so its history
+the person or sender is not spam, out when it is) and every handle a
+person took off a contact. Nothing can rebuild it from the sources, so its history
 keeps every change.
 
 This page is for an agent asked to do that work. It is the steps; the
@@ -78,8 +78,10 @@ why.
 
 The other kinds, and who writes which, are in [the
 reference](../dev/contacts.md#handles). A number written without its
-country code gets no handle, so it cannot be linked. Copy handles from the
-query below rather than building them.
+country code gets no handle, so it cannot be linked as it is: `POST
+/applet/unified_grid_and_search_index/people` answers which full numbers
+it may be, in `full_numbers`. Copy handles from the query below rather
+than building them.
 
 ## 1. See what is known
 
@@ -126,9 +128,9 @@ curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/datalib_contacts/not_lin
 - `review/items`: every contact or handle with anything proposed or
   labelled, and who said so. `reviewed_at_utc` is when a person looked,
   and `decided_how` of `manual` is their own answer.
-- `not_linked`: every link a person turned down, with the `reason` that
-  proposed it. Read these for what they tell you about this person's
-  idea of a duplicate.
+- `not_linked`: every handle a person took off a contact, with the
+  `reason` that proposed it where an agent had. Read these for what they
+  tell you about this person's idea of a duplicate.
 
 `POST /resolve` with `{"handles": […]}` answers which of those handles
 have a contact already.
@@ -180,9 +182,9 @@ may send a batch again over your own rows nobody has reviewed yet.
 
 ## 4. Hand it to the person
 
-Nothing you sent is final. Tell them it is waiting: on the Manage
-screen, **Browse** on the contacts row opens the contacts card, and its
-*Review* switch shows every row with something proposed or labelled, the
+Nothing you sent is final. Tell them it is waiting: **Contacts**, in the
+sidebar, opens the contacts card (so does **Browse** on the contacts row
+of the Manage screen), and its *Review* switch shows every row with something proposed or labelled, the
 least sure first. Until they look, your links already draw on chips, so
 say so.
 

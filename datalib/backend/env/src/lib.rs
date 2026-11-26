@@ -82,7 +82,7 @@ pub const DATALIB_SQL_CENSUS: &str = "DATALIB_SQL_CENSUS";
 /// How many threads the embedder computes on where its caller leaves that
 /// to llama.cpp, which otherwise takes four on any machine. Tests set it
 /// (`.bazelrc`), since several of them share CI's cores, and name it in
-/// [`DATALIB_CHILD_ENV`] for it to reach a step.
+/// [`DATALIB_CHILD_ENV`] for it to reach a step or an applet.
 pub const DATALIB_EMBED_THREADS: &str = "DATALIB_EMBED_THREADS";
 
 /// A child process, for what of this process's environment it is handed
@@ -168,10 +168,6 @@ const LATCHKEY_ALSO: &[&str] = &[
     "DATALIB_CURL_ROUTER",
 ];
 
-/// What an applet reads beyond every child's: how many threads its
-/// embedder takes.
-const APPLET_ALSO: &[&str] = &[DATALIB_EMBED_THREADS];
-
 /// What Modal's SDK signs in with and is pointed by, beyond every child's.
 /// A step is not handed these: a sync's runner passes them on only when
 /// [`DATALIB_CHILD_ENV`] names them.
@@ -195,7 +191,7 @@ pub fn hands_down(name: &str, child: Child, also: &[String]) -> bool {
         || match child {
             Child::Step => latchkey(name),
             Child::Latchkey => latchkey(name),
-            Child::Applet => APPLET_ALSO.contains(&name),
+            Child::Applet => false,
             Child::Modal => MODAL_ALSO.contains(&name),
         }
 }
@@ -290,6 +286,7 @@ mod tests {
             "DATALIB_SEARCH_NOW",
             "DATALIB_SEARCH_NO_WARM",
             "DATALIB_CACHE_DIR",
+            DATALIB_EMBED_THREADS,
             DATALIB_SQL_CENSUS,
         ];
         for name in switches {
@@ -298,16 +295,6 @@ mod tests {
                 assert!(hands_down(name, child, &[name.to_string()]), "{name} named");
             }
         }
-    }
-
-    /// Tests cap the embedder's threads; dropped on the way down, the
-    /// search applet would spin four threads again. A step gets the cap
-    /// only where a test names it in `DATALIB_CHILD_ENV`.
-    #[test]
-    fn the_embedder_thread_cap_reaches_applets_and_steps_only_when_named() {
-        assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
-        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Applet, &[]));
-        assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Latchkey, &[]));
     }
 
     fn step_protocol_doc() -> String {

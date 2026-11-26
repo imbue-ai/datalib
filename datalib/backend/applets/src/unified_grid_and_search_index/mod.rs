@@ -45,7 +45,7 @@ use datalib_etl_render::section::Node;
 use datalib_schema::grid_rows::{GridRow, GridRowColumn};
 use datalib_unified_grid_and_search_index::grid_columns::GridColumn;
 use datalib_unified_grid_and_search_index::group::Within;
-use datalib_unified_grid_and_search_index::hits::index_state::{DocReport, IndexStamp};
+use datalib_unified_grid_and_search_index::hits::index_state::DocReport;
 use datalib_unified_grid_and_search_index::hits::{display_snippet, GridIndex, IndexSummary};
 use datalib_unified_grid_and_search_index::query::{parse_query, ParsedQuery, Semantic};
 use datalib_unified_grid_and_search_index::repo::{DocRow, DynIndexRepo, EdgeRowOut};
@@ -73,7 +73,6 @@ struct Index {
     held_vectors: Arc<datalib_unified_grid_and_search_index::search_index::HeldVectors>,
     results: Arc<results::ResultCache>,
     keyed: Arc<tokio::sync::Mutex<results::KeyedCache>>,
-    coverage: Arc<tokio::sync::Mutex<results::VectorCoverage>>,
     /// The sources the grid holds, and the commit they were read at.
     grid_sources: Arc<tokio::sync::Mutex<Option<GridSources>>>,
     /// Turns for `/sql`'s queries, [`sql::AT_ONCE`] at a time.
@@ -102,7 +101,6 @@ impl Index {
             held_vectors: Arc::default(),
             results: Arc::new(results::ResultCache::default()),
             keyed: Arc::default(),
-            coverage: Arc::default(),
             grid_sources: Arc::default(),
             sql_slots: Arc::new(tokio::sync::Semaphore::new(sql::AT_ONCE)),
             mutes: mutes::Mutes::new(&root),
@@ -523,19 +521,6 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
         }
         _ => None,
     };
-    // On the first page, for the line above the results: a later page and a
-    // group's rows have nothing to add to it.
-    let without_vectors = if read && offset == 0 && within.is_empty() {
-        match without_vectors(s, &parsed).await {
-            Ok(counted) => counted,
-            Err(e) => {
-                errors.push(format!("count the documents without vectors: {e}"));
-                None
-            }
-        }
-    } else {
-        None
-    };
     let mut rows = page.rows;
     // The names and marks the config gives each source, read per
     // request: a rename lands on the next search, with no re-index.
@@ -553,7 +538,6 @@ async fn answer_search(s: &Index, p: SearchParams) -> SearchResponse {
             "search_error": search_error,
             "search_index_missing": search_index_missing,
             "partial": page.partial,
-            "without_vectors": without_vectors,
         }),
         rows,
         total: page.total as u64,
@@ -816,51 +800,6 @@ async fn page_rows(
         }
     }
     Ok((rows, next_offset))
-}
-
-/// How many of the documents this search could find search by meaning
-/// cannot reach; `None` where it was not asked to look, or no index has
-/// been built.
-async fn without_vectors(
-    s: &Index,
-    parsed: &ParsedQuery,
-) -> Result<Option<results::WithoutVectors>, SearchFailure> {
-    if !embeds(parsed) {
-        return Ok(None);
-    }
-    if !datalib_runtime::layout::grid_index_db(&s.root).exists() {
-        return Ok(None);
-    }
-    let (index_stamp, cache_stamp) =
-        datalib_unified_grid_and_search_index::search_index::stamps(&s.root);
-    let stamp: Vec<IndexStamp> = vec![index_stamp, cache_stamp];
-    let mut coverage = s.coverage.lock().await;
-    let with_vectors = match coverage
-        .with_vectors
-        .as_ref()
-        .filter(|(at, _)| *at == stamp)
-    {
-        Some((_, read)) => read.clone(),
-        None => {
-            let Some(read) = s
-                .held_vectors
-                .documents(&s.root)
-                .await
-                .map_err(embedding_failed)?
-            else {
-                return Ok(None);
-            };
-            let read = Arc::new(read);
-            coverage.with_vectors = Some((stamp, read.clone()));
-            read
-        }
-    };
-    drop(coverage);
-    let candidates = s.repo.documents_with_pages(parsed).await.map_err(index)?;
-    Ok(Some(results::WithoutVectors::among(
-        &candidates,
-        &with_vectors,
-    )))
 }
 
 /// the search's score, and the words the hit matched in place of the row's
@@ -1556,20 +1495,24 @@ async fn index_state(
 
 #[derive(Deserialize)]
 struct PeopleBody {
+    #[serde(default)]
     handles: Vec<String>,
+    /// Contacts' own pages, by their ids.
+    #[serde(default)]
+    pages: Vec<String>,
 }
 
-/// Every source's account of whoever holds each asked-for handle, ranked
-/// (`datalib_unified_grid_and_search_index::people`). A handle no source mentions is
-/// simply absent.
+/// Every source's account of whoever holds each asked-for handle, ranked,
+/// and of who each contact's page is about
+/// (`datalib_unified_grid_and_search_index::people`).
 async fn people(
     State(s): State<Index>,
     Json(body): Json<PeopleBody>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match s.repo.people_for_handles(&body.handles).await {
-        Ok(rows) => Ok(Json(serde_json::json!({
-            "people": datalib_unified_grid_and_search_index::people::merge_and_rank(rows)
-        }))),
+) -> Result<Json<datalib_unified_grid_and_search_index::people::People>, StatusCode> {
+    match s.repo.people(&body.handles, &body.pages).await {
+        Ok(rows) => Ok(Json(
+            datalib_unified_grid_and_search_index::people::People::of(rows),
+        )),
         Err(e) => {
             tracing::error!(error = %e, "could not read people by handle");
             Err(StatusCode::INTERNAL_SERVER_ERROR)

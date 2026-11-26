@@ -85,7 +85,7 @@ function onContextMenu(ev: MouseEvent) {
     id: `${EXTRA}${i}`,
     label: e.label,
   }));
-  const own = chipMenuOf(c, false).map((e, i) =>
+  const own = chipMenuOf(c).map((e, i) =>
     i === 0 && extra.length ? { ...e, separator: true } : e,
   );
   menu.value = { chip: c, entries: [...extra, ...own], x: ev.clientX, y: ev.clientY };

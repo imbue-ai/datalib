@@ -230,7 +230,16 @@ Different upstreams expose different surfaces for "what changed since X": a delt
 
 That is what makes [`AGENTS.md`'s "give a bag an order before storing it"](/AGENTS.md) an architectural rule rather than a tidiness one: an API that returns a set in a different order each time will, left alone, manufacture a diff out of nothing — and the symptom is not an error but a pipeline that quietly stops being incremental. The same reasoning covers volatile paths (`VolatilePath`, which drops a per-fetch stamp that carries no information into the sidecar) and any future rule of that shape: canonical field order, stable number formatting, excluded bookkeeping. When you add one, say which of the two it is — **sorting keeps the signal and removes the noise; declaring a field volatile throws the signal away too** — because the two look interchangeable and are not.
 
-The property this protects is what a consumer actually buys with a cursor; [`toolchain_for_agents.md`](plans/data_lib_as_a_library/toolchain_for_agents.md#the-incremental-contract-is-a-capability-not-a-protocol) makes the case for it as the thing Datalib offers anyone building on it.
+### What a commit hash buys a reader
+
+Every raw store and render store answers one question by itself: **what changed since this commit?** A reader its producer never heard of keeps one hash and gets correct incremental reads, with no registration, no change feed and no schema for one. Two properties make that work:
+
+- **The diff costs what changed, not what is there.** Two commits share their unchanged subtrees by identity, so `dolt_diff` descends only where hashes differ. A `WHERE updated_at > ?` scan or a hash tree computed in Rust costs the whole table every time.
+- **The rows and the change feed are one object.** With a table and a separate log of changes, a reader can see an event whose row is not there yet, or a row no event announced. `dolt_diff` and `SELECT` read one structure, so neither can happen.
+
+The contract is not new: Hudi's incremental queries, Iceberg's snapshots and Delta Lake's change feed make the same one, Datomic had it in 2012, and the prolly tree comes from Noms. Those assume a cluster and a catalog; here it is one file and a library linked into the binary.
+
+What it costs is that a commit keeps every row it ever reached. On a raw store that is the point ([below](#noticing-when-the-upstream-loses-data)). On a derived store it is growth, which `--compact` gives back ([`step_protocol.md`](step_protocol.md)).
 
 ## Wire-fidelity of the raw store
 The raw store preserves the **semantic content** of upstream responses verbatim — every field, every value, with no loss and no pre-shaping into our internal model. The on-disk *encoding* of that content is a separate question; we pick whichever encoding is human-readable and inspectable. Concretely:
@@ -306,8 +315,7 @@ provider's copy is not under your control.
 It is also the good side of a property we criticize elsewhere.
 That a commit keeps every row it ever reached
 ([disk space](/docs/dev/doltlite.md#disk-space-and-dolt_gc)) is a real cost for
-[derived intermediates](plans/data_lib_as_a_library/toolchain_for_agents.md),
-which we could always rebuild. On the raw store it is the feature.
+derived stores, which we could always rebuild. On the raw store it is the feature.
 
 ### What is on disk
 
@@ -392,6 +400,7 @@ therefore what it can see:
 | `email` (JMAP) | `Email/changes` / `Mailbox/changes` tombstones | emails, mailboxes, and the label joins |
 | `email` (Gmail) | `history.list` deletions; a whole-account walk whenever the account is not listed whole | emails, via the same cascade |
 | `contacts` (CardDAV), `calendar` (CalDAV) | RFC 6578 sync-collection `404`/`410`; a whole listing on a first sync or after the server calls the token invalid, and every run for a windowed calendar; the home listing of address books or calendars, whole by nature | contacts or events a whole listing does not name, once it reaches its end: a listing the server cut short (a 507 it would not page past, or 50 pages) deletes nothing until a later run carries it to the end (`dav_unconfirmed`); an address book or calendar the home listing no longer names, with everything stored for it. A home listing that names nothing, not even the home itself (a 200 with an empty body), fails the run and deletes nothing (`dav::list_members`); `datalib_etl_web::dav` |
+| `contacts` (Google) | `metadata.deleted` and `previousResourceNames` in a sync-token listing; a whole listing on a first sync or after the token expired; the label listing, whole every run | contacts a whole listing does not name, once it reaches its end, each with its photo; labels the label listing does not name; another account's contacts, when the login changes. A listing with an entry it could not identify deletes nothing it did not name |
 | `contacts` (`.vcf` folder), `calendar` (`.ics` folder) | the folder's scan, and each re-read file | a gone file's address book or calendar; cards or events a re-read file dropped. Nothing is deleted when the walk reported an error. A file that is nothing deletes nothing and is a `listing:` problem: a `.vcf` with no card or cut off inside one, an `.ics` with no `VCALENDAR`, cut off before `END:VCALENDAR`, or whose events all lack a `UID`. Only a whole `VCALENDAR` with no events empties its calendar; a book is emptied by deleting its file |
 | `google_takeout` Chat, Maps photos | the export's scan, and each re-read `messages.json` | a gone file's user, group, messages or photo; messages a re-read file dropped. A missing `Google Chat/` or photos folder deletes nothing, nor does a `messages.json` listing entries none of which has a `message_id`. Deletions land in the transaction that stamps the files |
 | `google_takeout` Maps reviews and saved places, YouTube, Gemini | each re-read file, which is the feed's whole table | records the file no longer lists, and a Gemini activity's attachment edges. A missing file deletes nothing, and so does one in a layout the reader does not know (no list, or entries none of which it could read): that fails the feed as a `phase:` problem. A Gemini log really emptied upstream cannot prune: no empty layout has been seen to tell it from one the reader does not know |
@@ -573,7 +582,7 @@ Nothing is marked done, and no position in a walk is stored.
   `listed_messages`, the forges' `listed_change_requests`, DAV's
   `dav_resources`), the rows of an enumeration it re-reads every run
   (chatgpt, claude), or results that are themselves the content
-  (Notion's search, Google Calendar's events).
+  (Notion's search, Google Calendar's events, Google's contacts).
 - **Held.** The version each record's content satisfies, in
   `held_version` on that table's `_bookkeeping` sidecar, written in the
   transaction that writes the content. A failed attempt leaves a
@@ -625,6 +634,7 @@ user list, claude's orgs and project docs).
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
+| contacts (Google) | the connections page is the content; each contact's photo link | `google_photos` sidecar, at its link | — |
 | calendar (Calendly) | the scheduled-events listing, at each event's `listing_hash` | `calendly_invitees` sidecar | — |
 | google_drive | the file listing, at each file's Drive `version`; each stored revision's export links. The folder and shared-drive listings, and each listed file's `parents`, are the content (`folders`, `drives`, `file_parents`) | `files` sidecar, written with the whole capture; `revision_exports` sidecar, at no version | — |
 | chatgpt, claude | the conversation enumeration, at `update_time` / `updated_at` | `conversations` sidecar, its attachment edges, claude's `projects` and `project_docs_listings` | — |

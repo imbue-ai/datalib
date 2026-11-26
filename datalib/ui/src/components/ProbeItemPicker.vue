@@ -185,6 +185,12 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
       },
     ],
   },
+  label: {
+    placeholder: "Search these labels…",
+    columns: [
+      { id: "path", name: "Label", field: "path", width: 280, formatter: (_r, _c, v) => text(v) },
+    ],
+  },
   address_book: {
     placeholder: "Search these address books…",
     columns: [

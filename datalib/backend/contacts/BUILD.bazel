@@ -6,6 +6,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 rust_library(
     name = "datalib_contacts",
     srcs = [
+        "src/add_people.rs",
         "src/drafts.rs",
         "src/labels.rs",
         "src/lib.rs",
