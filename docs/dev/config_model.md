@@ -577,7 +577,7 @@ download …` command lines become groups and steps, retired type words become t
 `common.input_path` / `common.raw_path` become method tables with
 their own `path` (`convert.rs`). The rewrite is value-level, so comments do not
 survive. The loader and `datalib-step` recognize the old shapes only
-well enough to name the tool. Fifteen rewrites are made without asking,
+well enough to name the tool. Seventeen rewrites are made without asking,
 all text edits that keep comments, and each refuses a result that would
 drop an entry the original ran, other than one it exists to take out. They are listed, in this
 order, in `datalib_migrate_config::UNATTENDED`, which `datalib-http` runs
@@ -736,6 +736,15 @@ the next would put the first back:
     `check` gets it, so a save and `datalib-pipeline check` ask each of
     its steps about its params. An entry with no `verbs` is left alone;
     one whose `verbs` spans lines is refused, naming it.
+
+`datalib-migrate-config` is Datalib's own migration tool, and it may
+know `datalib-step`: most of its rewrites are about `datalib-step`'s
+steps and params. It is not a step program's protocol. Many rewrites
+need the whole file rather than one program's entries (the time-series
+steps add a group and its steps; the search locks edit `[[locks]]`),
+which a protocol where each program rewrites only its own entries could
+not express. A package that needs its entries rewritten has no way to
+ask for it yet.
 
 The wizard never gives a source `unified_index`,
 `unified_document_index`, `unified_grid_and_search_index` or
