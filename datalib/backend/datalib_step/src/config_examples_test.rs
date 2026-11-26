@@ -47,7 +47,7 @@ pub(crate) fn validate_config(name: &str, path: &std::path::Path) {
     datalib_dag::Graph::build(specs).unwrap_or_else(|e| panic!("{name}: graph build: {e:#}"));
 
     let data_root = tempfile::tempdir().expect("tempdir");
-    let found = crate::check_params::problems(&cfg, data_root.path());
+    let found = crate::check::problems(&cfg, data_root.path());
     assert!(
         found.is_empty(),
         "{name}: a sync would refuse these steps' params:\n{}",
