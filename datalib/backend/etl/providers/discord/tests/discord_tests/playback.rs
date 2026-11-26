@@ -1,6 +1,14 @@
 //! One run after another over the tapes in [`crate::world`].
 
 use std::path::Path;
+use std::time::Duration;
+
+use datalib_etl::checkpointer::Cadence;
+use datalib_etl::control::DownloadControl;
+use datalib_etl::download_metrics::DownloadMetrics;
+use datalib_etl::processor::RunCtx;
+use datalib_etl::progress::Progress;
+use datalib_obs::diagnostics::Diagnostics;
 
 use datalib_etl::doltlite_raw::commit_run;
 use datalib_etl_discord::ingest::{self, db_path_for, schema_raw, snowflake, FetchSummary, RawDb};
@@ -378,4 +386,71 @@ async fn signing_in_as_another_account_leaves_one() {
     let sidecars = count(&store, "SELECT count(*) FROM account_bookkeeping").await;
     assert_eq!((accounts, sidecars), (1, 1));
     assert!(payload(&store, "account", RIKER).await.is_some());
+}
+
+/// A run that seals after it finds a name Discord does not have, as a
+/// run past the seal cadence does, used to count that problem in its
+/// `sync_runs` deltas, and a shorter one did not; so the bake's golden
+/// changed from one run to the next.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_that_seals_after_a_problem_leaves_it_out_of_its_deltas() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    let tape = World::before().tape(d.path(), "before");
+    let sync = DiscordSync {
+        channels: Some(vec!["bridge".into(), "holodeck".into()]),
+        threads: false,
+        ..sync()
+    };
+    let control = DownloadControl {
+        checkpoint_cadence: Some(Cadence {
+            at_most_every: Duration::ZERO,
+        }),
+        ..Default::default()
+    };
+    let (progress, now) = (Progress::noop(), world::now().to_string());
+    let ctx = RunCtx::new(
+        "discord",
+        &store,
+        &now,
+        &progress,
+        &control,
+        DownloadMetrics::new(),
+        Diagnostics::new(),
+    );
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+    let sealing = ctx.run_store(pool, Some(cas_pool), |sealer| async {
+        let opts = ingest::FetchOptions {
+            control: control.clone(),
+            sealer: Some(sealer),
+            ..options(db.clone(), sync, world::now())
+        };
+        ingest::fetch(opts).await.map(|s| s.line())
+    });
+    playback::scope(&tape, sealing).await.unwrap();
+
+    let got = problems(&store).await;
+    assert!(
+        got.len() == 1 && got[0].contains("holodeck"),
+        "the store holds the one problem: {got:?}"
+    );
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+    let seals: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log")
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let summary: String =
+        sqlx::query_scalar("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
+    db.close().await;
+    assert!(seals > 2, "the run sealed as it went: {seals} commits");
+    let summary: Value = serde_json::from_str(&summary).unwrap();
+    let deltas = summary["deltas"]
+        .as_object()
+        .expect("the summary has deltas");
+    assert!(deltas.contains_key("messages"), "{deltas:?}");
+    assert!(!deltas.contains_key("problems"), "{deltas:?}");
 }

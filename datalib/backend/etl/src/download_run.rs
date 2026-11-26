@@ -135,6 +135,11 @@ fn final_status(succeeded: bool, ended_early: bool) -> &'static str {
 /// Every table, not just the ones `dolt_status` reports dirty: a table a
 /// streaming provider finished and committed mid-run is clean by the time
 /// we get here, and asking only about dirty tables loses it entirely.
+///
+/// Every table but `problems`. A seal writes the problems found so far,
+/// and the rest are written after this measures, so counting them would
+/// report a run's problems only when a seal happened to land after they
+/// were found.
 async fn compute_deltas(
     pool: &SqlitePool,
     head_at_start: Option<&str>,
@@ -157,8 +162,9 @@ async fn compute_deltas(
                 return None;
             }
         };
+    let problems = <datalib_problems::ProblemRow as datalib_table::BulkUpsertable>::TABLE;
     let mut out: BTreeMap<String, RowDelta> = BTreeMap::new();
-    for table in tables {
+    for table in tables.into_iter().filter(|t| t != problems) {
         // Guard against any table name that wouldn't be a safe
         // identifier in the dynamic `dolt_diff_<table>` query. Dolt's
         // own naming for these virtual tables matches the underlying
@@ -508,6 +514,48 @@ mod tests {
         assert_eq!(
             notes["added"], 7,
             "both batches should count, not just the one after the mid-run commit; got {notes}"
+        );
+    }
+
+    /// A seal mid-run writes the problems found so far, and the rest are
+    /// written after the deltas are measured. Counting them made a run's
+    /// deltas name `problems` only when a seal landed after the problem
+    /// was found, so one bake's golden disagreed with the next.
+    #[tokio::test]
+    async fn a_problem_a_seal_wrote_stays_out_of_the_deltas() {
+        let (pool, _dir) = fresh_pool().await;
+        assert!(
+            crate::doltlite_raw::has_dolt_extensions(&pool).await,
+            "this test measures deltas, which need the dolt extensions"
+        );
+        let stop = crate::stop::StopFlag::new();
+        let store = &pool;
+        let run_id = crate::run_problems::collecting(&pool, &stop, |found| async move {
+            let run = DownloadRun::start(store, &json!({})).await?;
+            let run_id = run.run_id();
+            found.listing("channels", "HTTP 500");
+            found
+                .write_or_say(store, crate::run_problems::Ran::PartWay)
+                .await;
+            crate::doltlite_raw::commit_run(store, "a seal").await?;
+            let in_store: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+                .fetch_one(store)
+                .await?;
+            assert_eq!(in_store, 1, "the seal wrote the problem before the measure");
+            run.finish(
+                false,
+                &Ok::<(), anyhow::Error>(()),
+                &DummySummary { new: 0, skipped: 0 },
+            )
+            .await;
+            Ok(run_id)
+        })
+        .await
+        .unwrap();
+        let deltas = summary_deltas(&pool, run_id).await;
+        assert!(
+            !deltas.contains_key("problems"),
+            "problems are not part of a run's deltas; got {deltas:?}"
         );
     }
 

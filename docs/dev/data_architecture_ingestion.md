@@ -327,7 +327,10 @@ looks. `DownloadRun::finish`
 ([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) counts
 `dolt_diff_<table>` by `diff_type` for every table in the store and
 writes `{table: {added, modified, removed}}` to
-`sync_runs.summary.deltas`.
+`sync_runs.summary.deltas`. The one table it leaves out is `problems`:
+a seal writes the problems a run has found so far and the rest are
+written after the count, so counting them would depend on whether a
+seal happened to land after a problem was found.
 
 The diff runs from the HEAD the run *started* at, which `DownloadRun`
 captures before the provider writes anything. That has to be the
