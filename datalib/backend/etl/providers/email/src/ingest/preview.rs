@@ -8,6 +8,7 @@ use tracing::info;
 
 use super::db::RawDb;
 use super::envelope;
+use datalib_sql::sql;
 
 /// Rows written in one transaction. A batch's bytes are read and dropped one
 /// message at a time, so this bounds no memory, only what a stop can lose.
@@ -22,11 +23,13 @@ pub(crate) async fn fill_from_held_bytes(
     sealer: Option<&Sealer>,
     stop: &StopFlag,
 ) -> Result<()> {
-    let unfilled: Vec<(String, String)> = sqlx::query_as(
+    let unfilled: Vec<(String, String)> = sql!(
+        "email.preview.list_emails_missing_preview",
         "SELECT e.id, b.blake3 FROM emails e
          JOIN email_blobs b ON b.email_id = e.id AND b.blob_id = e.blob_id
-         WHERE e.preview IS NULL AND b.blake3 IS NOT NULL",
+         WHERE e.preview IS NULL AND b.blake3 IS NOT NULL"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .context("select the emails with no preview")?;
@@ -46,12 +49,16 @@ pub(crate) async fn fill_from_held_bytes(
         }
         let mut tx = db.pool().begin().await.context("begin previews tx")?;
         for (id, preview) in &previews {
-            sqlx::query("UPDATE emails SET preview = ? WHERE id = ?")
-                .bind(preview)
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("write the preview of email {id}"))?;
+            sql!(
+                "email.preview.set_preview",
+                "UPDATE emails SET preview = ? WHERE id = ?"
+            )
+            .query()
+            .bind(preview)
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("write the preview of email {id}"))?;
         }
         tx.commit().await.context("commit previews tx")?;
         if let Some(sealer) = sealer {

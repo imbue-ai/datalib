@@ -32,6 +32,7 @@ use datalib_etl_agent_sessions_render::{
 };
 
 use crate::ids;
+use datalib_sql::{sql, Sql};
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
@@ -125,7 +126,7 @@ impl SessionRender for ClaudeCode<'_> {
         clock: &ReadClock,
     ) -> Result<Vec<(String, Value)>> {
         let rows: Vec<(String, String)> = clock
-            .load(sqlx::query_as(LOAD_RECORDS_SQL).bind(ids).fetch_all(pool))
+            .load(LOAD_RECORDS_SQL.query_as().bind(ids).fetch_all(pool))
             .await
             .context("select a page of records")?;
         clock.parse(|| {
@@ -154,9 +155,12 @@ impl SessionRender for ClaudeCode<'_> {
 
 /// A page of transcripts' records. `transcript_id` leads the table's key,
 /// so each transcript's records are one range of the store.
-const LOAD_RECORDS_SQL: &str = "SELECT id, json(payload) FROM records \
+const LOAD_RECORDS_SQL: Sql = sql!(
+    "claude_code_render.load_records_of_transcripts",
+    "SELECT id, json(payload) FROM records \
      WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
-     AND payload IS NOT NULL";
+     AND payload IS NOT NULL"
+);
 
 /// The document id for a raw transcript id, with no row in hand.
 fn chat_uuid_of(source_id: &str, tid: &str) -> String {
@@ -949,6 +953,7 @@ mod store_tests {
     use super::*;
     use sqlx::Row;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// A page's records are read as one range of the key per transcript:
     /// keyed by the record's uuid alone, each was a random read, and a full
     /// render of a 4.5 GB store spent half its time loading them.
@@ -961,8 +966,12 @@ mod store_tests {
             .await
             .unwrap();
         // Audited: a constant statement of this crate.
-        let explain = format!("EXPLAIN QUERY PLAN {LOAD_RECORDS_SQL}");
-        let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
+        let explain = Sql::dynamic(
+            test_sql_id!(),
+            format!("EXPLAIN QUERY PLAN {LOAD_RECORDS_SQL}"),
+        );
+        let plan: Vec<String> = explain
+            .query()
             .bind("[]")
             .fetch_all(db.pool())
             .await
@@ -996,10 +1005,11 @@ mod store_tests {
             .await
             .unwrap();
         let pool = db.pool();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO transcripts (id, payload, session_id, rel_path) \
-             VALUES ('s1', NULL, 's1', 's1.jsonl')",
+             VALUES ('s1', NULL, 's1', 's1.jsonl')"
         )
+        .query()
         .execute(pool)
         .await
         .unwrap();

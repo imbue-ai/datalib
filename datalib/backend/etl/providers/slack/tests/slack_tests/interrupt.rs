@@ -16,6 +16,7 @@ use datalib_etl_slack::recorded::record_workspace;
 use serde_json::json;
 
 use crate::support::{channels_with_messages, checked_at, fetch_into, Tree};
+use datalib_sql::test_sql;
 
 /// Raises the stop on the download's first progress tick — what the SIGINT
 /// handler does, at a point the test controls. The first tick now lands
@@ -64,15 +65,16 @@ async fn a_stop_ends_the_walk_at_the_next_channel_boundary() {
     let reader = datalib_pin::open_reader(&db_path_for(&t.out))
         .await
         .unwrap();
-    let covered: Vec<String> = sqlx::query_scalar("SELECT scope FROM coverage ORDER BY scope")
+    let covered: Vec<String> = test_sql!("SELECT scope FROM coverage ORDER BY scope")
+        .query_scalar()
         .fetch_all(&reader)
         .await
         .unwrap();
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM sync_runs ORDER BY run_id DESC LIMIT 1")
-            .fetch_one(&reader)
-            .await
-            .unwrap();
+    let status: String = test_sql!("SELECT status FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query_scalar()
+        .fetch_one(&reader)
+        .await
+        .unwrap();
     reader.close().await;
     assert_eq!(covered.len(), 1, "{covered:?}");
     assert_eq!(

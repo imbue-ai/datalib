@@ -5,6 +5,7 @@ use std::time::Duration;
 use datalib_runs::{
     open_or_create, runs_path, versions, LogRow, Process, ProcessLogWriter, Retention,
 };
+use datalib_sql::test_sql;
 
 /// Far under the store's ten-second busy timeout, which is how long a
 /// reader waits on a writer before SQLite gives up on it.
@@ -30,14 +31,19 @@ async fn a_read_is_answered_while_a_writer_holds_the_lock() {
 
     let writer = open_or_create(&runs_path(td.path())).await.unwrap();
     let mut held = writer.acquire().await.unwrap();
-    sqlx::raw_sql("BEGIN EXCLUSIVE; UPDATE store_changes SET version = version + 1")
+    test_sql!("BEGIN EXCLUSIVE; UPDATE store_changes SET version = version + 1")
+        .raw()
         .execute(&mut *held)
         .await
         .unwrap();
 
     let read = tokio::time::timeout(ANSWERED_WITHIN, versions(td.path())).await;
 
-    sqlx::raw_sql("ROLLBACK").execute(&mut *held).await.unwrap();
+    test_sql!("ROLLBACK")
+        .raw()
+        .execute(&mut *held)
+        .await
+        .unwrap();
     drop(held);
     writer.close().await;
     let parts = read
@@ -72,7 +78,8 @@ async fn a_store_in_the_old_journal_mode_turns_to_wal_and_keeps_its_lines() {
     before.flush().await;
     drop(before);
     let old = open_or_create(&path).await.unwrap();
-    sqlx::raw_sql("PRAGMA journal_mode = DELETE")
+    test_sql!("PRAGMA journal_mode = DELETE")
+        .raw()
         .execute(&old)
         .await
         .unwrap();
@@ -133,7 +140,8 @@ async fn a_store_in_another_shape_is_refused_not_read_as_empty() {
     assert!(!versions(td.path()).await.unwrap().is_empty());
 
     let pool = open_or_create(&runs_path(td.path())).await.unwrap();
-    sqlx::query("UPDATE _datalib_meta SET value = 'another' WHERE key = 'schema_hash'")
+    test_sql!("UPDATE _datalib_meta SET value = 'another' WHERE key = 'schema_hash'")
+        .query()
         .execute(&pool)
         .await
         .unwrap();

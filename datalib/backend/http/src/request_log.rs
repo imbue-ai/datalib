@@ -80,9 +80,13 @@ fn worth(method: &Method, path: &str, status: StatusCode, live_refetch: bool) ->
     }
 }
 
-/// On a proxied response: the rows the applet says it read, if it says.
-#[derive(Debug, Clone, Copy)]
-pub struct AppletRowsRead(pub Option<u64>);
+/// On a proxied response: the rows the applet says it read and what its
+/// statements did, if it says.
+#[derive(Debug, Clone)]
+pub struct AppletWork {
+    pub rows_read: Option<u64>,
+    pub sql_work: Option<String>,
+}
 
 pub async fn record(
     State(echoes): State<crate::loop_guard::Echoes>,
@@ -102,7 +106,7 @@ pub async fn record(
     let live_refetch = cause.is_some();
     let chain = crate::loop_guard::request_chain(cause);
     let started = Instant::now();
-    let (resp, own_rows) =
+    let (resp, own) =
         datalib_sql_work::counted(crate::loop_guard::scope(chain, next.run(req))).await;
     let status = resp.status();
     if !is_logged(&path, status) {
@@ -112,9 +116,14 @@ pub async fn record(
     let ms = started.elapsed().as_millis() as u64;
     // Not the `Content-Length` header: axum sets that outside this layer.
     let bytes = resp.body().size_hint().exact();
-    let rows_read = match resp.extensions().get::<AppletRowsRead>() {
-        Some(AppletRowsRead(theirs)) => *theirs,
-        None => own_rows,
+    let (rows_read, sql) = match resp.extensions().get::<AppletWork>() {
+        Some(theirs) => (theirs.rows_read, theirs.sql_work.clone()),
+        None => (
+            own.as_ref().map(|c| c.rows),
+            own.as_ref()
+                .filter(|c| !c.statements.is_empty())
+                .map(|c| datalib_sql_work::header_value(&c.statements)),
+        ),
     };
     let code = status.as_u16();
     // Zero is every request nothing caused; leaving it off keeps the
@@ -137,7 +146,7 @@ pub async fn record(
                 method = %method, path = %path, query = query.as_deref(), status = code,
                 ms, rows_read, bytes,
                 page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(),
-                chain,
+                chain, sql = sql.as_deref(),
                 "{method} {path} {code} {cost}"
             )
         };

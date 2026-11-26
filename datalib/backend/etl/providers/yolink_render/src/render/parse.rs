@@ -8,6 +8,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_etl_yolink::ingest::db_path_for;
+use datalib_sql::sql;
 
 pub use datalib_etl_timeseries_render::series::Series;
 
@@ -99,16 +100,22 @@ pub fn parse(raw_path: &Path, range: RawRange<'_>) -> Result<ParsedYolink> {
 async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<ParsedYolink> {
     let devices = load_devices(pool).await?;
     let series = load_series(pool).await?;
-    let reading_errors: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL",
+    let reading_errors: i64 = sql!(
+        "yolink_render.count_failed_readings",
+        "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .unwrap_or(0);
-    let reading_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yolink_readings")
-        .fetch_one(pool)
-        .await
-        .context("count yolink_readings")?;
+    let reading_count: i64 = sql!(
+        "yolink_render.count_readings",
+        "SELECT COUNT(*) FROM yolink_readings"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await
+    .context("count yolink_readings")?;
 
     Ok(ParsedYolink {
         head: Some(pin.commit().to_string()),
@@ -120,12 +127,14 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
 }
 
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "yolink_render.list_devices_with_last_reading",
         "SELECT d.id, d.kind, d.start_ms, d.family_device_id, \
                 (SELECT MAX(r.ts_ms) FROM yolink_readings r WHERE r.device_name = d.id) \
                 AS last_ts_ms \
-           FROM yolink_devices d ORDER BY d.id",
+           FROM yolink_devices d ORDER BY d.id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load yolink_devices")?;
@@ -147,10 +156,12 @@ async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
 /// The `yolink_readings_by_device_ts` index covers the leading two
 /// columns of the ORDER BY.
 async fn load_series(pool: &SqlitePool) -> Result<Vec<Series>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "yolink_render.list_readings_by_series",
         "SELECT device_name, metric, ts_ms, value \
-           FROM yolink_readings ORDER BY device_name, metric, ts_ms",
+           FROM yolink_readings ORDER BY device_name, metric, ts_ms"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load yolink_readings")?;

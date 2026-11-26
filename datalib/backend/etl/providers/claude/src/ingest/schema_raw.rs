@@ -10,6 +10,7 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const USERS: &str = "users";
 pub const ORGS: &str = "orgs";
@@ -168,9 +169,7 @@ pub const LADDER: &[Migration] = &[
 /// the copy rather than be dropped. A store from before Cowork has no
 /// table to copy, and the open that follows creates it keyed this way.
 async fn cowork_events_by_session(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
-    let has_events: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cowork_events')",
-    )
+    let has_events: bool = sql!("claude.migrate.cowork_events_table_exists", "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cowork_events')").query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if !has_events {
@@ -226,57 +225,65 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
         dr::bookkeeping_ddl_for(PROJECT_DOCS_LISTINGS),
     ] {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("claude.migrate.create_project_docs_listings"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
     for table in [CONVERSATIONS, PROJECTS, ATTACHMENTS] {
-        let has_column: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')",
+        let has_column: bool = sql!(
+            "claude.migrate.sidecar_has_held_version",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')"
         )
+        .query_scalar()
         .bind(format!("{table}_bookkeeping"))
         .fetch_one(&mut *conn)
         .await?;
         if !has_column {
             // Audited: `table` is one of this module's constants.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"
-            )))
+            Sql::dynamic(
+                sql_id!("claude.migrate.add_held_version_to_sidecar"),
+                format!("ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"),
+            )
+            .query()
             .execute(&mut *conn)
             .await?;
         }
     }
     for table in [CONVERSATIONS, PROJECTS] {
         // Audited: `table` is one of this module's constants.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "UPDATE {table}_bookkeeping SET held_version = \
+        Sql::dynamic(
+            sql_id!("claude.migrate.set_held_version_from_updated_at"),
+            format!(
+                "UPDATE {table}_bookkeeping SET held_version = \
                 (SELECT t.updated_at FROM {table} t WHERE t.id = {table}_bookkeeping.id) \
              WHERE fetched_at_utc IS NOT NULL"
-        )))
+            ),
+        )
+        .query()
         .execute(&mut *conn)
         .await?;
     }
     let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
+    sql!(
+        "claude.migrate.insert_swept_project_docs_listings",
         "INSERT OR IGNORE INTO project_docs_listings (id) \
          SELECT p.id FROM projects p \
-         WHERE 'claude:sweep:project_docs:' || p.id IN (SELECT scope FROM sync_scope_state)",
+         WHERE 'claude:sweep:project_docs:' || p.id IN (SELECT scope FROM sync_scope_state)"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
-    sqlx::query(
-        "INSERT INTO project_docs_listings_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
+    sql!("claude.migrate.insert_project_docs_listing_bookkeeping", "INSERT INTO project_docs_listings_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
          SELECT l.id, 0, ?, p.updated_at FROM project_docs_listings l JOIN projects p ON p.id = l.id \
          WHERE true \
          ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version, \
             fetched_at_utc = COALESCE(project_docs_listings_bookkeeping.fetched_at_utc, \
-                                      excluded.fetched_at_utc)",
-    )
+                                      excluded.fetched_at_utc)").query()
     .bind(&now)
     .execute(&mut *conn)
     .await?;
-    sqlx::query(
-        "INSERT INTO claude_attachments_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
+    sql!("claude.migrate.insert_held_attachment_bookkeeping", "INSERT INTO claude_attachments_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
          SELECT a.id, 0, ?, b.held_version FROM claude_attachments a \
          JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid \
          WHERE a.blake3 IS NOT NULL \
@@ -284,8 +291,7 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
                         WHERE scope_kind = ? AND reason = ? AND scope_key LIKE 'claude_attachments:%') \
          ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version, \
             fetched_at_utc = COALESCE(claude_attachments_bookkeeping.fetched_at_utc, \
-                                      excluded.fetched_at_utc)",
-    )
+                                      excluded.fetched_at_utc)").query()
     .bind(&now)
     .bind(datalib_problems::ScopeKind::Entity.as_str())
     .bind(datalib_problems::Reason::NotFound.as_str())

@@ -1795,6 +1795,7 @@ mod tests {
     use crate::supervisor::tick::{StateKind, WaitKind};
     use crate::EventSink;
 
+    use datalib_sql::test_sql;
     /// A purge's last stop before `remove_dir_all`. A Mac's disk ignores
     /// letter case, so `Gone` there is the folder `gone`; it is never
     /// deleted under a name that is not its own.
@@ -2740,7 +2741,8 @@ mod tests {
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
         assert!(other.running_invocations().await.unwrap().is_empty());
-        let outcome: String = sqlx::query_scalar("SELECT outcome FROM invocations WHERE id = ?")
+        let outcome: String = test_sql!("SELECT outcome FROM invocations WHERE id = ?")
+            .query_scalar()
             .bind(&open[0].id)
             .fetch_one(other.pool())
             .await

@@ -10,6 +10,7 @@ use sqlx::Row;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// What `lightroom`'s `skip_xmp` expands to; spelled out here so the
 /// engine's tests do not depend on a provider's config crate.
@@ -74,7 +75,8 @@ impl Fixture {
         let pool = mirror::open_sqlite(&self.catalog, false).await?;
         for s in stmts {
             // Test: `stmts` are literal catalog edits written by the test itself.
-            sqlx::query(sqlx::AssertSqlSafe(*s))
+            Sql::dynamic(test_sql_id!(), *s)
+                .query()
                 .execute(&pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("{s}: {e}"))?;
@@ -97,7 +99,8 @@ fn fixture_catalog() -> PathBuf {
 }
 
 async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -105,7 +108,8 @@ async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
 }
 
 async fn opt_string(pool: &SqlitePool, sql: &str) -> Option<String> {
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .fetch_optional(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -119,7 +123,8 @@ async fn commit_count(pool: &SqlitePool) -> i64 {
 async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String> {
     let sql =
         format!("SELECT diff_type FROM dolt_diff_{table} WHERE to_commit = ? OR from_commit = ?");
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+    let rows = Sql::dynamic(test_sql_id!(), sql.as_str())
+        .query()
         .bind(commit)
         .bind(commit)
         .fetch_all(pool)
@@ -134,23 +139,21 @@ async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String>
 }
 
 async fn mirror_columns(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo(\"{table}\")"
-    )))
-    .fetch_all(pool)
-    .await
-    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_xinfo(\"{table}\")"))
+        .query()
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     rows.iter().map(|r| r.get::<String, _>("name")).collect()
 }
 
 /// A table's primary-key columns, in key order.
 async fn mirror_pk(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo(\"{table}\")"
-    )))
-    .fetch_all(pool)
-    .await
-    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_xinfo(\"{table}\")"))
+        .query()
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     let mut keyed: Vec<(i64, String)> = rows
         .iter()
         .map(|r| (r.get::<i64, _>("pk"), r.get::<String, _>("name")))
@@ -289,9 +292,10 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
     f.ingest().await?;
 
     let src = mirror::open_sqlite(&f.catalog, false).await?;
-    let want: Vec<(String, String)> = sqlx::query(
-        "SELECT id_global, hex(xmp) AS h FROM Adobe_AdditionalMetadata ORDER BY id_global",
+    let want: Vec<(String, String)> = test_sql!(
+        "SELECT id_global, hex(xmp) AS h FROM Adobe_AdditionalMetadata ORDER BY id_global"
     )
+    .query()
     .fetch_all(&src)
     .await?
     .iter()
@@ -300,9 +304,10 @@ async fn large_values_round_trip_byte_for_byte() -> Result<()> {
     src.close().await;
 
     let pool = f.mirror_pool().await?;
-    let got: Vec<(String, String)> = sqlx::query(
-        "SELECT id_global, hex(xmp) AS h FROM Adobe_AdditionalMetadata ORDER BY id_global",
+    let got: Vec<(String, String)> = test_sql!(
+        "SELECT id_global, hex(xmp) AS h FROM Adobe_AdditionalMetadata ORDER BY id_global"
     )
+    .query()
     .fetch_all(&pool)
     .await?
     .iter()
@@ -520,10 +525,11 @@ async fn history_is_preserved_across_runs() -> Result<()> {
     }
 
     // The edited row's every prior value is still readable.
-    let ratings = sqlx::query(
+    let ratings = test_sql!(
         "SELECT rating FROM dolt_history_Adobe_images \
-         WHERE id_global = 'IMAGE-0102-DATA' ORDER BY rating",
+         WHERE id_global = 'IMAGE-0102-DATA' ORDER BY rating"
     )
+    .query()
     .fetch_all(&pool)
     .await?;
     let ratings: Vec<i64> = ratings.iter().map(|r| r.get::<i64, _>("rating")).collect();
@@ -582,7 +588,8 @@ async fn stable_key_is_used_where_available_and_declared_key_elsewhere() -> Resu
 }
 
 async fn mirror_key(pool: &SqlitePool, table: &str) -> Vec<String> {
-    sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+    test_sql!("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+        .query_scalar()
         .bind(table)
         .fetch_all(pool)
         .await
@@ -794,14 +801,15 @@ async fn table_filters_select_what_is_mirrored() -> Result<()> {
     );
 
     let pool = f.mirror_pool().await?;
-    let mut names: Vec<String> = sqlx::query(
+    let mut names: Vec<String> = test_sql!(
         // `sqlite_%` is SQLite's internal `sqlite_sequence`, which the
         // AUTOINCREMENT in the store's bookkeeping brings along; the
         // store's own tables (`doltlite_raw::SHARED_TABLES`) are
         // filtered below. Neither is mirrored content.
         "SELECT name FROM sqlite_master WHERE type = 'table' \
-         AND name NOT LIKE 'sqlite_%' ORDER BY name",
+         AND name NOT LIKE 'sqlite_%' ORDER BY name"
     )
+    .query()
     .fetch_all(&pool)
     .await?
     .iter()
@@ -1013,18 +1021,21 @@ async fn a_dropped_columns_values_survive_at_their_commit() -> Result<()> {
     // statements must run on one connection: doltlite's active branch is
     // per-connection.
     let mut conn = pool.acquire().await?;
-    sqlx::query("SELECT dolt_branch(?, ?)")
+    test_sql!("SELECT dolt_branch(?, ?)")
+        .query()
         .bind("before_drop")
         .bind(&before)
         .execute(&mut *conn)
         .await?;
-    sqlx::query("SELECT dolt_checkout(?)")
+    test_sql!("SELECT dolt_checkout(?)")
+        .query()
         .bind("before_drop")
         .execute(&mut *conn)
         .await?;
-    let recovered: i64 = sqlx::query(
-        "SELECT parentId FROM AgLibraryFolder WHERE id_global = 'FOLDER-0002-TENFORWARD'",
+    let recovered: i64 = test_sql!(
+        "SELECT parentId FROM AgLibraryFolder WHERE id_global = 'FOLDER-0002-TENFORWARD'"
     )
+    .query()
     .fetch_one(&mut *conn)
     .await
     .expect("the dropped column reads back on the pre-drop branch")
@@ -1033,7 +1044,8 @@ async fn a_dropped_columns_values_survive_at_their_commit() -> Result<()> {
 
     // Leave the connection on `main` so the pool isn't handed back
     // pointing at the recovery branch.
-    sqlx::query("SELECT dolt_checkout(?)")
+    test_sql!("SELECT dolt_checkout(?)")
+        .query()
         .bind("main")
         .execute(&mut *conn)
         .await?;
@@ -1167,7 +1179,8 @@ async fn column_defaults_are_not_mirrored_and_the_rows_still_land() -> Result<()
 /// The tables a mirror holds of its source, sorted: not the store's own.
 async fn mirrored_tables(pool: &SqlitePool) -> Result<Vec<String>> {
     let names: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+        test_sql!("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .query_scalar()
             .fetch_all(pool)
             .await?;
     Ok(names
@@ -1237,7 +1250,8 @@ async fn nothing_to_mirror_is_a_problem_inside_a_collector() -> Result<()> {
     .await?;
     assert!(ran.is_none());
     assert_eq!(mirrored_tables(&pool).await?, CATALOG_TABLES);
-    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+    let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+        .query_scalar()
         .fetch_all(&pool)
         .await?;
     assert_eq!(keys, ["phase:source"]);
@@ -1261,7 +1275,8 @@ async fn a_colliding_table_is_a_problem_inside_a_collector() -> Result<()> {
     })
     .await?;
     assert!(ran.is_some(), "a clean source mirrors");
-    let clean: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+    let clean: i64 = test_sql!("SELECT COUNT(*) FROM problems")
+        .query_scalar()
         .fetch_one(&pool)
         .await?;
     assert_eq!(clean, 0);
@@ -1278,7 +1293,8 @@ async fn a_colliding_table_is_a_problem_inside_a_collector() -> Result<()> {
     .await?;
     assert!(ran.is_none());
     assert_eq!(mirrored_tables(&pool).await?, CATALOG_TABLES);
-    let rows: Vec<(String, String)> = sqlx::query_as("SELECT scope_key, sample FROM problems")
+    let rows: Vec<(String, String)> = test_sql!("SELECT scope_key, sample FROM problems")
+        .query_as()
         .fetch_all(&pool)
         .await?;
     assert_eq!(rows.len(), 1, "{rows:?}");

@@ -76,6 +76,9 @@ pub struct Inputs<'a> {
     pub root_bytes: u64,
     pub disk: &'a crate::disk_free::DiskFree,
     pub applets: &'a BTreeMap<String, crate::applet_memory::Reading>,
+    /// What the statements of each process the server can see did, by
+    /// name: its own (`datalib-http`) and each applet's (`applet:<id>`).
+    pub sql: &'a BTreeMap<String, datalib_sql_work::ByTag>,
 }
 
 /// A name as Prometheus allows one: `[a-zA-Z_:][a-zA-Z0-9_:]*`, anything
@@ -297,6 +300,25 @@ pub fn families(inputs: &Inputs<'_>) -> Vec<Family> {
             );
         }
     }
+    for (process, by) in inputs.sql {
+        for s in datalib_sql_work::series(by) {
+            let mut labels = vec![("process".to_string(), process.clone())];
+            labels.extend(s.labels.iter().map(|(k, v)| (k.to_string(), v.clone())));
+            add(
+                format!("datalib_{}", s.name),
+                format!(
+                    "`{}` of a process the server runs, by the statement's name: since the \
+                     process started.",
+                    s.name
+                ),
+                Kind::Counter,
+                Sample {
+                    labels,
+                    value: s.value as f64,
+                },
+            );
+        }
+    }
     out.into_values().collect()
 }
 
@@ -368,6 +390,13 @@ pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse,
         .free
         .snapshot(crate::disk_free::floor_of(&config_path))
         .await;
+    let mut sql: BTreeMap<String, datalib_sql_work::ByTag> = s
+        .applets
+        .sql_work()
+        .into_iter()
+        .map(|(id, by)| (format!("applet:{id}"), by))
+        .collect();
+    sql.insert("datalib-http".to_string(), datalib_sql_work::totals());
     let body = render(&families(&Inputs {
         steps: &steps,
         metrics: &metrics,
@@ -376,6 +405,7 @@ pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse,
         root_bytes: storage.root.bytes,
         disk: &disk,
         applets: &s.applets.memory(),
+        sql: &sql,
     }));
     Ok(([(header::CONTENT_TYPE, CONTENT_TYPE)], body))
 }
@@ -420,7 +450,56 @@ mod tests {
                     peak_rss_bytes: 700,
                 },
             )]),
+            sql: &BTreeMap::from([(
+                "applet:search".to_string(),
+                BTreeMap::from([(
+                    "search_index.read.rank_documents_by_words".to_string(),
+                    datalib_sql_work::TagWork {
+                        runs: 3,
+                        rows: 30,
+                        rows_scanned: 900,
+                        micros: 1_500,
+                        loops: BTreeMap::from([(
+                            "SEARCH search_terms USING INDEX terms_by_value (value=?)".to_string(),
+                            900,
+                        )]),
+                        ..Default::default()
+                    },
+                )]),
+            )]),
         }))
+    }
+
+    /// A statement's work is served under its process and its name, each
+    /// loop under the index it read: what a person looking for a slow
+    /// statement charts.
+    #[test]
+    fn a_statements_work_is_served_by_its_process_and_name() {
+        let text = scrape(&[]);
+        let of = r#"process="applet:search",sql="search_index.read.rank_documents_by_words""#;
+        assert!(
+            text.contains("# TYPE datalib_sql_runs_total counter\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("datalib_sql_runs_total{{{of}}} 3\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("datalib_sql_rows_scanned_total{{{of}}} 900\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("datalib_sql_microseconds_total{{{of}}} 1500\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "datalib_sql_loop_rows_scanned_total{{{of},loop=\"SEARCH search_terms USING INDEX \
+                 terms_by_value (value=?)\"}} 900\n"
+            )),
+            "{text}"
+        );
     }
 
     fn disk() -> crate::disk_free::DiskFree {
@@ -557,6 +636,7 @@ mod tests {
             root_bytes: 0,
             disk: &disk(),
             applets: &BTreeMap::new(),
+            sql: &BTreeMap::new(),
         }));
         assert!(
             text.contains("datalib_step_state{step=\"s\",state=\"running\"} 1\n"),

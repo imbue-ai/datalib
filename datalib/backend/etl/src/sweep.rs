@@ -3,6 +3,7 @@
 //! it is never progress, and what is owed never depends on one.
 
 use anyhow::{Context, Result};
+use datalib_sql::sql;
 use datalib_time::IsoOffsetTimestamp;
 use sqlx::SqliteExecutor;
 
@@ -30,12 +31,15 @@ impl Sweeps {
         key: &str,
         now: &IsoOffsetTimestamp,
     ) -> Result<Option<chrono::Duration>> {
-        let stamp: Option<String> =
-            sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-                .bind(self.scope(key))
-                .fetch_optional(db)
-                .await
-                .with_context(|| format!("read the sweep marker {key}"))?;
+        let stamp: Option<String> = sql!(
+            "etl.sweep.read_marker_stamp",
+            "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?"
+        )
+        .query_scalar()
+        .bind(self.scope(key))
+        .fetch_optional(db)
+        .await
+        .with_context(|| format!("read the sweep marker {key}"))?;
         stamp.map(|s| age_of(&s, now)).transpose()
     }
 
@@ -51,11 +55,15 @@ impl Sweeps {
     }
 
     pub async fn forget<'e>(&self, db: impl SqliteExecutor<'e>, key: &str) -> Result<()> {
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-            .bind(self.scope(key))
-            .execute(db)
-            .await
-            .with_context(|| format!("forget the sweep marker {key}"))?;
+        sql!(
+            "etl.sweep.delete_marker",
+            "DELETE FROM sync_scope_state WHERE scope = ?"
+        )
+        .query()
+        .bind(self.scope(key))
+        .execute(db)
+        .await
+        .with_context(|| format!("forget the sweep marker {key}"))?;
         Ok(())
     }
 }

@@ -5,6 +5,7 @@ use std::path::Path;
 use datalib_dirtree_diff::analyze::Explained;
 use datalib_dirtree_diff::store::{self, Commit, Skip, Table};
 use datalib_etl_file_inventory::ingest::schema_raw::{DIRS_DDL, FILES_DDL};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// A store with file_inventory's own two tables. A `dir` row lands in `dirs`
 /// (its `size` doubling as `entries`, which these tests never read
@@ -12,12 +13,17 @@ use datalib_etl_file_inventory::ingest::schema_raw::{DIRS_DDL, FILES_DDL};
 async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {
     let pool = store::open_scratch(path).await.unwrap();
     for ddl in [FILES_DDL, DIRS_DDL] {
-        sqlx::query(ddl).execute(&pool).await.unwrap();
+        Sql::dynamic(test_sql_id!(), ddl)
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
     }
     for (id, kind, size, digest) in rows {
         insert(&pool, id, kind, *size, digest).await;
     }
-    sqlx::query("SELECT dolt_commit('-Am','scan')")
+    test_sql!("SELECT dolt_commit('-Am','scan')")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -29,13 +35,15 @@ async fn make_scan(path: &Path, rows: &[(&str, &str, i64, &str)]) -> Commit {
 async fn insert(pool: &sqlx::SqlitePool, id: &str, kind: &str, size: i64, digest: &str) {
     let blake3 = hex::decode(digest).unwrap();
     let query = if kind == "dir" {
-        sqlx::query("INSERT INTO dirs (id, size, entries, blake3) VALUES (?,?,?,?)")
+        test_sql!("INSERT INTO dirs (id, size, entries, blake3) VALUES (?,?,?,?)")
+            .query()
             .bind(id)
             .bind(size)
             .bind(size)
             .bind(blake3)
     } else {
-        sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES (?,?,?,?)")
+        test_sql!("INSERT INTO files (id, kind, size, blake3) VALUES (?,?,?,?)")
+            .query()
             .bind(id)
             .bind(kind)
             .bind(size)
@@ -159,13 +167,15 @@ async fn the_fetching_connection_sees_what_it_fetched() {
     let pool = store::open_scratch(&scratch).await.unwrap();
     for (name, path) in [("l", &left_path), ("r", &right_path)] {
         let url = format!("file://{}", std::fs::canonicalize(path).unwrap().display());
-        sqlx::query("SELECT dolt_remote('add', ?, ?)")
+        test_sql!("SELECT dolt_remote('add', ?, ?)")
+            .query()
             .bind(name)
             .bind(&url)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_fetch(?)")
+        test_sql!("SELECT dolt_fetch(?)")
+            .query()
             .bind(name)
             .execute(&pool)
             .await
@@ -186,12 +196,14 @@ async fn two_commits_in_one_file_diff_directly() {
 
     let first = make_scan(&path, &[("a.txt", "file", 1, &digest(0x11))]).await;
     let pool = store::open_scratch(&path).await.unwrap();
-    sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES ('b.txt','file',2,?)")
+    test_sql!("INSERT INTO files (id, kind, size, blake3) VALUES ('b.txt','file',2,?)")
+        .query()
         .bind(hex::decode(digest(0x22)).unwrap())
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("SELECT dolt_commit('-Am','second')")
+    test_sql!("SELECT dolt_commit('-Am','second')")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -213,7 +225,8 @@ async fn reads_see_the_commit_not_the_working_set() {
 
     let pool = store::open_scratch(&path).await.unwrap();
     // Uncommitted: this lands in the working set only.
-    sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES ('uncommitted.txt','file',9,?)")
+    test_sql!("INSERT INTO files (id, kind, size, blake3) VALUES ('uncommitted.txt','file',9,?)")
+        .query()
         .bind(hex::decode(digest(0x33)).unwrap())
         .execute(&pool)
         .await

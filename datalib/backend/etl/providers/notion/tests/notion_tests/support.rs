@@ -9,6 +9,7 @@ use datalib_etl_notion::ingest::{fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
+use datalib_sql::test_sql;
 use serde_json::{json, Value};
 
 pub const BRIDGE: &str = "1701d000-0000-4000-8000-000000000001";
@@ -248,7 +249,8 @@ pub async fn run_with(
 
 pub async fn problems(store: &Path) -> Vec<(String, String)> {
     let db = RawDb::open(store).await.unwrap();
-    let rows = sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+    let rows = test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap();

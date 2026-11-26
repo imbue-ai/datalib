@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use crate::file_changes_scan::{FileScanCursor, Listing, ScannedFile};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// The cursor table. One row per `(scope, root-relative path)`.
 ///
@@ -40,9 +41,11 @@ pub const INGESTED_FILES_DDL: &str = "CREATE TABLE IF NOT EXISTS ingested_files 
 /// Feed it straight to [`crate::file_changes_scan::Scan::changes_since`] — that
 /// pair is the whole "what changed since I last looked?" question.
 pub async fn load_cursor(pool: &SqlitePool, scope: &str) -> Result<FileScanCursor> {
-    let rows = sqlx::query_as::<_, (String, String)>(
-        "SELECT rel_path, blake3 FROM ingested_files WHERE scope = ?",
+    let rows = sql!(
+        "etl.files.checkpoint.list_file_hashes_of_scope",
+        "SELECT rel_path, blake3 FROM ingested_files WHERE scope = ?"
     )
+    .query_as::<(String, String)>()
     .bind(scope)
     .fetch_all(pool)
     .await
@@ -82,7 +85,8 @@ pub async fn record_file_with_problem(
 ) -> Result<()> {
     replace_file_problem(tx, scope, &file.rel, problem).await?;
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
+    sql!(
+        "etl.files.checkpoint.upsert_ingested_file",
         "INSERT INTO ingested_files \
             (scope, rel_path, blake3, size_bytes, last_finished_at_utc, tz_offset)
          VALUES (?, ?, ?, ?, ?, ?)
@@ -92,8 +96,9 @@ pub async fn record_file_with_problem(
             last_finished_at_utc = excluded.last_finished_at_utc,
             tz_offset = excluded.tz_offset
          WHERE ingested_files.blake3 != excluded.blake3
-            OR ingested_files.size_bytes != excluded.size_bytes",
+            OR ingested_files.size_bytes != excluded.size_bytes"
     )
+    .query()
     .bind(scope)
     .bind(&file.rel)
     .bind(crate::file_changes_scan::hex(&file.blake3))
@@ -111,12 +116,16 @@ pub async fn record_file_with_problem(
 /// and the next run sees it removed again and retries.
 pub async fn forget_file(tx: &mut Transaction<'_, Sqlite>, scope: &str, rel: &str) -> Result<()> {
     replace_file_problem(tx, scope, rel, None).await?;
-    sqlx::query("DELETE FROM ingested_files WHERE scope = ? AND rel_path = ?")
-        .bind(scope)
-        .bind(rel)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("forget ingested_files {scope}={rel}"))?;
+    sql!(
+        "etl.files.checkpoint.delete_ingested_file",
+        "DELETE FROM ingested_files WHERE scope = ? AND rel_path = ?"
+    )
+    .query()
+    .bind(scope)
+    .bind(rel)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("forget ingested_files {scope}={rel}"))?;
     Ok(())
 }
 
@@ -137,10 +146,12 @@ async fn replace_file_problem(
     use datalib_etl::bulk::BulkUpsertable as _;
     use datalib_problems::{ProblemRow, Scope, ScopeKind, Stage};
     let key = file_problem_key(scope, rel);
-    let earlier = sqlx::query(
+    let earlier = sql!(
+        "etl.files.checkpoint.find_file_problem",
         "SELECT * FROM problems INDEXED BY problems_by_scope \
-         WHERE scope_kind = ? AND scope_key = ?",
+         WHERE scope_kind = ? AND scope_key = ?"
     )
+    .query()
     .bind(ScopeKind::Entity.as_str())
     .bind(&key)
     .fetch_optional(&mut **tx)
@@ -148,10 +159,12 @@ async fn replace_file_problem(
     .with_context(|| format!("read the problem of {key}"))?
     .map(|r| ProblemRow::from_row(&r))
     .transpose()?;
-    sqlx::query(
+    sql!(
+        "etl.files.checkpoint.delete_file_problem",
         "DELETE FROM problems INDEXED BY problems_by_scope \
-         WHERE scope_kind = ? AND scope_key = ?",
+         WHERE scope_kind = ? AND scope_key = ?"
     )
+    .query()
     .bind(ScopeKind::Entity.as_str())
     .bind(&key)
     .execute(&mut **tx)
@@ -171,10 +184,13 @@ async fn replace_file_problem(
         None,
     )
     .stamped(earlier.as_ref(), &now, Some(&tz_offset));
-    let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+    let sql = Sql::dynamic(
+        sql_id!("etl.files.checkpoint.insert_file_problem"),
+        datalib_etl::bulk::insert_sql::<ProblemRow>(),
+    );
     // Audited: `sql` is built from `ProblemRow`'s associated consts, never
     // from row data; all values bound.
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+    row.bind_into(sql.query())
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record the problem of {key}"))?;
@@ -279,31 +295,41 @@ where
 /// `reset` path when wiping per-feed state.
 pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
     forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{scope}:")).await?;
-    sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
-        .bind(scope)
-        .execute(pool)
-        .await
-        .with_context(|| format!("clear ingested_files scope={scope}"))?;
+    sql!(
+        "etl.files.checkpoint.delete_files_of_scope",
+        "DELETE FROM ingested_files WHERE scope = ?"
+    )
+    .query()
+    .bind(scope)
+    .execute(pool)
+    .await
+    .with_context(|| format!("clear ingested_files scope={scope}"))?;
     Ok(())
 }
 
 pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
     forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{prefix}")).await?;
-    sqlx::query("DELETE FROM ingested_files WHERE scope LIKE ?")
-        .bind(format!("{prefix}%"))
-        .execute(pool)
-        .await
-        .with_context(|| format!("clear ingested_files scope LIKE {prefix}%"))?;
+    sql!(
+        "etl.files.checkpoint.delete_files_under_scope_prefix",
+        "DELETE FROM ingested_files WHERE scope LIKE ?"
+    )
+    .query()
+    .bind(format!("{prefix}%"))
+    .execute(pool)
+    .await
+    .with_context(|| format!("clear ingested_files scope LIKE {prefix}%"))?;
     Ok(())
 }
 
 async fn forget_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()> {
     let end = datalib_etl::key_range::prefix_end(key_prefix)
         .with_context(|| format!("no key follows the prefix {key_prefix:?}"))?;
-    sqlx::query(
+    sql!(
+        "etl.files.checkpoint.delete_problems_under_prefix",
         "DELETE FROM problems INDEXED BY problems_by_scope \
-         WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?",
+         WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?"
     )
+    .query()
     .bind(datalib_problems::ScopeKind::Entity.as_str())
     .bind(key_prefix)
     .bind(&end)
@@ -323,6 +349,7 @@ mod tests {
     use std::str::FromStr;
     use tempfile::tempdir;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     fn is_unchanged(cursor: &FileScanCursor, f: &ScannedFile) -> bool {
         cursor.get(&f.rel) == Some(&f.blake3)
     }
@@ -371,7 +398,11 @@ mod tests {
                     .copied(),
             )
         {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            Sql::dynamic(test_sql_id!(), ddl)
+                .query()
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         let cache = FingerprintCache::open(&dir.path().join("fp.sqlite"))
             .await
@@ -422,7 +453,8 @@ mod tests {
     }
 
     async fn file_problems(pool: &SqlitePool) -> Vec<(String, String)> {
-        sqlx::query_as("SELECT scope_key, first_seen_at_utc FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, first_seen_at_utc FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap()
@@ -577,7 +609,8 @@ mod tests {
         clear_scope_prefix(&e.pool, "google_takeout/")
             .await
             .unwrap();
-        let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_files")
+        let remaining: i64 = test_sql!("SELECT count(*) FROM ingested_files")
+            .query_scalar()
             .fetch_one(&e.pool)
             .await
             .unwrap();

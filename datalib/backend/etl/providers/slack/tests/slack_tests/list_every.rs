@@ -8,14 +8,15 @@ use datalib_etl_slack::recorded::History;
 use serde_json::json;
 
 use crate::support::{fetch_into, msg, record_general, serve, Tree};
+use datalib_sql::test_sql;
 
 async fn users_listing_failed(out: &std::path::Path) -> bool {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let n: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM problems WHERE scope_key LIKE '%users.list%'")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let n: i64 = test_sql!("SELECT COUNT(*) FROM problems WHERE scope_key LIKE '%users.list%'")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     db.close().await;
     n > 0
 }

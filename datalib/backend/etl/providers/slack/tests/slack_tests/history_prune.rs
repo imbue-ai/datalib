@@ -13,6 +13,7 @@ use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
+use datalib_sql::test_sql;
 
 /// Far enough back that `refresh_window_days: WHOLE_CHANNEL_DAYS` covers
 /// every message here, so the window pass re-walks the whole channel.
@@ -73,7 +74,8 @@ fn write_cold_start_with_thread(api: &Path) {
 async fn recorded_latest_reply(out: &Path) -> Option<String> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
     let held: Option<Option<String>> =
-        sqlx::query_scalar("SELECT held_version FROM threads_bookkeeping WHERE id = ?")
+        test_sql!("SELECT held_version FROM threads_bookkeeping WHERE id = ?")
+            .query_scalar()
             .bind(slack_message_key("T1", "C1", TS_A))
             .fetch_optional(db.pool())
             .await

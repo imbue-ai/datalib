@@ -16,6 +16,7 @@ use super::canonicalize::canonicalize_payload;
 use super::schema_raw::{
     full_ddl, DiscussionRow, MergeRequestRow, SelfIdentityRow, LADDER, SELF_IDENTITY_VOLATILE_PATHS,
 };
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -85,10 +86,12 @@ impl RawDb {
     // ── loads ───────────────────────────────────────────────────────
 
     pub async fn load_merge_requests(&self) -> Result<Vec<LoadedMergeRequest>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "gitlab.load_merge_requests",
             "SELECT id, project_full_path, mr_iid, json(payload) AS payload
-             FROM merge_requests WHERE payload IS NOT NULL ORDER BY id",
+             FROM merge_requests WHERE payload IS NOT NULL ORDER BY id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select merge_requests")?;
@@ -108,10 +111,12 @@ impl RawDb {
     }
 
     pub async fn load_discussions(&self) -> Result<Vec<LoadedDiscussion>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "gitlab.load_discussions",
             "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload
-             FROM discussions WHERE payload IS NOT NULL ORDER BY id",
+             FROM discussions WHERE payload IS NOT NULL ORDER BY id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select discussions")?;
@@ -155,10 +160,14 @@ impl RawDb {
     }
 
     pub async fn any_merge_requests(&self) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM merge_requests WHERE payload IS NOT NULL LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("any_merge_requests")?;
+        let row = sql!(
+            "gitlab.has_any_merge_request",
+            "SELECT 1 FROM merge_requests WHERE payload IS NOT NULL LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("any_merge_requests")?;
         Ok(row.is_some())
     }
 }
@@ -206,6 +215,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn self_identity_round_trips() {
         let d = tempfile::tempdir().unwrap();
@@ -272,7 +282,8 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
         let row =
-            sqlx::query("SELECT typeof(payload) AS t FROM merge_requests WHERE id='ns/proj!12'")
+            test_sql!("SELECT typeof(payload) AS t FROM merge_requests WHERE id='ns/proj!12'")
+                .query()
                 .fetch_one(db.pool())
                 .await
                 .unwrap();

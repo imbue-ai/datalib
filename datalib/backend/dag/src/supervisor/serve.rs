@@ -431,6 +431,30 @@ async fn serve_period(
         run_id: run_id.clone(),
     });
     tracing::info!(run = %run_id, "supervisor: the sync is over");
+    say_runner_statements(&run_id);
+}
+
+/// What the runner's own statements did during the sync that just ended,
+/// by name, as one line: the runner never ends, so its work is reported
+/// a sync at a time rather than as a step's metrics are.
+fn say_runner_statements(run_id: &str) {
+    static LAST: std::sync::Mutex<datalib_sql_work::ByTag> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let now = datalib_sql_work::totals();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let ran = datalib_sql_work::since(&now, &last);
+    *last = now;
+    if ran.is_empty() {
+        return;
+    }
+    let statements = datalib_sql_work::header_value(&ran);
+    tracing::debug!(
+        target: datalib_sql_work::TARGET,
+        run = %run_id,
+        statements = %statements,
+        "the runner's statements this sync: {} names",
+        ran.len()
+    );
 }
 
 /// Close every open request: the loop cannot run them, for `why`.

@@ -518,6 +518,7 @@ mod tests {
     use super::*;
     use meta::tests::jpeg_with_date_time_original;
 
+    use datalib_sql::{test_sql, Sql};
     fn panics_on_red_alert(
         path: &Path,
         size: i64,
@@ -556,8 +557,8 @@ mod tests {
         summary
     }
 
-    async fn column(db: &RawDb, sql: &'static str) -> Vec<String> {
-        sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap()
+    async fn column(db: &RawDb, sql: Sql) -> Vec<String> {
+        sql.query_scalar().fetch_all(db.pool()).await.unwrap()
     }
 
     /// A parser that panicked on one file ended the whole scan, and the
@@ -585,14 +586,14 @@ mod tests {
         let summary = scan(&root, &raw, &db, panics_on_red_alert).await;
         assert_eq!((summary.items, summary.errors), (2, 1));
         assert_eq!(
-            column(&db, "SELECT id FROM media_files ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM media_files ORDER BY id")).await,
             ["bridge.jpg", "ten_forward.jpg"]
         );
-        let problems: Vec<(String, String)> =
-            sqlx::query_as("SELECT scope_key, sample FROM problems")
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+        let problems: Vec<(String, String)> = test_sql!("SELECT scope_key, sample FROM problems")
+            .query_as()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         assert_eq!(
             problems,
             [(
@@ -603,11 +604,11 @@ mod tests {
 
         scan(&root, &raw, &db, identify).await;
         assert_eq!(
-            column(&db, "SELECT id FROM media_files ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM media_files ORDER BY id")).await,
             ["bridge.jpg", "red_alert.jpg", "ten_forward.jpg"],
             "the next run tries the file again"
         );
-        assert!(column(&db, "SELECT scope_key FROM problems")
+        assert!(column(&db, test_sql!("SELECT scope_key FROM problems"))
             .await
             .is_empty());
         db.pool().close().await;

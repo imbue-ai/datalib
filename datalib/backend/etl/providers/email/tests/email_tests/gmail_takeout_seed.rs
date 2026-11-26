@@ -18,6 +18,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     Mirror, GMAIL,
 };
+use datalib_sql::test_sql;
 
 const ACCOUNT: &str = "t@example.test";
 /// In the Takeout, and still in the account, relabeled since.
@@ -277,7 +278,8 @@ async fn run(m: &Mirror, takeout: &Path) -> FetchSummary {
 
 async fn emails(m: &Mirror) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT id FROM emails ORDER BY id")
+        test_sql!("SELECT id FROM emails ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -290,23 +292,23 @@ async fn emails(m: &Mirror) -> Vec<String> {
 /// is the same.
 async fn filed(m: &Mirror, gmail_id: &'static str) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar(
-            "SELECT mailbox_id FROM email_mailboxes WHERE email_id = ? ORDER BY mailbox_id",
-        )
-        .bind(gmail_id)
-        .fetch_all(db.pool())
-        .await
-        .unwrap()
+        test_sql!("SELECT mailbox_id FROM email_mailboxes WHERE email_id = ? ORDER BY mailbox_id")
+            .query_scalar()
+            .bind(gmail_id)
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
     })
     .await
 }
 
 async fn bodies(m: &Mirror) -> i64 {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar(
+        test_sql!(
             "SELECT count(*) FROM emails e JOIN email_blobs b
-             ON b.email_id = e.id AND b.blob_id = e.blob_id WHERE b.blake3 IS NOT NULL",
+             ON b.email_id = e.id AND b.blob_id = e.blob_id WHERE b.blake3 IS NOT NULL"
         )
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap()

@@ -729,6 +729,7 @@ async fn main() {
         let _log = LogRecordedProblems;
         run(cli, step_env, &data_root, &now, &control, &emitter).await
     };
+    report_statements(&emitter);
     match result {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
@@ -776,6 +777,16 @@ async fn main() {
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// What every SQL statement this step ran did, by the name it carries, as
+/// the step's metrics (`datalib_metrics::SQL_RUNS` and its kin).
+fn report_statements(emitter: &Emitter) {
+    let progress = emitter.progress();
+    for s in datalib_sql_work::series(&datalib_sql_work::totals()) {
+        let labels: Vec<(&str, &str)> = s.labels.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        progress.metric(s.name, &labels, s.value as i64);
     }
 }
 

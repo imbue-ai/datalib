@@ -16,6 +16,7 @@
 //! one another records that apart, in `coverage_checked`.
 
 use anyhow::{Context, Result};
+use datalib_sql::sql;
 use sqlx::{Sqlite, Transaction};
 
 /// One table for every range a store's download walks, keyed by a scope
@@ -45,12 +46,14 @@ pub async fn checked(
     }
     let (at_utc, tz_offset) = at.to_utc_and_offset();
     let scopes = serde_json::to_string(scopes).context("serialize the scopes checked")?;
-    sqlx::query(
+    sql!(
+        "etl.web.coverage.upsert_checked_scopes",
         "INSERT INTO coverage_checked (scope, checked_at_utc, tz_offset) \
          SELECT value, ?, ? FROM json_each(?) WHERE true \
          ON CONFLICT(scope) DO UPDATE SET checked_at_utc = excluded.checked_at_utc, \
-            tz_offset = excluded.tz_offset",
+            tz_offset = excluded.tz_offset"
     )
+    .query()
     .bind(&at_utc)
     .bind(&tz_offset)
     .bind(&scopes)
@@ -133,12 +136,15 @@ pub async fn held<'e, E>(executor: E, scope: &str) -> Result<Vec<Span>>
 where
     E: sqlx::Executor<'e, Database = Sqlite>,
 {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT lo, hi FROM coverage WHERE scope = ? ORDER BY lo")
-            .bind(scope)
-            .fetch_all(executor)
-            .await
-            .with_context(|| format!("read the coverage of {scope}"))?;
+    let rows: Vec<(String, String)> = sql!(
+        "etl.web.coverage.list_spans_of_scope",
+        "SELECT lo, hi FROM coverage WHERE scope = ? ORDER BY lo"
+    )
+    .query_as()
+    .bind(scope)
+    .fetch_all(executor)
+    .await
+    .with_context(|| format!("read the coverage of {scope}"))?;
     Ok(rows.into_iter().map(|(lo, hi)| Span { lo, hi }).collect())
 }
 
@@ -149,30 +155,42 @@ pub async fn cover(tx: &mut Transaction<'_, Sqlite>, scope: &str, span: Span) ->
     let mut all = held(&mut **tx, scope).await?;
     all.push(span);
     let all = merged(all);
-    sqlx::query("DELETE FROM coverage WHERE scope = ?")
+    sql!(
+        "etl.web.coverage.delete_spans_to_rewrite",
+        "DELETE FROM coverage WHERE scope = ?"
+    )
+    .query()
+    .bind(scope)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("rewrite the coverage of {scope}"))?;
+    for span in all {
+        sql!(
+            "etl.web.coverage.insert_span",
+            "INSERT INTO coverage (scope, lo, hi) VALUES (?, ?, ?)"
+        )
+        .query()
         .bind(scope)
+        .bind(&span.lo)
+        .bind(&span.hi)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("rewrite the coverage of {scope}"))?;
-    for span in all {
-        sqlx::query("INSERT INTO coverage (scope, lo, hi) VALUES (?, ?, ?)")
-            .bind(scope)
-            .bind(&span.lo)
-            .bind(&span.hi)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("record the coverage of {scope}"))?;
+        .with_context(|| format!("record the coverage of {scope}"))?;
     }
     Ok(())
 }
 
 /// Forget every span of `scope`: a channel that is gone, a source reset.
 pub async fn forget(tx: &mut Transaction<'_, Sqlite>, scope: &str) -> Result<()> {
-    sqlx::query("DELETE FROM coverage WHERE scope = ?")
-        .bind(scope)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("forget the coverage of {scope}"))?;
+    sql!(
+        "etl.web.coverage.delete_spans_of_scope",
+        "DELETE FROM coverage WHERE scope = ?"
+    )
+    .query()
+    .bind(scope)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("forget the coverage of {scope}"))?;
     Ok(())
 }
 

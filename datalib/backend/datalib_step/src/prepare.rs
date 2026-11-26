@@ -398,6 +398,7 @@ mod tests {
     use super::*;
     use crate::source_type::SourceType;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     const SHAPES_DIR: &str = "datalib/backend/datalib_step/raw_shapes";
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,10 +432,11 @@ mod tests {
             .await
             .unwrap()
             .expect("a migrated store has a commit");
-        let sql: Vec<String> = sqlx::query_scalar(
+        let sql: Vec<String> = test_sql!(
             "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL \
-             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name",
+             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name"
         )
+        .query_scalar()
         .fetch_all(reader.pool())
         .await
         .unwrap();
@@ -478,20 +480,19 @@ mod tests {
             .await
             .unwrap()
             .expect("a migrated store has a commit");
-        let objects: Vec<(String, String)> = sqlx::query_as(
+        let objects: Vec<(String, String)> = test_sql!(
             "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'index') \
-             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name",
+             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name"
         )
+        .query_as()
         .fetch_all(reader.pool())
         .await
         .unwrap();
         let mut out = BTreeMap::new();
         for (kind, name) in objects {
             let columns: Vec<String> = if kind == "table" {
-                sqlx::query_scalar(
-                    "SELECT name || ' ' || type || ' notnull=' || \"notnull\" || ' default=' || \
-                     ifnull(dflt_value, '-') || ' pk=' || pk FROM pragma_table_info(?) ORDER BY cid",
-                )
+                test_sql!("SELECT name || ' ' || type || ' notnull=' || \"notnull\" || ' default=' || \
+                     ifnull(dflt_value, '-') || ' pk=' || pk FROM pragma_table_info(?) ORDER BY cid").query_scalar()
                 .bind(&name)
                 .fetch_all(reader.pool())
                 .await
@@ -521,14 +522,16 @@ mod tests {
         for stmt in tables.into_iter().chain(rest) {
             // Audited: the SQL is checked in under raw_shapes/, written by
             // this test from a store this repo's own code created.
-            sqlx::query(sqlx::AssertSqlSafe(stmt.clone()))
+            Sql::dynamic(test_sql_id!(), stmt)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap_or_else(|e| panic!("{stmt}: {e}"));
         }
-        let names: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        let names: Vec<String> = test_sql!(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         )
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -547,12 +550,14 @@ mod tests {
         datalib_store_meta::write(&pool, StoreKind::Raw, &recorded)
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+        test_sql!("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+            .query()
             .bind(release)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', ?)")
+        test_sql!("SELECT dolt_commit('-Am', ?)")
+            .query()
             .bind(format!("a store as {release} left it"))
             .execute(&pool)
             .await
@@ -567,7 +572,8 @@ mod tests {
     /// a hash-length check.
     async fn one_row(pool: &sqlx::SqlitePool, table: &str) {
         let columns: Vec<(String, String)> =
-            sqlx::query_as("SELECT name, upper(type) FROM pragma_table_info(?) ORDER BY cid")
+            test_sql!("SELECT name, upper(type) FROM pragma_table_info(?) ORDER BY cid")
+                .query_as()
                 .bind(table)
                 .fetch_all(pool)
                 .await
@@ -589,14 +595,17 @@ mod tests {
                 })
                 .collect();
             let names: Vec<String> = columns.iter().map(|(n, _)| format!("\"{n}\"")).collect();
-            let sql = format!(
-                "INSERT INTO \"{table}\" ({}) VALUES ({})",
-                names.join(", "),
-                values.join(", ")
+            let sql = Sql::dynamic(
+                test_sql_id!(),
+                format!(
+                    "INSERT INTO \"{table}\" ({}) VALUES ({})",
+                    names.join(", "),
+                    values.join(", ")
+                ),
             );
             // Audited: table and column names come from sqlite_master and
             // pragma_table_info of a store this test just built, quoted.
-            match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
+            match sql.query().execute(pool).await {
                 Ok(_) => return,
                 Err(e) => last_error = Some(e),
             }
@@ -736,12 +745,14 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let raw = store_at(dir.path(), &shape, &release).await;
             let pool = plain_pool(&entities_db(&raw)).await;
-            sqlx::query("UPDATE contacts SET payload = json_object('vcard', ?)")
+            test_sql!("UPDATE contacts SET payload = json_object('vcard', ?)")
+                .query()
                 .bind(&card)
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("SELECT dolt_commit('-Am', 'a card with a photo')")
+            test_sql!("SELECT dolt_commit('-Am', 'a card with a photo')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -827,13 +838,15 @@ mod tests {
     /// Set one `_datalib_meta` row of a store and commit it.
     async fn set_meta(db: &Path, key: &str, value: &str) {
         let pool = plain_pool(db).await;
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = ?")
+        test_sql!("UPDATE _datalib_meta SET value = ? WHERE key = ?")
+            .query()
             .bind(value)
             .bind(key)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', 'set a meta row')")
+        test_sql!("SELECT dolt_commit('-Am', 'set a meta row')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -923,7 +936,8 @@ mod tests {
             .await
             .unwrap();
         let hash = "a".repeat(64);
-        sqlx::query("INSERT INTO cas_objects VALUES (?, 5, 'text/plain', x'68656c6c6f')")
+        test_sql!("INSERT INTO cas_objects VALUES (?, 5, 'text/plain', x'68656c6c6f')")
+            .query()
             .bind(&hash)
             .execute(&pool)
             .await
@@ -1002,13 +1016,15 @@ mod tests {
     /// would have left it.
     async fn written_by_an_older_build(db: &Path) {
         let pool = plain_pool(db).await;
-        sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         // The grid index is plain SQLite, and has no commit to make.
         if db.extension().is_some_and(|e| e == "doltlite_db") {
-            sqlx::query("SELECT dolt_commit('-Am', 'an older build')")
+            test_sql!("SELECT dolt_commit('-Am', 'an older build')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -1069,15 +1085,18 @@ mod tests {
         .unwrap();
         let db = datalib_etl_render::indexed_markdown::path_for(&tree);
         let pool = plain_pool(&db).await;
-        sqlx::query("DROP INDEX markdowns_by_render_unit")
+        test_sql!("DROP INDEX markdowns_by_render_unit")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', 'an older build, one index short')")
+        test_sql!("SELECT dolt_commit('-Am', 'an older build, one index short')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -1092,10 +1111,11 @@ mod tests {
             Some(datalib_etl_render::indexed_markdown::shape())
         );
         let pool = plain_pool(&db).await;
-        let made: i64 = sqlx::query_scalar(
+        let made: i64 = test_sql!(
             "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
-             AND name = 'markdowns_by_render_unit'",
+             AND name = 'markdowns_by_render_unit'"
         )
+        .query_scalar()
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -1156,7 +1176,11 @@ mod tests {
             let db = db.clone();
             async move {
                 let pool = plain_pool(&db).await;
-                sqlx::query(sql).execute(&pool).await.unwrap();
+                Sql::dynamic(test_sql_id!(), sql)
+                    .query()
+                    .execute(&pool)
+                    .await
+                    .unwrap();
                 pool.close().await;
             }
         };
@@ -1252,12 +1276,12 @@ mod tests {
         made.close().await;
         let pool = plain_pool(&path).await;
         for sql in [
-            "PRAGMA journal_mode = DELETE",
-            "PRAGMA page_size = 4096",
-            "VACUUM",
-            "PRAGMA journal_mode = WAL",
+            test_sql!("PRAGMA journal_mode = DELETE"),
+            test_sql!("PRAGMA page_size = 4096"),
+            test_sql!("VACUUM"),
+            test_sql!("PRAGMA journal_mode = WAL"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         pool.close().await;
         assert!(cache::in_other_pages(&path).await.unwrap(), "set up");

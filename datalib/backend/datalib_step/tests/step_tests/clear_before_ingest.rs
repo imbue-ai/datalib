@@ -1,6 +1,7 @@
 //! A config still carrying the retired `always_clear_before_ingest`,
 //! against the real binary: what a reader sees when the input the store
 //! would be rewritten from is not there.
+use datalib_sql::test_sql;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -47,7 +48,8 @@ async fn messages_on_main(root: &Path) -> i64 {
         .await
         .unwrap()
         .expect("a store with a main");
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sms_messages")
+    let n: i64 = test_sql!("SELECT COUNT(*) FROM sms_messages")
+        .query_scalar()
         .fetch_one(reader.pool())
         .await
         .unwrap();

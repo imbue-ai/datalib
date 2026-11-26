@@ -342,6 +342,7 @@ mod tests {
     use super::content_hash::tests::doc;
     use super::*;
 
+    use datalib_sql::{test_sql, Sql};
     fn panics_on_red_alert(path: &Path, bytes: &[u8]) -> Result<PdfDocumentRow> {
         if path.ends_with("red_alert.pdf") {
             panic!("a parser met bytes it did not expect");
@@ -372,8 +373,8 @@ mod tests {
         summary
     }
 
-    async fn column(db: &RawDb, sql: &'static str) -> Vec<String> {
-        sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap()
+    async fn column(db: &RawDb, sql: Sql) -> Vec<String> {
+        sql.query_scalar().fetch_all(db.pool()).await.unwrap()
     }
 
     /// A parser that panicked on one PDF ended the whole scan, and the
@@ -397,14 +398,14 @@ mod tests {
         let summary = scan(&root, &raw, &db, panics_on_red_alert).await;
         assert_eq!((summary.documents, summary.errors), (2, 1));
         assert_eq!(
-            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM pdf_paths ORDER BY id")).await,
             ["bridge.pdf", "ten_forward.pdf"]
         );
-        let problems: Vec<(String, String)> =
-            sqlx::query_as("SELECT scope_key, sample FROM problems")
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+        let problems: Vec<(String, String)> = test_sql!("SELECT scope_key, sample FROM problems")
+            .query_as()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         assert_eq!(
             problems,
             [(
@@ -415,11 +416,11 @@ mod tests {
 
         scan(&root, &raw, &db, identify).await;
         assert_eq!(
-            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM pdf_paths ORDER BY id")).await,
             ["bridge.pdf", "red_alert.pdf", "ten_forward.pdf"],
             "the next run tries the file again"
         );
-        assert!(column(&db, "SELECT scope_key FROM problems")
+        assert!(column(&db, test_sql!("SELECT scope_key FROM problems"))
             .await
             .is_empty());
         db.pool().close().await;
@@ -454,11 +455,13 @@ mod tests {
 
         assert_eq!(summary.errors, 1);
         assert_eq!(
-            column(&db, "SELECT id FROM pdf_paths ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM pdf_paths ORDER BY id")).await,
             ["bridge.pdf", "sickbay.pdf"]
         );
         assert_eq!(
-            column(&db, "SELECT blake3 FROM pdf_documents").await.len(),
+            column(&db, test_sql!("SELECT blake3 FROM pdf_documents"))
+                .await
+                .len(),
             2
         );
         db.pool().close().await;
@@ -494,14 +497,14 @@ mod tests {
         let summary = scan(&root, &raw, &db, refuses_past_a_kilobyte).await;
         assert_eq!((summary.documents, summary.errors), (1, 1));
         assert_eq!(
-            column(&db, "SELECT id FROM pdf_paths").await,
+            column(&db, test_sql!("SELECT id FROM pdf_paths")).await,
             ["bridge.pdf"]
         );
-        let problems: Vec<(String, String)> =
-            sqlx::query_as("SELECT scope_key, sample FROM problems")
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+        let problems: Vec<(String, String)> = test_sql!("SELECT scope_key, sample FROM problems")
+            .query_as()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         assert_eq!(problems.len(), 1);
         assert_eq!(problems[0].0, "record:pdf_paths:crafted.pdf");
         assert!(

@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 use crate::support::{checked_at, fetch_into, msg, serve, stored_ts};
+use datalib_sql::{test_sql, Sql};
 
 const A: &str = "1735689600.000100";
 const REPLY_1: &str = "1735689600.000150";
@@ -169,7 +170,8 @@ async fn a_root_says_its_replies_are_not_mirrored_until_they_are() {
 
 /// The rule in `docs/user/raw_stores.md` for whether a `ts` is mirrored,
 /// its `:channel` and `:ts` written `?1` and `?2`.
-const IS_MIRRORED: &str = "\
+const IS_MIRRORED: Sql = test_sql!(
+    "\
     WITH q(scope, ts, key) AS (
       SELECT 'history:' || ?1, ?2, substr('0000000000000000000' || ?2, -19))
     SELECT EXISTS (SELECT 1 FROM coverage c, q
@@ -178,7 +180,8 @@ const IS_MIRRORED: &str = "\
                     WHERE k.scope = q.scope
                       AND CAST(q.ts AS REAL) <= unixepoch(k.checked_at_utc)
                       AND q.key > COALESCE(
-                            (SELECT max(hi) FROM coverage WHERE scope = q.scope), ''))";
+                            (SELECT max(hi) FROM coverage WHERE scope = q.scope), ''))"
+);
 
 /// #1606: a reply newer than a channel's last top-level message lies past
 /// `hi`, which is the newest top-level message the walk saw. Before, the
@@ -211,7 +214,8 @@ async fn a_reply_past_the_newest_top_level_message_counts_as_mirrored() {
     assert_eq!(checked_at(&out).await["C1"], walked_at);
 
     let reader = datalib_pin::open_reader(&db_path_for(&out)).await.unwrap();
-    let hi: String = sqlx::query_scalar("SELECT hi FROM coverage WHERE scope = 'history:C1'")
+    let hi: String = test_sql!("SELECT hi FROM coverage WHERE scope = 'history:C1'")
+        .query_scalar()
         .fetch_one(&reader)
         .await
         .unwrap();
@@ -222,7 +226,8 @@ async fn a_reply_past_the_newest_top_level_message_counts_as_mirrored() {
     let mirrored = |ts: &'static str| {
         let reader = reader.clone();
         async move {
-            sqlx::query_scalar::<_, bool>(IS_MIRRORED)
+            IS_MIRRORED
+                .query_scalar::<bool>()
                 .bind("C1")
                 .bind(ts)
                 .fetch_one(&reader)

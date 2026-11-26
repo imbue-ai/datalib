@@ -7,6 +7,7 @@ use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_sql::sql;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -225,12 +226,14 @@ fn read_rows(
             return Ok(Vec::new());
         };
         let pool = reader.pool();
-        let rows = sqlx::query(
+        let rows = sql!(
+            "applets.slack.list_message_rows",
             "SELECT channel, markdown_uuid, message_index, \
                         IFNULL(created_at, ''), IFNULL(author, ''), preview \
                  FROM grid_rows \
-                 WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL",
+                 WHERE channel IS NOT NULL AND markdown_uuid IS NOT NULL"
         )
+        .query()
         .fetch_all(pool)
         .await?;
         let out = rows
@@ -371,7 +374,15 @@ fn handle(
         _ => "Not Found",
     };
     let rows_read = rows_read
-        .map(|n| format!("{}: {n}\r\n", datalib_sql_work::ROWS_READ_HEADER))
+        .map(|c| {
+            format!(
+                "{}: {}\r\n{}: {}\r\n",
+                datalib_sql_work::ROWS_READ_HEADER,
+                c.rows,
+                datalib_sql_work::SQL_WORK_HEADER,
+                datalib_sql_work::header_value(&c.statements)
+            )
+        })
         .unwrap_or_default();
     let resp = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n{rows_read}Connection: close\r\n\r\n{body}",

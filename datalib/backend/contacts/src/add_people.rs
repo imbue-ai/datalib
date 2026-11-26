@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::review::Skipped;
 use crate::{holder, insert_contact, insert_handle, name_of, ContactKind, Maker, Store};
+use datalib_sql::sql;
 
 #[derive(Debug, Clone)]
 pub struct NewPerson {
@@ -136,20 +137,25 @@ async fn turned_down(
     handle: &Handle,
     contact_id: &str,
 ) -> Result<bool> {
-    let row: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM not_linked WHERE handle = ? AND contact_id = ?")
-            .bind(handle.as_str())
-            .bind(contact_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .context("read whether a handle was taken off")?;
+    let row: Option<i64> = sql!(
+        "contacts_app.is_handle_turned_down",
+        "SELECT 1 FROM not_linked WHERE handle = ? AND contact_id = ?"
+    )
+    .query_scalar()
+    .bind(handle.as_str())
+    .bind(contact_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read whether a handle was taken off")?;
     Ok(row.is_some())
 }
 
 async fn is_a_name(conn: &mut sqlx::SqliteConnection, name: &str) -> Result<bool> {
-    let row: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM contacts WHERE merged_into IS NULL AND name = ? COLLATE NOCASE LIMIT 1",
+    let row: Option<i64> = sql!(
+        "contacts_app.find_contact_by_name",
+        "SELECT 1 FROM contacts WHERE merged_into IS NULL AND name = ? COLLATE NOCASE LIMIT 1"
     )
+    .query_scalar()
     .bind(name)
     .fetch_optional(&mut *conn)
     .await

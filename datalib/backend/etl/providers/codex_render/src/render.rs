@@ -34,6 +34,7 @@ use datalib_etl_agent_sessions_render::{
 };
 
 use crate::ids;
+use datalib_sql::sql;
 
 /// v3: the account's own messages are "Me", as every chat source writes
 ///     them.
@@ -121,11 +122,13 @@ impl SessionRender for Codex<'_> {
     ) -> Result<Vec<RecordRow>> {
         let rows: Vec<(String, String, i64, String)> = clock
             .load(
-                sqlx::query_as(
+                sql!(
+                    "codex_render.list_records_of_transcripts",
                     "SELECT id, transcript_id, line_no, json(payload) FROM records \
                      WHERE transcript_id IN (SELECT value FROM json_each(?1)) \
-                     ORDER BY transcript_id, line_no",
+                     ORDER BY transcript_id, line_no"
                 )
+                .query_as()
                 .bind(ids)
                 .fetch_all(pool),
             )

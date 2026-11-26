@@ -189,6 +189,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     fn render(raw: &std::path::Path) -> Result<FeedOutcome> {
         let source = Source {
             raw_dir: raw,
@@ -224,11 +225,13 @@ mod tests {
         );
 
         let db = RawDb::open(&db_path_for(raw)).await.unwrap();
-        sqlx::query("CREATE TABLE connections (id TEXT PRIMARY KEY)")
+        test_sql!("CREATE TABLE connections (id TEXT PRIMARY KEY)")
+            .query()
             .execute(db.pool())
             .await
             .unwrap();
-        sqlx::query("INSERT INTO connections (id) VALUES ('c1')")
+        test_sql!("INSERT INTO connections (id) VALUES ('c1')")
+            .query()
             .execute(db.pool())
             .await
             .unwrap();

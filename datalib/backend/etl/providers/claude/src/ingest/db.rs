@@ -24,6 +24,7 @@ use super::schema_raw::{
     full_ddl, ConversationAttachmentRow, ConversationRow, CoworkEventRow, CoworkSessionRow,
     ProjectDocRow, ProjectRow, ATTACHMENTS, COWORK_EVENTS, COWORK_SESSIONS, LADDER, PROJECTS,
 };
+use datalib_sql::{sql, Sql};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -60,7 +61,8 @@ impl RawDb {
     // ── users and orgs ───────────────────────────────────────────────
 
     pub async fn has_any_user(&self) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM users LIMIT 1")
+        let row = sql!("claude.has_any_user", "SELECT 1 FROM users LIMIT 1")
+            .query()
             .fetch_optional(self.pool())
             .await
             .context("has_any_user")?;
@@ -85,9 +87,11 @@ impl RawDb {
         now: &IsoOffsetTimestamp,
     ) -> Result<HashMap<String, chrono::Duration>> {
         let prefix = SWEEPS.scope("project_docs:");
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'",
+        let rows: Vec<(String, String)> = sql!(
+            "claude.list_project_docs_sweep_ages",
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'"
         )
+        .query_as()
         .bind(&prefix)
         .fetch_all(self.pool())
         .await
@@ -199,11 +203,15 @@ impl RawDb {
             });
         }
         bulk_upsert_in_tx(tx, &rows, now).await?;
-        sqlx::query("INSERT OR IGNORE INTO project_docs_listings (id) VALUES (?)")
-            .bind(project_uuid)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list the docs of {project_uuid}"))?;
+        sql!(
+            "claude.insert_project_docs_listing",
+            "INSERT OR IGNORE INTO project_docs_listings (id) VALUES (?)"
+        )
+        .query()
+        .bind(project_uuid)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list the docs of {project_uuid}"))?;
         record_sweep_in_tx(tx, &super::project_docs_sweep_key(project_uuid), run_now).await?;
         Ok(rows.len())
     }
@@ -255,11 +263,15 @@ impl RawDb {
             &[uuid.to_string()],
         )
         .await?;
-        sqlx::query("DELETE FROM conversations WHERE id = ?")
-            .bind(uuid)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("forget conversation {uuid}"))?;
+        sql!(
+            "claude.delete_conversation",
+            "DELETE FROM conversations WHERE id = ?"
+        )
+        .query()
+        .bind(uuid)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget conversation {uuid}"))?;
         Ok(())
     }
 }
@@ -275,20 +287,24 @@ async fn list_attachments_in_tx(
     let mut keep: HashSet<String> = HashSet::new();
     for file_uuid in files.iter().filter_map(file_uuid_of) {
         let id = ConversationAttachmentRow::pk_recipe(owner, file_uuid);
-        sqlx::query(
+        sql!(
+            "claude.insert_attachment_edge",
             "INSERT INTO claude_attachments (id, conversation_uuid, file_uuid, blake3) \
-             VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING",
+             VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING"
         )
+        .query()
         .bind(&id)
         .bind(owner)
         .bind(file_uuid)
         .execute(&mut **tx)
         .await
         .with_context(|| format!("list attachment {id}"))?;
-        sqlx::query(
+        sql!(
+            "claude.insert_attachment_bookkeeping",
             "INSERT INTO claude_attachments_bookkeeping (id, attempt_count) VALUES (?, 0) \
-             ON CONFLICT(id) DO NOTHING",
+             ON CONFLICT(id) DO NOTHING"
         )
+        .query()
         .bind(&id)
         .execute(&mut **tx)
         .await
@@ -306,12 +322,14 @@ impl RawDb {
     /// fetch of the owner, and a file claude.ai no longer serves is asked
     /// for again only when the owner changes.
     pub async fn attachments_listed(&self) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "claude.list_attachments_with_held_version",
             "SELECT a.id, coalesce(b.held_version, c.held_version) FROM claude_attachments a \
              LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid \
              LEFT JOIN cowork_sessions_bookkeeping c ON c.id = a.conversation_uuid \
-             ORDER BY a.conversation_uuid, a.file_uuid",
+             ORDER BY a.conversation_uuid, a.file_uuid"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("list the attachments")?;
@@ -325,10 +343,12 @@ impl RawDb {
     /// their hash: a file's bytes never change, so one landed under one
     /// conversation is not fetched for another.
     pub async fn blake3_of_file(&self, file_uuid: &str) -> Result<Option<String>> {
-        sqlx::query_scalar(
+        sql!(
+            "claude.find_blake3_by_file_uuid",
             "SELECT blake3 FROM claude_attachments \
-             WHERE file_uuid = ? AND blake3 IS NOT NULL LIMIT 1",
+             WHERE file_uuid = ? AND blake3 IS NOT NULL LIMIT 1"
         )
+        .query_scalar()
         .bind(file_uuid)
         .fetch_optional(self.pool())
         .await
@@ -342,12 +362,16 @@ impl RawDb {
         edge_id: &str,
         blake3: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE claude_attachments SET blake3 = ? WHERE id = ?")
-            .bind(blake3)
-            .bind(edge_id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("record the bytes of {edge_id}"))?;
+        sql!(
+            "claude.update_attachment_blake3",
+            "UPDATE claude_attachments SET blake3 = ? WHERE id = ?"
+        )
+        .query()
+        .bind(blake3)
+        .bind(edge_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("record the bytes of {edge_id}"))?;
         Ok(())
     }
 
@@ -373,11 +397,15 @@ impl RawDb {
         keep: &HashSet<String>,
         when: WhenDeletedUpstream,
     ) -> Result<(usize, usize)> {
-        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations WHERE org_uuid = ?")
-            .bind(org_uuid)
-            .fetch_one(self.pool())
-            .await
-            .context("count org conversations for prune")?;
+        let held: i64 = sql!(
+            "claude.count_org_conversations",
+            "SELECT COUNT(*) FROM conversations WHERE org_uuid = ?"
+        )
+        .query_scalar()
+        .bind(org_uuid)
+        .fetch_one(self.pool())
+        .await
+        .context("count org conversations for prune")?;
         let unlisted = self
             .prune_conversations_in(&[("org_uuid", org_uuid)], keep, when)
             .await?;
@@ -392,9 +420,11 @@ impl RawDb {
     /// caller every org of which listed completely: a stub belongs to
     /// whichever org listed it, and nothing records which.
     pub async fn prune_unlisted_stubs(&self, listed: &HashSet<String>) -> Result<usize> {
-        let stubs: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM conversations WHERE org_uuid IS NULL AND payload IS NULL",
+        let stubs: Vec<String> = sql!(
+            "claude.list_conversation_stubs",
+            "SELECT id FROM conversations WHERE org_uuid IS NULL AND payload IS NULL"
         )
+        .query_scalar()
         .fetch_all(self.pool())
         .await
         .context("list conversation stubs")?;
@@ -402,13 +432,17 @@ impl RawDb {
         if gone.is_empty() {
             return Ok(0);
         }
-        let keep: HashSet<String> = sqlx::query_scalar::<_, String>("SELECT id FROM conversations")
-            .fetch_all(self.pool())
-            .await
-            .context("list conversation ids")?
-            .into_iter()
-            .filter(|id| !gone.contains(id))
-            .collect();
+        let keep: HashSet<String> = sql!(
+            "claude.list_conversation_ids",
+            "SELECT id FROM conversations"
+        )
+        .query_scalar::<String>()
+        .fetch_all(self.pool())
+        .await
+        .context("list conversation ids")?
+        .into_iter()
+        .filter(|id| !gone.contains(id))
+        .collect();
         // A stub holds nothing to keep, so it goes whatever
         // `when_deleted_upstream` says.
         let n = self
@@ -443,12 +477,15 @@ impl RawDb {
 
     /// The conversation as stored, `None` for one never fetched.
     pub async fn load_conversation_payload(&self, id: &str) -> Result<Option<Value>> {
-        let payload: Option<Option<String>> =
-            sqlx::query_scalar("SELECT json(payload) FROM conversations WHERE id = ?")
-                .bind(id)
-                .fetch_optional(self.pool())
-                .await
-                .context("select one conversation")?;
+        let payload: Option<Option<String>> = sql!(
+            "claude.read_conversation_payload",
+            "SELECT json(payload) FROM conversations WHERE id = ?"
+        )
+        .query_scalar()
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await
+        .context("select one conversation")?;
         payload
             .flatten()
             .map(|s| serde_json::from_str(&s).context("parse a stored conversation"))
@@ -459,10 +496,12 @@ impl RawDb {
     /// `None` for a conversation the bulk export filed, which names no
     /// org.
     pub async fn org_of_conversation(&self, id: &str) -> Result<Option<String>> {
-        let org: Option<Option<String>> = sqlx::query_scalar(
+        let org: Option<Option<String>> = sql!(
+            "claude.find_org_of_conversation_or_task",
             "SELECT org_uuid FROM conversations WHERE id = ?1 \
-                 UNION ALL SELECT org_uuid FROM cowork_sessions WHERE id = ?1 LIMIT 1",
+                 UNION ALL SELECT org_uuid FROM cowork_sessions WHERE id = ?1 LIMIT 1"
         )
+        .query_scalar()
         .bind(id)
         .fetch_optional(self.pool())
         .await
@@ -523,9 +562,11 @@ impl RawDb {
     /// The files a stored Cowork task's person attached, for the
     /// attachment loop.
     pub async fn cowork_files(&self, id: &str) -> Result<Vec<Value>> {
-        let payloads: Vec<String> = sqlx::query_scalar(
-            "SELECT json(payload) FROM cowork_events WHERE session_id = ? AND payload IS NOT NULL",
+        let payloads: Vec<String> = sql!(
+            "claude.list_cowork_task_event_payloads",
+            "SELECT json(payload) FROM cowork_events WHERE session_id = ? AND payload IS NOT NULL"
         )
+        .query_scalar()
         .bind(id)
         .fetch_all(self.pool())
         .await
@@ -552,11 +593,15 @@ impl RawDb {
             &[id.to_string()],
         )
         .await?;
-        sqlx::query("DELETE FROM cowork_sessions WHERE id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("forget cowork session {id}"))?;
+        sql!(
+            "claude.delete_cowork_session",
+            "DELETE FROM cowork_sessions WHERE id = ?"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget cowork session {id}"))?;
         Ok(())
     }
 
@@ -570,12 +615,15 @@ impl RawDb {
         keep: &HashSet<String>,
         when: WhenDeletedUpstream,
     ) -> Result<(usize, usize)> {
-        let held: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM cowork_sessions WHERE org_uuid = ?")
-                .bind(org_uuid)
-                .fetch_one(self.pool())
-                .await
-                .context("count org cowork sessions for prune")?;
+        let held: i64 = sql!(
+            "claude.count_org_cowork_sessions",
+            "SELECT COUNT(*) FROM cowork_sessions WHERE org_uuid = ?"
+        )
+        .query_scalar()
+        .bind(org_uuid)
+        .fetch_one(self.pool())
+        .await
+        .context("count org cowork sessions for prune")?;
         let mut tx = self.pool().begin().await.context("begin cowork prune tx")?;
         let unlisted = datalib_etl::prune::follow_deletions_in_tx(
             &mut tx,
@@ -632,10 +680,12 @@ pub struct LoadedCoworkSession {
 /// Every stored Cowork task, without its log: [`load_cowork_events_into`]
 /// reads the log of the ones a render wants.
 pub async fn load_cowork_sessions_from(pool: &SqlitePool) -> Result<Vec<LoadedCoworkSession>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "claude.load_cowork_sessions",
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM cowork_sessions \
-          WHERE payload IS NOT NULL ORDER BY id",
+          WHERE payload IS NOT NULL ORDER BY id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load cowork sessions")?;
@@ -657,17 +707,20 @@ pub async fn load_cowork_sessions_from(pool: &SqlitePool) -> Result<Vec<LoadedCo
 
 /// The logs of `sessions`, in order. `session_id` leads the table's key,
 /// so each session's events are one range of the store.
-pub const LOAD_COWORK_EVENTS_SQL: &str =
+pub const LOAD_COWORK_EVENTS_SQL: Sql = sql!(
+    "claude.load_cowork_events_for_sessions",
     "SELECT id, session_id, json(payload) AS payload FROM cowork_events \
       WHERE session_id IN (SELECT value FROM json_each(?1)) AND payload IS NOT NULL \
-      ORDER BY session_id, sequence_num, id";
+      ORDER BY session_id, sequence_num, id"
+);
 
 pub async fn load_cowork_events_into(
     pool: &SqlitePool,
     sessions: &mut [LoadedCoworkSession],
 ) -> Result<()> {
     let ids: Vec<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
-    let events = sqlx::query(LOAD_COWORK_EVENTS_SQL)
+    let events = LOAD_COWORK_EVENTS_SQL
+        .query()
         .bind(serde_json::to_string(&ids)?)
         .fetch_all(pool)
         .await
@@ -744,10 +797,12 @@ pub struct LoadedProjectDoc {
 }
 
 pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConversation>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "claude.load_conversations",
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations \
-          WHERE payload IS NOT NULL ORDER BY id",
+          WHERE payload IS NOT NULL ORDER BY id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load_conversations")?;
@@ -767,20 +822,26 @@ pub async fn load_conversations_from(pool: &SqlitePool) -> Result<Vec<LoadedConv
 }
 
 pub async fn first_user_uuid_from(pool: &SqlitePool) -> Result<Option<String>> {
-    let row = sqlx::query("SELECT id FROM users ORDER BY id LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("first_user_uuid")?;
+    let row = sql!(
+        "claude.find_first_user_id",
+        "SELECT id FROM users ORDER BY id LIMIT 1"
+    )
+    .query()
+    .fetch_optional(pool)
+    .await
+    .context("first_user_uuid")?;
     row.map(|r| r.try_get::<String, _>("id"))
         .transpose()
         .context("users id")
 }
 
 pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "claude.load_projects",
         "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects \
-          WHERE payload IS NOT NULL ORDER BY id",
+          WHERE payload IS NOT NULL ORDER BY id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load_projects")?;
@@ -800,10 +861,12 @@ pub async fn load_projects_from(pool: &SqlitePool) -> Result<Vec<LoadedProject>>
 }
 
 pub async fn load_project_docs_from(pool: &SqlitePool) -> Result<Vec<LoadedProjectDoc>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "claude.load_project_docs",
         "SELECT id, project_uuid, json(payload) AS payload FROM project_docs \
-          WHERE payload IS NOT NULL AND project_uuid IS NOT NULL ORDER BY project_uuid, id",
+          WHERE payload IS NOT NULL AND project_uuid IS NOT NULL ORDER BY project_uuid, id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load_project_docs")?;
@@ -888,6 +951,7 @@ mod tests {
     use datalib_etl::doltlite_raw::WirePayload;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     fn now() -> datalib_time::IsoOffsetTimestamp {
         datalib_time::parse_strict("2026-06-11T00:00:00-07:00").unwrap()
     }
@@ -950,7 +1014,8 @@ mod tests {
     async fn a_conversation_that_does_not_parse_is_an_error() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
-        sqlx::query(r#"INSERT INTO conversations (id, payload) VALUES ('c0', '{"uuid": "c0"}')"#)
+        test_sql!(r#"INSERT INTO conversations (id, payload) VALUES ('c0', '{"uuid": "c0"}')"#)
+            .query()
             .execute(db.pool())
             .await
             .unwrap();
@@ -959,9 +1024,7 @@ mod tests {
         assert_eq!(ids, ["c0"]);
         assert_eq!(loaded[0].payload["uuid"], "c0");
 
-        sqlx::query(
-            r#"INSERT INTO conversations (id, payload) VALUES ('c1', '{"uuid": "c1", "warp": 1e999}')"#,
-        )
+        test_sql!(r#"INSERT INTO conversations (id, payload) VALUES ('c1', '{"uuid": "c1", "warp": 1e999}')"#).query()
         .execute(db.pool())
         .await
         .unwrap();
@@ -1019,12 +1082,12 @@ mod tests {
         let db = RawDb::open(&d.path().join("a.doltlite_db")).await.unwrap();
         db.record_sweep("orgs", &now()).await.unwrap();
         db.record_sweep("orgs", &now()).await.unwrap();
-        let n: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sync_scope_state WHERE scope = 'claude:sweep:orgs'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let n: i64 =
+            test_sql!("SELECT COUNT(*) FROM sync_scope_state WHERE scope = 'claude:sweep:orgs'")
+                .query_scalar()
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(n, 1, "expected exactly one marker row, got {n}");
     }
 
@@ -1079,22 +1142,24 @@ mod tests {
                 .unwrap();
         }
         tx.commit().await.unwrap();
-        sqlx::query("INSERT INTO conversations (id, payload) VALUES ('exported', jsonb('{}'))")
+        test_sql!("INSERT INTO conversations (id, payload) VALUES ('exported', jsonb('{}'))")
+            .query()
             .execute(db.pool())
             .await
             .unwrap();
         let listed: HashSet<String> = ["stub-listed".to_string()].into_iter().collect();
         assert_eq!(db.prune_unlisted_stubs(&listed).await.unwrap(), 1);
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
+        let ids: Vec<String> = test_sql!("SELECT id FROM conversations ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
         assert_eq!(ids, ["exported", "stub-listed"]);
-        let problems: Vec<String> =
-            sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+        let problems: Vec<String> = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         assert_eq!(problems, ["conversations:stub-listed"]);
     }
 

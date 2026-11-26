@@ -28,6 +28,7 @@ use datalib_etl_slack::ingest::shapes::{
 };
 
 use super::{ts_to_iso, Channel, Message, User, Workspace};
+use datalib_sql::sql;
 
 /// SQL projection that maps a Slack `file_id` to its CAS blake3.
 /// Used by [`BlobBundle::load_many`] for a batch of threads.
@@ -419,11 +420,13 @@ async fn threads_a_moved_mark_crossed(
         // A second either side of the bounds as REAL, so rounding there
         // loses no root; the exact test is on the parsed `ts`.
         let seconds = |micros: i64| micros as f64 / 1e6;
-        let roots: Vec<(String, String)> = sqlx::query_as(
+        let roots: Vec<(String, String)> = sql!(
+            "slack_render.list_roots_a_mark_crossed",
             "SELECT thread_root_uuid, ts FROM messages \
              WHERE channel_id = ? AND is_thread_root = 1 AND CAST(ts AS REAL) >= ? \
-               AND (? IS NULL OR CAST(ts AS REAL) <= ?)",
+               AND (? IS NULL OR CAST(ts AS REAL) <= ?)"
         )
+        .query_as()
         .bind(&moved.id)
         .bind(seconds(lo) - 1.0)
         .bind(hi.map(|h| seconds(h) + 1.0))
@@ -437,10 +440,12 @@ async fn threads_a_moved_mark_crossed(
         }));
     }
     if !threads.is_empty() {
-        let held: Vec<String> = sqlx::query_scalar(
+        let held: Vec<String> = sql!(
+            "slack_render.list_threads_whose_mark_moved",
             "SELECT DISTINCT thread_root_uuid FROM messages \
-             WHERE thread_root_uuid IN (SELECT value FROM json_each(?))",
+             WHERE thread_root_uuid IN (SELECT value FROM json_each(?))"
         )
+        .query_scalar()
         .bind(serde_json::to_string(&threads)?)
         .fetch_all(pool)
         .await
@@ -464,20 +469,25 @@ async fn load_read_marks(pool: &SqlitePool) -> Result<ReadMarks> {
 }
 
 async fn load_thread_keys(pool: &SqlitePool) -> Result<Vec<String>> {
-    sqlx::query_scalar::<_, String>(
-        "SELECT DISTINCT thread_root_uuid FROM messages WHERE payload IS NOT NULL",
+    sql!(
+        "slack_render.list_thread_keys",
+        "SELECT DISTINCT thread_root_uuid FROM messages WHERE payload IS NOT NULL"
     )
+    .query_scalar::<String>()
     .fetch_all(pool)
     .await
     .context("list threads")
 }
 
 async fn load_workspace(pool: &SqlitePool) -> Result<Option<Workspace>> {
-    let row =
-        sqlx::query("SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
-            .fetch_optional(pool)
-            .await
-            .context("select workspace")?;
+    let row = sql!(
+        "slack_render.load_workspace",
+        "SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1"
+    )
+    .query()
+    .fetch_optional(pool)
+    .await
+    .context("select workspace")?;
     let Some(row) = row else { return Ok(None) };
     let Ok(s): Result<String, _> = row.try_get("payload") else {
         return Ok(None);
@@ -502,9 +512,11 @@ async fn load_users(
     pool: &SqlitePool,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<BTreeMap<String, User>> {
-    let rows = sqlx::query(
-        "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL",
+    let rows = sql!(
+        "slack_render.load_users",
+        "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("select users")?;
@@ -551,19 +563,26 @@ async fn load_users(
 
 /// Each bot's name, as `bots.info` gave it.
 async fn load_bots(pool: &SqlitePool) -> Result<BTreeMap<String, String>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''")
-            .fetch_all(pool)
-            .await
-            .context("select bots")?;
+    let rows: Vec<(String, String)> = sql!(
+        "slack_render.load_bots",
+        "SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("select bots")?;
     Ok(rows.into_iter().collect())
 }
 
 async fn load_channels(pool: &SqlitePool) -> Result<BTreeMap<String, Channel>> {
-    let rows = sqlx::query("SELECT id, name, is_dm, dm_user_ids FROM channels")
-        .fetch_all(pool)
-        .await
-        .context("select channels")?;
+    let rows = sql!(
+        "slack_render.load_channels",
+        "SELECT id, name, is_dm, dm_user_ids FROM channels"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("select channels")?;
     let mut out: BTreeMap<String, Channel> = BTreeMap::new();
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();
@@ -604,9 +623,11 @@ struct LoadedMessageWithThread {
 }
 
 async fn thread_count(pool: &SqlitePool) -> Result<usize> {
-    let row = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL",
+    let row = sql!(
+        "slack_render.count_threads",
+        "SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL"
     )
+    .query_scalar::<i64>()
     .fetch_one(pool)
     .await
     .context("count threads")?;
@@ -622,14 +643,16 @@ async fn load_messages_for_threads(
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let rows = sqlx::query(
+    let rows = sql!(
+        "slack_render.load_messages_of_threads",
         "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                 json(payload) AS payload, thread_root_uuid
            FROM messages
           WHERE payload IS NOT NULL
             AND thread_root_uuid IN (SELECT value FROM json_each(?))
-          ORDER BY thread_root_uuid, ts",
+          ORDER BY thread_root_uuid, ts"
     )
+    .query()
     .bind(serde_json::to_string(keys)?)
     .fetch_all(pool)
     .await

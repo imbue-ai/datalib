@@ -9,6 +9,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl_codex::ingest::{db_path_for, fetch, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_sql::test_sql;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CODEX_FIXTURE_DIR") {
@@ -68,7 +69,8 @@ impl Env {
     }
 
     async fn problems(&self) -> Vec<(String, String)> {
-        sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(self.db.pool())
             .await
             .unwrap()
@@ -102,7 +104,8 @@ async fn a_missing_sessions_folder_fails_only_a_first_run() {
     let s = env.fetch().await.unwrap();
     assert_eq!(s.files, 0);
     assert_eq!(env.problem_keys().await, ["listing:codex/sessions"]);
-    let stored: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transcripts")
+    let stored: i64 = test_sql!("SELECT COUNT(*) FROM transcripts")
+        .query_scalar()
         .fetch_one(env.db.pool())
         .await
         .unwrap();
@@ -157,7 +160,8 @@ async fn what_a_run_could_not_read_is_a_row_until_it_reads() {
     // walk itself does not open it.
     let victim =
         "2364/04/13/rollout-2364-04-13T09-15-00-72fb0cda-0eb6-754e-8bfd-a7dcc8d6c8f4.jsonl";
-    sqlx::query("DELETE FROM ingested_files WHERE rel_path = ?")
+    test_sql!("DELETE FROM ingested_files WHERE rel_path = ?")
+        .query()
         .bind(victim)
         .execute(env.db.pool())
         .await
@@ -209,7 +213,8 @@ async fn a_gone_rollout_takes_its_file_row_with_it() {
     std::fs::remove_file(&bad).unwrap();
     env.fetch().await.unwrap();
     assert_eq!(env.problem_keys().await, Vec::<String>::new());
-    let kept: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transcripts WHERE id = 'bad-thread'")
+    let kept: i64 = test_sql!("SELECT COUNT(*) FROM transcripts WHERE id = 'bad-thread'")
+        .query_scalar()
         .fetch_one(env.db.pool())
         .await
         .unwrap();

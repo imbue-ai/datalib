@@ -16,6 +16,7 @@
 //! README.md beside this crate has the check.
 
 use anyhow::{Context, Result};
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::{Row, SqlitePool};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
@@ -169,7 +170,9 @@ pub struct Versions {
 /// Returns whether any row changed, so an owner that commits can commit
 /// exactly when there is something to commit.
 pub async fn write(pool: &SqlitePool, kind: StoreKind, shape: &Shape) -> Result<bool> {
-    sqlx::query(DDL)
+    // `DDL` stays plain text: a store's recorded shape is a hash over it.
+    Sql::dynamic(sql_id!("store_meta.create_meta_table"), DDL)
+        .query()
         .execute(pool)
         .await
         .context("create _datalib_meta")?;
@@ -200,12 +203,14 @@ pub async fn write(pool: &SqlitePool, kind: StoreKind, shape: &Shape) -> Result<
         if current.get(key.as_str()).map(|(v, _)| v) == Some(value) {
             continue;
         }
-        sqlx::query(
+        sql!(
+            "store_meta.upsert_meta_key",
             "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) \
              VALUES (?, ?, ?, ?) \
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
-             written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset",
+             written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset"
         )
+        .query()
         .bind(key.as_str())
         .bind(value)
         .bind(&now)
@@ -216,11 +221,15 @@ pub async fn write(pool: &SqlitePool, kind: StoreKind, shape: &Shape) -> Result<
         changed = true;
     }
     if shape.indexes.is_none() && current.contains_key(Key::IndexHash.as_str()) {
-        sqlx::query("DELETE FROM _datalib_meta WHERE key = ?")
-            .bind(Key::IndexHash.as_str())
-            .execute(pool)
-            .await
-            .context("clear _datalib_meta.index_hash")?;
+        sql!(
+            "store_meta.delete_index_hash",
+            "DELETE FROM _datalib_meta WHERE key = ?"
+        )
+        .query()
+        .bind(Key::IndexHash.as_str())
+        .execute(pool)
+        .await
+        .context("clear _datalib_meta.index_hash")?;
         changed = true;
     }
     Ok(changed)
@@ -272,12 +281,15 @@ pub async fn read_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<Meta>> 
 }
 
 async fn table_exists(conn: &mut sqlx::SqliteConnection) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(TABLE)
-            .fetch_one(conn)
-            .await
-            .context("probe _datalib_meta")?;
+    let n: i64 = sql!(
+        "store_meta.has_meta_table",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+    )
+    .query_scalar()
+    .bind(TABLE)
+    .fetch_one(conn)
+    .await
+    .context("probe _datalib_meta")?;
     Ok(n > 0)
 }
 
@@ -286,10 +298,14 @@ async fn rows<'c, E>(conn: E) -> Result<std::collections::BTreeMap<String, (Stri
 where
     E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
 {
-    let rows = sqlx::query("SELECT key, value, written_at_utc FROM _datalib_meta")
-        .fetch_all(conn)
-        .await
-        .context("read _datalib_meta")?;
+    let rows = sql!(
+        "store_meta.list_meta_rows",
+        "SELECT key, value, written_at_utc FROM _datalib_meta"
+    )
+    .query()
+    .fetch_all(conn)
+    .await
+    .context("read _datalib_meta")?;
     rows.into_iter()
         .map(|r| {
             Ok((
@@ -306,7 +322,8 @@ where
 /// `dolt_version()` is a scalar function only doltlite has; stock SQLite
 /// errors on it, and that is the answer.
 async fn doltlite_version(pool: &SqlitePool) -> Option<String> {
-    sqlx::query_scalar::<_, String>("SELECT dolt_version()")
+    sql!("store_meta.read_doltlite_version", "SELECT dolt_version()")
+        .query_scalar::<String>()
         .fetch_one(pool)
         .await
         .ok()
@@ -318,6 +335,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
+    use datalib_sql::test_sql;
     async fn pool(path: &std::path::Path) -> SqlitePool {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
             .unwrap()
@@ -388,7 +406,8 @@ mod tests {
         // `dolt_version()` through this plain pool on every host; both
         // answers are legal, and the row exists either way.
         let stored: String =
-            sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'doltlite_version'")
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'doltlite_version'")
+                .query_scalar()
                 .fetch_one(&p)
                 .await
                 .unwrap();
@@ -401,7 +420,8 @@ mod tests {
 
         // Stamps are microsecond UTC, so make the second write land later.
         let stamps_before: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, written_at_utc FROM _datalib_meta ORDER BY key")
+            test_sql!("SELECT key, written_at_utc FROM _datalib_meta ORDER BY key")
+                .query_as()
                 .fetch_all(&p)
                 .await
                 .unwrap();
@@ -424,7 +444,8 @@ mod tests {
         assert_eq!(after.schema_hash, hash2);
         assert_eq!(after.schema_version, 1);
         let stamps_after: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, written_at_utc FROM _datalib_meta ORDER BY key")
+            test_sql!("SELECT key, written_at_utc FROM _datalib_meta ORDER BY key")
+                .query_as()
                 .fetch_all(&p)
                 .await
                 .unwrap();
@@ -468,11 +489,13 @@ mod tests {
         write(&p, StoreKind::DiskStats, &Shape::of_tables("h".into()))
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'holodeck' WHERE key = 'store_kind'")
+        test_sql!("UPDATE _datalib_meta SET value = 'holodeck' WHERE key = 'store_kind'")
+            .query()
             .execute(&p)
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'unknown' WHERE key = 'git_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'unknown' WHERE key = 'git_hash'")
+            .query()
             .execute(&p)
             .await
             .unwrap();

@@ -489,6 +489,7 @@ mod tests {
     use super::*;
     use datalib_problems::{Problem, Reason, Severity};
 
+    use datalib_sql::test_sql;
     async fn store(dir: &tempfile::TempDir) -> sqlx::SqlitePool {
         crate::doltlite_raw::open(&dir.path().join("p.doltlite_db"), &[])
             .await
@@ -496,7 +497,8 @@ mod tests {
     }
 
     async fn keys(pool: &sqlx::SqlitePool) -> Vec<String> {
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
             .fetch_all(pool)
             .await
             .unwrap()
@@ -524,10 +526,11 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = store(&d).await;
         let rows = || async {
-            sqlx::query_as::<_, (String, String, String, String)>(
+            test_sql!(
                 "SELECT scope_key, severity, reason, first_seen_at_utc FROM problems \
-                 ORDER BY scope_key",
+                 ORDER BY scope_key"
             )
+            .query_as::<(String, String, String, String)>()
             .fetch_all(&pool)
             .await
             .unwrap()
@@ -705,7 +708,8 @@ mod tests {
         })
         .await;
         let rows: Vec<(String, String, String)> =
-            sqlx::query_as("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+            test_sql!("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+                .query_as()
                 .fetch_all(&pool)
                 .await
                 .unwrap();
@@ -778,7 +782,8 @@ mod tests {
         })
         .await;
         let rows: Vec<(String, String, String)> =
-            sqlx::query_as("SELECT scope_key, severity, reason FROM problems")
+            test_sql!("SELECT scope_key, severity, reason FROM problems")
+                .query_as()
                 .fetch_all(&pool)
                 .await
                 .unwrap();

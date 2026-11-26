@@ -20,6 +20,7 @@ rust_library(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/table:datalib_table",
         "//datalib/backend/columns:datalib_columns",
@@ -88,6 +89,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/h3:datalib_h3",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:h3o",
         ":search_fixture",
         "//datalib/backend/contact_schema:datalib_contact_schema",

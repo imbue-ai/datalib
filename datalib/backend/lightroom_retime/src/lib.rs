@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 use sqlx::sqlite::SqliteConnection;
 use sqlx::{Connection, Row as _};
 
+use datalib_sql::sql;
 use edits::Edit;
 use plan::{Outcome, Photo, Write};
 
@@ -204,7 +205,8 @@ async fn read_photos(
     ids: &[&str],
 ) -> Result<HashMap<String, Vec<Photo>>> {
     // Lightroom's columns are untyped, so each is read as what it holds.
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_retime.list_photos",
         "SELECT i.id_global, i.id_local, coalesce(f.baseName || '.' || f.extension, ''),
                 CAST(i.captureTime AS TEXT), CAST(i.originalCaptureTime AS TEXT),
                 CAST(m.xmp AS BLOB),
@@ -215,8 +217,9 @@ async fn read_photos(
          LEFT JOIN Adobe_AdditionalMetadata m ON m.image = i.id_local
          LEFT JOIN AgHarvestedExifMetadata d ON d.id_local =
              (SELECT min(e.id_local) FROM AgHarvestedExifMetadata e WHERE e.image = i.id_local)
-         WHERE i.id_global IN (SELECT value FROM json_each(?))",
+         WHERE i.id_global IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(serde_json::to_string(ids)?)
     .fetch_all(conn)
     .await?;
@@ -241,31 +244,39 @@ async fn read_photos(
 
 async fn write_one(conn: &mut SqliteConnection, w: &Write) -> Result<()> {
     let changed = match &w.original_capture_time {
-        Some(original) => sqlx::query(
-            "UPDATE Adobe_images SET captureTime = ?, originalCaptureTime = ? WHERE id_local = ?",
+        Some(original) => sql!(
+            "lightroom_retime.update_capture_times",
+            "UPDATE Adobe_images SET captureTime = ?, originalCaptureTime = ? WHERE id_local = ?"
         )
+        .query()
         .bind(&w.capture_time)
         .bind(original)
         .bind(w.image),
-        None => sqlx::query("UPDATE Adobe_images SET captureTime = ? WHERE id_local = ?")
-            .bind(&w.capture_time)
-            .bind(w.image),
+        None => sql!(
+            "lightroom_retime.update_capture_time",
+            "UPDATE Adobe_images SET captureTime = ? WHERE id_local = ?"
+        )
+        .query()
+        .bind(&w.capture_time)
+        .bind(w.image),
     }
     .execute(&mut *conn)
     .await?
     .rows_affected();
     expect_one("Adobe_images", changed)?;
-    let changed = sqlx::query("UPDATE Adobe_AdditionalMetadata SET xmp = ? WHERE image = ?")
-        .bind(&w.xmp)
-        .bind(w.image)
-        .execute(&mut *conn)
-        .await?
-        .rows_affected();
+    let changed = sql!(
+        "lightroom_retime.update_xmp",
+        "UPDATE Adobe_AdditionalMetadata SET xmp = ? WHERE image = ?"
+    )
+    .query()
+    .bind(&w.xmp)
+    .bind(w.image)
+    .execute(&mut *conn)
+    .await?
+    .rows_affected();
     expect_one("Adobe_AdditionalMetadata", changed)?;
     // Lightroom keeps these as reals (2024.0).
-    let changed = sqlx::query(
-        "UPDATE AgHarvestedExifMetadata SET dateYear = ?, dateMonth = ?, dateDay = ? WHERE image = ?",
-    )
+    let changed = sql!("lightroom_retime.update_exif_date", "UPDATE AgHarvestedExifMetadata SET dateYear = ?, dateMonth = ?, dateDay = ? WHERE image = ?").query()
     .bind(w.year)
     .bind(w.month)
     .bind(w.day)

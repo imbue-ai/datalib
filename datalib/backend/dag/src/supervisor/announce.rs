@@ -338,6 +338,7 @@ impl Drop for Fifo {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// The loop's whole cue: another connection's commit reaches every
     /// listener, saying what it was, including one made before the
     /// listener started waiting.
@@ -441,7 +442,8 @@ mod tests {
 
         // Past `Store`, as a `sqlite3` shell would write.
         let before = missed_announcements();
-        sqlx::query("DELETE FROM turned_off")
+        test_sql!("DELETE FROM turned_off")
+            .query()
             .execute(other.pool())
             .await
             .unwrap();

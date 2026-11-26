@@ -20,6 +20,7 @@ use datalib_unified_grid_and_search_index::places::{
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
 use crate::dolt_backend_integration::{unique_db_path, writer};
+use datalib_sql::{test_sql_id, Sql};
 
 pub(crate) const SOURCE: &str = "slack";
 
@@ -310,7 +311,7 @@ async fn a_level_holds_only_places() {
 }
 
 pub(crate) async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<String> {
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+    let mut query = Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}")).query();
     for _ in 0..binds {
         query = query.bind("x");
     }

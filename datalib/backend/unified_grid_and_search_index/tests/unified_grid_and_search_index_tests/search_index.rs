@@ -8,6 +8,7 @@ use std::sync::Arc;
 use datalib_runtime::layout;
 use datalib_search_index::chunk::{chunk_hash, four_bytes_a_token};
 use datalib_search_index::{model_key, ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache};
+use datalib_sql::test_sql;
 use datalib_unified_grid_and_search_index::hits::mapping::Place;
 use datalib_unified_grid_and_search_index::hits::vectors::Kept;
 use datalib_unified_grid_and_search_index::search_index::HeldVectors;
@@ -335,7 +336,8 @@ async fn a_write_that_changes_no_document_reads_none_again() {
         )
         .await
         .unwrap();
-    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+    test_sql!("UPDATE store_generation SET generation = generation + 1")
+        .query()
         .execute(&grid)
         .await
         .unwrap();

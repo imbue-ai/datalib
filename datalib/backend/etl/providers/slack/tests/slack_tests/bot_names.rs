@@ -8,6 +8,7 @@ use datalib_etl_slack::recorded::{record_bot_info, record_call, record_workspace
 use serde_json::json;
 
 use crate::support::{fetch_into, Tree};
+use datalib_sql::test_sql;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn each_bot_a_message_names_is_looked_up_once() {
@@ -41,7 +42,8 @@ async fn each_bot_a_message_names_is_looked_up_once() {
 
     let db = RawDb::open(&db_path_for(&t.out)).await.unwrap();
     let bots: Vec<(String, Option<String>, bool)> =
-        sqlx::query_as("SELECT id, name, payload IS NOT NULL FROM bots ORDER BY id")
+        test_sql!("SELECT id, name, payload IS NOT NULL FROM bots ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -56,12 +58,12 @@ async fn each_bot_a_message_names_is_looked_up_once() {
             ),
         ]
     );
-    let updated: Option<String> = sqlx::query_scalar(
-        "SELECT json_extract(payload, '$.updated') FROM bots WHERE id = 'B_SENSORS'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let updated: Option<String> =
+        test_sql!("SELECT json_extract(payload, '$.updated') FROM bots WHERE id = 'B_SENSORS'")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     assert_eq!(updated, None, "`updated` moves with the app, not the bot");
     let mut conn = db.pool().acquire().await.unwrap();
     let owed: Vec<String> = db
@@ -78,7 +80,8 @@ async fn each_bot_a_message_names_is_looked_up_once() {
         "the bot Slack would not name is asked again"
     );
     let problems: Vec<String> =
-        sqlx::query_scalar("SELECT scope_key FROM problems WHERE scope_key LIKE 'bots:%'")
+        test_sql!("SELECT scope_key FROM problems WHERE scope_key LIKE 'bots:%'")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();

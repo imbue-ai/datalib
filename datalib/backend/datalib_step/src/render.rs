@@ -17,6 +17,7 @@ use crate::dispatch::{PlannedSource, Wave};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore, WHOLE_TABLE};
+use datalib_sql::sql;
 
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
@@ -1253,10 +1254,12 @@ fn fetch_problem_entities(raw_db: &Path, commit: Option<&str>) -> Result<Vec<Str
     };
     let pool = reader.pool().clone();
     let result = blocking(async {
-        sqlx::query_scalar::<_, String>(
+        sql!(
+            "datalib_step.render.list_fetch_problem_entities",
             "SELECT DISTINCT scope_key FROM problems WHERE stage = ? AND scope_kind = ? \
-             ORDER BY scope_key",
+             ORDER BY scope_key"
         )
+        .query_scalar::<String>()
         .bind(Stage::Fetch.as_str())
         .bind(datalib_schema::problems::ScopeKind::Entity.as_str())
         .fetch_all(&pool)

@@ -8,6 +8,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_google_takeout::ingest::{self, FetchOptions, RawDb, SyncFlags};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 fn fixture_root() -> PathBuf {
     let rel =
@@ -93,7 +94,8 @@ async fn maps_photo_lands_row_and_blob() {
     let rows = db.load_payloads("maps_photos").await.unwrap();
     assert_eq!(rows.len(), 1);
     // blake3 column populated from JPEG bytes.
-    let blake3: Option<String> = sqlx::query_scalar("SELECT blake3 FROM maps_photos WHERE id = ?")
+    let blake3: Option<String> = test_sql!("SELECT blake3 FROM maps_photos WHERE id = ?")
+        .query_scalar()
         .bind("2026-06-04-tenfwd.jpg")
         .fetch_one(db.pool())
         .await
@@ -101,12 +103,12 @@ async fn maps_photo_lands_row_and_blob() {
     let blake3 = blake3.expect("blake3 populated");
     assert_eq!(blake3.len(), 64);
     // CAS has the bytes.
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
-            .bind(&blake3)
-            .fetch_one(db.cas().pool())
-            .await
-            .unwrap();
+    let exists: bool = test_sql!("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
+        .query_scalar()
+        .bind(&blake3)
+        .fetch_one(db.cas().pool())
+        .await
+        .unwrap();
     assert!(exists, "photo bytes in CAS");
 }
 
@@ -115,12 +117,12 @@ async fn youtube_subscriptions_handles_quoted_titles() {
     let (_work, summary, db_path) = run_all().await;
     assert_eq!(summary.youtube_subscriptions, 3);
     let db = RawDb::open(&db_path).await.unwrap();
-    let title: String = sqlx::query_scalar(
-        "SELECT channel_title FROM youtube_subscriptions WHERE id = 'UCriker002'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let title: String =
+        test_sql!("SELECT channel_title FROM youtube_subscriptions WHERE id = 'UCriker002'")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     assert_eq!(title, "Riker, William T.");
 }
 
@@ -131,17 +133,18 @@ async fn youtube_watch_history_parses_cells_and_timestamps() {
     let db = RawDb::open(&db_path).await.unwrap();
     // video_id promoted column populated for each row.
     let count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM youtube_watch_history WHERE video_id IS NOT NULL")
+        test_sql!("SELECT count(*) FROM youtube_watch_history WHERE video_id IS NOT NULL")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
     assert_eq!(count, 3);
-    let when: Option<String> = sqlx::query_scalar(
-        "SELECT when_ts FROM youtube_watch_history WHERE video_id = 'trekS01E01'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let when: Option<String> =
+        test_sql!("SELECT when_ts FROM youtube_watch_history WHERE video_id = 'trekS01E01'")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     // Parsed PDT-relative; the rfc3339 wallclock is the local 11:48
     // turned into a -07:00 offset.
     assert!(when.unwrap().starts_with("2026-06-04T11:48:37"));
@@ -163,12 +166,12 @@ async fn a_multibyte_char_before_the_timestamp_lands_with_it() {
 
     let (_work, _summary, db_path) = run_all().await;
     let db = RawDb::open(&db_path).await.unwrap();
-    let when: Option<String> = sqlx::query_scalar(
-        "SELECT when_ts FROM youtube_watch_history WHERE video_id = 'trekS04E02'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let when: Option<String> =
+        test_sql!("SELECT when_ts FROM youtube_watch_history WHERE video_id = 'trekS04E02'")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     assert!(when.unwrap().starts_with("2026-06-06T09:00:00"));
 }
 
@@ -184,7 +187,8 @@ async fn google_chat_lands_groups_users_messages_and_attachments() {
     assert_eq!(summary.chat_attachments, 2 + SPACE_ATTACHMENTS as usize);
     let db = RawDb::open(&db_path).await.unwrap();
     // The DM group key is the takeout directory name verbatim.
-    let group_ids: Vec<String> = sqlx::query_scalar("SELECT id FROM chat_groups ORDER BY id")
+    let group_ids: Vec<String> = test_sql!("SELECT id FROM chat_groups ORDER BY id")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -192,23 +196,25 @@ async fn google_chat_lands_groups_users_messages_and_attachments() {
         group_ids,
         vec!["DM EMPTYdm01", "DM TNG-BRIDGE", "Space AAAATenFwd"]
     );
-    let stored: Vec<String> = sqlx::query_scalar(
+    let stored: Vec<String> = test_sql!(
         "SELECT export_name FROM chat_attachments \
-         WHERE message_id = 'AAAATenFwd/N1/N2' AND blake3 IS NOT NULL ORDER BY export_name",
+         WHERE message_id = 'AAAATenFwd/N1/N2' AND blake3 IS NOT NULL ORDER BY export_name"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await
     .unwrap();
     assert_eq!(stored, ["nexus notes", "nexus-draft.txt"]);
     // The fetched attachment's edge row has the CAS blake3 set.
-    let blake3: Option<String> = sqlx::query_scalar(
-        "SELECT blake3 FROM chat_attachments WHERE export_name = 'course-laid-in.txt'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let blake3: Option<String> =
+        test_sql!("SELECT blake3 FROM chat_attachments WHERE export_name = 'course-laid-in.txt'")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     let blake3 = blake3.expect("blake3 set");
-    let bytes: Vec<u8> = sqlx::query_scalar("SELECT bytes FROM cas_objects WHERE blake3 = ?")
+    let bytes: Vec<u8> = test_sql!("SELECT bytes FROM cas_objects WHERE blake3 = ?")
+        .query_scalar()
         .bind(&blake3)
         .fetch_one(db.cas().pool())
         .await
@@ -258,7 +264,8 @@ async fn gemini_apps_splits_each_cell_into_prompt_and_response() {
     by_prompt("How does a warp coil work?");
 
     let when_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM gemini_activity WHERE when_ts IS NOT NULL")
+        test_sql!("SELECT count(*) FROM gemini_activity WHERE when_ts IS NOT NULL")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -277,7 +284,8 @@ async fn gemini_apps_stores_every_file_a_cell_names() {
 
     let db = RawDb::open(&e.db_path).await.unwrap();
     let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT filename, blake3 FROM gemini_attachments ORDER BY filename")
+        test_sql!("SELECT filename, blake3 FROM gemini_attachments ORDER BY filename")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -360,7 +368,8 @@ async fn a_link_in_an_unpacked_export_is_not_read() {
 
     let db = RawDb::open(&e.db_path).await.unwrap();
     let samples: Vec<String> =
-        sqlx::query_scalar("SELECT sample FROM problems WHERE scope_key = 'listing:files'")
+        test_sql!("SELECT sample FROM problems WHERE scope_key = 'listing:files'")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -427,7 +436,8 @@ impl Export {
 
     async fn count(&self, table: &str) -> i64 {
         let db = RawDb::open(&self.db_path).await.unwrap();
-        let n = sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        let n = Sql::dynamic(test_sql_id!(), format!("SELECT count(*) FROM {table}"))
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -556,10 +566,11 @@ async fn unread_files_are_rows_by_shape() {
     let e = Export::new();
     e.sync().await;
     let db = RawDb::open(&e.db_path).await.unwrap();
-    let rows: Vec<(String, String)> = sqlx::query_as(
+    let rows: Vec<(String, String)> = test_sql!(
         "SELECT severity, sample FROM problems \
-         WHERE scope_key LIKE 'skipped:unread_files:%' ORDER BY sample",
+         WHERE scope_key LIKE 'skipped:unread_files:%' ORDER BY sample"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -600,8 +611,12 @@ const DIPLOMACY: &str = "Google Play Books/The Art of Diplomacy/The Art of Diplo
 async fn payloads_of(e: &Export, table: &str, file: &str) -> Vec<serde_json::Value> {
     let db = RawDb::open(&e.db_path).await.unwrap();
     // Audited: `table` is a literal at every call; `file` is bound.
-    let sql = format!("SELECT json(payload) FROM {table} WHERE file = ? ORDER BY id");
-    let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(payload) FROM {table} WHERE file = ? ORDER BY id"),
+    );
+    let rows: Vec<String> = sql
+        .query_scalar()
         .bind(file)
         .fetch_all(db.pool())
         .await
@@ -706,7 +721,8 @@ async fn play_books_land_a_row_per_entry() {
     assert_eq!(note["section"], "My notes");
     let db = RawDb::open(&e.db_path).await.unwrap();
     let when: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT when_ts FROM play_books_annotations ORDER BY when_ts")
+        test_sql!("SELECT when_ts FROM play_books_annotations ORDER BY when_ts")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -810,17 +826,15 @@ async fn a_watch_dropped_from_a_newer_export_is_gone() {
 /// one row with a count.
 #[tokio::test(flavor = "multi_thread")]
 async fn watch_history_entries_with_no_link_are_one_row_with_a_count() {
-    const NO_LINK: &str = "SELECT sample FROM problems WHERE rule = 'youtube_watch_no_link'";
+    const NO_LINK: Sql =
+        test_sql!("SELECT sample FROM problems WHERE rule = 'youtube_watch_no_link'");
     let e = Export::new();
     e.sync().await;
     let said = |e: &Export| {
         let db_path = e.db_path.clone();
         async move {
             let db = RawDb::open(&db_path).await.unwrap();
-            let rows: Vec<String> = sqlx::query_scalar(NO_LINK)
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+            let rows: Vec<String> = NO_LINK.query_scalar().fetch_all(db.pool()).await.unwrap();
             db.close().await;
             rows
         }
@@ -989,7 +1003,8 @@ impl Export {
     async fn problems(&self) -> Vec<(String, String, String)> {
         let db = RawDb::open(&self.db_path).await.unwrap();
         let rows: Vec<(String, String, String)> =
-            sqlx::query_as("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+            test_sql!("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+                .query_as()
                 .fetch_all(db.pool())
                 .await
                 .unwrap();
@@ -1239,9 +1254,10 @@ async fn a_feed_that_fails_is_a_problem_row_and_the_rest_land() {
     assert_eq!(s.youtube_watch_history, 3, "{s:?}");
 
     let db = RawDb::open(&e.db_path).await.unwrap();
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT scope_key, severity, sample FROM problems WHERE scope_key LIKE 'phase:%'",
+    let rows: Vec<(String, String, String)> = test_sql!(
+        "SELECT scope_key, severity, sample FROM problems WHERE scope_key LIKE 'phase:%'"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -1269,11 +1285,12 @@ async fn entries_read_and_not_stored_are_problem_rows() {
         Option<String>,
         String,
     );
-    let rows: Vec<Row> = sqlx::query_as(
+    let rows: Vec<Row> = test_sql!(
         "SELECT scope_key, severity, reason, rule, field, sample FROM problems \
          WHERE scope_key LIKE 'skipped:%' AND scope_key NOT LIKE 'skipped:unread_files:%' \
-         ORDER BY scope_key",
+         ORDER BY scope_key"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -1310,10 +1327,11 @@ async fn an_unchanged_file_keeps_its_skipped_rows() {
     e.sync().await;
     let skipped = || async {
         let db = RawDb::open(&e.db_path).await.unwrap();
-        let n: i64 = sqlx::query_scalar(
+        let n: i64 = test_sql!(
             "SELECT count(*) FROM problems WHERE scope_key LIKE 'skipped:%' \
-                 AND scope_key NOT LIKE 'skipped:unread_files:%'",
+                 AND scope_key NOT LIKE 'skipped:unread_files:%'"
         )
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -1338,9 +1356,10 @@ async fn an_unchanged_file_keeps_its_skipped_rows() {
 impl Export {
     async fn phase_problems(&self) -> Vec<String> {
         let db = RawDb::open(&self.db_path).await.unwrap();
-        let keys = sqlx::query_scalar(
-            "SELECT scope_key FROM problems WHERE scope_key LIKE 'phase:%' ORDER BY scope_key",
+        let keys = test_sql!(
+            "SELECT scope_key FROM problems WHERE scope_key LIKE 'phase:%' ORDER BY scope_key"
         )
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -1472,9 +1491,9 @@ async fn a_file_that_lists_nothing_empties_its_table() {
 // ── A unit read whole is replaced in one transaction ────────────────
 
 impl Export {
-    async fn exec(&self, sql: &'static str) {
+    async fn exec(&self, sql: Sql) {
         let db = RawDb::open(&self.db_path).await.unwrap();
-        sqlx::query(sql).execute(db.pool()).await.unwrap();
+        sql.query().execute(db.pool()).await.unwrap();
         db.commit_all("test").await.unwrap();
         db.close().await;
     }
@@ -1485,7 +1504,8 @@ impl Export {
 impl Export {
     async fn schema_version(&self) -> String {
         let db = RawDb::open(&self.db_path).await.unwrap();
-        let v = sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
+        let v = test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -1508,8 +1528,10 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     );
     assert_eq!(e.sync().await.gemini_activity, 0, "nothing changed");
 
-    e.exec("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
-        .await;
+    e.exec(test_sql!(
+        "UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'"
+    ))
+    .await;
     let s = e.sync().await;
     assert_eq!(e.schema_version().await, "4");
     assert_eq!(
@@ -1534,8 +1556,10 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
 async fn rung_2_reads_the_feeds_with_zoned_timestamps_again() {
     let e = Export::new();
     e.sync().await;
-    e.exec("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
-        .await;
+    e.exec(test_sql!(
+        "UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'"
+    ))
+    .await;
     let s = e.sync().await;
     assert_eq!(e.schema_version().await, "4");
     assert_eq!(
@@ -1562,8 +1586,10 @@ async fn rung_2_reads_the_feeds_with_zoned_timestamps_again() {
 async fn rung_3_reads_the_chat_files_again() {
     let e = Export::new();
     e.sync().await;
-    e.exec("UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'")
-        .await;
+    e.exec(test_sql!(
+        "UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'"
+    ))
+    .await;
     let s = e.sync().await;
     assert_eq!(e.schema_version().await, "4");
     assert_eq!(s.chat_messages, 2 + SPACE_MESSAGES as usize, "{s:?}");
@@ -1580,8 +1606,10 @@ async fn rung_3_reads_the_chat_files_again() {
 async fn rung_4_reads_the_voice_files_again() {
     let e = Export::new();
     e.sync().await;
-    e.exec("UPDATE _datalib_meta SET value = '3' WHERE key = 'schema_version'")
-        .await;
+    e.exec(test_sql!(
+        "UPDATE _datalib_meta SET value = '3' WHERE key = 'schema_version'"
+    ))
+    .await;
     let s = e.sync().await;
     assert_eq!(e.schema_version().await, "4");
     assert!(s.voice_messages > 0, "{s:?}");
@@ -1602,9 +1630,7 @@ async fn a_voice_file_whose_name_leaves_its_type_out_is_read_by_its_markup() {
     e.sync().await;
     assert_eq!(e.skipped_parts().await, Vec::<String>::new());
     let db = RawDb::open(&e.db_path).await.unwrap();
-    let kinds: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT kind, count(*) FROM voice_messages WHERE folder = 'calls' GROUP BY kind ORDER BY kind",
-    )
+    let kinds: Vec<(String, i64)> = test_sql!("SELECT kind, count(*) FROM voice_messages WHERE folder = 'calls' GROUP BY kind ORDER BY kind").query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -1621,9 +1647,10 @@ async fn a_voice_file_whose_name_leaves_its_type_out_is_read_by_its_markup() {
     // A cut-short voicemail's link names its recording in full, and the
     // recording on disk is cut short like the record.
     let db = RawDb::open(&e.db_path).await.unwrap();
-    let audio: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT ref_name, blake3 FROM voice_attachments WHERE ref_name LIKE '% - Voi.mp3'",
+    let audio: Vec<(String, Option<String>)> = test_sql!(
+        "SELECT ref_name, blake3 FROM voice_attachments WHERE ref_name LIKE '% - Voi.mp3'"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -1657,9 +1684,11 @@ impl Export {
     async fn count_timed(&self, table: &str) -> i64 {
         let db = RawDb::open(&self.db_path).await.unwrap();
         // `table` is a literal at every callsite.
-        let n = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT count(*) FROM {table} WHERE when_ts LIKE '%+02:00'"
-        )))
+        let n = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT count(*) FROM {table} WHERE when_ts LIKE '%+02:00'"),
+        )
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -1686,14 +1715,14 @@ async fn a_voice_run_that_fails_before_its_prune_prunes_on_the_next() {
             "2364-03-03T12:00:00.000-08:00",
         )
     });
-    e.exec(
+    e.exec(test_sql!(
         "CREATE TRIGGER refuse_prune BEFORE DELETE ON voice_messages \
-         BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
-    )
+         BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END"
+    ))
     .await;
     let failed = e.sync().await;
     assert_eq!(failed.feeds_failed, 1, "{failed:?}");
-    e.exec("DROP TRIGGER refuse_prune").await;
+    e.exec(test_sql!("DROP TRIGGER refuse_prune")).await;
 
     e.sync().await;
     assert_eq!(
@@ -1715,14 +1744,14 @@ async fn a_chat_run_that_fails_before_its_prune_prunes_on_the_next() {
         serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     doc["messages"].as_array_mut().unwrap().pop();
     std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
-    e.exec(
+    e.exec(test_sql!(
         "CREATE TRIGGER refuse_prune BEFORE DELETE ON chat_messages \
-         BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
-    )
+         BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END"
+    ))
     .await;
     let failed = e.sync().await;
     assert_eq!(failed.feeds_failed, 1, "{failed:?}");
-    e.exec("DROP TRIGGER refuse_prune").await;
+    e.exec(test_sql!("DROP TRIGGER refuse_prune")).await;
 
     e.sync().await;
     assert_eq!(
@@ -1998,7 +2027,8 @@ async fn unchanged_parts_are_not_unpacked_again() {
     let cache = FingerprintCache::open(&work.path().join("fingerprints.sqlite"))
         .await
         .unwrap();
-    let rows: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+    let rows: Vec<String> = test_sql!("SELECT abs_path FROM fingerprints")
+        .query_scalar()
         .fetch_all(cache.pool())
         .await
         .unwrap();

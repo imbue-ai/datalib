@@ -15,6 +15,7 @@ use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use datalib_source_common::WhenDeletedUpstream;
+use datalib_sql::{sql_id, Sql};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 /// Delete the rows of `table` inside `scope` whose id is not in `keep`,
@@ -107,10 +108,13 @@ async fn unlisted_in_tx(
     keep: &HashSet<String>,
 ) -> Result<Vec<String>> {
     let columns: Vec<&str> = scope.iter().map(|(col, _)| *col).collect();
-    let select = scope_ids_sql(table, &columns);
+    let select = Sql::dynamic(
+        sql_id!("etl.prune.list_ids_in_scope"),
+        scope_ids_sql(table, &columns),
+    );
     // Audited: `table` and every `col` are `&'static str` at each callsite;
     // the scope values are bound below.
-    let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(select));
+    let mut q = select.query_scalar::<String>();
     for (_, val) in scope {
         q = q.bind((*val).to_string());
     }
@@ -140,7 +144,8 @@ async fn delete_ids_in_tx(
         ] {
             // Audited: `table` is a `&'static str`; the IN-list is a `?,?,?`
             // run sized from the chunk and every id is bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut q =
+                Sql::dynamic(sql_id!("etl.prune.delete_rows_and_sidecars_by_id"), sql).query();
             for id in chunk {
                 q = q.bind(id.clone());
             }
@@ -170,14 +175,18 @@ pub(crate) async fn forget_problems_in_tx(
     placeholders: &str,
     ids: &[String],
 ) -> Result<()> {
-    let sql = format!(
-        "DELETE FROM problems INDEXED BY problems_by_scope \
+    let sql = Sql::dynamic(
+        sql_id!("etl.prune.delete_problems_of_ids"),
+        format!(
+            "DELETE FROM problems INDEXED BY problems_by_scope \
          WHERE scope_kind = ? AND scope_key IN ({placeholders})"
+        ),
     );
     // Audited: the IN-list is a `?,?,?` run sized from `ids`; every key is
     // bound.
-    let mut q =
-        sqlx::query(sqlx::AssertSqlSafe(sql)).bind(datalib_problems::ScopeKind::Entity.as_str());
+    let mut q = sql
+        .query()
+        .bind(datalib_problems::ScopeKind::Entity.as_str());
     for id in ids {
         q = q.bind(format!("{table}:{id}"));
     }
@@ -233,7 +242,7 @@ pub async fn delete_owned_in_tx(
             // callsite, the scope kind a closed vocabulary's spelling; the
             // IN-list is a `?,?,?` run sized from the chunk and every owner
             // is bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut q = Sql::dynamic(sql_id!("etl.prune.delete_rows_by_owner"), sql).query();
             for id in chunk {
                 q = q.bind(id.clone());
             }
@@ -318,6 +327,7 @@ mod tests {
     use super::*;
     use std::collections::HashSet;
 
+    use datalib_sql::test_sql;
     /// With `keep_local_copy`, a re-enumeration that leaves rows out
     /// names them and deletes nothing: not the row, its sidecar or its
     /// problem.
@@ -326,7 +336,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for id in ["a", "b"] {
-            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
+            test_sql!("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
+                .query()
                 .bind(id)
                 .execute(&pool)
                 .await
@@ -352,7 +363,8 @@ mod tests {
                 kept: vec!["b".to_string()],
             }
         );
-        let sidecars: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notes_bookkeeping")
+        let sidecars: i64 = test_sql!("SELECT COUNT(*) FROM notes_bookkeeping")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -397,7 +409,8 @@ mod tests {
     }
 
     async fn problem_keys(pool: &SqlitePool) -> Vec<String> {
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
             .fetch_all(pool)
             .await
             .unwrap()
@@ -410,7 +423,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for (id, owner) in [("a", "x"), ("b", "x"), ("e1", "gone")] {
-            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+            test_sql!("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .query()
                 .bind(id)
                 .bind(owner)
                 .execute(&pool)
@@ -436,7 +450,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for (id, owner) in [("a", "x"), ("b", "x"), ("c", "y")] {
-            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+            test_sql!("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .query()
                 .bind(id)
                 .bind(owner)
                 .execute(&pool)
@@ -451,7 +466,8 @@ mod tests {
             .unwrap();
         assert_eq!(gone, vec!["b".to_string()]);
 
-        let mut left: Vec<String> = sqlx::query_scalar("SELECT id FROM notes ORDER BY id")
+        let mut left: Vec<String> = test_sql!("SELECT id FROM notes ORDER BY id")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -471,7 +487,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for id in ["a", "b"] {
-            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
+            test_sql!("INSERT INTO notes (id, owner, payload) VALUES (?, 'x', '{}')")
+                .query()
                 .bind(id)
                 .execute(&pool)
                 .await
@@ -488,7 +505,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pool = open_notes(&d.path().join("t.doltlite_db")).await;
         for (id, owner) in [("e1", "gone"), ("e2", "gone"), ("e3", "kept")] {
-            sqlx::query("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+            test_sql!("INSERT INTO notes (id, owner, payload) VALUES (?, ?, '{}')")
+                .query()
                 .bind(id)
                 .bind(owner)
                 .execute(&pool)
@@ -499,7 +517,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 2);
-        let left: Vec<String> = sqlx::query_scalar("SELECT id FROM notes")
+        let left: Vec<String> = test_sql!("SELECT id FROM notes")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();

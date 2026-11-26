@@ -16,6 +16,7 @@ use datalib_etl_apple_photos::processor::mirror_options;
 use datalib_etl_apple_photos_config::{ApplePhotosConfig, DATABASE_IN_BUNDLE};
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_source_common::LocalPath;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// A library bundle + mirror pair in a tempdir, with the fixture copied
 /// in so tests can edit it the way Photos would.
@@ -79,7 +80,8 @@ impl Fixture {
         let pool = mirror::open_sqlite(&self.db(), false).await?;
         for s in stmts {
             // Test: `stmts` are literal library edits written by the test itself.
-            sqlx::query(sqlx::AssertSqlSafe(*s))
+            Sql::dynamic(test_sql_id!(), *s)
+                .query()
                 .execute(&pool)
                 .await
                 .map_err(|e| anyhow::anyhow!("{s}: {e}"))?;
@@ -102,7 +104,8 @@ fn fixture_db() -> PathBuf {
 }
 
 async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -112,10 +115,11 @@ async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
 /// The mirrored tables: everything but SQLite's own and datalib's
 /// shared ones (`doltlite_raw::SHARED_TABLES`).
 async fn table_names(pool: &SqlitePool) -> Vec<String> {
-    let rows = sqlx::query(
+    let rows = test_sql!(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
-         ORDER BY name",
+         ORDER BY name"
     )
+    .query()
     .fetch_all(pool)
     .await
     .expect("list mirror tables");
@@ -126,22 +130,20 @@ async fn table_names(pool: &SqlitePool) -> Vec<String> {
 }
 
 async fn columns(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo(\"{table}\")"
-    )))
-    .fetch_all(pool)
-    .await
-    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_xinfo(\"{table}\")"))
+        .query()
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     rows.iter().map(|r| r.get::<String, _>("name")).collect()
 }
 
 async fn primary_key(pool: &SqlitePool, table: &str) -> Vec<String> {
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo(\"{table}\")"
-    )))
-    .fetch_all(pool)
-    .await
-    .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
+    let rows = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_xinfo(\"{table}\")"))
+        .query()
+        .fetch_all(pool)
+        .await
+        .unwrap_or_else(|e| panic!("table_xinfo({table}): {e}"));
     let mut keyed: Vec<(i64, String)> = rows
         .iter()
         .map(|r| (r.get::<i64, _>("pk"), r.get::<String, _>("name")))
@@ -153,7 +155,8 @@ async fn primary_key(pool: &SqlitePool, table: &str) -> Vec<String> {
 
 async fn diff_types(pool: &SqlitePool, table: &str, commit: &str) -> Vec<String> {
     let sql = format!("SELECT diff_type FROM dolt_diff_{table} WHERE to_commit = ?");
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+    let rows = Sql::dynamic(test_sql_id!(), sql.as_str())
+        .query()
         .bind(commit)
         .fetch_all(pool)
         .await
@@ -289,10 +292,11 @@ async fn a_favorite_toggle_is_one_modified_row_and_daemon_churn_is_nothing() -> 
     let commit = commit.expect("a favourite is a change");
     let pool = f.mirror_pool().await?;
     assert_eq!(diff_types(&pool, "ZASSET", &commit).await, vec!["modified"]);
-    let row = sqlx::query(
+    let row = test_sql!(
         "SELECT from_ZFAVORITE, to_ZFAVORITE, to_ZUUID FROM dolt_diff_ZASSET \
-         WHERE to_commit = ?",
+         WHERE to_commit = ?"
     )
+    .query()
     .bind(&commit)
     .fetch_one(&pool)
     .await?;

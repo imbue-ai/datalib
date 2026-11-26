@@ -12,6 +12,7 @@ use datalib_etl_chat_common::BlobsAt;
 use datalib_etl_render::inputs::{Inputs, RawRange};
 use datalib_etl_signal::ingest::schema_raw::chat_item_attachment_id_recipe;
 use datalib_signal_backup::backup;
+use datalib_sql::sql;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -282,9 +283,11 @@ type Recipients = (HashMap<String, ParsedRecipient>, Vec<(String, String)>);
 async fn load_recipients(pool: &sqlx::SqlitePool) -> Result<Recipients> {
     let mut recipients: HashMap<String, ParsedRecipient> = HashMap::new();
     let mut unreadable: Vec<(String, String)> = Vec::new();
-    let rrows = sqlx::query(
-        "SELECT id, identifier, display_name, json(payload) AS payload FROM recipients",
+    let rrows = sql!(
+        "signal_render.list_recipients",
+        "SELECT id, identifier, display_name, json(payload) AS payload FROM recipients"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read recipients")?;
@@ -344,10 +347,14 @@ fn uuid_of(bytes: &[u8]) -> Option<String> {
 }
 
 async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedChat>> {
-    let crows = sqlx::query("SELECT id, recipient_id FROM chats ORDER BY id")
-        .fetch_all(pool)
-        .await
-        .context("read chats")?;
+    let crows = sql!(
+        "signal_render.list_chats",
+        "SELECT id, recipient_id FROM chats ORDER BY id"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("read chats")?;
     let mut chats: HashMap<String, ParsedChat> = HashMap::new();
     for r in &crows {
         let id: String = r.try_get("id")?;
@@ -364,21 +371,27 @@ async fn load_chats(pool: &sqlx::SqlitePool) -> Result<HashMap<String, ParsedCha
 }
 
 async fn load_orphan_chats(pool: &sqlx::SqlitePool) -> Result<Vec<(String, i64)>> {
-    sqlx::query_as(
+    sql!(
+        "signal_render.count_messages_of_missing_chats",
         "SELECT i.chat_id, COUNT(*) FROM chat_items i \
          WHERE NOT EXISTS (SELECT 1 FROM chats c WHERE c.id = i.chat_id) \
-         GROUP BY i.chat_id ORDER BY i.chat_id",
+         GROUP BY i.chat_id ORDER BY i.chat_id"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .context("find messages whose chat is gone")
 }
 
 async fn load_all_chat_ids(pool: &sqlx::SqlitePool) -> Result<HashSet<String>> {
-    let rows = sqlx::query("SELECT DISTINCT chat_id FROM chat_items")
-        .fetch_all(pool)
-        .await
-        .context("load all chat_ids")?;
+    let rows = sql!(
+        "signal_render.list_chat_ids_with_messages",
+        "SELECT DISTINCT chat_id FROM chat_items"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("load all chat_ids")?;
     let mut out: HashSet<String> = HashSet::with_capacity(rows.len());
     for r in &rows {
         out.insert(r.try_get::<String, _>("chat_id")?);
@@ -460,9 +473,11 @@ async fn marked_since(
         return Ok(Vec::new());
     }
     let ids: Vec<&str> = moved.iter().map(|m| m.id.as_str()).collect();
-    sqlx::query_scalar(
-        "SELECT DISTINCT chat_id FROM chat_items WHERE id IN (SELECT value FROM json_each(?))",
+    sql!(
+        "signal_render.list_chats_of_messages",
+        "SELECT DISTINCT chat_id FROM chat_items WHERE id IN (SELECT value FROM json_each(?))"
     )
+    .query_scalar()
     .bind(serde_json::to_string(&ids)?)
     .fetch_all(pool)
     .await
@@ -478,22 +493,26 @@ async fn load_render_units(
         return Ok(Vec::new());
     }
     let chat_ids_json = serde_json::to_string(chat_ids)?;
-    let irows = sqlx::query(
+    let irows = sql!(
+        "signal_render.list_messages_of_chats",
         "SELECT id, chat_id, author_id, date_sent, json(payload) AS payload
            FROM chat_items
           WHERE chat_id IN (SELECT value FROM json_each(?))
-          ORDER BY chat_id, date_sent",
+          ORDER BY chat_id, date_sent"
     )
+    .query()
     .bind(&chat_ids_json)
     .fetch_all(pool)
     .await
     .context("read chat_items")?;
-    let edges: HashMap<String, String> = sqlx::query_as(
+    let edges: HashMap<String, String> = sql!(
+        "signal_render.list_attachments_of_chats",
         "SELECT a.id, a.ref_id
            FROM chat_item_attachments a
            JOIN chat_items i ON i.id = a.chat_item_id
-          WHERE i.chat_id IN (SELECT value FROM json_each(?))",
+          WHERE i.chat_id IN (SELECT value FROM json_each(?))"
     )
+    .query_as()
     .bind(&chat_ids_json)
     .fetch_all(pool)
     .await
@@ -765,6 +784,7 @@ mod load_tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// More chats to render than SQLite binds in one statement (#1156):
     /// every chat still comes back as its own render unit.
     #[tokio::test]
@@ -777,17 +797,16 @@ mod load_tests {
             .await
             .unwrap();
         for ddl in [ChatItemRow::ddl(), ChatItemAttachmentRow::ddl()] {
-            sqlx::query(sqlx::AssertSqlSafe(ddl))
+            Sql::dynamic(test_sql_id!(), ddl)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
         }
         let n = SQLITE_MAX_VARIABLES + 1;
-        sqlx::query(
-            "WITH RECURSIVE s(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM s WHERE value < ?1)
+        test_sql!("WITH RECURSIVE s(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM s WHERE value < ?1)
              INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload)
-             SELECT 'i' || value, 'c' || value, 'worf', value, '{}' FROM s",
-        )
+             SELECT 'i' || value, 'c' || value, 'worf', value, '{}' FROM s").query()
         .bind(n as i64)
         .execute(&pool)
         .await
@@ -814,19 +833,20 @@ mod load_tests {
             .await
             .unwrap();
         for ddl in [ChatRow::ddl(), ChatItemRow::ddl()] {
-            sqlx::query(sqlx::AssertSqlSafe(ddl))
+            Sql::dynamic(test_sql_id!(), ddl)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
         }
         for q in [
-            "INSERT INTO chats (id, recipient_id, payload) VALUES ('enterprise', 'picard', '{}')",
-            "INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload) VALUES \
+            test_sql!("INSERT INTO chats (id, recipient_id, payload) VALUES ('enterprise', 'picard', '{}')"),
+            test_sql!("INSERT INTO chat_items (id, chat_id, author_id, date_sent, payload) VALUES \
                 ('i1', 'enterprise', 'worf', 1, '{}'), \
                 ('i2', 'stargazer', 'worf', 2, '{}'), \
-                ('i3', 'stargazer', 'worf', 3, '{}')",
+                ('i3', 'stargazer', 'worf', 3, '{}')"),
         ] {
-            sqlx::query(q).execute(&pool).await.unwrap();
+            q.query().execute(&pool).await.unwrap();
         }
         assert_eq!(
             load_orphan_chats(&pool).await.unwrap(),

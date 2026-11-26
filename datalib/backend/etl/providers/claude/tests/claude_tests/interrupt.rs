@@ -27,6 +27,7 @@ use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use serde_json::{json, Value};
 
 const ORG: (&str, &str) = ("org-a", "Enterprise");
@@ -67,13 +68,16 @@ async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
     for table in HELD {
         out.push_str(&format!("== {table} held\n"));
         // Audited: `table` is a literal of HELD.
-        let rows: Vec<(String, bool, Option<String>)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        let rows: Vec<(String, bool, Option<String>)> = Sql::dynamic(
+            test_sql_id!(),
+            format!(
                 "SELECT id, fetched_at_utc IS NOT NULL, held_version \
                  FROM {table}_bookkeeping ORDER BY id"
-            )))
-            .fetch_all(pool)
-            .await?;
+            ),
+        )
+        .query_as()
+        .fetch_all(pool)
+        .await?;
         for (id, fetched, held) in rows {
             out.push_str(&format!("{id} fetched={fetched} @ {held:?}\n"));
         }
@@ -438,10 +442,11 @@ async fn a_death_between_the_row_and_its_attachments_leaves_them_owed() {
 async fn cowork_tasks_follow_the_listing() {
     async fn held(rig: &Claude, dir: &Path) -> Vec<(String, i64)> {
         let db = rig.open(dir).await.unwrap();
-        let rows: Vec<(String, i64)> = sqlx::query_as(
+        let rows: Vec<(String, i64)> = test_sql!(
             "SELECT s.id, (SELECT COUNT(*) FROM cowork_events e WHERE e.session_id = s.id) \
-             FROM cowork_sessions s ORDER BY s.id",
+             FROM cowork_sessions s ORDER BY s.id"
         )
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -470,10 +475,11 @@ async fn cowork_tasks_follow_the_listing() {
         [pair("cse_Guinan", 2), pair("cse_Worf", 4)]
     );
     let db = later.open(&store).await.unwrap();
-    let pictures: Vec<(String, bool)> = sqlx::query_as(
+    let pictures: Vec<(String, bool)> = test_sql!(
         "SELECT conversation_uuid, blake3 IS NOT NULL FROM claude_attachments \
-         WHERE conversation_uuid LIKE 'cse_%'",
+         WHERE conversation_uuid LIKE 'cse_%'"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();

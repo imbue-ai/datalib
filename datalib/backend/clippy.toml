@@ -17,7 +17,29 @@
 #
 # If a new caller needs progress bars, pull the shared MP via
 # `datalib_obs::shared_multi()` and attach bars there.
+# Every SQL statement is a named `datalib_sql::Sql` (datalib/backend/sql):
+# `sql!("<package>.<what_it_does>", "…").query()`, or
+# `Sql::dynamic(sql_id!("…"), text)` for text built while running, and its
+# work is counted under that name. sqlx's own entry points take a bare
+# string, so they are refused everywhere but in `datalib_sql` itself.
 disallowed-methods = [
+    { path = "sqlx::query", reason = "Name the statement: `sql!(\"<package>.<what_it_does>\", \"…\").query()`, or `Sql::dynamic(sql_id!(…), text).query()` (datalib/backend/sql)." },
+    { path = "sqlx::query_as", reason = "Name the statement: `sql!(…).query_as()` (datalib/backend/sql)." },
+    { path = "sqlx::query_scalar", reason = "Name the statement: `sql!(…).query_scalar()` (datalib/backend/sql)." },
+    { path = "sqlx::query_with", reason = "Name the statement: `sql!(…).query()` and bind (datalib/backend/sql)." },
+    { path = "sqlx::query_as_with", reason = "Name the statement: `sql!(…).query_as()` and bind (datalib/backend/sql)." },
+    { path = "sqlx::query_scalar_with", reason = "Name the statement: `sql!(…).query_scalar()` and bind (datalib/backend/sql)." },
+    { path = "sqlx::raw_sql", reason = "Name the statement: `sql!(…).raw()` (datalib/backend/sql)." },
+    { path = "sqlx::QueryBuilder::new", reason = "Build the text, then name it: `Sql::dynamic(sql_id!(…), text)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::execute", reason = "An executor handed a string runs it unnamed: `sql!(…).query().execute(executor)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::execute_many", reason = "Name each statement: `sql!(…).raw().execute(executor)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::fetch", reason = "Name the statement: `sql!(…).query().fetch(executor)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::fetch_many", reason = "Name the statement (datalib/backend/sql)." },
+    { path = "sqlx::Executor::fetch_all", reason = "Name the statement: `sql!(…).query().fetch_all(executor)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::fetch_one", reason = "Name the statement: `sql!(…).query().fetch_one(executor)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::fetch_optional", reason = "Name the statement: `sql!(…).query().fetch_optional(executor)` (datalib/backend/sql)." },
+    { path = "sqlx::Executor::prepare", reason = "Name the statement (datalib/backend/sql)." },
+    { path = "sqlx::Executor::prepare_with", reason = "Name the statement (datalib/backend/sql)." },
     { path = "indicatif::MultiProgress::new", reason = "Use `datalib_obs::shared_multi()` to get the process-wide MultiProgress that's coordinated with the tracing writer. A second MultiProgress races for stderr and flickers." },
 ]
 

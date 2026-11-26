@@ -17,6 +17,7 @@ use serde_json::Value;
 use sqlx::SqliteConnection;
 
 use super::labels;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Entity tables — what `dolt diff` should see across re-fetches.
 /// Each gets a paired `<table>_bookkeeping` sidecar. `email_blobs` is
@@ -523,12 +524,21 @@ pub const LADDER: &[Migration] = &[
         apply: |conn| {
             Box::pin(async move {
                 for sql in [
-                    "ALTER TABLE mailboxes DROP COLUMN total_emails",
-                    "ALTER TABLE mailboxes DROP COLUMN unread_emails",
-                    "UPDATE mailboxes SET payload = jsonb_remove(payload, \
-                     '$.totalEmails', '$.unreadEmails', '$.totalThreads', '$.unreadThreads')",
+                    sql!(
+                        "email.migrate_mailbox_counts.drop_total_emails",
+                        "ALTER TABLE mailboxes DROP COLUMN total_emails"
+                    ),
+                    sql!(
+                        "email.migrate_mailbox_counts.drop_unread_emails",
+                        "ALTER TABLE mailboxes DROP COLUMN unread_emails"
+                    ),
+                    sql!(
+                        "email.migrate_mailbox_counts.strip_payload_counts",
+                        "UPDATE mailboxes SET payload = jsonb_remove(payload, \
+                     '$.totalEmails', '$.unreadEmails', '$.totalThreads', '$.unreadThreads')"
+                    ),
                 ] {
-                    sqlx::query(sql).execute(&mut *conn).await?;
+                    sql.query().execute(&mut *conn).await?;
                 }
                 Ok(())
             })
@@ -549,9 +559,13 @@ pub const LADDER: &[Migration] = &[
         name: "threads lose their account index",
         apply: |conn| {
             Box::pin(async move {
-                sqlx::query("DROP INDEX IF EXISTS threads_by_account")
-                    .execute(&mut *conn)
-                    .await?;
+                sql!(
+                    "email.migrate_drop_threads_by_account_index",
+                    "DROP INDEX IF EXISTS threads_by_account"
+                )
+                .query()
+                .execute(&mut *conn)
+                .await?;
                 Ok(())
             })
         },
@@ -589,27 +603,35 @@ pub const LADDER: &[Migration] = &[
 /// labels, which no row kept; the Gmail API's are asked for every run, and
 /// a JMAP server's were the keyword moved here.
 async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
-    let has_column: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('read_marks') WHERE name = 'muted')",
+    let has_column: bool = sql!(
+        "email.migrate_muted.has_muted_column",
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('read_marks') WHERE name = 'muted')"
     )
+    .query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if !has_column {
-        sqlx::query("ALTER TABLE read_marks ADD COLUMN muted INTEGER NULL")
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "email.migrate_muted.add_muted_column",
+            "ALTER TABLE read_marks ADD COLUMN muted INTEGER NULL"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     dr::run_statements(&mut *conn, &MUTED_INTO_READ_MARKS).await?;
-    let has_stamps: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')",
-    )
+    let has_stamps: bool = sql!("email.migrate_muted.has_ingested_files", "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')").query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if has_stamps {
-        sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
-            .bind(super::mbox::READ_SCOPE)
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "email.migrate_muted.forget_read_scope_stamps",
+            "DELETE FROM ingested_files WHERE scope = ?"
+        )
+        .query()
+        .bind(super::mbox::READ_SCOPE)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -621,7 +643,8 @@ async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<
 async fn move_seen_into_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
     for ddl in ReadMarkRow::all_ddl() {
         // Audited: the DDL is the derive's, from a literal table name.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("email.migrate_seen.create_read_marks"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
@@ -704,6 +727,7 @@ mod tests {
     use sqlx::Row;
     use std::str::FromStr;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// Every write of an email deletes its mailbox and keyword rows by
     /// `email_id`, and render loads them the same way. Without an index
     /// each of those scans the whole table, which makes a full sync
@@ -723,20 +747,26 @@ mod tests {
             <EmlBlobRow as CasEdgeRow>::all_ddl(),
         ];
         for sql in ddl.concat() {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
         }
         for sql in [
-            "DELETE FROM email_mailboxes WHERE email_id = ?",
-            "DELETE FROM email_keywords WHERE email_id = ?",
-            "DELETE FROM email_blobs WHERE email_id = ?",
-            "SELECT id FROM email_mailboxes WHERE email_id IN (SELECT value FROM json_each(?))",
-            "SELECT id FROM email_keywords WHERE email_id IN (SELECT value FROM json_each(?))",
+            test_sql!("DELETE FROM email_mailboxes WHERE email_id = ?"),
+            test_sql!("DELETE FROM email_keywords WHERE email_id = ?"),
+            test_sql!("DELETE FROM email_blobs WHERE email_id = ?"),
+            test_sql!(
+                "SELECT id FROM email_mailboxes WHERE email_id IN (SELECT value FROM json_each(?))"
+            ),
+            test_sql!(
+                "SELECT id FROM email_keywords WHERE email_id IN (SELECT value FROM json_each(?))"
+            ),
         ] {
             let plan: Vec<String> =
-                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"))
+                    .query()
                     .bind("[]")
                     .fetch_all(&pool)
                     .await
@@ -760,7 +790,8 @@ mod tests {
             .await
             .unwrap();
         for sql in full_ddl() {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -781,7 +812,8 @@ mod tests {
             .map(|s| s.sql)
         {
             let plan: Vec<(i64, i64, String)> =
-                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"))
+                    .query()
                     .fetch_all(&pool)
                     .await
                     .unwrap()

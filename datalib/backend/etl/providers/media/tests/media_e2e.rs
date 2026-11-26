@@ -8,6 +8,7 @@ use sqlx::Row;
 
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_media::ingest::{self, RawDb};
+use datalib_sql::{test_sql, Sql};
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
 const STANZA: &str = "tng_media";
@@ -108,7 +109,8 @@ impl Harness {
 }
 
 async fn files(db: &RawDb) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query("SELECT id, blake3 FROM media_files")
+    let rows = test_sql!("SELECT id, blake3 FROM media_files")
+        .query()
         .fetch_all(db.pool())
         .await?;
     Ok(rows
@@ -120,9 +122,10 @@ async fn files(db: &RawDb) -> Result<HashMap<String, String>> {
 async fn items(
     db: &RawDb,
 ) -> Result<HashMap<String, (Option<String>, Option<String>, String, String)>> {
-    let rows = sqlx::query(
-        "SELECT blake3, payload_blake3, payload_scheme, media_class, container FROM media_items",
+    let rows = test_sql!(
+        "SELECT blake3, payload_blake3, payload_scheme, media_class, container FROM media_items"
     )
+    .query()
     .fetch_all(db.pool())
     .await?;
     Ok(rows
@@ -142,11 +145,12 @@ async fn items(
 }
 
 async fn payload_of(db: &RawDb, path: &str) -> Result<(Option<String>, Option<String>)> {
-    let row = sqlx::query(
+    let row = test_sql!(
         "SELECT i.payload_blake3 AS p, i.payload_scheme AS s
            FROM media_files f JOIN media_items i ON i.blake3 = f.blake3
-          WHERE f.id = ?",
+          WHERE f.id = ?"
     )
+    .query()
     .bind(path)
     .fetch_one(db.pool())
     .await?;
@@ -233,7 +237,8 @@ async fn one_item_two_paths_when_a_file_is_copied() -> Result<()> {
     let copy = &f["archive/ode_to_spot_copy.mp3"];
     assert_eq!(original, copy, "byte-identical copies are one item");
 
-    let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM media_files WHERE blake3 = ?")
+    let n: i64 = test_sql!("SELECT COUNT(*) AS n FROM media_files WHERE blake3 = ?")
+        .query()
         .bind(original)
         .fetch_one(db.pool())
         .await?
@@ -369,7 +374,8 @@ async fn an_unparsable_container_gets_null_rather_than_the_file_hash() -> Result
         assert_eq!(s, None, "{path} should have no payload scheme");
         // …and specifically must NOT have fallen back to the file hash.
         let file_hash = &f[path];
-        let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM media_items WHERE payload_blake3 = ?")
+        let n: i64 = test_sql!("SELECT COUNT(*) AS n FROM media_items WHERE payload_blake3 = ?")
+            .query()
             .bind(file_hash)
             .fetch_one(db.pool())
             .await?
@@ -394,7 +400,8 @@ async fn the_payload_ceiling_leaves_null_and_is_counted() -> Result<()> {
 
     let db = &h.db;
     let n: i64 =
-        sqlx::query("SELECT COUNT(*) AS n FROM media_items WHERE payload_blake3 IS NOT NULL")
+        test_sql!("SELECT COUNT(*) AS n FROM media_items WHERE payload_blake3 IS NOT NULL")
+            .query()
             .fetch_one(db.pool())
             .await?
             .get("n");
@@ -410,10 +417,11 @@ async fn audio_tags_are_hoisted_into_columns() -> Result<()> {
     h.scan().await?;
     let db = &h.db;
 
-    let row = sqlx::query(
+    let row = test_sql!(
         "SELECT a.* FROM media_files f JOIN media_audio a ON a.blake3 = f.blake3
-          WHERE f.id = 'music/ode_to_spot.mp3'",
+          WHERE f.id = 'music/ode_to_spot.mp3'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert_eq!(
@@ -438,11 +446,12 @@ async fn audio_tags_are_hoisted_into_columns() -> Result<()> {
     assert_eq!(row.get::<Option<i64>, _>("sample_rate_hz"), Some(44100));
 
     // Vorbis comments through the same columns.
-    let flac = sqlx::query(
+    let flac = test_sql!(
         "SELECT a.artist AS artist, a.album AS album FROM media_files f
            JOIN media_audio a ON a.blake3 = f.blake3
-          WHERE f.id = 'music/warp_core_hum.flac'",
+          WHERE f.id = 'music/warp_core_hum.flac'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert_eq!(
@@ -462,10 +471,11 @@ async fn exif_is_hoisted_including_the_capture_offset_and_gps() -> Result<()> {
     h.scan().await?;
     let db = &h.db;
 
-    let row = sqlx::query(
+    let row = test_sql!(
         "SELECT v.* FROM media_files f JOIN media_visual v ON v.blake3 = f.blake3
-          WHERE f.id = 'photos/bridge.jpg'",
+          WHERE f.id = 'photos/bridge.jpg'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert_eq!(
@@ -502,10 +512,11 @@ async fn dimensions_come_from_the_container_when_there_is_no_exif() -> Result<()
     let dims = |path: &'static str| {
         let pool = db.pool().clone();
         async move {
-            let row = sqlx::query(
+            let row = test_sql!(
                 "SELECT v.width AS w, v.height AS h FROM media_files f
-                   JOIN media_visual v ON v.blake3 = f.blake3 WHERE f.id = ?",
+                   JOIN media_visual v ON v.blake3 = f.blake3 WHERE f.id = ?"
             )
+            .query()
             .bind(path)
             .fetch_one(&pool)
             .await
@@ -545,14 +556,15 @@ async fn a_video_reports_duration_codecs_and_its_own_capture_metadata() -> Resul
     h.scan().await?;
     let db = &h.db;
 
-    let row = sqlx::query(
+    let row = test_sql!(
         "SELECT i.duration_ms AS d, v.video_codec AS vc, v.audio_codec AS ac,
                 v.captured_at AS at, v.gps_lat AS lat, v.gps_lon AS lon
            FROM media_files f
            JOIN media_items i ON i.blake3 = f.blake3
            JOIN media_visual v ON v.blake3 = f.blake3
-          WHERE f.id = 'video/holodeck_clip.mp4'",
+          WHERE f.id = 'video/holodeck_clip.mp4'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     // 900 units at timescale 600.
@@ -586,14 +598,15 @@ async fn a_bmff_file_keeps_both_its_tags_and_its_capture_metadata() -> Result<()
     let both = |path: &'static str| {
         let pool = db.pool().clone();
         async move {
-            sqlx::query(
+            test_sql!(
                 "SELECT a.title AS tag_title, a.artist AS artist,
                         v.captured_at AS captured_at, v.video_codec AS vc
                    FROM media_files f
                    LEFT JOIN media_audio a ON a.blake3 = f.blake3
                    LEFT JOIN media_visual v ON v.blake3 = f.blake3
-                  WHERE f.id = ?",
+                  WHERE f.id = ?"
             )
+            .query()
             .bind(path)
             .fetch_one(&pool)
             .await
@@ -650,14 +663,15 @@ async fn single_purpose_files_get_exactly_one_class_row() -> Result<()> {
         ("photos/holodeck.png", false, true),
         ("photos/sensor.dng", false, true),
     ] {
-        let row = sqlx::query(
+        let row = test_sql!(
             "SELECT (a.blake3 IS NOT NULL) AS has_audio,
                     (v.blake3 IS NOT NULL) AS has_visual
                FROM media_files f
                LEFT JOIN media_audio a ON a.blake3 = f.blake3
                LEFT JOIN media_visual v ON v.blake3 = f.blake3
-              WHERE f.id = ?",
+              WHERE f.id = ?"
         )
+        .query()
         .bind(path)
         .fetch_one(db.pool())
         .await?;
@@ -683,10 +697,11 @@ async fn a_playlist_keeps_its_order_and_its_unresolvable_entries() -> Result<()>
     let s = h.scan().await?;
     let db = &h.db;
 
-    let pl = sqlx::query(
+    let pl = test_sql!(
         "SELECT title, entry_count, format FROM media_playlists
-          WHERE id = 'playlists/bridge_ambience.m3u'",
+          WHERE id = 'playlists/bridge_ambience.m3u'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert_eq!(
@@ -699,17 +714,18 @@ async fn a_playlist_keeps_its_order_and_its_unresolvable_entries() -> Result<()>
     // "How much of this playlist do I still have?" is a join, not a
     // stored count — so it is always current, where a column would go
     // stale the moment a track is added without a rescan.
-    let have: i64 = sqlx::query(
+    let have: i64 = test_sql!(
         "SELECT COUNT(*) AS n FROM media_playlist_entries e
            JOIN media_files f ON f.id = e.resolved_path
-          WHERE e.playlist_id = 'playlists/bridge_ambience.m3u'",
+          WHERE e.playlist_id = 'playlists/bridge_ambience.m3u'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?
     .get("n");
     assert_eq!(have, 3);
 
-    let rows = sqlx::query(
+    let rows = test_sql!(
         "SELECT e.position       AS position,
                 e.target_raw     AS target_raw,
                 e.target_kind    AS target_kind,
@@ -719,8 +735,9 @@ async fn a_playlist_keeps_its_order_and_its_unresolvable_entries() -> Result<()>
            FROM media_playlist_entries e
            LEFT JOIN media_files f ON f.id = e.resolved_path
           WHERE e.playlist_id = 'playlists/bridge_ambience.m3u'
-          ORDER BY e.position",
+          ORDER BY e.position"
     )
+    .query()
     .fetch_all(db.pool())
     .await?;
     assert_eq!(rows.len(), 6);
@@ -774,10 +791,11 @@ async fn a_playlist_keeps_its_order_and_its_unresolvable_entries() -> Result<()>
     // about the playlist text; the second is the join above, and the
     // gap between them is the whole reason the two are not one column.
     assert_eq!(s.playlist_entries_in_tree, 6, "across both playlists");
-    let have_any: i64 = sqlx::query(
+    let have_any: i64 = test_sql!(
         "SELECT COUNT(*) AS n FROM media_playlist_entries e
-           JOIN media_files f ON f.id = e.resolved_path",
+           JOIN media_files f ON f.id = e.resolved_path"
     )
+    .query()
     .fetch_one(db.pool())
     .await?
     .get("n");
@@ -791,10 +809,11 @@ async fn a_latin1_playlist_decodes_and_keeps_duplicate_entries() -> Result<()> {
     h.scan().await?;
     let db = &h.db;
 
-    let rows = sqlx::query(
+    let rows = test_sql!(
         "SELECT position, target_raw, ext_title FROM media_playlist_entries
-          WHERE playlist_id LIKE 'playlists/caf%' ORDER BY position",
+          WHERE playlist_id LIKE 'playlists/caf%' ORDER BY position"
     )
+    .query()
     .fetch_all(db.pool())
     .await?;
     assert_eq!(rows.len(), 2, "the same track twice is two entries");
@@ -817,7 +836,8 @@ async fn hls_manifests_are_skipped_and_counted() -> Result<()> {
     let db = &h.db;
 
     assert_eq!(s.hls_skipped, 1, "the stream manifest should be recognized");
-    let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM media_playlists WHERE id LIKE '%.m3u8'")
+    let n: i64 = test_sql!("SELECT COUNT(*) AS n FROM media_playlists WHERE id LIKE '%.m3u8'")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("n");
@@ -850,7 +870,8 @@ async fn a_rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
     );
     // Playlists are rebuilt from scratch each scan, so they must not
     // accumulate duplicates.
-    let n: i64 = sqlx::query("SELECT COUNT(*) AS n FROM media_playlist_entries")
+    let n: i64 = test_sql!("SELECT COUNT(*) AS n FROM media_playlist_entries")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("n");
@@ -913,10 +934,11 @@ async fn deletions_are_reconciled_without_a_clock() -> Result<()> {
     let db = &h.db;
     let f = files(db).await?;
     assert!(!f.contains_key("music/untagged_hum.mp3"));
-    let n: i64 = sqlx::query(
+    let n: i64 = test_sql!(
         "SELECT COUNT(*) AS n FROM media_playlist_entries
-          WHERE playlist_id = 'playlists/bridge_ambience.m3u'",
+          WHERE playlist_id = 'playlists/bridge_ambience.m3u'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?
     .get("n");
@@ -938,10 +960,11 @@ async fn a_shortened_playlist_loses_its_trailing_entries() -> Result<()> {
     h.scan().await?;
 
     let db = &h.db;
-    let rows = sqlx::query(
+    let rows = test_sql!(
         "SELECT position FROM media_playlist_entries
-          WHERE playlist_id = 'playlists/bridge_ambience.m3u' ORDER BY position",
+          WHERE playlist_id = 'playlists/bridge_ambience.m3u' ORDER BY position"
     )
+    .query()
     .fetch_all(db.pool())
     .await?;
     assert_eq!(rows.len(), 1, "five stale entries should be gone");
@@ -958,7 +981,8 @@ async fn an_item_no_path_names_goes_and_a_moved_one_stays() -> Result<()> {
     h.scan().await?;
     let hash = files(db).await?["music/untagged_hum.mp3"].clone();
     let audio_rows = || async {
-        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM media_audio WHERE blake3 = ?")
+        test_sql!("SELECT count(*) FROM media_audio WHERE blake3 = ?")
+            .query_scalar::<i64>()
             .bind(&hash)
             .fetch_one(db.pool())
             .await
@@ -1082,10 +1106,11 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
         hum_payload_before,
         "…but the audio did not"
     );
-    let title: Option<String> = sqlx::query(
+    let title: Option<String> = test_sql!(
         "SELECT a.title AS t FROM media_files f JOIN media_audio a ON a.blake3 = f.blake3
-          WHERE f.id = 'music/untagged_hum.mp3'",
+          WHERE f.id = 'music/untagged_hum.mp3'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?
     .get("t");
@@ -1121,10 +1146,11 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     assert_eq!(items_after.len(), items_before.len() + 2 - 2);
 
     // (6) Playlist: rewritten, not merged. The old positions are gone.
-    let n: i64 = sqlx::query(
+    let n: i64 = test_sql!(
         "SELECT COUNT(*) AS n FROM media_playlist_entries
-          WHERE playlist_id LIKE 'playlists/caf%'",
+          WHERE playlist_id LIKE 'playlists/caf%'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?
     .get("n");
@@ -1141,7 +1167,8 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
 
 async fn problem_keys(db: &RawDb) -> Result<Vec<String>> {
     Ok(
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
             .fetch_all(db.pool())
             .await?,
     )
@@ -1213,7 +1240,8 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
     // Forget the item, so the next scan must open the file again; the
     // walk itself does not, once the cache vouches for the new mode.
     let hash = files(&h.db).await?["music/untagged_hum.mp3"].clone();
-    sqlx::query("DELETE FROM media_items WHERE blake3 = ?")
+    test_sql!("DELETE FROM media_items WHERE blake3 = ?")
+        .query()
         .bind(&hash)
         .execute(h.db.pool())
         .await?;
@@ -1239,9 +1267,10 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
             "record:media_playlists:playlists/bridge_ambience.m3u",
         ]
     );
-    let n: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'",
+    let n: i64 = test_sql!(
+        "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'"
     )
+    .query_scalar()
     .fetch_one(h.db.pool())
     .await?;
     assert_eq!(n, 1, "the playlist that would not read keeps its row");
@@ -1326,9 +1355,10 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
         before,
         "every file is over max_bytes, none is gone"
     );
-    let warned: Vec<String> = sqlx::query_scalar(
-        "SELECT scope_key FROM problems WHERE reason = 'over_size_limit' AND severity = 'warning'",
+    let warned: Vec<String> = test_sql!(
+        "SELECT scope_key FROM problems WHERE reason = 'over_size_limit' AND severity = 'warning'"
     )
+    .query_scalar()
     .fetch_all(h.db.pool())
     .await?;
     assert!(warned.contains(&"record:files:music/ode_to_spot.mp3".to_string()));
@@ -1352,7 +1382,8 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
     assert_eq!(walked.removed, 0, "{walked:?}");
     assert!(files(&h.db).await?.contains_key("music/untagged_hum.mp3"));
     let problems: Vec<String> =
-        sqlx::query_scalar("SELECT scope_key FROM problems WHERE scope_key NOT LIKE 'skipped:%'")
+        test_sql!("SELECT scope_key FROM problems WHERE scope_key NOT LIKE 'skipped:%'")
+            .query_scalar()
             .fetch_all(h.db.pool())
             .await?;
     assert_eq!(problems, vec!["listing:files".to_string()]);
@@ -1364,8 +1395,9 @@ async fn a_path_the_scan_passed_over_keeps_its_row() -> Result<()> {
 /// which goes when none is left.
 #[tokio::test]
 async fn cloud_placeholders_are_one_warning_with_a_count() -> Result<()> {
-    const SAID: &str =
-        "SELECT sample FROM problems WHERE scope_key LIKE 'skipped:cloud_placeholders:%'";
+    const SAID: Sql = test_sql!(
+        "SELECT sample FROM problems WHERE scope_key LIKE 'skipped:cloud_placeholders:%'"
+    );
     let h = Harness::on_a_copy().await?;
     let mut evicted = Vec::new();
     for rel in ["music/ode_to_spot.mp3", "music/untagged_hum.mp3"] {
@@ -1377,7 +1409,7 @@ async fn cloud_placeholders_are_one_warning_with_a_count() -> Result<()> {
     }
     let s = h.scan().await?;
     assert_eq!(s.dataless_skipped, 2, "{s:?}");
-    let said: Vec<String> = sqlx::query_scalar(SAID).fetch_all(h.db.pool()).await?;
+    let said: Vec<String> = SAID.query_scalar().fetch_all(h.db.pool()).await?;
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("2 files "), "{}", said[0]);
     assert!(said[0].ends_with("music/ode_to_spot.mp3"), "{}", said[0]);
@@ -1386,7 +1418,7 @@ async fn cloud_placeholders_are_one_warning_with_a_count() -> Result<()> {
         std::fs::write(path, bytes)?;
     }
     h.scan().await?;
-    let said: Vec<String> = sqlx::query_scalar(SAID).fetch_all(h.db.pool()).await?;
+    let said: Vec<String> = SAID.query_scalar().fetch_all(h.db.pool()).await?;
     assert_eq!(said, Vec::<String>::new());
     Ok(())
 }
@@ -1398,18 +1430,21 @@ async fn a_playlist_too_large_to_read_keeps_its_row_and_says_so() -> Result<()> 
     const KEY: &str = "record:media_playlists:playlists/bridge_ambience.m3u";
     let h = Harness::on_a_copy().await?;
     h.scan().await?;
-    let stored = "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'";
-    let row: i64 = sqlx::query_scalar(stored).fetch_one(h.db.pool()).await?;
+    let stored = test_sql!(
+        "SELECT COUNT(*) FROM media_playlists WHERE id = 'playlists/bridge_ambience.m3u'"
+    );
+    let row: i64 = stored.query_scalar().fetch_one(h.db.pool()).await?;
     assert_eq!(row, 1);
 
     let path = h.root.join("playlists/bridge_ambience.m3u");
     let small = std::fs::read(&path)?;
     std::fs::write(&path, vec![b'#'; 17 * 1024 * 1024])?;
     h.scan().await?;
-    let row: i64 = sqlx::query_scalar(stored).fetch_one(h.db.pool()).await?;
+    let row: i64 = stored.query_scalar().fetch_one(h.db.pool()).await?;
     assert_eq!(row, 1);
     let said: Vec<(String, String)> =
-        sqlx::query_as("SELECT severity, reason FROM problems WHERE scope_key = ?")
+        test_sql!("SELECT severity, reason FROM problems WHERE scope_key = ?")
+            .query_as()
             .bind(KEY)
             .fetch_all(h.db.pool())
             .await?;
@@ -1420,7 +1455,8 @@ async fn a_playlist_too_large_to_read_keeps_its_row_and_says_so() -> Result<()> 
 
     std::fs::write(&path, small)?;
     h.scan().await?;
-    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+    let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+        .query_scalar()
         .fetch_all(h.db.pool())
         .await?;
     assert!(!keys.contains(&KEY.to_string()), "{keys:?}");

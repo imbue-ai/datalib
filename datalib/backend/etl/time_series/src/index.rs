@@ -97,6 +97,7 @@ mod tests {
     use crate::apply;
     use datalib_time_series_schema::{Points, TimeSeries};
 
+    use datalib_sql::test_sql;
     fn series(id: &str, source: &str, points: Points) -> TimeSeries {
         crate::tests::series(id, source, points)
     }
@@ -167,12 +168,12 @@ mod tests {
                 ("yolink".into(), 2)
             ]
         );
-        let has_chunks: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'time_series_chunks'",
-        )
-        .fetch_one(&ix)
-        .await
-        .unwrap();
+        let has_chunks: i64 =
+            test_sql!("SELECT COUNT(*) FROM sqlite_master WHERE name = 'time_series_chunks'")
+                .query_scalar()
+                .fetch_one(&ix)
+                .await
+                .unwrap();
         assert_eq!(has_chunks, 0);
 
         let warmer = series("temp", "yolink", Points::floats([(1, 20.0), (2, 21.5)]));

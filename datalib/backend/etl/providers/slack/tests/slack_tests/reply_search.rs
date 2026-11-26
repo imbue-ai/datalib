@@ -9,6 +9,7 @@ use datalib_etl_slack::recorded::{record_call, History};
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
+use datalib_sql::test_sql;
 
 /// A thread from long before either run, and the channel's newest
 /// top-level message.
@@ -61,12 +62,12 @@ async fn run(playback: &Path, out: &Path, now: &str) {
 
 async fn search_problems(out: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT scope_key FROM problems WHERE scope_key LIKE '%search.messages%'",
-    )
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
+    let rows: Vec<String> =
+        test_sql!("SELECT scope_key FROM problems WHERE scope_key LIKE '%search.messages%'")
+            .query_scalar()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
     db.close().await;
     rows
 }

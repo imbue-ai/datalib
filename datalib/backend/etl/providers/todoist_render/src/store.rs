@@ -11,6 +11,7 @@ use datalib_etl_todoist::ingest::schema_raw::{
     COLLABORATORS, COMPLETED_ITEMS, ITEMS, NOTES, PROJECTS, PROJECT_NOTES, SECTIONS, USER,
 };
 use datalib_etl_todoist::ingest::RawDb;
+use datalib_sql::{sql_id, Sql};
 use serde_json::Value;
 use sqlx::Row as _;
 
@@ -113,9 +114,13 @@ impl Store {
 
 async fn read(db: &RawDb, table: &str) -> Result<Rows> {
     // Audited: `table` is one of this crate's `&'static str` table names.
-    let sql = format!("SELECT id, json(payload) AS payload FROM \"{table}\"");
+    let sql = Sql::dynamic(
+        sql_id!("todoist_render.list_table_payloads"),
+        format!("SELECT id, json(payload) AS payload FROM \"{table}\""),
+    );
     let mut out = Rows::new();
-    for row in sqlx::query(sqlx::AssertSqlSafe(sql))
+    for row in sql
+        .query()
         .fetch_all(db.pool())
         .await
         .with_context(|| format!("read {table}"))?

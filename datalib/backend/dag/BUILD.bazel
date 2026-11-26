@@ -34,6 +34,7 @@ rust_library(
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/step_problems:datalib_step_problems",
@@ -127,6 +128,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -146,6 +148,7 @@ rust_binary(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
@@ -162,6 +165,7 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -221,6 +225,7 @@ rust_test(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",

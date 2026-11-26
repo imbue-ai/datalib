@@ -1,6 +1,7 @@
 //! Does the store still come out as an *ordinary* SQLite file?
 
 use datalib_runs::{open_or_create, runs_path};
+use datalib_sql::{test_sql_id, Sql};
 
 const SCHEMA: &str = app_schema::runs::run::DDL[0].1;
 
@@ -15,7 +16,11 @@ async fn the_store_is_a_stock_sqlite_file() {
     let db = runs_path(td.path());
 
     let pool = open_or_create(&db).await.expect("open the store");
-    sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+    Sql::ddl(test_sql_id!(), SCHEMA)
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 
     assert_eq!(
@@ -44,7 +49,11 @@ async fn without_the_parameter_doltlite_claims_the_file() {
         )
         .await
         .unwrap();
-    sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+    Sql::ddl(test_sql_id!(), SCHEMA)
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 
     assert_eq!(
@@ -64,7 +73,11 @@ async fn an_awkward_path_still_opens() {
     let db = runs_path(&td.path().join("Imbue Dropbox 100%41 #1"));
 
     let pool = open_or_create(&db).await.expect("open the store");
-    sqlx::raw_sql(SCHEMA).execute(&pool).await.unwrap();
+    Sql::ddl(test_sql_id!(), SCHEMA)
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
     pool.close().await;
 
     assert_eq!(magic(&db), b"SQLite format 3");
