@@ -22,6 +22,10 @@ pub(super) const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS document_contacts (markdown_uuid TEXT NOT NULL, \
      record_id INTEGER NOT NULL, seen_items INTEGER, last_seen_at TEXT, \
      PRIMARY KEY (markdown_uuid, record_id)) WITHOUT ROWID",
+    // A number a record writes without its country code, which makes no
+    // handle: its digits (`datalib_handle::home_digits`).
+    "CREATE TABLE IF NOT EXISTS contact_record_numbers (record_id INTEGER NOT NULL, \
+     digits TEXT NOT NULL, PRIMARY KEY (record_id, digits)) WITHOUT ROWID",
 ];
 
 pub(super) const INDEXES: &[&str] = &[
@@ -31,6 +35,13 @@ pub(super) const INDEXES: &[&str] = &[
     // And how much they wrote, over every document that carries them.
     "CREATE INDEX IF NOT EXISTS document_contacts_by_record \
      ON document_contacts (record_id, seen_items, last_seen_at)",
+    // The numbers that may be one, read by the last digits they share
+    // (`datalib_handle::SHARED_DIGITS`): the full ones, and those without
+    // a country code.
+    "CREATE INDEX IF NOT EXISTS contact_record_handles_by_last_digits \
+     ON contact_record_handles (substr(handle, -7)) WHERE substr(handle, 1, 4) = 'tel:'",
+    "CREATE INDEX IF NOT EXISTS contact_record_numbers_by_last_digits \
+     ON contact_record_numbers (substr(digits, -7))",
 ];
 
 /// A record goes when the last document that carries it does. Until a
@@ -40,6 +51,9 @@ pub(super) const ORPHANED: &[&str] = &[
     "DELETE FROM contact_record_handles WHERE NOT EXISTS (SELECT 1 \
      FROM document_contacts d INDEXED BY document_contacts_by_record \
      WHERE d.record_id = contact_record_handles.record_id)",
+    "DELETE FROM contact_record_numbers WHERE NOT EXISTS (SELECT 1 \
+     FROM document_contacts d INDEXED BY document_contacts_by_record \
+     WHERE d.record_id = contact_record_numbers.record_id)",
     "DELETE FROM contact_records WHERE NOT EXISTS (SELECT 1 \
      FROM document_contacts d INDEXED BY document_contacts_by_record \
      WHERE d.record_id = contact_records.record_id)",
@@ -112,6 +126,18 @@ async fn record_id(conn: &mut SqliteConnection, contact: &NormalizedContact) -> 
         .await
         .with_context(|| format!("insert handle {handle}"))?;
     }
+    for digits in contact.handles.iter().filter_map(|h| h.home_digits()) {
+        sql!(
+            "etl.render.grid.insert_record_number",
+            "INSERT OR IGNORE INTO contact_record_numbers (record_id, digits) VALUES (?, ?)"
+        )
+        .query()
+        .bind(record_id)
+        .bind(digits)
+        .execute(&mut *conn)
+        .await
+        .context("insert a number without its country code")?;
+    }
     Ok(record_id)
 }
 
@@ -144,6 +170,7 @@ mod tests {
         c.handles = vec![
             ContactHandle::email(None, "riker@enterprise.org"),
             ContactHandle::phone(None, "+1 202 555 0101"),
+            ContactHandle::phone(None, "(907) 555-0142"),
         ];
         c.seen = seen.map(|(items, at)| Seen {
             items,
@@ -161,11 +188,13 @@ mod tests {
             .unwrap()
     }
 
-    /// (records, their handles, documents carrying one).
-    async fn held(pool: &sqlx::SqlitePool) -> (i64, i64, i64) {
+    /// (records, their handles, their numbers with no country code,
+    /// documents carrying one).
+    async fn held(pool: &sqlx::SqlitePool) -> (i64, i64, i64, i64) {
         (
             count(pool, "contact_records").await,
             count(pool, "contact_record_handles").await,
+            count(pool, "contact_record_numbers").await,
             count(pool, "document_contacts").await,
         )
     }
@@ -194,19 +223,19 @@ mod tests {
             apply_one(&lock, &md).await.unwrap();
         }
         seal(&lock).await.unwrap();
-        assert_eq!(held(&pool).await, (2, 4, 4));
+        assert_eq!(held(&pool).await, (2, 4, 2, 4));
 
         delete_markdowns(&lock, &["md-a".into(), "md-b".into(), "md-d".into()])
             .await
             .unwrap();
         seal(&lock).await.unwrap();
-        assert_eq!(held(&pool).await, (1, 2, 1), "md-c still carries one");
+        assert_eq!(held(&pool).await, (1, 2, 1, 1), "md-c still carries one");
 
         apply_one(&lock, &carrying("md-c", riker(&["William"], None)))
             .await
             .unwrap();
         seal(&lock).await.unwrap();
-        assert_eq!(held(&pool).await, (1, 2, 1), "a re-render replaces it");
+        assert_eq!(held(&pool).await, (1, 2, 1, 1), "a re-render replaces it");
         let names: Vec<String> = test_sql!("SELECT name FROM contact_records")
             .query_scalar()
             .fetch_all(&pool)
@@ -216,7 +245,7 @@ mod tests {
 
         delete_markdowns(&lock, &["md-c".into()]).await.unwrap();
         seal(&lock).await.unwrap();
-        assert_eq!(held(&pool).await, (0, 0, 0));
+        assert_eq!(held(&pool).await, (0, 0, 0, 0));
         pool.close().await;
     }
 }

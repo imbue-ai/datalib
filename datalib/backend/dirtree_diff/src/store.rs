@@ -244,7 +244,7 @@ pub async fn fetch_diff(
     to: &Commit,
     skip: &Skip,
 ) -> Result<crate::model::Diff> {
-    // Audited for `AssertSqlSafe`: both commits are `Commit`, which
+    // Audited: both commits are `Commit`, which
     // only parses from ASCII hex, and the table-valued function takes
     // them as literals rather than bindable parameters; the table name
     // and column list are `Table`'s own constants; every skipped prefix
@@ -287,7 +287,7 @@ pub async fn fetch_diff(
 pub async fn load_side(pool: &SqlitePool, commit: &Commit) -> Result<Vec<Entry>> {
     let mut out = Vec::new();
     for table in [Table::Dirs, Table::Files] {
-        // Audited for `AssertSqlSafe`: `commit` is hex by construction
+        // Audited: `commit` is hex by construction
         // and the rest is `Table`'s own constants.
         let sql = Sql::dynamic(
             sql_id!("dirtree_diff.list_entries_at_commit"),
@@ -325,7 +325,7 @@ pub async fn duplicate_candidates(
     );
     let mut out = Vec::new();
     for table in [Table::Dirs, Table::Files] {
-        // Audited for `AssertSqlSafe`: `commit` is hex by construction,
+        // Audited: `commit` is hex by construction,
         // `threshold` is an i64 rendered by Rust, not caller text, and
         // the rest is `Table`'s own constants.
         let sql = Sql::dynamic(
@@ -372,7 +372,7 @@ pub async fn lookup_digests(
                  so this is a full scan"
             );
         }
-        // Audited for `AssertSqlSafe`: `commit` is hex by construction,
+        // Audited: `commit` is hex by construction,
         // the table name is `Table`'s own constant, and the digests are
         // one bound JSON array.
         let sql = Sql::dynamic(

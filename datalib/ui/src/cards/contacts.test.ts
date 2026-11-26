@@ -15,6 +15,8 @@ import {
   chipTooltip,
   isAbsent,
   type NormalizedContact,
+  type PeopleAnswer,
+  addedSummary,
   rewriteChipsForCopy,
   suggestedName,
   todayPartialDate,
@@ -27,6 +29,7 @@ import {
   people,
   linkHandle,
   unlinkHandle,
+  whoFrom,
   peopleTitle,
   contactLook,
   decorateHandles,
@@ -44,6 +47,11 @@ function dom(html: string): HTMLElement {
 
 const chip = (handle: string, name: string) =>
   `<a class="chip" href="x" data-handle="${handle}">${name}</a>`;
+
+/** What `POST /people` answers, with nothing but these handles' records. */
+function indexAnswer(people: Record<string, NormalizedContact[]>): PeopleAnswer {
+  return { people, same_digits: {}, pages: {}, full_numbers: {} };
+}
 
 describe("chipAnchors", () => {
   /** A chip may sit anywhere: the header, the To line, a mention in the
@@ -453,7 +461,7 @@ describe("an edit to a link", () => {
             },
           }
         : url.endsWith("/people")
-          ? { people: {} }
+          ? indexAnswer({})
           : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
@@ -576,7 +584,7 @@ describe("a message's own header", () => {
     const riker = "email:riker@enterprise.test";
     vi.stubGlobal("fetch", async (url: string) => {
       const body = url.endsWith("/people")
-        ? { people: { [riker]: [contact("mail", "William Riker", [[riker, null]], 10)] } }
+        ? indexAnswer({ [riker]: [contact("mail", "William Riker", [[riker, null]], 10)] })
         : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
@@ -627,9 +635,9 @@ describe("your contact's name", () => {
       const body = url.endsWith("/resolve")
         ? { resolved: { [riker]: mine } }
         : url.endsWith("/people")
-          ? {
-              people: { [riker]: [contact("mail", "PAY INVOICE NOW - Riker", [[riker, null]], 9)] },
-            }
+          ? indexAnswer({
+              [riker]: [contact("mail", "PAY INVOICE NOW - Riker", [[riker, null]], 9)],
+            })
           : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
@@ -656,5 +664,57 @@ describe("your contact's name", () => {
       expect(labels).toContain("Copy “Will Riker”");
       expect(labels.join("\n")).not.toContain("PAY INVOICE");
     }
+  });
+});
+
+/** An answer about one handle that held another's numbers would change with
+ *  whatever chips happened to be drawn beside it. */
+describe("whoFrom", () => {
+  it("takes only what the answer says of its handle", () => {
+    const gomez = { ...contact("book", "Sonya Gomez", []), handles: [] };
+    const written = (value: string): NormalizedContact => ({
+      ...gomez,
+      handles: [{ medium: "phone", label: null, value, handle: null, stopped_working_by: null }],
+    });
+    const answer: PeopleAnswer = {
+      people: { "email:a@b.org": [written("555-0147")] },
+      same_digits: { "tel:+12025550199": [written("555-0199")] },
+      pages: {},
+      full_numbers: { "555-0147": ["tel:+12025550147"], "555-0199": ["tel:+12025550199"] },
+    };
+    expect(whoFrom(answer, "email:a@b.org", null)).toEqual({
+      mine: null,
+      sourceContacts: [written("555-0147")],
+      fullNumbers: { "555-0147": ["tel:+12025550147"] },
+    });
+    expect(whoFrom(answer, "tel:+12025550199", null)).toEqual({
+      mine: null,
+      sourceContacts: [],
+      sameDigits: [written("555-0199")],
+      fullNumbers: { "555-0199": ["tel:+12025550199"] },
+    });
+    expect(whoFrom(answer, "email:nobody@b.org", null)).toEqual({ mine: null, sourceContacts: [] });
+  });
+});
+
+describe("addedSummary", () => {
+  const none = { created: 0, added_to: 0, already: 0, skipped: [] };
+  it("says what came of everyone who was selected", () => {
+    expect(addedSummary({ ...none, created: 1 })).toBe("Added 1 person to contacts");
+    expect(
+      addedSummary({
+        created: 12,
+        added_to: 2,
+        already: 3,
+        skipped: [{ what: "The Captains", why: "their handles are on Riker and Picard" }],
+      }),
+    ).toBe(
+      "Added 12 people to contacts; added handles to 2 contacts; 3 already there; " +
+        "The Captains skipped: their handles are on Riker and Picard",
+    );
+    expect(addedSummary({ ...none, added_to: 1 })).toBe("Added handles to 1 contact");
+    expect(addedSummary({ ...none, already: 4 })).toBe(
+      "Added 0 people to contacts; 4 already there",
+    );
   });
 });

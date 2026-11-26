@@ -191,7 +191,7 @@ async fn bodies_are_written_and_sealed_as_they_land() {
                 .unwrap();
             let mut held = Vec::new();
             for commit in commits {
-                // Audited for `AssertSqlSafe`: `commit` is a hash doltlite
+                // Audited: `commit` is a hash doltlite
                 // just listed, and the table function takes a literal. The
                 // store's first commit predates the table.
                 let n: i64 = Sql::dynamic(

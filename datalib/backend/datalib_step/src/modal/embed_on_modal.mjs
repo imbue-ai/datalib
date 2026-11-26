@@ -10,7 +10,9 @@
 // `{"sandbox_ms":…,"ok":<bool>}`, its life from when Modal placed it to its
 // end, what Modal bills; or, when nothing could start, one `{"fatal":…,"sign_in":<bool>}`
 // and exit 1. On stderr, what it is doing, never a prompt's text. SIGTERM
-// ends every Sandbox it started, then the driver.
+// ends every Sandbox it asked for, then the driver: those still waiting for
+// a GPU too, found by the tag each is made with, since the SDK names a
+// Sandbox only once Modal has placed it.
 //
 // A slice goes in and its vectors come out as files in the Sandbox, never
 // through the Sandbox's stdin and stdout: on a GPU Sandbox, stdout lost most
@@ -31,6 +33,7 @@
 // `command`, `app`, `slice`, `sandboxes`, `timeoutMs`, `pauseMs`, `reachMs`
 // and `offlineMs`.
 
+import { randomUUID } from "node:crypto";
 import { createInterface } from "node:readline";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -63,10 +66,22 @@ async function fatal(message, signIn) {
   process.exit(1);
 }
 
+// Every Sandbox this run asks for carries this tag.
+const TAGS = { datalib_embed_run: randomUUID().replaceAll("-", "") };
+
 const live = new Set();
 process.on("SIGTERM", async () => {
-  say(`stopping: ending ${live.size} Sandbox(es)`);
-  await Promise.all([...live].map((sb) => sb.terminate().catch(() => {})));
+  const ending = new Map([...live].map((sb) => [sb.sandboxId, sb]));
+  const placed = ending.size;
+  try {
+    for await (const sb of client.sandboxes.list({ appId: app.appId, tags: TAGS })) {
+      if (!ending.has(sb.sandboxId)) ending.set(sb.sandboxId, sb);
+    }
+  } catch (e) {
+    say(`stopping: could not list the Sandboxes still waiting for a GPU: ${messageOf(e)}`);
+  }
+  say(`stopping: ending ${placed} Sandbox(es) placed and ${ending.size - placed} not yet`);
+  await Promise.all([...ending.values()].map((sb) => sb.terminate().catch(() => {})));
   process.exit(143);
 });
 
@@ -146,6 +161,7 @@ async function place(n) {
         gpu: options.gpu,
         command: ["sleep", String(Math.ceil(options.timeoutMs / 1000))],
         timeoutMs: options.timeoutMs,
+        tags: TAGS,
       });
       const placed = Date.now();
       return { sb, placed, limit: placed + options.timeoutMs };

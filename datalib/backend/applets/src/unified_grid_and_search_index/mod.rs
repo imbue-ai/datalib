@@ -1499,20 +1499,24 @@ async fn index_state(
 
 #[derive(Deserialize)]
 struct PeopleBody {
+    #[serde(default)]
     handles: Vec<String>,
+    /// Contacts' own pages, by their ids.
+    #[serde(default)]
+    pages: Vec<String>,
 }
 
-/// Every source's account of whoever holds each asked-for handle, ranked
-/// (`datalib_unified_grid_and_search_index::people`). A handle no source mentions is
-/// simply absent.
+/// Every source's account of whoever holds each asked-for handle, ranked,
+/// and of who each contact's page is about
+/// (`datalib_unified_grid_and_search_index::people`).
 async fn people(
     State(s): State<Index>,
     Json(body): Json<PeopleBody>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match s.repo.people_for_handles(&body.handles).await {
-        Ok(rows) => Ok(Json(serde_json::json!({
-            "people": datalib_unified_grid_and_search_index::people::merge_and_rank(rows)
-        }))),
+) -> Result<Json<datalib_unified_grid_and_search_index::people::People>, StatusCode> {
+    match s.repo.people(&body.handles, &body.pages).await {
+        Ok(rows) => Ok(Json(
+            datalib_unified_grid_and_search_index::people::People::of(rows),
+        )),
         Err(e) => {
             tracing::error!(error = %e, "could not read people by handle");
             Err(StatusCode::INTERNAL_SERVER_ERROR)

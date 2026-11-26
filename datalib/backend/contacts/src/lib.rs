@@ -41,6 +41,7 @@ pub fn store_path(data_root: &Path) -> PathBuf {
     data_root.join(CURATED_DIR).join(APP_DIR).join(STORE_FILE)
 }
 
+pub mod add_people;
 pub mod drafts;
 pub mod labels;
 pub mod review;

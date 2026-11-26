@@ -716,15 +716,16 @@ besides components:
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
   the process itself. Its *keep* / *exclude* buttons narrow the log
   beside it through the bus (`log.query`, a token for the query bar).
-- `personView(handle, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
-  its rules in `cards/person.ts`): your contact, when the handle is
-  linked to one, and each source's record of them from `/people`, a
-  section per source, never merged. The source named by `seenIn` —
+- `personView(subject, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
+  its rules in `cards/person.ts`), by a handle, `contact:<id>` or
+  `page:<a contact's page>`: your contact, when they are one, and each
+  source's record of them from `/people`, a section per source, never
+  merged. The source named by `seenIn` —
   where the chip that opened it was — leads, marked "seen here". A
   person chip's double-click opens it (`personSource` in
   `cards/cardSources.ts`); it offers the search for everything with
-  them, and *Create contact* for an unlinked handle where a contacts
-  app is configured.
+  them, and *Add to contacts* with their handles ticked for someone who
+  is not in them, where a contacts app is configured.
 - `contactsView()` — every contact in the contacts app
   (`cards/ContactsCard.ce.vue`), read straight from it
   (`GET /applet/datalib_contacts/contacts`, a typed table) and read

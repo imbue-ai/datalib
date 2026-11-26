@@ -67,7 +67,7 @@ async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
         .fetch_one(db.pool())
         .await
         .unwrap_or_else(|e| panic!("resolve branch {branch:?} to a commit: {e}"));
-    // Audited for `AssertSqlSafe`: `commit` is a hex digest that
+    // Audited: `commit` is a hex digest that
     // doltlite just produced from `dolt_hashof`, not caller input, and
     // the table-valued function takes it as a literal.
     let rows = Sql::dynamic(

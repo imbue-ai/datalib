@@ -63,22 +63,27 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
 
 [[scan]]
+statement = "/* sql:etl.render.grid.delete_uncarried_contact_records */ DELETE FROM contact_record_numbers WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_record_numbers.record_id)"
+files = ["*/unified_grid_and_search_index/db.sqlite"]
+why = "Once per pass that changed anything: records no document carries any more, in a table of one row per number a record writes with no country code."
+
+[[scan]]
 statement = "/* sql:etl.render.grid.delete_uncarried_contact_records */ DELETE FROM contact_records WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_records.record_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
 
 [[scan]]
-statement = "/* sql:pdf.ingest.db.prune_unnamed.delete_pdf_documents */ DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
+statement = "/* sql:pdf.prune_unnamed.delete_pdf_documents */ DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
 
 [[scan]]
-statement = "/* sql:pdf.ingest.db.prune_unnamed.delete_pdf_documents_bookkeeping */ DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)"
+statement = "/* sql:pdf.prune_unnamed.delete_pdf_documents_bookkeeping */ DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
 
 [[scan]]
-statement = "/* sql:pdf.ingest.db.prune_unnamed.delete_pdf_paths_bookkeeping */ DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)"
+statement = "/* sql:pdf.prune_unnamed.delete_pdf_paths_bookkeeping */ DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
 
@@ -98,17 +103,17 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per index pass: `search_sources` holds one row per source."
 
 [[scan]]
-statement = "/* sql:etl.render.search_terms.write_part.delete_temp_4 */ DELETE FROM temp.dropped WHERE EXISTS (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
+statement = "/* sql:etl.render.terms.keep_dropped_values_still_used */ DELETE FROM temp.dropped WHERE EXISTS (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads this pass's own staging table, `temp.dropped`, whole by design."
 
 [[scan]]
-statement = "/* sql:email.ingest.db.prune_emails_to.delete_threads */ DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)"
+statement = "/* sql:email.prune_emails_to.delete_threads */ DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per account after a walk that listed all of its mail: a sweep for threads left with no email, which has to read every thread of the account."
 
 [[scan]]
-statement = "/* sql:email.ingest.db.prune_emails_to.delete_threads_bookkeeping */ DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))"
+statement = "/* sql:email.prune_emails_to.delete_threads_bookkeeping */ DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per account after a walk that listed all of its mail: the sidecars of the sweep beside it, which reads every thread of the account."
 
@@ -153,7 +158,7 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads this pass's own staging table, `temp.incoming`, whole by design."
 
 [[scan]]
-statement = "/* sql:etl.render.search_terms.write_part.insert_terms */ INSERT OR IGNORE INTO terms (val_id, kind, row_id) SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i JOIN vals v ON v.value = i.value"
+statement = "/* sql:etl.render.terms.write_part.insert_terms */ INSERT OR IGNORE INTO terms (val_id, kind, row_id) SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i JOIN vals v ON v.value = i.value"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads this pass's own staging table, `temp.incoming`, whole by design; each value is a seek on `vals`."
 
@@ -839,7 +844,7 @@ why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
 statement = "/* sql:whatsapp.read_contacts_grouped_by_jid */ SELECT jid, json_group_array(json(obj)) FROM (SELECT jid, json_object('_id', CASE WHEN typeof(\"_id\") = 'blob' THEN hex(\"_id\") ELSE \"_id\" END, 'jid', CASE WHEN typeof(\"jid\") = 'blob' THEN hex(\"jid\") ELSE \"jid\" END, 'is_whatsapp_user', CASE WHEN typeof(\"is_whatsapp_user\") = 'blob' THEN hex(\"is_whatsapp_user\") ELSE \"is_whatsapp_user\" END, 'status', CASE WHEN typeof(\"status\") = 'blob' THEN hex(\"status\") ELSE \"status\" END, 'status_timestamp', CASE WHEN typeof(\"status_timestamp\") = 'blob' THEN hex(\"status_timestamp\") ELSE \"status_timestamp\" END, 'number', CASE WHEN typeof(\"number\") = 'blob' THEN hex(\"number\") ELSE \"number\" END, 'raw_contact_id', CASE WHEN typeof(\"raw_contact_id\") = 'blob' THEN hex(\"raw_contact_id\") ELSE \"raw_contact_id\" END, 'display_name', CASE WHEN typeof(\"display_name\") = 'blob' THEN hex(\"display_name\") ELSE \"display_name\" END, 'phone_type', CASE WHEN typeof(\"phone_type\") = 'blob' THEN hex(\"phone_type\") ELSE \"phone_type\" END, 'phone_label', CASE WHEN typeof(\"phone_label\") = 'blob' THEN hex(\"phone_label\") ELSE \"phone_label\" END, 'photo_ts', CASE WHEN typeof(\"photo_ts\") = 'blob' THEN hex(\"photo_ts\") ELSE \"photo_ts\" END, 'thumb_ts', CASE WHEN typeof(\"thumb_ts\") = 'blob' THEN hex(\"thumb_ts\") ELSE \"thumb_ts\" END, 'photo_id_timestamp', CASE WHEN typeof(\"photo_id_timestamp\") = 'blob' THEN hex(\"photo_id_timestamp\") ELSE \"photo_id_timestamp\" END, 'given_name', CASE WHEN typeof(\"given_name\") = 'blob' THEN hex(\"given_name\") ELSE \"given_name\" END, 'family_name', CASE WHEN typeof(\"family_name\") = 'blob' THEN hex(\"family_name\") ELSE \"family_name\" END, 'wa_name', CASE WHEN typeof(\"wa_name\") = 'blob' THEN hex(\"wa_name\") ELSE \"wa_name\" END, 'sort_name', CASE WHEN typeof(\"sort_name\") = 'blob' THEN hex(\"sort_name\") ELSE \"sort_name\" END, 'nickname', CASE WHEN typeof(\"nickname\") = 'blob' THEN hex(\"nickname\") ELSE \"nickname\" END, 'company', CASE WHEN typeof(\"company\") = 'blob' THEN hex(\"company\") ELSE \"company\" END, 'title', CASE WHEN typeof(\"title\") = 'blob' THEN hex(\"title\") ELSE \"title\" END, 'status_autodownload_disabled', CASE WHEN typeof(\"status_autodownload_disabled\") = 'blob' THEN hex(\"status_autodownload_disabled\") ELSE \"status_autodownload_disabled\" END, 'keep_timestamp', CASE WHEN typeof(\"keep_timestamp\") = 'blob' THEN hex(\"keep_timestamp\") ELSE \"keep_timestamp\" END, 'is_spam_reported', CASE WHEN typeof(\"is_spam_reported\") = 'blob' THEN hex(\"is_spam_reported\") ELSE \"is_spam_reported\" END, 'is_sidelist_synced', CASE WHEN typeof(\"is_sidelist_synced\") = 'blob' THEN hex(\"is_sidelist_synced\") ELSE \"is_sidelist_synced\" END, 'is_business_synced', CASE WHEN typeof(\"is_business_synced\") = 'blob' THEN hex(\"is_business_synced\") ELSE \"is_business_synced\" END, 'disappearing_mode_duration', CASE WHEN typeof(\"disappearing_mode_duration\") = 'blob' THEN hex(\"disappearing_mode_duration\") ELSE \"disappearing_mode_duration\" END, 'disappearing_mode_timestamp', CASE WHEN typeof(\"disappearing_mode_timestamp\") = 'blob' THEN hex(\"disappearing_mode_timestamp\") ELSE \"disappearing_mode_timestamp\" END, 'disappearing_mode_support_disabled', CASE WHEN typeof(\"disappearing_mode_support_disabled\") = 'blob' THEN hex(\"disappearing_mode_support_disabled\") ELSE \"disappearing_mode_support_disabled\" END, 'history_sync_initial_phash', CASE WHEN typeof(\"history_sync_initial_phash\") = 'blob' THEN hex(\"history_sync_initial_phash\") ELSE \"history_sync_initial_phash\" END, 'is_starred', CASE WHEN typeof(\"is_starred\") = 'blob' THEN hex(\"is_starred\") ELSE \"is_starred\" END, 'is_wa_created_contact', CASE WHEN typeof(\"is_wa_created_contact\") = 'blob' THEN hex(\"is_wa_created_contact\") ELSE \"is_wa_created_contact\" END, 'sync_policy', CASE WHEN typeof(\"sync_policy\") = 'blob' THEN hex(\"sync_policy\") ELSE \"sync_policy\" END, 'status_emoji', CASE WHEN typeof(\"status_emoji\") = 'blob' THEN hex(\"status_emoji\") ELSE \"status_emoji\" END, 'is_contact_synced', CASE WHEN typeof(\"is_contact_synced\") = 'blob' THEN hex(\"is_contact_synced\") ELSE \"is_contact_synced\" END, 'is_reachable', CASE WHEN typeof(\"is_reachable\") = 'blob' THEN hex(\"is_reachable\") ELSE \"is_reachable\" END, 'external_user_state', CASE WHEN typeof(\"external_user_state\") = 'blob' THEN hex(\"external_user_state\") ELSE \"external_user_state\" END) AS obj FROM wa_contacts WHERE jid IS NOT NULL ORDER BY _id) GROUP BY jid ORDER BY jid"
-files = ["wa-db-YePfTe.db"]
+files = ["wa-db-wgjsy2.db"]
 why = "Once per run, by design: the download reads the backup's contacts table whole, as WhatsApp keeps it."
 
 [[scan]]
@@ -869,7 +874,7 @@ why = "Once per run, by design: the users stored comments name (`users_named_in_
 
 [[scan]]
 statement = "/* sql:store_meta.list_meta_rows */ SELECT key, value, written_at_utc FROM _datalib_meta"
-files = ["*/ingest/entities.doltlite_db", "*/render_markdown/indexed_markdown.doltlite_db", "*/runs/runs.sqlite", "*/supervisor.sqlite", "*/time_series_index/time_series.doltlite_db", "*/unified_grid_and_search_index/db.sqlite"]
+files = ["*/disk_stats.sqlite", "*/ingest/entities.doltlite_db", "*/remote_media.doltlite_db", "*/render_markdown/indexed_markdown.doltlite_db", "*/render_time_series/time_series.doltlite_db", "*/runs/runs.sqlite", "*/supervisor.sqlite", "*/time_series_index/time_series.doltlite_db", "*/unified_grid_and_search_index/db.sqlite", "entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
@@ -1433,12 +1438,12 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per person a message names, few beside the messages."
 
 [[scan]]
-statement = "/* sql:discord.ingest.db.forget_other_accounts.delete_account */ DELETE FROM account WHERE id <> ?"
+statement = "/* sql:discord.forget_other_accounts.delete_account */ DELETE FROM account WHERE id <> ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "One row, or two as another account signs in."
 
 [[scan]]
-statement = "/* sql:discord.ingest.db.forget_other_accounts.delete_account_bookkeeping */ DELETE FROM account_bookkeeping WHERE id <> ?"
+statement = "/* sql:discord.forget_other_accounts.delete_account_bookkeeping */ DELETE FROM account_bookkeeping WHERE id <> ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "One row, or two as another account signs in."
 

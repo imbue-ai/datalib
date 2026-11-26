@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use datalib_contact_schema::{NormalizedContact, Seen};
 use datalib_handle::Handle;
+use serde::Serialize;
 
 /// One of the index's contact records reached through one of its handles,
 /// its `seen` summed over the documents that carry it.
@@ -25,6 +26,86 @@ pub struct HandleRow {
     pub credit: u64,
 }
 
+/// What the index read about some people, one row per distinct record.
+#[derive(Default)]
+pub struct PeopleRows {
+    /// The records holding each handle.
+    pub holding: Vec<HandleRow>,
+    /// The records that write a number asked about without its country
+    /// code, for that number: a likely match, by its digits alone.
+    pub same_digits: Vec<HandleRow>,
+    /// The record of each contact's page, for the page's id.
+    pub pages: Vec<HandleRow>,
+    /// Every full number any of these records' numbers may be.
+    pub full_numbers: Vec<Handle>,
+}
+
+/// Who each handle and each contact's page is, as `POST /people` answers.
+#[derive(Debug, Default, Serialize)]
+pub struct People {
+    /// Each handle's records, ranked. One no source mentions is absent.
+    pub people: BTreeMap<String, Vec<NormalizedContact>>,
+    /// Each number's records that write it without its country code.
+    pub same_digits: BTreeMap<String, Vec<NormalizedContact>>,
+    /// Each contact's page, by its id.
+    pub pages: BTreeMap<String, NormalizedContact>,
+    /// Each number a record above writes without its country code, as it
+    /// wrote it, with the full numbers a source knows that it may be.
+    pub full_numbers: BTreeMap<String, Vec<Handle>>,
+}
+
+impl People {
+    pub fn of(rows: PeopleRows) -> Self {
+        let mut full_numbers = BTreeMap::new();
+        for row in [&rows.holding, &rows.same_digits, &rows.pages]
+            .into_iter()
+            .flatten()
+        {
+            for h in &row.contact.handles {
+                let Some(digits) = h.home_digits() else {
+                    continue;
+                };
+                let may_be: Vec<Handle> = rows
+                    .full_numbers
+                    .iter()
+                    .filter(|full| full.may_be(&digits))
+                    .cloned()
+                    .collect();
+                if !may_be.is_empty() {
+                    full_numbers.insert(h.value.clone(), may_be);
+                }
+            }
+        }
+        Self {
+            people: merge_and_rank(rows.holding),
+            same_digits: merge_and_rank(rows.same_digits),
+            pages: merge_and_rank(rows.pages)
+                .into_iter()
+                .filter_map(|(page, contacts)| Some((page, contacts.into_iter().next()?)))
+                .collect(),
+            full_numbers,
+        }
+    }
+}
+
+/// The records reached by digits a number ends in, each given the handles
+/// of `numbers` its own digits may be, less any the record holds outright.
+pub fn for_each_number(numbers: &[Handle], by_digits: Vec<HandleRow>) -> Vec<HandleRow> {
+    by_digits
+        .iter()
+        .flat_map(|row| {
+            numbers
+                .iter()
+                .filter(|number| number.may_be(&row.handle) && !row.contact.holds(number))
+                .map(|number| HandleRow {
+                    handle: number.as_str().to_string(),
+                    contact: row.contact.clone(),
+                    credit: row.credit,
+                })
+        })
+        .collect()
+}
+
 struct Merged {
     contact: NormalizedContact,
     /// How many items were written under each name.
@@ -34,7 +115,7 @@ struct Merged {
 /// Records for the same handle, source and person — a chat's differ by
 /// the names it showed — become one source contact; then each handle's
 /// are ranked.
-pub fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContact>> {
+fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContact>> {
     let mut merged: BTreeMap<(String, String, String), Merged> = BTreeMap::new();
     for HandleRow {
         handle,

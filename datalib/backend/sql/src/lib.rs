@@ -8,8 +8,11 @@
 //! ```
 //!
 //! A statement is a [`Sql`], and the only ways to make one are [`sql!`]
-//! for text written in the code and [`Sql::dynamic`] for text built while
-//! running, which takes a name from [`sql_id!`]. sqlx's own entry points
+//! for text written in the code, and for text built while running
+//! [`Sql::dynamic`] (or [`Sql::dynamic_on`], one name per table, and
+//! [`Sql::ddl`] for schema text), which take a name from [`sql_id!`]. A
+//! test writes [`test_sql!`] and [`test_sql_id!`], named for its module
+//! and line. sqlx's own entry points
 //! (`sqlx::query`, `raw_sql`, an executor handed a `&str`) are refused by
 //! clippy (`datalib/backend/clippy.toml`), so a statement without a name
 //! does not build, and `//:lint_repo` refuses two call sites that share

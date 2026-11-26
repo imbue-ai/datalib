@@ -4,7 +4,7 @@
 //! tables of the grid index, so a term on one of these keys is one more
 //! clause of the grid's own query.
 
-use datalib_handle::Handle;
+use datalib_handle::{home_digits, Handle};
 use datalib_schema::search_terms::SearchTermKind as Kind;
 
 /// Which kinds of term a key reads.
@@ -159,11 +159,21 @@ pub enum TermsValue {
     /// a quoted value (`from:"Will Riker"` finds "Will Riker <riker@…>").
     /// On a person key, also every handle seen under exactly that name,
     /// never under a name merely holding it, which may be a bot's that
-    /// writes on many people's behalf.
-    Words { text: String, by_name: bool },
+    /// writes on many people's behalf; and, for a phone number written
+    /// without its country code, every value ending in its digits.
+    Words {
+        text: String,
+        by_name: bool,
+        digits: Option<String>,
+    },
     /// A value holding `text`, case-blind; on a person key, also every
-    /// handle seen under a name holding it.
-    Partial { text: String, by_name: bool },
+    /// handle seen under a name holding it, and every value ending in
+    /// `digits`, as for [`TermsValue::Words`].
+    Partial {
+        text: String,
+        by_name: bool,
+        digits: Option<String>,
+    },
     /// A contact in the contacts store, by id: the handles it reaches,
     /// read when the search runs ([`FilterTerm::handles`]).
     ///
@@ -206,12 +216,20 @@ pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsVa
     }
     let exact =
         |values: Vec<String>, by_name: Option<String>| TermsValue::Exact { values, by_name };
+    let digits = || home_digits(value).filter(|_| key.person);
     match handle_of(value).filter(|_| key.person) {
-        Some(handle) if handle == value => exact(vec![handle], None),
-        Some(handle) => exact(vec![handle, value.to_string()], None),
+        Some(handle) => {
+            let typed = (handle != value).then(|| value.to_string());
+            let at_home = spelled_at_home(&handle);
+            exact(
+                [handle].into_iter().chain(typed).chain(at_home).collect(),
+                None,
+            )
+        }
         None if quoted && value.chars().any(char::is_alphanumeric) => TermsValue::Words {
             text: value.to_string(),
             by_name: key.person,
+            digits: digits(),
         },
         None if quoted => exact(
             vec![value.to_string()],
@@ -220,8 +238,15 @@ pub fn value_of(key: &TermsKey, value: &str, quoted: bool, any: &str) -> TermsVa
         None => TermsValue::Partial {
             text: value.to_string(),
             by_name: key.person,
+            digits: digits(),
         },
     }
+}
+
+/// A phone number's handle as a card may write it, without its country
+/// code, in the spelling contact-common files such a number under.
+pub fn spelled_at_home(handle: &str) -> Vec<String> {
+    Handle::parse(handle).map_or_else(Vec::new, |h| h.dialled_at_home())
 }
 
 /// The whole numbers in `lo..=hi` that `value` names: `3`, `=3`, `>=3`,
@@ -301,6 +326,21 @@ mod tests {
             exact(&["email:ann@example.com", "Ann@Example.com"], None)
         );
         assert_eq!(
+            value_of(from, "+1 (202) 555-0101", true, "*"),
+            exact(
+                &["tel:+12025550101", "+1 (202) 555-0101", "2025550101"],
+                None
+            )
+        );
+        assert_eq!(
+            value_of(from, "(202) 555-0101", true, "*"),
+            TermsValue::Words {
+                text: "(202) 555-0101".into(),
+                by_name: true,
+                digits: Some("2025550101".into()),
+            }
+        );
+        assert_eq!(
             value_of(from, "email:ann@example.com", false, "*"),
             exact(&["email:ann@example.com"], None)
         );
@@ -308,14 +348,16 @@ mod tests {
             value_of(from, "Riker", false, "*"),
             TermsValue::Partial {
                 text: "Riker".into(),
-                by_name: true
+                by_name: true,
+                digits: None,
             }
         );
         assert_eq!(
             value_of(from, "Riker", true, "*"),
             TermsValue::Words {
                 text: "Riker".into(),
-                by_name: true
+                by_name: true,
+                digits: None,
             }
         );
         assert_eq!(value_of(from, "*", false, "*"), TermsValue::Any);
@@ -330,7 +372,8 @@ mod tests {
             value_of(from, "me", true, "*"),
             TermsValue::Words {
                 text: "me".into(),
-                by_name: true
+                by_name: true,
+                digits: None,
             },
             "a quoted `me` is the text"
         );
@@ -339,7 +382,8 @@ mod tests {
             value_of(label, "a@b.c", false, "*"),
             TermsValue::Partial {
                 text: "a@b.c".into(),
-                by_name: false
+                by_name: false,
+                digits: None,
             },
             "a label is never a person"
         );
@@ -347,21 +391,24 @@ mod tests {
             value_of(label, "Work", true, "*"),
             TermsValue::Words {
                 text: "Work".into(),
-                by_name: false
+                by_name: false,
+                digits: None,
             }
         );
         assert_eq!(
             value_of(label, "me", false, "*"),
             TermsValue::Partial {
                 text: "me".into(),
-                by_name: false
+                by_name: false,
+                digits: None,
             }
         );
         assert_eq!(
             value_of(label, "contact:c-1", false, "*"),
             TermsValue::Partial {
                 text: "contact:c-1".into(),
-                by_name: false
+                by_name: false,
+                digits: None,
             }
         );
     }
@@ -392,14 +439,16 @@ mod tests {
             value_of(rating, "high", false, "*"),
             TermsValue::Partial {
                 text: "high".into(),
-                by_name: false
+                by_name: false,
+                digits: None,
             }
         );
         assert_eq!(
             value_of(key("label").unwrap(), ">=3", false, "*"),
             TermsValue::Partial {
                 text: ">=3".into(),
-                by_name: false
+                by_name: false,
+                digits: None,
             },
             "only a key of counts compares"
         );

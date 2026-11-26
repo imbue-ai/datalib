@@ -355,6 +355,7 @@ async fn every_row_is_found_by_what_it_holds() {
         tokio::spawn(by_each_key(f.clone())),
         tokio::spawn(by_each_terms_key(f.clone())),
         tokio::spawn(by_each_id_pasted(f.clone())),
+        tokio::spawn(by_each_number_however_written(f.clone())),
         tokio::spawn(by_the_rarest_word_on_the_words(f.clone())),
         tokio::spawn(the_table_of_contents_not_on_the_words(f.clone())),
         tokio::spawn(by_the_opening_words_on_the_meaning(f.clone())),
@@ -522,7 +523,8 @@ async fn by_each_key(f: Arc<Fixture>) -> Findings {
 /// A key that reads the search terms, given a value quoted, finds
 /// exactly the rows holding its words in order in one of its kinds,
 /// case-blind; a handle-shaped value its handle's rows (`+1701…` shown
-/// as a name is the `tel:` handle), and a name the rows of every handle
+/// as a name is the `tel:` handle), a number with no country code each
+/// value ending in its digits, and a name the rows of every handle
 /// seen under exactly it. A bare value matches in part, which the
 /// applet's own tests pin down.
 async fn by_each_terms_key(f: Arc<Fixture>) -> Findings {
@@ -549,18 +551,24 @@ async fn by_each_terms_key(f: Arc<Fixture>) -> Findings {
                 .map(|r| r.uuid)
                 .collect();
             let how = terms_keys::value_of(key, value, true, "*");
-            let (wanted, by_name) = match &how {
-                TermsValue::Exact { by_name, .. } => (Vec::new(), by_name.as_deref()),
-                TermsValue::Words { text, by_name } => {
-                    (tokens(text), by_name.then_some(text.as_str()))
-                }
+            let (wanted, by_name, digits) = match &how {
+                TermsValue::Exact { by_name, .. } => (Vec::new(), by_name.as_deref(), None),
+                TermsValue::Words {
+                    text,
+                    by_name,
+                    digits,
+                } => (
+                    tokens(text),
+                    by_name.then_some(text.as_str()),
+                    digits.as_deref(),
+                ),
                 other => panic!("a quoted value is matched whole or by its words: {q} {other:?}"),
             };
             let matches = |v: &str| match &how {
                 TermsValue::Exact { values, .. } => {
                     values.iter().any(|w| w.eq_ignore_ascii_case(v))
                 }
-                _ => holds_in_order(&tokens(v), &wanted),
+                _ => holds_in_order(&tokens(v), &wanted) || digits.is_some_and(|d| v.ends_with(d)),
             };
             // A name also reaches the handles seen under it.
             let seen_under = |handle: &str| {
@@ -588,6 +596,66 @@ async fn by_each_terms_key(f: Arc<Fixture>) -> Findings {
                 found
                     .coverage
                     .checked(&format!("terms: {}:", key.key), &f.source_of(uuid));
+            }
+        }
+    }
+    found
+}
+
+/// Each American number in the library, written every way a person types
+/// one, finds the rows that name it by `from:`, `to:` and `with:`: those
+/// its handle is on, and the cards that write it with no country code.
+/// Full numbers, so no two of them end in the same digits.
+async fn by_each_number_however_written(f: Arc<Fixture>) -> Findings {
+    let s = index_over(&f.root).await;
+    let mut found = Findings::default();
+    let terms = terms_of(&f.root).await;
+    for key in TERMS_KEYS
+        .iter()
+        .filter(|k| ["from", "to", "with"].contains(&k.key))
+    {
+        let kinds: Vec<&str> = key.kinds().iter().map(|k| k.as_str()).collect();
+        let mut by_digits: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+        for ((kind, value), holding) in &terms {
+            let digits = value.strip_prefix("tel:+1").unwrap_or(value);
+            let number = digits.len() == 10 && digits.bytes().all(|b| b.is_ascii_digit());
+            if number && kinds.contains(&kind.as_str()) {
+                let rows = by_digits.entry(digits).or_default();
+                rows.extend(holding.iter().cloned());
+            }
+        }
+        for (digits, expected) in by_digits {
+            let (area, rest) = digits.split_at(3);
+            let (exchange, line) = rest.split_at(3);
+            for written in [
+                format!("+1{digits}"),
+                format!("tel:+1{digits}"),
+                format!("+1 ({area}) {exchange}-{line}"),
+                format!("+1-{area}-{exchange}-{line}"),
+                format!("({area}) {exchange}-{line}"),
+                format!("{area}.{exchange}.{line}"),
+                format!("1-{area}-{exchange}-{line}"),
+                digits.to_string(),
+            ] {
+                let q = datalib_query::term(key.key, &written, false);
+                let got: BTreeSet<String> = every_uuid(&s, &q, None)
+                    .await
+                    .into_iter()
+                    .map(|r| r.uuid)
+                    .collect();
+                if got != expected {
+                    found.failures.push(format!(
+                        "`{q}` missed [{}] and found [{}]",
+                        listed(&expected.difference(&got).map(String::as_str).collect()),
+                        listed(&got.difference(&expected).map(String::as_str).collect()),
+                    ));
+                }
+            }
+            for uuid in &expected {
+                found.coverage.checked(
+                    &format!("a number however written: {}:", key.key),
+                    &f.source_of(uuid),
+                );
             }
         }
     }

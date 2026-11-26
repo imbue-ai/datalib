@@ -16,7 +16,7 @@ import { subscribeLive } from "@/live";
 import { CONTACT } from "@/search/queryText";
 import { pushToast } from "@/toasts";
 import type { ColumnSpec } from "@/api";
-import { personSource, searchSource } from "./cardSources";
+import { contactSubject, personSource, searchSource } from "./cardSources";
 import {
   CONTACTS_APPLET,
   contactsById,
@@ -114,9 +114,8 @@ async function create() {
 }
 
 function openPerson(row: ContactRow) {
-  const handle = rowHandle(row);
-  if (handle) props.ctx.host.openCards(personSource(handle, { seenIn: null }));
-  else pushToast(`${row.contact_ref.label} has no handle yet, so no page to open`, "info");
+  const subject = rowHandle(row) ?? contactSubject(row.key);
+  props.ctx.host.openCards(personSource(subject, { seenIn: null }));
 }
 
 function everythingWith(row: ContactRow) {
@@ -152,8 +151,7 @@ function menu(row: ContactRow, targets: ContactRow[]): MenuEntry[] {
   const others = mergeInto(row, targets);
   return [
     {
-      name: "Open person card",
-      disabled: rowHandle(row) ? null : "This contact has no handle yet.",
+      name: "Open",
       action: () => openPerson(row),
     },
     { name: `Everything with ${name}`, action: () => everythingWith(row) },
