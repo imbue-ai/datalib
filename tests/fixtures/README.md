@@ -28,7 +28,9 @@ driver, the generators, and the tests over the result.
 | sync it from scratch and check it | `bazelisk test //tests/fixtures:ingested_tng_test` |
 
 `dev_tng` builds a data root from the corpus in a temporary directory
-and opens the app on it. Browsing and search work. Syncing a source
+and opens the app on it, with Picard's curated contacts and mutes
+([`curated/`](curated/)) in its contacts app. Browsing, search and
+curating work. Syncing a source
 does not: the root holds the rendered documents but not the raw stores
 they came from.
 
@@ -225,6 +227,7 @@ can agree by luck.
 | `//datalib/backend/datalib_step:step_tests` | `index_text`, the text search draws from each fixture document, as one snapshot per source |
 | each provider's own tests | its parse and render snapshots, over its own fixture |
 | `//datalib/ui:e2e_test` | the Playwright suite, against a root from `materialize_tng_root` |
+| `//datalib/backend/curated_overlay:tng_overlay_test` | Picard's curated stores, checked in under [`curated/`](curated/) and carried forward by each change that moves their shape, laid over the root `materialize_tng_root` builds: each opens in this build, every contact, merge, `me` and mute fits the corpus, and a build that changes a store fails until its `.update` target writes it back ([`curated_overlay/README.md`](../../datalib/backend/curated_overlay/README.md)) |
 | `:sync_drivers_test` | both sync drivers fail at once, naming the floor, when the loop holds their steps for disk space |
 | `:tng_fuzz_test` (manual) | random clicks and killed steps, then a full sync compared with a sync from nothing |
 

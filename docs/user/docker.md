@@ -89,7 +89,10 @@ nothing else on your network can reach it.
 
 You are looking at Captain Picard's Claude conversations, a Gmail
 Takeout, Google Chat and Voice, texts and calls, a LinkedIn export,
-contacts and a folder of PDFs, all in one grid. Search by words and by
+contacts and a folder of PDFs, all in one grid. The contacts app
+already knows a few of the crew, with Picard marked as you, so
+`from:me` and the person chips work; most of the people in the grid are
+linked to nobody yet, for you to try linking. Search by words and by
 meaning both work right away: the image was built with every step run,
 the embeddings included. To sync from the command line, the same as
 **Sync everything** on the Data sources card:

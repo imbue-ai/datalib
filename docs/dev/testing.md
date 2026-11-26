@@ -603,10 +603,15 @@ The test makes three pipeline runs, each asserting something different:
    `<group>/render_markdown/<id>.md`, a manifest and the
    layout invariants. A snapshot of a file the bake no
    longer writes is deleted, and so is the folder of a group that is no
-   longer in the root, which is what renaming a group leaves. Then it makes the contacts listed in
-   `contacts.toml` (beside the config) in the contacts app, asserts every
-   handle they link is an author in the index, and snapshots the contacts
-   store with each minted `contact_id` replaced by the contact's name.
+   longer in the root, which is what renaming a group leaves. Then it
+   opens the curated stores it laid over the root before the run, the
+   `datalib_curated/` checked in beside the config (your contacts, the
+   problems you muted), as their applets would, and checks they fit the
+   data: every contact and linked handle finds rows, a merged contact
+   finds what its survivor does, `from:me` covers the "me" contact's
+   handles, and every mute names a problem the root has
+   ([`curated_overlay/README.md`](../../datalib/backend/curated_overlay/README.md)).
+   It snapshots each store and what each reaches (`overlay.snap`).
 2. **Incremental** — re-runs against the now-populated `data_root` and
    snapshots each source's `sync_runs.summary`, whose `deltas` prove the run
    didn't re-fetch the world. A broken-incrementality regression shows up as
@@ -619,9 +624,11 @@ The test makes three pipeline runs, each asserting something different:
 3. **`reset`, then sync** — empties the store and re-downloads it, then
    asserts the content tables come back byte-identical. This is what catches a
    per-fetch field leaking into a content payload (it belongs in the
-   `volatile_payload` sidecar instead). It also asserts that the contacts
-   store came through unchanged, that every linked handle is still in the
-   re-downloaded index, and that each one still resolves to its contact.
+   `volatile_payload` sidecar instead). It also asserts that the curated
+   stores came through unchanged and fit the re-downloaded data as they
+   fit run 1's. A store this build changed as it opened it (a rung on its
+   ladder) is written back over the checked-in file at the end, as the
+   config's upgrade is, so the next bake starts from it.
 
 The bake leaves its data root behind under `$TMPDIR/datalib-e2e-runs/run-<millis>/data`
 (the newest three runs are kept; the test prints the path as `[test]
