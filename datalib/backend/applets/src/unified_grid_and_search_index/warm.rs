@@ -131,8 +131,15 @@ pub(super) async fn warm_once(s: &Index) -> Warming {
 }
 
 /// Why the index is refused for its shape; `None` when it is not, or
-/// cannot be opened at all, which the searches then say.
+/// cannot be opened at all, which the searches then say. A warming search
+/// reads the grid as well as the keyword index, so it waits for both.
 async fn refused(root: &Path) -> Option<String> {
+    let grid = datalib_runtime::layout::grid_index_db(root);
+    match datalib_etl_render::grid_index::open_for_reading(&grid).await {
+        Ok(Some(pool)) => pool.close().await,
+        Ok(None) => {}
+        Err(e) => return datalib_store_meta::other_shape(&e).map(ToString::to_string),
+    }
     match datalib_unified_grid_and_search_index::search_index::open(root).await {
         Ok(Some(reader)) => {
             reader.close().await;
