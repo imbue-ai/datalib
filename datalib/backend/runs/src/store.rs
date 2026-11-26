@@ -226,6 +226,12 @@ fn emptying_for(head: &[u8]) -> Emptying {
     }
 }
 
+/// Opens a second descriptor of the file and closes it, which drops every
+/// POSIX lock this process holds on the file, SQLite's included
+/// (fcntl(2); `datalib_dag::supervisor::announce` was bitten by it). Safe
+/// only because [`open_or_recreate`] calls it with no connection to the
+/// file open in this process: its own pools are closed, every reader
+/// opens and closes its own, and each process's one writer is the caller.
 fn emptying_of(path: &Path) -> Result<Emptying, sqlx::Error> {
     use std::io::Read;
     let mut head = Vec::with_capacity(16);
@@ -1882,12 +1888,14 @@ async fn bump(
 /// that age with no run and no line left to name it.
 async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sqlx::Error> {
     let cutoff = cutoff_days_ago(retention.process_log_days);
-    sqlx::query("DELETE FROM log WHERE run_id IS NULL AND ts_utc < ?")
+    // Marked: each counts every line it keeps, once per open
+    // (`datalib_sql_work::judge::BY_DESIGN`).
+    sqlx::query("DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND ts_utc < ?")
         .bind(&cutoff)
         .execute(pool)
         .await?;
     sqlx::query(
-        "DELETE FROM log WHERE run_id IS NULL AND seq < \
+        "DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND seq < \
          (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
     )
     .bind(retention.process_log_lines.max(1) as i64 - 1)

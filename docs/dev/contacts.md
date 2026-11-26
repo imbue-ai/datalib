@@ -157,9 +157,34 @@ lost, but nothing links to it either.
 That is not a rare case. WhatsApp and Signal always store the
 international form, but an address-book card is often typed by hand
 without one, and a phone's SMS backup keeps whatever the phone was
-given. A card whose numbers are all national reaches nobody through
-them. The planned fix, not built, is a default region the render
-applies to such a number.
+given. Google sends its own full reading of some numbers
+(`canonicalForm`), and one typed without its country code takes its
+handle from that where there is one.
+
+**What any other such number may be is matched, never decided.** Nothing
+sets a country, for a library or a source. The number's digits, less
+what is dialled before a number and is no part of it (`home_digits`: any
+leading zero, the 1 before ten digits), are compared with every full
+number a source knows, and match one that is those digits with its
+country code in front (`Handle::dialled_at_home`, which knows how long
+each country code is and nothing else about it). Where that finds one
+number, adding the person to contacts takes it; where it finds two, in
+two countries, both are offered and neither is ticked. It stays a match:
+it makes no handle, names no chip and is in no stored record. Three
+places use it:
+
+- **`POST /people`** answers the cards that write a number asked about
+  this way (`same_digits`), and the full numbers each such number may be
+  (`full_numbers`). The index keeps a record's numbers for it in
+  `contact_record_numbers`, read by their last seven digits.
+- **Search**: a person key takes a number however it is typed, and
+  contact-common writes a card's such numbers as `about` terms, by their
+  digits, so `with:+12025550101` finds a card that says `(202) 555-0101`
+  ([`searching.md`](../user/searching.md) §"People").
+- **The person's page** and adding many people at once (§"In the UI").
+
+A text thread whose other side the phone knew only by such a number
+still has no handle for them.
 
 ### Changing the rules
 
@@ -258,9 +283,10 @@ in the mirror (`render.rs::reactor`). Slack writes a `<@U…>` mention as
 a chip link in the body (`slack_render/src/render/mrkdwn.rs`), and as
 plain `@Name` inside code, which shows what it holds; an email's
 `@` mention is a chip link too (`email_render/src/render/mentions.rs`).
-A contact's own page leads with the person as a chip, so the
-right-click that links them to a contact is at the top of the page;
-a group of contacts lists its members, each a chip link where the
+A contact's own page leads with the person as a chip, so adding them is
+a double-click away: by a handle of theirs, else by the page itself
+(`datalib:contact_page/<page>`, `contact_schema::contact_page_uri`),
+for a card with no address and no full number. A group of contacts lists its members, each a chip link where the
 member's card has an address or a full number (contact-common, from
 `ContactDoc::member_handles`).
 Every mention a source marks up is also a `mention` search term on its
@@ -316,15 +342,21 @@ documents as they wrote or were named in, and their record is the same
 in all of them but for `seen`, how much they wrote in that document. So
 the index keeps the record without `seen` in `contact_records`
 (`record_id`, `source_id`, `contact_key`, `name`, `contact_json`), its
-handles in `contact_record_handles` (`record_id`, `handle`), and a row
+handles in `contact_record_handles` (`record_id`, `handle`), its numbers
+with no country code in `contact_record_numbers` (`record_id`,
+`digits`), and a row
 per document in `document_contacts` (`markdown_uuid`, `record_id`,
 `seen_items`, `last_seen_at`; `seen_items` is null where the source
 counts nothing). In a library of 309,481 rows there were 2,081 distinct
 records. A re-render replaces its document's `document_contacts` rows,
 and a record no document carries goes at the end of the pass.
 
-**`POST /people` on the `unified_grid_and_search_index` applet** takes `{"handles":
-[…]}` and answers `{"people": {<handle>: [NormalizedContact, …]}}`: for
+**`POST /people` on the `unified_grid_and_search_index` applet** takes
+`{"handles": […], "pages": […]}` and answers `{"people": {<handle>:
+[NormalizedContact, …]}, "pages": {<page>: NormalizedContact},
+"same_digits": …, "full_numbers": …}` (the last two are §"A number
+without its country code"). `pages` are contacts' own pages, by id, each
+answered with the contact it is about. `people` is, for
 each handle, every source contact holding it, one per source and key
 (what was written in each document summed), ranked by
 `unified_grid_and_search_index/src/people.rs`: a source about people first, then the
@@ -355,7 +387,9 @@ image). A vCard carries its photo inside
 the card: the contacts download decodes each inline `PHOTO` into the
 source's blob store before the card is stored, and the source's
 `--prepare` does the same for every card a store already holds. Render
-hashes the card's decoded photo and links it. A photo the blob store
+hashes the card's decoded photo and links it. A Google contact's photo
+is a link, which the download fetches into the blob store
+(`contacts/INGEST.md`). A photo the blob store
 lacks leaves the contact with no photo and a `blob_missing` problem on
 its page.
 
@@ -390,7 +424,7 @@ work, and nothing can rebuild it:
 |---|---|---|
 | `contacts` | `contact_id`, a random v4 (the one id here that is a person's act, not a function of a record) | `kind`, `name`, `note`, `merged_into`, `agent` (the agent that made it, if one did), stamps |
 | `handles` | `handle`, as `datalib_handle` spells it | `contact_id`, `linked_how` (`manual` or `agent`), `linked_at_utc`, `stopped_working_by`, `agent`, `reason`, `confidence`, `run`, `reviewed_at_utc` |
-| `not_linked` | `(handle, contact_id)` | a link a person turned down: `contact_name`, the `agent` and `reason` that proposed it, `decided_at_utc`, `contact_rejected` (the agent's whole contact was rejected) |
+| `not_linked` | `(handle, contact_id)` | a handle a person took off a contact: `contact_name`, the `agent` and `reason` that proposed it where an agent did, `decided_at_utc`, `contact_rejected` (the agent's whole contact was rejected) |
 | `labels` | `(subject, label)`, the subject a handle or `contact:<id>` | `applies` (in or out), `decided_how`, `agent`, `reason`, `confidence`, `run`, `decided_at_utc`, `reviewed_at_utc` |
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
@@ -435,13 +469,14 @@ for an agent, as steps:
 | `GET /` | every route below, with its method, `kind` and what it does, and how a handle is spelled |
 | `GET /health` | `{ok: true}` |
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: NormalizedContact}}`, each handle's contact; a handle nobody holds is absent |
-| `GET /search?q=` | contacts whose name contains `q`, for the popover's typeahead |
+| `GET /search?q=` | contacts whose name contains `q`, for the person card's *Add to contacts* |
 | `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); a "me" chip on a contact marked as you; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
+| `POST /contacts/add` | `{people: [{name, handles}]}`, in one commit (`add_people.rs`): each a new contact with every handle, unless a contact has one of them; then they are that contact, which gets the rest, less any taken off it as not theirs. A person with no handle is already there when a contact has their name. Answers `{created, added_to, already, skipped: [{what, why}]}`; skipped are those with no name, and those whose handles are on several contacts |
 | `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
 | `DELETE /contact/{id}` | delete the contact and every contact merged into it: their links, fields, photo, drafts and memberships. Its handles are nobody's afterwards; the commit before holds it all |
 | `POST /merge` | `{from, into}`: `into` survives and takes `from`'s links, fields and memberships, its photo and note where it has none (two notes are kept one after the other); `from` stays as a row whose `merged_into` names `into`, so a `contact:<id>` saved anywhere still reaches the person, and anything merged into `from` now points at `into`. Two people or two groups, never one of each |
-| `POST /link`, `POST /unlink` | `{handle, contact_id}` / `{handle}`: one handle to or from a contact, as the person's own act; an agent proposes instead |
+| `POST /link`, `POST /unlink` | `{handle, contact_id}` / `{handle}`: one handle to or from a contact, as the person's own act; an agent proposes instead. Unlinking is written down in `not_linked` |
 | `POST /stopped_working` | `{handle, by}`; `by: null` means it works again |
 | `POST /rename` | `{contact_id, name}`, at once, without a draft |
 | `POST /me` | `{contact_id, me}`: say the contact is you, or stop; answers `{changed}`. A merged-away id marks its survivor, and a group is refused |
@@ -454,7 +489,7 @@ for an agent, as steps:
 | `GET /review?label=` | the review as a typed table, one row per contact or handle with anything an agent proposed or a label, with a `membership` column for `real` and for `label` if given; `GET /review/items` the same as plain records, for an agent |
 | `POST /review/confirm`, `POST /review/reject` | `{subjects}`, each a handle or `contact:<id>`: agree with, or turn down, everything an agent proposed for each |
 | `POST /label` | `{subjects, label, applies}`: a person's in (`true`), out (`false`) or unknown (`null`) |
-| `GET /not_linked` | every link a person turned down, newest first |
+| `GET /not_linked` | every handle a person took off a contact, newest first |
 
 The config entry is `[[applets]] id = "datalib_contacts"` with
 `command = "datalib-applet datalib_contacts"`, in the
@@ -506,16 +541,15 @@ knows (`contactFields.ts`):
 
 - **Each address or number field says how it stands against the
   links.** Linked to this contact, it says nothing more; linked to
-  nobody, it offers *Link it*, one click and never automatic; linked to
+  nobody, it offers *Add it*, one click and never automatic; linked to
   someone else, it shows that contact's chip, which also catches a
   typo. The handle comes from the store, which answers each field's
   handle on every autosave, so the card never repeats the handle rules.
-  A linked address or number that no field holds offers *Add as a
-  field*.
-- **A source's section copies into the contact.** *Copy to …* under
-  each source lists what it says that a contact can hold (name,
+  A linked address or number that no field holds offers *Add it there*.
+- **A source's section copies into the contact.** *Use what it says*
+  under each source lists what it says that a contact can hold (name,
   addresses and numbers, title, organization, its details as fields,
-  note), each with *Copy*, and *Copy all*, which leaves the name to be
+  note), each with *Use*, and *Use all*, which leaves the name to be
   picked on its own. Copying opens the draft if it is not open; a value
   the contact already holds, written however, says so instead. A copied
   field records the source and record it came from (`copied_from`), and
@@ -555,10 +589,10 @@ things the same way.
   into `not_linked`, and flips each label, so its in becomes the
   person's out; the row stays `manual` and still names the agent, which
   said the opposite. A contact an agent made that is left holding no
-  handle goes with its links. Unlinking an agent's link anywhere else
-  (the popover) is written down the same way; a person's own link is
-  theirs to undo without a record, and linking a turned-down pair again
-  takes the record back.
+  handle goes with its links. Taking a handle off a contact anywhere else
+  (*Not theirs*, on the person card) is written down the same way,
+  whoever put it there, so no agent puts it back; the person adding it
+  again takes the record back.
 - **A person's word stands.** An agent's batch skips, and names in its
   answer, a handle someone else holds, a pair in `not_linked`, a label
   a person answered the other way; an
@@ -595,9 +629,9 @@ Everything is in `datalib/ui/src/cards/`:
   `chipLook` (what a chip shows, from the contact if there is one,
   else the best-ranked source contact, else what the source showed),
   `chipTooltip` (the chip's title: who, the identifier, each source's
-  record and the person's other handles), `chipMenu` (copy the name,
-  the identifier or both; find everything with the person; link or
-  edit), `copyText` and the copy rewrite. `people` is who each handle
+  record and the person's other handles), `chipMenu` (open the card; copy
+  the name, the identifier or both; find everything with the person; add
+  them to your contacts), `copyText` and the copy rewrite. `people` is who each handle
   is, for the whole app: the resolver ([`chips.md`](chips.md)
   §"Resolving") over `/people` and the contacts app's `/resolve`; an
   edit made in the page forgets the handles it touched. An edit made
@@ -609,29 +643,44 @@ Everything is in `datalib/ui/src/cards/`:
   commit, so it sends none. `decorateHandles` draws a document's chips
   and `chipCell` a grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
-  owns the popover
-  (`HandlePopover.ce.vue`: link to a contact, create one, unlink, mark
-  a handle as no longer working) and the right-click menu
-  (`ChipMenu.ce.vue`). `chip.css` is the one look.
+  owns the right-click menu (`ChipMenu.ce.vue`). `chip.css` is the one
+  look.
 - `PersonCard.ce.vue` is the card a person chip's double-click opens
-  (`personView`; its rules are `person.ts`). Its heading is the
-  person's chip; then your contact when the handle is linked to one,
+  (`personView`; its rules are `person.ts`). It is about a handle, one
+  of your contacts by its id, with or without a handle, or whoever a
+  card with no handle describes (`Subject`). Its heading is the
+  person's chip; then your contact when they are one,
   which the card edits (§"Fields, and editing a contact through a
   draft"), with *This is me* to mark the contact as you (§"Searching
   for a person"); then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
   first, each saying which handle it was found *via*. Every handle on
   it is a chip showing the identifier (`identifierCell`), pale blue
-  when linked to a contact and grey when not, with a chip's click,
-  double-click and right-click. A source holding handles nobody has
-  linked offers *Link its other handles to <your contact>* (one link
-  per handle; one someone else holds is left alone and says whose it
-  is), and an unlinked handle offers *Create contact*.
+  when it is on a contact and grey when not, with a chip's double-click
+  and right-click. The menu of a handle on your contact also has *Not
+  theirs* and *No longer works* (whose date is then a box beside the
+  handle), and of one on nobody's, *Add to <your contact>*
+  (`person.ts::handleMenu`). A source holding handles that are on nobody
+  offers *Add its other handles to <your contact>* (one link per handle;
+  one someone else holds is left alone and says whose it is, and one
+  taken off this contact as not theirs is not offered). Someone not in
+  your contacts is offered whole: **the handles adding them takes are
+  listed, ticked** (`person.ts::offers`), the one opened and then every
+  other on any record that holds it, one hop and no further, since a
+  record is one source's word that its handles are one person and two
+  records are not. A handle another contact has is not offered, and a
+  number with no country code is offered as the full number it may be.
+  *Add to contacts* takes the ticked ones under a name, as do the
+  contacts that name already finds, the one of exactly that name first.
+  Opening the card adds nobody.
+- In a search grid, *Add to contacts* on the selected rows adds whoever
+  each card is about, every handle of theirs (`contactPages.ts`,
+  `POST /contacts/add`), and a toast says what came of each.
 - `ContactsCard.ce.vue` (`contactsView()`) is the contacts app's own
   table: every contact, read live from the app's `GET /contacts`, never
   through the index, so it needs no sync and shows an edit made
-  anywhere as soon as the `curated` frame arrives. Browse on the app's
-  Manage row opens it. A contact with no handle is drawn as a contact
+  anywhere as soon as the `curated` frame arrives. It is a pinned tab of
+  a new window, and Browse on the app's Manage row opens it. A contact with no handle is drawn as a contact
   chip (`contactCell`, through `contactsById`), and one marked as you
   wears a "me" chip. Its right-click deletes the rows it aims at, or
   merges every other selected row into the one clicked. Your contacts
@@ -787,11 +836,12 @@ chip in the UI is separate and always uses the latest answer.
 
 Merging or deleting from the person card, groups and members, undo, the triage grid of
 unresolved handles, labels in search (`label:` and its negation) and on a chip, a
-handle for a number without its country code, a handle that stopped
+handle for a text thread known only by a number without its country
+code, a handle that stopped
 working in some apps but not others, mentions in Google Chat,
 WhatsApp and Messages (each marks them up, in a shape not yet checked
 on real data), in Facebook (a tag is `@[<id>:2048:<Name>]` in a post,
 not yet written as a handle) and in Beeper (no handle kind for its
 users), and a handle for a Beeper (Matrix) user. The plans for them
-are `docs/dev/plans/contact_linking.md`, `contact_editing.md` and
-`search_autocomplete.md` in the repo.
+are `docs/dev/plans/contact_linking.md` and `contact_editing.md` in the
+repo.

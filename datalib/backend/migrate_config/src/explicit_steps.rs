@@ -3,8 +3,8 @@
 //! group's type from the environment the runner set; and the runner gave
 //! `datalib-step`'s steps the locks, `reads` and verbs it knew they
 //! needed. The rewrite writes all of that into the file, as
-//! `docs/dev/plans/completed/dag_and_step_decoupling.md` §"Existing
-//! configs" lists: each step gets its `id`, its whole `command`, and the `reads` and
+//! `docs/dev/config_model.md` §"The retired shapes" lists:
+//! each step gets its `id`, its whole `command`, and the `reads` and
 //! `locks` the runner used to give it; the file gets a `[[programs]]`
 //! entry for `datalib-step`, the `[[locks]]` its steps hold, and an
 //! `[env]` table in place of `checkpoint_cadence`, `render_pages` and
@@ -27,7 +27,7 @@ use toml::Spanned;
 use crate::retired::{is_datalib_step, STEP_PROGRAM};
 
 /// The verbs `datalib-step` takes.
-const STEP_VERBS: &str = r#"["reset", "prepare", "compact", "collect"]"#;
+const STEP_VERBS: &str = r#"["reset", "prepare", "compact", "collect", "check"]"#;
 
 const QMD_KEYWORD: &str = "qmd_keyword";
 const QMD_EMBED: &str = "qmd_embed";
@@ -979,7 +979,7 @@ at_most_every_secs = 2.5
                 )
             })
             .collect();
-        let verbs = vec!["reset", "prepare", "compact", "collect"];
+        let verbs = vec!["reset", "prepare", "compact", "collect", "check"];
         assert_eq!(
             programs,
             [
@@ -1237,7 +1237,7 @@ at_most_every_secs = 2.5
                 (None, false) => vec![default.to_string()],
             };
             let verbs = if runs {
-                vec!["reset", "prepare", "compact", "collect"]
+                vec!["reset", "prepare", "compact", "collect", "check"]
             } else {
                 vec![]
             };

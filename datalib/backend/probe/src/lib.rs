@@ -151,6 +151,9 @@ pub enum ProbeItemKind {
     /// A CardDAV address book. `path` is its name, which an
     /// `addressbooks` filter matches exactly.
     AddressBook,
+    /// A label in Google Contacts. `path` is its name, which a `labels`
+    /// filter matches exactly.
+    Label,
     /// A Linear team. `path` is its key, which a `teams` filter
     /// matches without regard to case; its name rides in `title`.
     Team,

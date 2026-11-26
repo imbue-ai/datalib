@@ -17,6 +17,9 @@ pub mod disk_free {
 /// its DDL and its schema hash.
 pub const DISK_STATS_DDL: &[(&str, &str)] = &[disk_usage::DDL[0], disk_free::DDL[0]];
 
+/// Its indexes, kept apart from its tables as `_datalib_meta` records them.
+pub const DISK_STATS_INDEXES: &[(&str, &str)] = disk_usage::INDEXES;
+
 pub mod remote_media;
 
 pub mod runs;

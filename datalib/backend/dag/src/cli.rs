@@ -123,8 +123,10 @@ pub enum Verb {
         data_root: PathBuf,
     },
     /// Report every problem with the config, as `file:line:col`, and run
-    /// nothing. Exits 0 when every entry loads, 1 when the file is not a
-    /// config at all, 2 when some entries were dropped.
+    /// nothing but each step's `--check`, where its program takes it.
+    /// Exits 0 when every entry loads, 1 when the file is not a config at
+    /// all, 2 when some entries were dropped or a step would refuse its
+    /// params.
     Check {
         /// The data root, or its config.toml.
         root: PathBuf,

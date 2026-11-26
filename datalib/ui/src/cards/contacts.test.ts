@@ -15,6 +15,8 @@ import {
   chipTooltip,
   isAbsent,
   type NormalizedContact,
+  type PeopleAnswer,
+  addedSummary,
   rewriteChipsForCopy,
   suggestedName,
   todayPartialDate,
@@ -27,6 +29,7 @@ import {
   people,
   linkHandle,
   unlinkHandle,
+  whoFrom,
   peopleTitle,
   contactLook,
   decorateHandles,
@@ -44,6 +47,11 @@ function dom(html: string): HTMLElement {
 
 const chip = (handle: string, name: string) =>
   `<a class="chip" href="x" data-handle="${handle}">${name}</a>`;
+
+/** What `POST /people` answers, with nothing but these handles' records. */
+function indexAnswer(people: Record<string, NormalizedContact[]>): PeopleAnswer {
+  return { people, same_digits: {}, pages: {}, full_numbers: {} };
+}
 
 describe("chipAnchors", () => {
   /** A chip may sit anywhere: the header, the To line, a mention in the
@@ -97,12 +105,11 @@ describe("chipLook", () => {
       "email:riker@enterprise.org",
       "Will Riker <riker@enterprise.org>",
       NOBODY,
-      true,
     );
     expect(look.text).toBe("Will Riker");
     expect(look.icon).toBe("email");
-    expect(look.classes).toContain("handle-linkable");
-    expect(chipLook(TEL, "+15550123456", NOBODY, true).text).toBe("+15550123456");
+    expect(look.classes).toContain("handle-unresolved");
+    expect(chipLook(TEL, "+15550123456", NOBODY).text).toBe("+15550123456");
   });
 
   /** A link a sender wrote can name anyone it likes; the chip says who
@@ -113,30 +120,29 @@ describe("chipLook", () => {
       mine: null,
       sourceContacts: [contact("slack", "Q", [["email:q@continuum.org", null]])],
     };
-    expect(chipLook("email:q@continuum.org", "Captain Picard", who, true).text).toBe("Q");
+    expect(chipLook("email:q@continuum.org", "Captain Picard", who).text).toBe("Q");
     const mine = contact("datalib_contacts", "Q", [["email:q@continuum.org", null]]);
     expect(
-      chipLook("email:q@continuum.org", "Captain Picard", { mine, sourceContacts: [] }, true).text,
+      chipLook("email:q@continuum.org", "Captain Picard", { mine, sourceContacts: [] }).text,
     ).toBe("Q");
     expect(
-      chipTooltip("email:q@continuum.org", "Captain Picard", { mine, sourceContacts: [] }, true),
+      chipTooltip("email:q@continuum.org", "Captain Picard", { mine, sourceContacts: [] }),
     ).toContain("Shown here as “Captain Picard”");
   });
 
-  it("names an unlinked handle after the best source contact, linkable only with the app", () => {
+  it("names a handle on no contact after the best source contact", () => {
     const who = {
       mine: null,
       sourceContacts: [contact("address_book", "Deanna Troi", [[TEL, null]])],
     };
-    const look = chipLook(TEL, "+15550123456", who, false);
+    const look = chipLook(TEL, "+15550123456", who);
     expect(look.text).toBe("Deanna Troi");
     expect(look.classes).toContain("handle-unresolved");
-    expect(look.classes).not.toContain("handle-linkable");
   });
 
   it("shows the contact's name when linked, faded when the handle stopped working", () => {
     const mine = contact("datalib_contacts", "Will Riker", [[TEL, "2019"]]);
-    const look = chipLook(TEL, "+1 555 012 3456", { mine, sourceContacts: [] }, true);
+    const look = chipLook(TEL, "+1 555 012 3456", { mine, sourceContacts: [] });
     expect(look.text).toBe("Will Riker");
     expect(look.initial).toBe("W");
     expect(look.classes).toContain("handle-stale");
@@ -146,8 +152,8 @@ describe("chipLook", () => {
 describe("chipMenu", () => {
   /** The person's card leads, as the double-click does; an email address
    *  can be written to; the copies, the search and, with a contacts app,
-   *  the link follow. */
-  it("opens the card first, then compose, the copies, the search, and a link", () => {
+   *  adding someone not in it follow. */
+  it("opens the card first, then compose, the copies, the search, and adding", () => {
     const ids = (entries: { id: string }[]) => entries.map((e) => e.id);
     const unlinked = chipMenu("email:riker@enterprise.org", "Will Riker", NOBODY, true);
     expect(ids(unlinked)).toEqual([
@@ -157,26 +163,26 @@ describe("chipMenu", () => {
       "copy-name",
       "copy-both",
       "search",
-      "edit",
+      "add",
     ]);
     expect(unlinked.map((e) => e.label)).toEqual([
-      "Open contact",
+      "Open",
       "Compose mail to riker@enterprise.org",
       "Copy riker@enterprise.org",
       "Copy “Will Riker”",
       "Copy “Will Riker <riker@enterprise.org>”",
       "Everything with Will Riker",
-      "Link to a contact…",
+      "Add to contacts…",
     ]);
     expect(unlinked.filter((e) => e.separator).map((e) => e.id)).toEqual([
       "compose",
       "search",
-      "edit",
+      "add",
     ]);
     const mine = contact("datalib_contacts", "Will Riker", [[TEL, null]]);
-    expect(chipMenu(TEL, "+1 555", { mine, sourceContacts: [] }, true).at(-1)?.label).toBe(
-      "Edit contact link…",
-    );
+    const inContacts = chipMenu(TEL, "+1 555", { mine, sourceContacts: [] }, true);
+    expect(inContacts[0].label).toBe("Open contact");
+    expect(ids(inContacts)).not.toContain("add");
     const phone = chipMenu(TEL, "+15550123456", NOBODY, false);
     expect(ids(phone)).toEqual(["open", "copy-id", "search"]);
     expect(phone.filter((e) => e.separator).map((e) => e.id)).toEqual(["copy-id", "search"]);
@@ -208,16 +214,16 @@ describe("a photo", () => {
       contact("slack", "Riker", [[TEL, null]]),
       `/data/beeper/ingest/blob/${"ab".repeat(32)}`,
     );
-    expect(chipLook(TEL, "+1 555", { mine, sourceContacts: [slack] }, true).photo).toBe(
+    expect(chipLook(TEL, "+1 555", { mine, sourceContacts: [slack] }).photo).toBe(
       "/applet/datalib_contacts/photo/c1",
     );
-    expect(chipLook(TEL, "+1 555", { mine: null, sourceContacts: [slack] }, true).photo).toBe(
+    expect(chipLook(TEL, "+1 555", { mine: null, sourceContacts: [slack] }).photo).toBe(
       `/data/beeper/ingest/blob/${"ab".repeat(32)}`,
     );
-    expect(chipLook(TEL, "+1 555", NOBODY, true).photo).toBeNull();
+    expect(chipLook(TEL, "+1 555", NOBODY).photo).toBeNull();
     const el = dom(`<a class="chip" data-handle="${TEL}">+1 555</a>`)
       .firstElementChild as HTMLElement;
-    drawChip(el, chipLook(TEL, "+1 555", { mine, sourceContacts: [] }, true));
+    drawChip(el, chipLook(TEL, "+1 555", { mine, sourceContacts: [] }));
     const lead = el.firstElementChild as HTMLImageElement;
     expect(lead.className).toBe("handle-photo");
     expect(lead.getAttribute("src")).toBe("/applet/datalib_contacts/photo/c1");
@@ -240,26 +246,16 @@ describe("chipTooltip", () => {
       contact("tng_contacts", "William T. Riker", [[TEL, null]]),
       contact("whatsapp", "Will", [[TEL, null]], 1),
     ];
-    expect(chipTooltip(TEL, "+1 555 012 3456", { mine, sourceContacts }, true).split("\n")).toEqual(
-      [
-        "Will Riker",
-        "+15550123456",
-        "Stopped working by 2019",
-        "Shown here as “+1 555 012 3456”",
-        "William T. Riker in tng_contacts",
-        "Will in whatsapp · 1 item",
-        "Also riker@enterprise.org",
-        "Click to edit",
-      ],
-    );
-  });
-
-  it("offers to link only when there is a contacts app to link with", () => {
-    const linkable = chipTooltip("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, true);
-    expect(linkable.split("\n")[0]).toBe("Q");
-    expect(linkable.split("\n").at(-1)).toContain("Not linked");
-    const without = chipTooltip("email:q@continuum.org", "Q <q@continuum.org>", NOBODY, false);
-    expect(without).not.toContain("link");
+    expect(chipTooltip(TEL, "+1 555 012 3456", { mine, sourceContacts }).split("\n")).toEqual([
+      "Will Riker",
+      "+15550123456",
+      "Stopped working by 2019",
+      "Shown here as “+1 555 012 3456”",
+      "William T. Riker in tng_contacts",
+      "Will in whatsapp · 1 item",
+      "Also riker@enterprise.org",
+      "Double-click to open",
+    ]);
   });
 
   /// The hover card that used to say this was a large panel with a
@@ -268,8 +264,8 @@ describe("chipTooltip", () => {
   it("is the drawn chip's title", () => {
     const sourceContacts = [contact("slack", "Worf", [[TEL, null]], 6894)];
     const el = dom(chip(TEL, "Worf")).querySelector<HTMLElement>("a")!;
-    drawChip(el, chipLook(TEL, "Worf", { mine: null, sourceContacts }, false));
-    expect(el.title).toBe("Worf\n+15550123456\nWorf in slack · 6894 items");
+    drawChip(el, chipLook(TEL, "Worf", { mine: null, sourceContacts }));
+    expect(el.title).toBe("Worf\n+15550123456\nWorf in slack · 6894 items\nDouble-click to open");
   });
 });
 
@@ -357,7 +353,7 @@ describe("chip.css", () => {
     style.textContent = chipCss;
     document.head.append(style);
     const el = dom(chip(TEL, "Jean-Luc Picard")).querySelector<HTMLElement>("a")!;
-    drawChip(el, chipLook(TEL, "Jean-Luc Picard", NOBODY, false));
+    drawChip(el, chipLook(TEL, "Jean-Luc Picard", NOBODY));
     document.body.append(el);
     expect(getComputedStyle(el).whiteSpace).toBe("nowrap");
     style.remove();
@@ -376,18 +372,16 @@ describe("movesPeople", () => {
 /** A list of one person's handles (the person card, a contact page's
  *  fields) shows each handle, not the name again, in the same colours. */
 describe("identifierLook", () => {
-  it("shows the identifier, with the kind's mark, blue only when linked", () => {
+  it("shows the identifier, with the kind's mark, blue only when on a contact", () => {
     const mine = contact("datalib_contacts", "Will Riker", [["email:riker@enterprise.org", null]]);
-    const linked = identifierLook(
-      "email:riker@enterprise.org",
-      "Riker@Enterprise.org",
-      { mine, sourceContacts: [] },
-      true,
-    );
+    const linked = identifierLook("email:riker@enterprise.org", "Riker@Enterprise.org", {
+      mine,
+      sourceContacts: [],
+    });
     expect(linked.text).toBe("Riker@Enterprise.org");
     expect(linked.classes).toContain("handle-resolved");
     expect([linked.initial, linked.photo, linked.icon]).toEqual([null, null, "email"]);
-    const loose = identifierLook(TEL, "", NOBODY, true);
+    const loose = identifierLook(TEL, "", NOBODY);
     expect(loose.text).toBe("+15550123456");
     expect(loose.classes).toContain("handle-unresolved");
   });
@@ -467,7 +461,7 @@ describe("an edit to a link", () => {
             },
           }
         : url.endsWith("/people")
-          ? { people: {} }
+          ? indexAnswer({})
           : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
@@ -542,18 +536,18 @@ describe("a name that is someone else's handle", () => {
    *  was drawn as the account owner on every message they sent. */
   it("is never drawn: the chip shows its own identifier instead", () => {
     const q = "email:q@continuum.test";
-    expect(chipLook(q, "picard@enterprise.org", NOBODY, true).text).toBe("q@continuum.test");
-    expect(chipLook(q, "mailto:picard@enterprise.org", NOBODY, true).text).toBe("q@continuum.test");
-    expect(chipLook(q, "+1 202 555 0101", NOBODY, true).text).toBe("q@continuum.test");
+    expect(chipLook(q, "picard@enterprise.org", NOBODY).text).toBe("q@continuum.test");
+    expect(chipLook(q, "mailto:picard@enterprise.org", NOBODY).text).toBe("q@continuum.test");
+    expect(chipLook(q, "+1 202 555 0101", NOBODY).text).toBe("q@continuum.test");
     const told = { mine: null, sourceContacts: [contact("mail", "picard@enterprise.org", [])] };
-    expect(chipLook(q, "Q", told, true).text).toBe("q@continuum.test");
-    expect(chipTooltip(q, "Q", told, true).split("\n")[0]).toBe("q@continuum.test");
-    expect(chipLook(q, "picard@enterprise.org", told, true, true).text).toBe("q@continuum.test");
+    expect(chipLook(q, "Q", told).text).toBe("q@continuum.test");
+    expect(chipTooltip(q, "Q", told).split("\n")[0]).toBe("q@continuum.test");
+    expect(chipLook(q, "picard@enterprise.org", told, true).text).toBe("q@continuum.test");
   });
 
   it("is a name when it is the handle itself, one the person holds, or no handle at all", () => {
     const q = "email:q@continuum.test";
-    expect(chipLook(q, "Q@Continuum.test", NOBODY, true).text).toBe("Q@Continuum.test");
+    expect(chipLook(q, "Q@Continuum.test", NOBODY).text).toBe("Q@Continuum.test");
     const book = {
       mine: null,
       sourceContacts: [
@@ -563,8 +557,8 @@ describe("a name that is someone else's handle", () => {
         ]),
       ],
     };
-    expect(chipLook(q, "", book, true).text).toBe("q@q.test");
-    expect(chipLook("slack:T1/U2", "@data", NOBODY, true).text).toBe("@data");
+    expect(chipLook(q, "", book).text).toBe("q@q.test");
+    expect(chipLook("slack:T1/U2", "@data", NOBODY).text).toBe("@data");
   });
 });
 
@@ -590,7 +584,7 @@ describe("a message's own header", () => {
     const riker = "email:riker@enterprise.test";
     vi.stubGlobal("fetch", async (url: string) => {
       const body = url.endsWith("/people")
-        ? { people: { [riker]: [contact("mail", "William Riker", [[riker, null]], 10)] } }
+        ? indexAnswer({ [riker]: [contact("mail", "William Riker", [[riker, null]], 10)] })
         : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
@@ -641,9 +635,9 @@ describe("your contact's name", () => {
       const body = url.endsWith("/resolve")
         ? { resolved: { [riker]: mine } }
         : url.endsWith("/people")
-          ? {
-              people: { [riker]: [contact("mail", "PAY INVOICE NOW - Riker", [[riker, null]], 9)] },
-            }
+          ? indexAnswer({
+              [riker]: [contact("mail", "PAY INVOICE NOW - Riker", [[riker, null]], 9)],
+            })
           : {};
       return new Response(JSON.stringify(body), { status: 200 });
     });
@@ -660,15 +654,67 @@ describe("your contact's name", () => {
     expect(header.dataset.label).toBe("Will Riker");
     expect(header.title.split("\n")[0]).toBe("Will Riker");
 
-    const cell = chipCell(riker, forged, people.get(riker), true);
+    const cell = chipCell(riker, forged, people.get(riker));
     expect(cell.dataset.label).toBe("Will Riker");
 
     for (const el of [header, cell]) {
       const chip = chipOf(el)!;
       expect(chipName(chip)).toBe("Will Riker");
-      const labels = chipMenuOf(chip, true).map((e) => e.label);
+      const labels = chipMenuOf(chip).map((e) => e.label);
       expect(labels).toContain("Copy “Will Riker”");
       expect(labels.join("\n")).not.toContain("PAY INVOICE");
     }
+  });
+});
+
+/** An answer about one handle that held another's numbers would change with
+ *  whatever chips happened to be drawn beside it. */
+describe("whoFrom", () => {
+  it("takes only what the answer says of its handle", () => {
+    const gomez = { ...contact("book", "Sonya Gomez", []), handles: [] };
+    const written = (value: string): NormalizedContact => ({
+      ...gomez,
+      handles: [{ medium: "phone", label: null, value, handle: null, stopped_working_by: null }],
+    });
+    const answer: PeopleAnswer = {
+      people: { "email:a@b.org": [written("555-0147")] },
+      same_digits: { "tel:+12025550199": [written("555-0199")] },
+      pages: {},
+      full_numbers: { "555-0147": ["tel:+12025550147"], "555-0199": ["tel:+12025550199"] },
+    };
+    expect(whoFrom(answer, "email:a@b.org", null)).toEqual({
+      mine: null,
+      sourceContacts: [written("555-0147")],
+      fullNumbers: { "555-0147": ["tel:+12025550147"] },
+    });
+    expect(whoFrom(answer, "tel:+12025550199", null)).toEqual({
+      mine: null,
+      sourceContacts: [],
+      sameDigits: [written("555-0199")],
+      fullNumbers: { "555-0199": ["tel:+12025550199"] },
+    });
+    expect(whoFrom(answer, "email:nobody@b.org", null)).toEqual({ mine: null, sourceContacts: [] });
+  });
+});
+
+describe("addedSummary", () => {
+  const none = { created: 0, added_to: 0, already: 0, skipped: [] };
+  it("says what came of everyone who was selected", () => {
+    expect(addedSummary({ ...none, created: 1 })).toBe("Added 1 person to contacts");
+    expect(
+      addedSummary({
+        created: 12,
+        added_to: 2,
+        already: 3,
+        skipped: [{ what: "The Captains", why: "their handles are on Riker and Picard" }],
+      }),
+    ).toBe(
+      "Added 12 people to contacts; added handles to 2 contacts; 3 already there; " +
+        "The Captains skipped: their handles are on Riker and Picard",
+    );
+    expect(addedSummary({ ...none, added_to: 1 })).toBe("Added handles to 1 contact");
+    expect(addedSummary({ ...none, already: 4 })).toBe(
+      "Added 0 people to contacts; 4 already there",
+    );
   });
 });

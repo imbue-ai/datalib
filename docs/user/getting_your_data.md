@@ -1287,8 +1287,9 @@ Two things agents get wrong:
 
 `type = "contacts"` — any CardDAV server, such as iCloud or Nextcloud,
 through latchkey (`carddav`), **or** local `.vcf` files (`vcf`).
-Mirrors your address book. Fastmail has a section of its own:
-[Fastmail Contacts](#fastmail-contacts). This source is a copy of what
+Mirrors your address book. Fastmail and Google have sections of their own:
+[Fastmail Contacts](#fastmail-contacts),
+[Google Contacts](#google-contacts). This source is a copy of what
 the address book says; saying that several handles are one person is
 [the contacts app](contacts_app.md), which needs no source.
 
@@ -2311,12 +2312,12 @@ latchkey auth browser-prepare google-gmail
 
 Or make one yourself and give it to every Google service at once: in
 the Google Cloud console, a project with the Gmail, Google Calendar,
-Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
+Google People, Google Drive, Google Docs, Google Sheets and Google Slides APIs turned
 on, and in it an OAuth client of type **Desktop app**. Then, with its
 id and secret:
 
 ```sh
-for s in google-gmail google-calendar google-drive google-docs google-sheets google-slides; do
+for s in google-gmail google-calendar google-people google-drive google-docs google-sheets google-slides; do
   latchkey auth prepare "$s" '{"clientId":"<id>","clientSecret":"<secret>"}'
 done
 ```
@@ -2461,6 +2462,66 @@ feed of. The Add source form ticks it; in a hand-written config, set
   the earlier, and both messages' attachment rows point at it. Cause:
   Datalib's implementation (an accidental limitation; not covered by a
   test). Nothing in the config changes it.
+
+## Google Contacts
+
+`type = "contacts"` — your Google contacts through Google's People API
+and latchkey (`google`). Mirrors every contact with its labels and
+photo. Rendered the way [Contacts (CardDAV)](#contacts-carddav) says: a
+label is a page listing who is in it, and a contact names its labels.
+
+Built into latchkey; one command opens a browser, you sign in and
+approve every scope it asks for:
+
+```sh
+latchkey auth browser google-people
+```
+
+The first time, latchkey needs an OAuth client to sign in with:
+[your own Google OAuth client](#your-own-google-oauth-client). The
+login it makes can change contacts as well as read them; Datalib only
+ever reads.
+
+An empty `google` table copies every contact. `labels = ["Bridge crew"]`
+copies only the contacts with one of those labels, named as Google
+Contacts shows them. A contact that loses the label leaves the copy, and
+so does one whose label you take out of the list; a name no label has is
+reported on the source and deletes nothing. After the first sync, each run
+asks Google only for what changed since the last, and fetches only the
+photos that are new. Two lists Google keeps apart are not mirrored:
+**Other contacts** (the addresses Google saved because you wrote to
+them) and your organization's directory, since the login latchkey makes
+has no permission to read either. A contact of a colleague that you
+never saved is in the second.
+
+### Limitations
+
+- **Only the account's own "Contacts" list is mirrored.** Other
+  contacts (the addresses Google saved because you wrote to them) and
+  the organization's directory are not. Cause: the sign-in latchkey
+  makes has no permission to read either. Nothing changes it.
+- **`labels` narrows what is kept, not what is asked for.** Every
+  contact is listed on every full listing, and those with none of the
+  labels are dropped. Changing `labels` makes the next run list everyone
+  again. A name that matches no label is a `config:labels:` problem and
+  deletes nothing; a run where none matches fails. Cause: the People
+  API cannot be asked for one label's contacts.
+- **An edit or a deletion arrives on the next sync, sometimes one sync
+  late.** Each run asks Google what changed since its last sync token,
+  and Google's answer can lag a write by some seconds, so a run right
+  after an edit may not see it; the next one does. A merge of two
+  contacts arrives as one changed and one deleted. Deletions are
+  copied; `when_deleted_upstream` is not offered. Cause: the service's
+  API.
+- **After seven days without a sync, the next one lists every contact
+  again.** Google refuses a sync token older than that. It costs one
+  full listing, not missing data. Cause: the service's API.
+- **Signing in as another Google account drops the first account's
+  contacts** on the next run, since each account has its own address
+  book. Cause: Datalib's implementation.
+- **Only one photo per contact is kept, at 512 pixels**, and a letter
+  Google drew in place of a photo is not kept at all. Cause: Datalib's
+  implementation.
 
 ## Google Drive
 

@@ -81,7 +81,13 @@ let found: RemoteRef[] = [];
 let chipMark: string | null = null;
 
 const CHIP_MARK = "data-chip-mark";
-const CHIP_ATTRS = ["data-handle", "data-entity", "data-contact", "data-chip-header"];
+const CHIP_ATTRS = [
+  "data-handle",
+  "data-entity",
+  "data-contact",
+  "data-contact-page",
+  "data-chip-header",
+];
 
 // A presentation attribute of SVG's (`fill`, `filter`, `mask`, …) reads
 // as CSS, so a `url(…)` in one is a fetch. One naming a part of the

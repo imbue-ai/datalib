@@ -296,6 +296,10 @@ def prepare(argv: list[str]) -> Prepared:
         "DATALIB_CACHE_DIR": str(workspace / "fingerprint_cache"),
         "DATALIB_MODELS_NO_FETCH": "1",
         "DATALIB_SQL_CENSUS": str(census),
+        # The runner and the server hand a step only the variables they
+        # list, and they list a test's own switches only when this names
+        # them.
+        "DATALIB_CHILD_ENV": "DATALIB_CACHE_DIR,DATALIB_EMBED_THREADS,DATALIB_SQL_CENSUS,DATALIB_HTTP_PLAYBACK",
     }
     _stage_embed_model(workspace)
 
@@ -510,8 +514,7 @@ def prepare(argv: list[str]) -> Prepared:
     ) -> str:
         """A `[[steps]]` header and its keys, as `datalib-step examples`
         writes one: the id, the command, and the `reads` and `locks` the
-        runner no longer infers
-        (docs/dev/plans/completed/dag_and_step_decoupling.md)."""
+        runner does not infer (docs/dev/config_model.md)."""
         text = f'[[steps]]\nid = "{group}/{function}"\ncommand = "{command}"'
         if reads:
             text += f'\nreads = "{reads}"'
@@ -725,7 +728,8 @@ inputs = [{grid_list}]"""
 
     print(f"[run_sync_pipeline] pipeline → {data_root}", flush=True)
     # `DATALIB_HTTP_PLAYBACK` redirects every provider transport to
-    # the playback tree (steps inherit the runner's env); the fixture
+    # the playback tree (the runner hands it on, as `DATALIB_CHILD_ENV`
+    # names it); the fixture
     # AEP/root key let the signal/whatsapp extractors decrypt the
     # snapshots generated above. The playback path is a link, so the
     # second capture can replace the first under a running server.

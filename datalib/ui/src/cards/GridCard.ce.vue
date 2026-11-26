@@ -47,11 +47,13 @@ import { copyText, typedColumns, groupTitle } from "./typedColumns";
 import type { Identity } from "@/api";
 import { handleFromUri } from "./chipLinks";
 import { entities, entityCopyText } from "./entities";
+import { addContactPages, contactPages } from "./contactPages";
 import {
-  canLinkHandles,
+  addedSummary,
   chipCell,
   contactsById,
   handleKind,
+  hasContactsApp,
   copyText as copyHandleText,
   nameOf,
   people,
@@ -60,11 +62,11 @@ import { CONTACT } from "@/search/queryText";
 import { dateWallText, datesInText, parseStamp } from "./dates";
 import {
   CHIP_SELECTOR,
-  chipCardSource,
   chipElAt,
   chipMenuOf,
   chipOf,
   asMenuEntries,
+  openChip,
   runChipAction,
   type Chip,
   type ChipEntry,
@@ -386,6 +388,7 @@ function refreshIndexState() {
 const PERSON_COLUMNS = ["author_ref", "contact_ref", "subject_ref"];
 const SOURCE_COLUMN = "source_ref";
 const stopPeople = people.subscribe(() => PERSON_COLUMNS.forEach(refreshCells));
+const stopPages = contactPages.subscribe(() => PERSON_COLUMNS.forEach(refreshCells));
 const stopEntities = entities.subscribe(() => refreshCells(SOURCE_COLUMN));
 
 function refreshCells(columnId: string) {
@@ -1499,6 +1502,7 @@ onMounted(() => {
 });
 onBeforeUnmount(() => unsubscribeLive?.());
 onBeforeUnmount(stopPeople);
+onBeforeUnmount(stopPages);
 onBeforeUnmount(stopEntities);
 
 function docSource(doc: { md: string; anchor: string | null }): string {
@@ -1529,7 +1533,7 @@ const textFormatter: Formatter<Row> = (_r, _c, value) => ({
 const authorFormatter: Formatter<Row> = (_r, _c, _v, _col, row) => {
   const ref = row.author_ref;
   const handle = ref ? handleFromUri(ref.id) : null;
-  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle), canLinkHandles());
+  if (handle && ref) return chipCell(handle, ref.label, people.lookup(handle));
   return { text: row.author ?? "" };
 };
 
@@ -1683,8 +1687,8 @@ watch(
       groupable: true,
       chips: {
         who: (h) => people.lookup(h),
-        canLink: canLinkHandles,
         entity: (uri) => entities.lookup(uri),
+        page: (p) => contactPages.lookup(p),
       },
     });
     const descendingFirst = new Set(
@@ -1802,9 +1806,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
     el?.querySelectorAll(selector).length === 1 ? el.querySelector<HTMLElement>(selector) : null;
   const chipEl = pointed ?? first(CHIP_SELECTOR);
   const pressed = chipEl ? chipOf(chipEl) : null;
-  // No popover in a grid cell yet, so the link entry is not offered
-  // here; the document view has it.
-  const chip = pressed ? { chip: pressed, entries: chipMenuOf(pressed, false) } : null;
+  const chip = pressed ? { chip: pressed, entries: chipMenuOf(pressed) } : null;
   return {
     anchor,
     copy,
@@ -1828,6 +1830,21 @@ const plural = (m: MenuScope) => (m.targets.length === 1 ? "" : "s");
 const countSuffix = (n: number) => (n === 1 ? "" : ` (${n})`);
 
 /// The rows a right-click aims at that are muted, or that are not.
+/// The contacts' pages a right-click aims at: rows that are each one card
+/// of an address book.
+const cardsAmong = (m: MenuScope) =>
+  hasContactsApp()
+    ? m.targets.filter((r) => r.contact_ref && rowKey(r) === r.markdown_uuid).map(rowKey)
+    : [];
+
+async function addCards(m: MenuScope) {
+  try {
+    pushToast(addedSummary(await addContactPages(cardsAmong(m))), "info");
+  } catch (e) {
+    pushToast((e as Error).message);
+  }
+}
+
 const mutedAmong = (m: MenuScope, muted: boolean) =>
   mutable ? m.targets.filter((r) => (r.muted === "yes") === muted) : [];
 
@@ -1898,7 +1915,16 @@ const menuItems: (MenuCommandItem | "divider")[] = [
   ),
   dividerAfter((m) => mutedAmong(m, true).length + mutedAmong(m, false).length > 0),
   ...chipSlots.commandItems,
-  dividerAfter((m) => m.chip !== null),
+  // One row's chip offers it already.
+  entry(
+    "add-people",
+    (m) => {
+      const n = cardsAmong(m).length;
+      return n > 1 || (n === 1 && !m.chip) ? `Add to contacts${countSuffix(n)}` : null;
+    },
+    (m) => void addCards(m),
+  ),
+  dividerAfter((m) => m.chip !== null || cardsAmong(m).length > 0),
   entry(
     "keep",
     (m) => m.filter[0]?.label ?? null,
@@ -2472,8 +2498,7 @@ function onDblClick(e: SlickEventData, args: OnDblClickEventArgs) {
     pickAndOpen(data);
     return;
   }
-  const source = chipCardSource(chip.ref, data?.source_id || null);
-  if (source) props.ctx.host.openCards(source);
+  openChip(chip.ref, data?.source_id || null, (source) => props.ctx.host.openCards(source));
 }
 
 // Any change a USER can make to columns gets reflected in the persisted
@@ -2606,7 +2631,6 @@ onBeforeUnmount(() => {
       :key="n.text"
       class="search-notice"
       role="status"
-      :title="n.title"
       data-testid="search-notice"
     >
       {{ n.text }}

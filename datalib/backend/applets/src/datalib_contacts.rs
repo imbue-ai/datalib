@@ -1,6 +1,6 @@
 //! `datalib-applet datalib_contacts` — the contacts app: the one writer of
 //! `datalib_curated/datalib_contacts/`, serving what a chip needs to resolve a
-//! handle, what its popover needs to create or link a contact, the
+//! handle, what its page needs to create or link a contact, the
 //! photo a person put on one, the draft a contact is edited through
 //! on its card, the table of every contact the app's Browse opens, and
 //! the review of what agents proposed (`review.rs`). `GET /` lists every
@@ -25,6 +25,7 @@ use axum::{
 };
 use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
 use datalib_contact_schema::{Medium, NormalizedContact};
+use datalib_contacts::add_people::{AddedPeople, NewPerson};
 use datalib_contacts::drafts::ContactEdit;
 use datalib_contacts::{ContactKind, Store};
 use datalib_handle::Handle;
@@ -124,6 +125,15 @@ fn api() -> Api {
             create,
         )
         .add(
+            Post,
+            "/contacts/add",
+            Person,
+            "`{people: [{name, handles}]}`: each a contact, in one commit; one whose handle is \
+             on a contact is that contact, which gets the rest. Answers `{created, added_to, \
+             already, skipped: [{what, why}]}`",
+            add_people,
+        )
+        .add(
             Get,
             one,
             Read,
@@ -155,7 +165,7 @@ fn api() -> Api {
             Post,
             "/unlink",
             Person,
-            "`{handle}`: take a handle off its contact",
+            "`{handle}`: take a handle off its contact, remembering it is not theirs",
             unlink,
         )
         .add(
@@ -430,6 +440,36 @@ async fn create(
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "contact_id": contact_id })))
+}
+
+#[derive(Deserialize)]
+struct AddBody {
+    people: Vec<PersonBody>,
+}
+
+#[derive(Deserialize)]
+struct PersonBody {
+    name: String,
+    handles: Vec<String>,
+}
+
+async fn add_people(
+    State(store): AppState,
+    Json(body): Json<AddBody>,
+) -> Result<Json<AddedPeople>, ApiError> {
+    let people = body
+        .people
+        .into_iter()
+        .map(|p| {
+            let handles = p.handles.iter().map(|h| handle(h));
+            Ok(NewPerson {
+                name: p.name,
+                handles: handles.collect::<Result<_, ApiError>>()?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let added = store.add_people(&people).await.map_err(refused)?;
+    Ok(Json(added))
 }
 
 async fn contact(

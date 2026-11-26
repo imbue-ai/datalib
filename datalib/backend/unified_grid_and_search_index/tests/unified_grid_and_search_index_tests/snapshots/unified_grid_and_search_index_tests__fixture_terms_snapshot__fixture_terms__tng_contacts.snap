@@ -8,6 +8,11 @@ expression: source.render()
   title: Engineering
 00000000-0000-8ef3-9b71-8e5cad3e9dff  Address book
   title: Bridge
+00000000-0000-8139-9794-990c3029c5e1  Contact
+  title: Sonya Gomez
+  name: Engineering
+  about: 2025550147
+  about: Sonya Gomez
 00000000-0000-8140-88d9-42badf1b195b  Contact
   title: drone.4.of.12@unimatrix01.borg
   name: Borg
@@ -51,6 +56,7 @@ expression: source.render()
 00000000-0000-8d78-9232-e6b0deeebfb7  Contact
   title: Geordi La Forge
   name: Engineering
+  about: 2025550153
   about: Geordi La Forge
   about: email:glaforge@enterprise.starfleet
   about: email:laforge@enterprise.starfleet

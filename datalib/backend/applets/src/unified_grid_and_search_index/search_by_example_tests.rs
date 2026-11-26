@@ -268,10 +268,39 @@ fn cards() -> Vec<ContactDoc> {
     vec![picard, staff]
 }
 
-/// Renders the cast and commits every document to the root's grid index
-/// the way the `unified_grid_and_search_index` step does; returns each supplied term as
+/// Renders the cast and indexes it; returns each supplied term as
 /// `(row, kind, value)`.
 async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
+    let docs = cast_documents();
+    let supplied = docs
+        .iter()
+        .flat_map(|md| &md.rows)
+        .flat_map(|row| {
+            row.supplied_terms()
+                .unwrap()
+                .into_iter()
+                .map(|t| (row.uuid.clone(), t.kind, t.value))
+        })
+        .collect();
+    index(root, &docs).await;
+    supplied
+}
+
+/// Commits every document to the root's grid index the way the
+/// `unified_grid_and_search_index` step does.
+async fn index(root: &Path, docs: &[RenderedMarkdown]) {
+    let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
+        .await
+        .unwrap();
+    let lock = WriteLock::for_index(pool.clone());
+    for md in docs {
+        apply_one(&lock, md).await.unwrap();
+    }
+    datalib_etl_render::grid_index::seal(&lock).await.unwrap();
+    pool.close().await;
+}
+
+fn cast_documents() -> Vec<RenderedMarkdown> {
     let mut docs: Vec<RenderedMarkdown> = Vec::new();
     let mut keep = |md: RenderedMarkdown| -> anyhow::Result<()> {
         docs.push(md);
@@ -326,26 +355,7 @@ async fn render_cast(root: &Path) -> HashSet<(String, SearchTermKind, String)> {
             .unwrap();
     }
 
-    let supplied = docs
-        .iter()
-        .flat_map(|md| &md.rows)
-        .flat_map(|row| {
-            row.supplied_terms()
-                .unwrap()
-                .into_iter()
-                .map(|t| (row.uuid.clone(), t.kind, t.value))
-        })
-        .collect();
-    let pool = open_index(&datalib_runtime::layout::grid_index_db(root))
-        .await
-        .unwrap();
-    let lock = WriteLock::for_index(pool.clone());
-    for md in &docs {
-        apply_one(&lock, md).await.unwrap();
-    }
-    datalib_etl_render::grid_index::seal(&lock).await.unwrap();
-    pool.close().await;
-    supplied
+    docs
 }
 
 /// Each row's search-key columns (and the author its `from` and `author`
@@ -728,4 +738,143 @@ async fn a_row_links_to_its_page_at_the_row() {
     let (page, link) = link_of("riker-thread");
     assert_eq!(page, "riker-thread", "the thread is its own page");
     assert_eq!(link, Some(format!("datalib:doc/{page}")));
+}
+
+/// Picard's number as each kind of source hands it over, each in its own
+/// spelling: a text from him, a WhatsApp message to him, and his card; and
+/// a second card that writes it the way it is dialled at home.
+fn one_number_in_every_source() -> Vec<RenderedMarkdown> {
+    let mut docs: Vec<RenderedMarkdown> = Vec::new();
+    let mut keep = |md: RenderedMarkdown| -> anyhow::Result<()> {
+        docs.push(md);
+        Ok(())
+    };
+    let none = HashMap::new();
+    let progress = Progress::noop();
+
+    let text = message(
+        "his-text",
+        "Jean-Luc Picard",
+        Handle::tel("+1 (202) 555-0101").unwrap(),
+        T0,
+        "Make it so.",
+    );
+    datalib_etl_chat_common::render_all(
+        &chat_profile(Provider::SmsBackupRestore, "Texts", "SMS Thread", "SMS"),
+        &[chat("text-thread", "Jean-Luc Picard", None, text)],
+        "texts",
+        &none,
+        &progress,
+        &mut keep,
+    )
+    .unwrap();
+
+    let mut to_him = message(
+        "to-him",
+        "Will Riker",
+        Handle::whatsapp_jid("17015550101@s.whatsapp.net").unwrap(),
+        T0 + HOUR,
+        "Aye, sir.",
+    );
+    to_him.recipients = vec![Recipient {
+        role: RecipientRole::To,
+        display: "Jean-Luc Picard".into(),
+        handle: Handle::whatsapp_jid("12025550101@s.whatsapp.net"),
+        drawn: true,
+    }];
+    datalib_etl_chat_common::render_all(
+        &chat_profile(Provider::Whatsapp, "WhatsApp", "WhatsApp Chat", "WhatsApp"),
+        &[chat("whatsapp-thread", "Jean-Luc Picard", None, to_him)],
+        "whatsapp",
+        &none,
+        &progress,
+        &mut keep,
+    )
+    .unwrap();
+
+    let mut full = card("his-card", ContactKind::Person, "Jean-Luc Picard", &[]);
+    full.contact.handles = vec![ContactHandle::phone(None, "tel:+1-202-555-0101;ext=1")];
+    let mut home = card("home-card", ContactKind::Person, "Uncle Jean-Luc", &[]);
+    home.contact.handles = vec![ContactHandle::phone(None, "(202) 555-0101")];
+    let profile = ContactRenderProfile {
+        provider: Provider::Contacts,
+        source_label: "Contacts".into(),
+        contact_kind: "Contact".into(),
+        contact_entity_kind: "contact",
+        account: None,
+        render_version: 1,
+    };
+    datalib_etl_contact_common::render_all(
+        &profile,
+        &[full, home],
+        "contacts",
+        &progress,
+        &mut keep,
+    )
+    .unwrap();
+    docs
+}
+
+/// However a number is written, by a source or in the search box, it is
+/// one number: `from:`, `to:` and `with:` find the same rows.
+#[tokio::test]
+async fn a_number_is_found_however_it_is_written() {
+    let tmp = tempfile::tempdir().unwrap();
+    index(tmp.path(), &one_number_in_every_source()).await;
+    let s = index_over(tmp.path()).await;
+    for written in [
+        "+12025550101",
+        "+1-202-555-0101",
+        "+1.202.555.0101",
+        "+1 (202) 555-0101",
+        "+1\u{a0}202\u{a0}555\u{2011}0101",
+        "tel:+12025550101",
+        "tel:+1-202-555-0101",
+        "(202) 555-0101",
+        "202-555-0101",
+        "2025550101",
+        "1-202-555-0101",
+        "001 202 555 0101",
+    ] {
+        for (key, want) in [
+            ("from", vec!["his-text"]),
+            ("to", vec!["to-him"]),
+            (
+                "with",
+                vec![
+                    "his-card",
+                    "his-text",
+                    "home-card",
+                    "text-thread",
+                    "to-him",
+                    "whatsapp-thread",
+                ],
+            ),
+        ] {
+            for q in [
+                datalib_query::term(key, written, false),
+                datalib_query::exact_term(key, written, false),
+            ] {
+                assert_eq!(found(&s, &q, None).await, want, "{q}");
+            }
+        }
+    }
+    // Less than a whole number finds whatever ends in it: Riker's WhatsApp
+    // number ends in the same seven digits.
+    assert_eq!(
+        found(&s, "from:555-0101", None).await,
+        ["his-text", "to-him"]
+    );
+    // Another country's number with the same digits is not his, but may be
+    // whoever the second card means, which does not say.
+    assert_eq!(found(&s, "with:+442025550101", None).await, ["home-card"]);
+    for q in [
+        // Another number.
+        r#"from:"+1 (202) 555-0102""#,
+        r#"with:"(202) 555-0102""#,
+        // The same seven digits under another area code.
+        r#"to:"(701) 555-0101""#,
+    ] {
+        assert_eq!(found(&s, q, None).await, Vec::<String>::new(), "{q}");
+    }
 }

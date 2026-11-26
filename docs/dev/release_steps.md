@@ -15,8 +15,7 @@ cannot.
 
 ## A patch release never changes a store's shape
 
-The downgrade guard (`datalib_store_meta::guard`,
-[`plans/completed/schema_migrations.md`](plans/completed/schema_migrations.md) §3.4)
+The downgrade guard (`datalib_store_meta::guard`)
 compares versions by `major.minor`: a build refuses a store a newer
 *minor* wrote and opens one a newer *patch* wrote. That is only safe if
 a patch release never adds, renames or drops a column, table, cursor

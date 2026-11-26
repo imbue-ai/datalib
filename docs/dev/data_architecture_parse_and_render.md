@@ -35,9 +35,7 @@ of its own (`calendar_render/src/occurrences/README.md`). Everything
 below is about documents.
 
 §2, §3's U-rules and §5 describe the tree as it is. §3's P-rules and
-§4's rules are partly aspiration: each says where the tree stands, and
-the retrofit plan is
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
+§4's rules are partly aspiration: each says where the tree stands.
 
 ## 1. Where the neighbouring material lives
 
@@ -561,12 +559,6 @@ small. It should grow deliberately: the test for admitting one is
 whether two providers disagreeing about it would produce a *wrong
 answer* rather than merely an inconsistent-looking one.
 
-The tree does not yet follow this rule for timestamps: seven of the 28
-render crates (`baby_connect`, `calendar`, `chatgpt`, `garmin`,
-`lightroom`, `linkedin`, `perseus`) call `chrono` directly
-rather than going through `datalib-time` alone. The retrofit is in
-[`data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
-
 **P4 — Parse reads the raw store and nothing else** (§2). Parse is
 where the temptation appears: a file-backed provider's `input_path` is
 *download's* input, not parse's.
@@ -702,9 +694,6 @@ The fetch-stage rows are the download side's; the rule for writing
 one is in [`data_architecture_ingestion.md` §"Error handling"](data_architecture_ingestion.md#error-handling),
 and where they are read is [`etl/README.md` §"Problems stay in the step that found them"](/datalib/backend/etl/README.md#problems-stay-in-the-step-that-found-them).
 
-The audit that produced them is
-[`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md).
-
 Several of the rules below are phrased after the `data-pipeline-builder`
 skill in
 [`imbue-ai/default-workspace-template#534`](https://github.com/imbue-ai/default-workspace-template/pull/534).
@@ -821,13 +810,10 @@ rewriting that history and then running `dolt_gc()` does
 [Removing a source](data_architecture_ingestion_practices.md#removing-a-source)).
 The *stating* half is not blocked.
 
-**A reclaim mechanism is deliberately deferred.** A derived store is
-cheap to reclaim by hand — delete it and rebuild, which costs a
-re-render and never a re-fetch — and while schemas change often enough
-that derived stores are rebuilt anyway, a mechanism would automate what
-the churn already does. Once a derived store starts living a long time,
-it needs building. The raw store is not covered by that argument: it is
-the copy we cannot re-fetch. Documents a source no longer produces are
+**A render store's history is given back on request**, by its step's
+`--compact` ([`step_protocol.md`](step_protocol.md)), never by a run on
+its own. The raw store's history is kept: it is the copy we cannot
+re-fetch. Documents a source no longer produces are
 not part of the problem — §5's sweep removes them in the run that stops producing them; only the store's *history* of
 them stays.
 
@@ -1091,8 +1077,7 @@ Discord (`datalib_etl_chat_common::render_paged`) and
 Claude Code and Codex (`datalib_etl_agent_sessions_render::render_paged`),
 which size a page by how many records it holds, counted from the index
 without reading one. The other renders still read their rows whole
-([`audits/2026-10-20_render_memory.md`](audits/2026-10-20_render_memory.md)
-lists them).
+([#1959](https://github.com/imbue-ai/datalib/issues/1959) lists them).
 
 Blob bytes are the larger part of most stores, and a render that still
 reads its rows whole can at least leave them where they are until they
@@ -1128,7 +1113,9 @@ mostly the writer: doltlite holds each table's pending edits in memory
 until they reach 64 MB or the SQL transaction commits, and each
 connection keeps a 64 MiB page cache. Committing the SQL transaction
 more often trims the peak but leaves more pages that later checkpoints
-pin on disk; the audit has the numbers.
+pin on disk, so the writer does not: committing every 32 MB of documents
+took that store's peak from 949 MB to 835 MB and its file from 6.9 GB to
+10.4 GB, and a 16 MiB page cache as well took it to 726 MB.
 
 ### Rendering the delta itself
 
@@ -1224,8 +1211,6 @@ For these `created_at` is **null**, and `before:`/`after:` exclude the row — t
 
 ## See also
 
-- [`plans/data_lib_as_a_library/data_handling_practices.md`](plans/data_lib_as_a_library/data_handling_practices.md)
-  — the audit and retrofit plan for §4.
 - [`plans/completed/one_mode.md`](plans/completed/one_mode.md) — the rule every step's
   writes follow, of which §5's sweep is the render-side half.
 - [`step_protocol.md`](step_protocol.md) — where R2's third category

@@ -64,18 +64,12 @@ const SETUP: &[SetupStep] = &[
         commands: &[],
     },
     SetupStep {
-        say: "Check the config. Every problem is reported at once, each with its line; \
-              `check-params` reads each source's params the way a sync would.",
-        commands: &[
-            Example {
-                what: "check the config",
-                command: "datalib-pipeline check ~/datalib/config.toml",
-            },
-            Example {
-                what: "check its sources' params",
-                command: "datalib-step check-params ~/datalib/config.toml",
-            },
-        ],
+        say: "Check the config. Every problem is reported at once, each with its line, \
+              and each source's params are read the way a sync would read them.",
+        commands: &[Example {
+            what: "check the config",
+            command: "datalib-pipeline check ~/datalib/config.toml",
+        }],
     },
     SetupStep {
         say: "Check the sign-in: ask the service which account the credentials reach. \
@@ -329,8 +323,7 @@ fn examples_intro(t: SourceType) -> Vec<String> {
         ),
         format!(
             "Then `datalib-pipeline check <data_root>` reports every problem with the config at \
-             once, each at its line, and `datalib-step check-params <config>` every param a \
-             sync would refuse; `{}` asks the service which \
+             once, each at its line, every param a sync would refuse among them; `{}` asks the service which \
              account the credentials reach, if the method reaches one; and \
              `datalib-pipeline sync <data_root> <id>/ingest --by <you>` syncs the source and \
              everything that reads it.{sign_in}",

@@ -3,8 +3,7 @@
 A source whose data is numbers over time renders it twice: as documents, by `render_markdown`, and as
 time series, by `render_time_series`. This doc covers the time-series
 path: the stores, how points are encoded, units, the index and the
-applet. The plan it was built from, with the questions it left open, is
-[`plans/completed/time_series.md`](plans/completed/time_series.md).
+applet.
 
 Three sources do:
 

@@ -48,6 +48,10 @@ instead from `bazel run //:precommit` and as a plain step in
  23. The runner's code outside its tests never names `datalib-step`:
      it gives datalib's own step program nothing another program could
      not ask for with the same config keys.
+ 24. The server's code outside its tests names `datalib-step` only in
+     the files `_SERVER_STEP_PROGRAM_FILES` lists, each for an open item
+     of `docs/dev/plans/decoupling_followups.md`; a listed file that no
+     longer names it must leave the list.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -361,6 +365,7 @@ def main() -> int:
     rc |= _check_card_children_carry_styles(root)
     rc |= _check_stores_open_by_literal_path(root)
     rc |= _check_runner_names_no_step_program(root)
+    rc |= _check_server_names_step_program_where_listed(root)
     return rc
 
 
@@ -1723,8 +1728,8 @@ def _check_card_children_carry_styles(root: Path) -> int:
 #
 # `datalib-pipeline` is a general supervisor: everything it does with a step
 # comes from the step's config entry, never from which program the step
-# runs (docs/dev/plans/completed/dag_and_step_decoupling.md). A
-# `datalib-step` in its code is how a special case for one program starts. Its tests may name
+# runs (datalib/backend/dag/README.md). A `datalib-step` in its
+# code is how a special case for one program starts. Its tests may name
 # it; a `#[cfg(test)] mod` block is cut out, its lines kept as blank so a
 # hit's line number is the file's.
 _RUNNER_SRC = "datalib/backend/dag/src/"
@@ -1770,6 +1775,64 @@ def _check_runner_names_no_step_program(root: Path) -> int:
         + "\n\n  The runner treats every step program alike. Give the behaviour a\n"
         "  config key, a verb, an event or an environment variable any program\n"
         "  may use, and leave the program's name out. See lint_repo.py check 23.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 24: the server names datalib's own step program where listed --
+#
+# `datalib-http` should give `datalib-step` nothing a package's program
+# could not get the same way (docs/dev/plans/decoupling_followups.md).
+# It still does in a few places, each an open item of that plan; this is
+# the list of them, and it only shrinks: a file that no longer names the
+# program has to leave it, and a file not on it may not start.
+_SERVER_SRC = "datalib/backend/http/src/"
+_SERVER_STEP_PROGRAM_FILES = {
+    # Item 2: "Check connection" runs `datalib-step probe`, found by name.
+    "datalib/backend/http/src/binaries.rs": "item 2",
+    "datalib/backend/http/src/probe.rs": "item 2",
+    # Item 3: the app writes datalib-step's steps; the starter config is
+    # one of them.
+    "datalib/backend/http/src/starter.rs": "item 3",
+    "datalib/backend/http/src/step_program.rs": "items 2 and 3",
+}
+
+
+def server_step_program_problems(mentions: dict[str, list[int]]) -> list[str]:
+    """What check 24 refuses, given the lines each server file names
+    `datalib-step` on: a file off the list that names it, and a listed
+    file that no longer does."""
+    problems = [
+        f"  {rel}:{line}: names {_STEP_PROGRAM}, and is not in _SERVER_STEP_PROGRAM_FILES"
+        for rel, lines in sorted(mentions.items())
+        if rel not in _SERVER_STEP_PROGRAM_FILES
+        for line in lines
+    ]
+    problems += [
+        f"  {rel}: no longer names {_STEP_PROGRAM} ({why} is done there); take it off "
+        "_SERVER_STEP_PROGRAM_FILES"
+        for rel, why in sorted(_SERVER_STEP_PROGRAM_FILES.items())
+        if not mentions.get(rel)
+    ]
+    return problems
+
+
+def _check_server_names_step_program_where_listed(root: Path) -> int:
+    mentions: dict[str, list[int]] = {}
+    for rel in _git_ls_files(root, f"{_SERVER_SRC}*.rs"):
+        path = root / rel
+        if path.is_file():
+            mentions[rel] = step_program_mentions(path.read_text(encoding="utf-8"))
+    problems = server_step_program_problems(mentions)
+    if not problems:
+        print(f"OK: {_SERVER_SRC} names {_STEP_PROGRAM} only where check 24 lists.")
+        return 0
+    print(
+        f"ERROR: the server's code names {_STEP_PROGRAM} where check 24 does not list:\n\n"
+        + "\n".join(problems)
+        + "\n\n  The server should give datalib-step nothing a package's program could\n"
+        "  not get the same way. See lint_repo.py check 24.",
         file=sys.stderr,
     )
     return 1

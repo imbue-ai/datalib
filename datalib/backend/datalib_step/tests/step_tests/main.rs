@@ -2,7 +2,7 @@
 //! behaviour.
 
 mod calendar_split;
-mod check_params;
+mod check_verb;
 mod clear_before_ingest;
 mod compact;
 mod documents_from_the_store;

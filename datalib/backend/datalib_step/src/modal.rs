@@ -154,6 +154,16 @@ pub(crate) struct Options {
     /// One Sandbox's longest life: the image's pull, the model's load,
     /// and a slice of long prompts, with room.
     pub(crate) timeout_ms: u64,
+    /// The first wait before a call is made again; each is twice the last,
+    /// up to half a minute.
+    pub(crate) pause_ms: u64,
+    /// How much waiting a running Sandbox that does not answer gets. Each
+    /// call also spends the SDK's own ten seconds of retries, so it comes to
+    /// about two minutes.
+    pub(crate) reach_ms: u64,
+    /// How much waiting a network that is gone gets before a Sandbox that
+    /// could not be made is a failure.
+    pub(crate) offline_ms: u64,
 }
 
 impl Options {
@@ -183,6 +193,9 @@ impl Options {
                 var(SANDBOXES_ENV).or_else(|| var(datalib_env::DATALIB_STEP_MODAL_MAX_SANDBOXES)),
             ),
             timeout_ms: 15 * 60 * 1000,
+            pause_ms: 1000,
+            reach_ms: 60 * 1000,
+            offline_ms: 10 * 60 * 1000,
         }
     }
 }
@@ -271,8 +284,8 @@ pub(crate) enum Reply {
     },
     /// A slice that failed twice: its prompts are still owed.
     Failed { failed: Vec<String>, error: String },
-    /// One Sandbox ended: how long it lived, from its creation to its
-    /// end, and whether its slice came back. One per attempt.
+    /// One Sandbox ended: how long it lived, from when Modal placed it to
+    /// its end, and whether its slice came back. One per attempt.
     Sandbox { sandbox_ms: u64, ok: bool },
     /// Nothing could start.
     Fatal { fatal: String, sign_in: bool },

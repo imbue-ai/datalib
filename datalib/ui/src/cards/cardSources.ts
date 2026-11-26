@@ -95,9 +95,20 @@ export type PersonViewOpts = {
   seenIn?: string | null;
 };
 
-/// The source of a person card, for a chip that opens one.
-export function personSource(handle: string, opts: PersonViewOpts = {}): string {
-  return `personView(${JSON.stringify(handle)}, ${JSON.stringify(opts)})`;
+/// The source of a person's page, for a chip that opens one. `subject` is a
+/// handle, or one of the two below.
+export function personSource(subject: string, opts: PersonViewOpts = {}): string {
+  return `personView(${JSON.stringify(subject)}, ${JSON.stringify(opts)})`;
+}
+
+/// One of your contacts, as `personSource`'s subject.
+export function contactSubject(contactId: string): string {
+  return `contact:${contactId}`;
+}
+
+/// Whoever a contact's page is about, for a card with no handle.
+export function pageSubject(page: string): string {
+  return `page:${page}`;
 }
 
 /// The source of the contacts app's table.

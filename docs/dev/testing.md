@@ -486,7 +486,11 @@ Three pieces make that possible, and each is small:
   a test can take the network away mid-run
   (`datalib_step`'s `step_tests/offline.rs`). A Rust test sets the same
   four on its scope (`Playback::delay`, `hold`, `hold_sealed`,
-  `offline`).
+  `offline`). None of them reaches a step through the runner unless
+  `DATALIB_CHILD_ENV` names it: the runner hands a step only the
+  variables it lists, and it lists no switch only a test sets
+  (`datalib/backend/env/src/lib.rs`). `playwright.config.ts` and
+  `run_sync_pipeline.py` name theirs.
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.
@@ -498,7 +502,8 @@ Three pieces make that possible, and each is small:
   index group and the applet, no data.
 
 To watch the same thing by hand, against any root, run the runner
-directly with the two variables set and a short cadence in the config:
+directly with the two variables set and named in `DATALIB_CHILD_ENV`,
+and a short cadence in the config:
 
 ```bash
 bazelisk build //datalib/backend:bin //datalib/backend/datalib_step:datalib_step
@@ -506,6 +511,7 @@ step=bazel-bin/datalib/backend/datalib_step/datalib_step
 echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
 $step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
+DATALIB_CHILD_ENV=DATALIB_HTTP_PLAYBACK,DATALIB_HTTP_PLAYBACK_DELAY_MS \
   bazel-bin/datalib/backend/bin/datalib-pipeline sync <root>
 ```
 
@@ -833,9 +839,7 @@ after a layout change. A fixture is too small and too fresh to show any
 of these. The run store of a real root, after a large sync, shows all of
 them. So after changing a download, a render, an index or a stored
 layout, sync a real root and read its logs as well as running the
-suite. Write what you find as a dated audit under `audits/`
-([`2026-10-29_live_sync_logs.md`](audits/2026-10-29_live_sync_logs.md)
-is one). Write counts and timings only, never what the records say
+suite. Write what you find as a dated audit under `audits/`. Write counts and timings only, never what the records say
 (AGENTS.md §"Real data stays out of the repo").
 
 Everything is plain SQLite. Open it with `sqlite3 -readonly`, the

@@ -149,13 +149,14 @@ datalib-pipeline check <data_root>                 # validate, run nothing
 Every verb takes the data root or its `config.toml`. `check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. It checks what the runner reads, not a step's params:
-the app's config editor (`PUT /api/config`, `POST /api/config/check`)
-has `datalib-step check-params` plan every `datalib-step` step's
-params, so there a misspelled or misplaced option is reported at its
-line before a sync rather than when the step runs. Exit 0 when every
-entry loads, 1 if the file is not a config at all, 2 if some entries
-were dropped. A root a newer Datalib wrote is not refused here: each
+one per typo. It also asks each step whose program takes `--check`
+about its params, `datalib-step`'s included, as the app's config editor
+does on a save (`PUT /api/config`, `POST /api/config/check`), so a
+misspelled or misplaced option is reported at its line before a sync
+rather than when the step runs, and an option that no longer does
+anything is a warning there. Exit 0 when every entry loads, 1 if the
+file is not a config at all, 2 if some entries were dropped or a step
+would refuse its params. A root a newer Datalib wrote is not refused here: each
 step refuses it when the runner starts, and is turned off until a build
 that can read it runs.
 

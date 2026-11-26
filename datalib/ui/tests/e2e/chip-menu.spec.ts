@@ -7,7 +7,7 @@ import { EVERY_ROW, openRowByUuid, inDocFrame, stubClipboard } from "./grid-help
 // name or the identifier and open a search for everything with that
 // person; a double-click opens the person's card, led by this
 // document's source. The fixture has no contacts app, so
-// the chips are unresolved and the menu has no link entry — the copies,
+// the chips are unresolved and the menu offers to add nobody — the copies,
 // the search and the card are what every root has.
 
 type Row = { uuid: string; kind: string; message_index: number | null; author: string };
@@ -60,7 +60,7 @@ test("right-click on a chip opens its menu, and the copies carry name and identi
   const drawn = (await menu.boundingBox())!;
   expect(Math.abs(drawn.y - (at.y + at.height / 2)), "menu top vs the click").toBeLessThan(40);
   await expect(menu.locator(".chip-menu-item")).toContainText([
-    /^Open contact$/,
+    /^Open$/,
     /^Copy /,
     /^Everything with /,
   ]);
@@ -106,7 +106,7 @@ test("the menu's first entry opens the person's card", async ({ page, request })
   const chip = await openADocumentWithAChip(page, request);
   await chip.click({ button: "right" });
   const first = page.locator(".chip-menu .chip-menu-item").first();
-  await expect(first).toHaveText("Open contact");
+  await expect(first).toHaveText("Open");
   await first.click();
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
@@ -163,9 +163,10 @@ test("a double-click opens the person's card, led by the document's source", asy
 
   const card = page.locator(".person");
   await expect(card.locator(".person-name")).not.toHaveText("", { timeout: 10_000 });
-  await expect(card.locator(".person-about")).toContainText(/not linked to a contact/i);
-  // The heading is the person's chip, grey: no contacts app, so not linked.
+  // The heading is the person's chip, grey: no contacts app to be in, and
+  // none to be added to.
   await expect(card.locator(".person-name a.chip")).toHaveClass(/handle-unresolved/);
+  await expect(card.getByRole("button", { name: "Add to contacts" })).toHaveCount(0);
   // Slack's record of its own author, from the document's source.
   const first = card.locator(".person-section").first();
   await expect(first).toHaveClass(/person-seen-here/);

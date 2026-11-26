@@ -29,6 +29,7 @@ describe("the card catalog", () => {
   it("lists the developer tools apart from the views, each group by title", () => {
     const { views, devTools } = byAudience(galleryBuiltins());
     expect(views.map((e) => e.title)).toEqual([
+      "Contacts",
       "Embedding map",
       "Library",
       "Manage data sources",
@@ -36,7 +37,6 @@ describe("the card catalog", () => {
       "Perseus corpus",
       "Search",
       "Time series",
-      "Your contacts",
     ]);
     // Case-blind: config.toml sits among the capitals.
     expect(devTools.map((e) => e.title)).toEqual([

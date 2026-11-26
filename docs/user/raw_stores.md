@@ -1892,7 +1892,13 @@ later evicts keeps its row.
 | `blake3` | the hash of its bytes, the key of its row in `blobs.sqlite`'s `cas_objects` |
 | `size_bytes` | its size in bytes |
 
-## CardDAV, Fastmail and `.vcf` contacts (`contacts`)
+## CardDAV, Fastmail, Google and `.vcf` contacts (`contacts`)
+
+The CardDAV, Fastmail and `.vcf` methods keep vCards, in `contacts`
+and the tables derived from it, as below. **Google keeps its own
+tables**: `google_people`, `google_contact_groups` and `google_photos`,
+holding the People API's JSON (§ "Google Contacts" at the end of this
+section). Both kinds share `accounts` and `addressbooks`.
 
 Each card is kept as the vCard text the server or the file gave,
 unchanged: `payload` is `{"vcard": "<BEGIN:VCARD … END:VCARD>"}`, read
@@ -2023,10 +2029,11 @@ row per host; a source whose server changed host keeps the old row.
 
 | column | what it holds |
 |---|---|
-| `id` | the server's host (`carddav.fastmail.com`), or `local` for files |
+| `id` | the server's host (`carddav.fastmail.com`), `local` for files, or `google` |
 | `server_url` | the configured server URL without a trailing `/`; `file://<path>` for files |
-| `principal_href` | the full URL of the account's CardDAV principal that discovery found; NULL for files |
-| `addressbook_home_set` | the full URL under which the server lists the address books; NULL for files |
+| `principal_href` | the full URL of the account's CardDAV principal that discovery found; for Google, the account's own resource name, `people/<id>`; NULL for files |
+| `addressbook_home_set` | the full URL under which the server lists the address books; NULL for files and for Google |
+| `login` | for Google, the signed-in account's address; NULL for CardDAV and files |
 
 ### `addressbooks`
 
@@ -2104,6 +2111,84 @@ listing to its end.
 |---|---|
 | `collection` | the `addressbooks.id` |
 | `href` | the card's URL path |
+
+### Google Contacts
+
+A Google source's one address book is `google!people/<id>/connections`,
+named "Contacts". A contact is kept as the People API's `Person`
+resource, verbatim but for its `memberships`, which are sorted; its
+`etag`s, each source's `updateTime` and each photo's `url` are in the
+sidecar's `volatile_payload`. A contact's labels are its
+`memberships`: read them with
+`json_extract(value, '$.contactGroupMembership.contactGroupResourceName')`
+over `json_each(payload, '$.memberships')`. The account itself is not a
+contact: "me" is `accounts.login` and `accounts.principal_href`, never a
+`google_people` row.
+
+Every contact with the names of its labels:
+
+```sql
+SELECT p.display_name, g.name AS label
+  FROM google_people p,
+       json_each(p.payload, '$.memberships') m
+  JOIN google_contact_groups g
+    ON g.addressbook_id = p.addressbook_id
+   AND g.resource_name = json_extract(m.value, '$.contactGroupMembership.contactGroupResourceName')
+ ORDER BY label, p.display_name;
+```
+
+**Is a Google copy complete?** It keeps no owed-record bookkeeping for
+contacts: each run lists what changed since its sync token, or everyone
+when it has none. A `listing:contacts` problem means the last listing
+was cut off and the token did not move; a `config:labels:` problem is a
+label name that matches no label. A photo still owed is a row with no
+bytes:
+
+```sql
+SELECT p.display_name, ph.photo_source
+  FROM google_photos ph JOIN google_people p ON p.id = ph.person_id
+ WHERE ph.blake3 IS NULL;
+```
+
+### `google_people`
+
+One row per contact in the account's "Contacts" list.
+
+| column | what it holds |
+|---|---|
+| `id` | `<address book id>#people/<id>` |
+| `payload` | the People API's `Person`, with its `memberships` sorted |
+| `addressbook_id` | the `addressbooks.id` |
+| `resource_name` | Google's resource name, `people/<id>` |
+| `display_name` | the `displayName` of the contact's primary name, where it has one |
+
+### `google_contact_groups`
+
+One row per label, and per one of Google's own groups (`myContacts`,
+`starred`), which are always kept. Who is in one is each contact's
+`memberships`.
+
+| column | what it holds |
+|---|---|
+| `id` | `<address book id>#contactGroups/<id>` |
+| `payload` | the People API's `ContactGroup` |
+| `addressbook_id` | the `addressbooks.id` |
+| `resource_name` | Google's resource name, `contactGroups/<id>` |
+| `name` | the label's name as Google Contacts shows it |
+
+### `google_photos`
+
+One row per contact that has a photo of its own: the one photo Google
+lists first for it. The letters Google draws for a contact with no
+photo are not kept. The bytes are in `blobs.sqlite`, under
+`blake3`; the link they came from is the sidecar's `held_version`.
+
+| column | what it holds |
+|---|---|
+| `id` | `<contact's id>#<source>`, the source being `PROFILE/<id>` or `CONTACT/<id>` |
+| `person_id` | the `google_people.id` |
+| `photo_source` | where Google has the photo from: `PROFILE/<id>` or `CONTACT/<id>` |
+| `blake3` | the hash of its bytes in `blobs.sqlite`; NULL until fetched |
 
 ## ChatGPT (`chatgpt`)
 

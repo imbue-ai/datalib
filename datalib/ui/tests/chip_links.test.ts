@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   contactFromUri,
+  contactPageFromUri,
   entityFromUri,
   handleFromUri,
   uriFromHandle,
+  writeContactPage,
 } from "../src/cards/chipLinks";
 import { renderDocument } from "../src/cards/renderDocument";
 
@@ -138,6 +140,20 @@ describe("entityFromUri", () => {
     expect(entityFromUri("datalib:group/")).toBeNull();
     expect(entityFromUri("datalib:handle/tel/+15550123456")).toBeNull();
     expect(entityFromUri("mailto:riker@enterprise.org")).toBeNull();
+  });
+});
+
+/// The URI `datalib_contact_schema::contact_page_uri` writes for a card with
+/// no handle, which a document's heading carries.
+describe("a contact's page", () => {
+  it("is read from its URI and back, and is marked as a chip", () => {
+    const page = "6c8f2f43-1d3c-4a5e-9b5e-0d3f6a1b2c3d";
+    expect(contactPageFromUri(writeContactPage(page))).toBe(page);
+    expect(contactPageFromUri("datalib:contact_page/")).toBeNull();
+    expect(contactPageFromUri("datalib:contact_page/../x")).toBeNull();
+    expect(handleFromUri(writeContactPage(page))).toBeNull();
+    const { html } = renderDocument(`# [Kalita](${writeContactPage(page)})`);
+    expect(html).toContain(`data-contact-page="${page}"`);
   });
 });
 

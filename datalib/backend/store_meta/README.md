@@ -72,7 +72,7 @@ in, and one reader-open that checks it:
 | time-series store, its index | `datalib_etl_time_series::store::shape` | `datalib_etl_time_series::store::open_reader` |
 | occurrences | `occurrences::store::shape` | (read only by its own step) |
 | contacts | `doltlite_raw::curated_shape` | `ContactsReader::open` |
-| a step's `problems.sqlite` | `StepFile::shape` | `datalib_step_problems` reads `shared_schema_version` |
+| a step's `problems.sqlite` | `StepFile::shape` | `datalib_step_problems` reads `shared_schema_version`, of every store that holds `problems`; a render store without `entity_items` is in another shape too |
 | run store (`system/runs/runs.sqlite`) | `datalib_runs::store::shape` | `datalib_runs::store::open_reader` |
 
 Once a store passes the check, every table and column this build reads
