@@ -170,10 +170,11 @@ takes `config`, `diagnostics`, `written` and `config_order`. The two
 options it was chosen over were the runner skipping `[[applets]]` while
 the server parses it, and applets moving to a file of their own.
 
-The two helpers the gateway and the probe use to hand a program its
-params in a file, `write_params_file` and `PARAMS_FILE_FLAG`, have
-already moved out of the runner's crate to
-`datalib/backend/http/src/params_file.rs`. `applet_type`
+An applet now gets its params in `DATALIB_DAG_PARAMS`, as a step does,
+rather than in a file named by `--params-file`. The helper that writes
+that file, which only the probe still uses, has moved out of the runner's
+crate to `datalib/backend/http/src/params_file.rs`, and goes once the
+probe takes its params the same way (items 2 and 3). `applet_type`
 (`datalib/backend/dag/src/written.rs`), which knows that
 `datalib-applet <type>` names an applet's type, moves with the rest of
 the config file's lenient reading.
