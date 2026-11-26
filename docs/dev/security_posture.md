@@ -421,7 +421,7 @@ it came from, so it gets its own section.
 ### What guards it
 
 - **Off by default, per source, in the config the person writes.** Nothing
-  in the wizard or the app turns it on; `check-params` refuses a value
+  in the wizard or the app turns it on; `datalib-pipeline check` refuses a value
   that is not a whole number, so a typo fails the check rather than
   sending everything (a misspelled name is refused too).
 - **The driver is handed a named environment**

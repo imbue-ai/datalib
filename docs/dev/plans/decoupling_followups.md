@@ -41,6 +41,8 @@ no longer do anything among them. The unattended rewrite `check_verb.rs`
 adds the verb to an existing config's `datalib-step` entry. One step
 is one process; up to eight are asked at once. Cross-step rules stay
 with the step that can see the problem, as a warning when it runs.
+`datalib-step check-params`, which did the same for a whole file, is
+gone; `datalib-pipeline check` is the one way to ask.
 
 ### 2. Checking a connection
 

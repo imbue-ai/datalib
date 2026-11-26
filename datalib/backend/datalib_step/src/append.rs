@@ -479,13 +479,9 @@ pub fn new_problems(path: &Path, before: &str, after: &str, group: &str) -> Vec<
     out
 }
 
-fn params_problems(
-    cfg: &DagConfig,
-    data_root: &Path,
-    group: &str,
-) -> Vec<crate::check_params::Problem> {
+fn params_problems(cfg: &DagConfig, data_root: &Path, group: &str) -> Vec<crate::check::Problem> {
     let prefix = format!("{group}/");
-    crate::check_params::problems(cfg, data_root)
+    crate::check::problems(cfg, data_root)
         .into_iter()
         .filter(|p| p.step.starts_with(&prefix))
         .collect()
@@ -567,8 +563,7 @@ pub fn run_cli(word: &str, path: &Path, method: Option<&str>, id: Option<&str>) 
     }
     status_line!(
         "Next: set its params (`datalib-step help {t} {method}`), sign it in if it needs \
-         it (`datalib-step help {t}`), then `datalib-pipeline check {shown}`, \
-         `datalib-step check-params {shown}` and \
+         it (`datalib-step help {t}`), then `datalib-pipeline check {shown}` and \
          `datalib-pipeline sync {shown} {group}/ingest --by <you>`."
     );
     0

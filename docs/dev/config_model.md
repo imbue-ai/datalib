@@ -94,7 +94,7 @@ The file then declares those two locks in `[[locks]]` entries
 step that holds an undeclared lock is dropped, and lists the verbs
 `datalib-step` takes in a `[[programs]]` entry. `datalib-step`'s own
 code for all of this is `datalib_step/src/step_entry.rs`, which the
-examples, `examples --append` and `check-params` share.
+examples and `examples --append` share.
 
 `[env]` is a table of variables handed to every step, below each
 step's own `env`. `datalib-step` reads three knobs from it:
@@ -183,7 +183,7 @@ package's programs by its path under the data root, in its `command`;
   many chunks (prompts the inference cache has no vector for) sends all
   of them to the person's own Modal account to be embedded on rented
   GPUs, and a run that owes fewer embeds them here; `0` sends every run.
-  `check-params` refuses anything else. What leaves and what guards it:
+  `datalib-pipeline check` refuses anything else. What leaves and what guards it:
   `docs/dev/security_posture.md` § "What leaves the machine for Modal";
   how the step does it: `docs/dev/plans/embed_on_modal.md`. What every
   such step shares is in `[env]`: `DATALIB_STEP_MODAL_MAX_SANDBOXES`,
@@ -340,9 +340,7 @@ program takes the verb, `datalib-step`'s included
 params is an ordinary `rejected` diagnostic at the misspelled key's
 line: the save is refused and the check exits 2. A warning it answers
 with, such as one of the keys below that no longer do anything, is a
-`warning` there. `datalib-step check-params <config>` asks the same of
-every `datalib-step` step of a file at once, and prints one JSON line
-per step it would refuse.
+`warning` there.
 
 ## `Reach`: origin or local
 
