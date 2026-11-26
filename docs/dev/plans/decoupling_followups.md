@@ -6,7 +6,7 @@ runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
 own tool. Items 2 and 9 are half done. Untouched: items 3 and 8 (item 8
-is decided). Of the reconciler in section 10, steps 1 and 2 are done.
+is decided). Of the reconciler in section 10, steps 1 to 3 are done.
 
 ## The end state
 
