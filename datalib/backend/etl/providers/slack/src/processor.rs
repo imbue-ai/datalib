@@ -56,7 +56,8 @@ impl DataProcessor for SlackIngest {
         &self.id
     }
 
-    /// Seals at the end of each channel.
+    /// Seals at checkpoints while the walk writes, so render can start
+    /// before the run ends (INGEST.md § "One transaction between two seals").
     fn streams_output(&self) -> bool {
         true
     }

@@ -42,7 +42,7 @@ and `src/ingest/mod.rs`:
   backup that carries their ACI.
 
 - **A snapshot is known by its bytes.** The ledger, `ingested_backups`,
-  is keyed by the blake3 of the snapshot's three files, read through
+  is keyed by the blake3 of each of the snapshot's three files, read through
   the host's fingerprint cache, so an unchanged folder costs a `stat`
   per file and decrypts nothing. A folder renamed or copied is the
   snapshot already held.
@@ -78,9 +78,13 @@ and `src/ingest/mod.rs`:
   whole: it deletes nothing, and the `phase:frames` problem describes
   the last snapshot read, which is what HEAD holds.
 - **What no page shows** (stickers, chat updates, reactions, quotes, link
-  previews, the rest of a long message) is stored and only counted: one
+  previews, the rest of a long message) is only counted: one
   `skipped:not_shown:<hash>` warning, by kind, for the last snapshot read. It is
-  one row because a real backup holds thousands.
+  one row because a real backup holds thousands. A chat item's frame is
+  stored whole, but only a plain message's attachments are decrypted, so
+  the rest of a long message and the image of a sticker, a quote or a link
+  preview are not in the store. Sticker packs, call links, notification
+  profiles and chat folders are not stored at all.
 - **A stop is honoured between snapshots**; one begun is read whole.
 
 Attachments are decrypted into the blob CAS once: one an earlier

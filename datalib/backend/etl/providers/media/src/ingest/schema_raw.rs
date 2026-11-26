@@ -153,7 +153,7 @@ pub const MEDIA_SCAN_META_DDL: &str = "CREATE TABLE IF NOT EXISTS media_scan_met
     abs_root     TEXT NOT NULL
 )";
 
-/// The tables written through the paired sidecar: when a row was last
+/// The tables written through the paired sidecar: when a row was first
 /// written is `<table>_bookkeeping.fetched_at_utc`, not a column of the
 /// row, so a scan that finds nothing changed changes no content row.
 /// For the content-keyed `media_items` that stamp is when the item was

@@ -146,7 +146,10 @@ The export is private, and its problems table should be safe to read.
 `src/ingest/shape.rs` is what a row may say: a file by `shape_rel` or
 `shape_name`, never by its path; a URL by `url_kind`, its host and first
 word; an entry by its size, never by its text. The render's rows give a
-value's JSON shape (`string(12 chars)`, `object{a,b}`).
+value's JSON shape (`string(12 chars)`, `object{a,b}`). The rows the
+shared file walk writes are the exception: a file that will not open
+is keyed `record:files:<path>`, and a walk error's `listing:files` row
+starts with the path it stopped at, both by the path under `Takeout/`.
 
 ## A feed that fails costs only itself
 
@@ -176,9 +179,13 @@ or stamped with its problem. Each kind is a `problems` row:
   line — is a `skipped:<feed>:<hash>` row (`RunProblems::skipped`). Watch-history
   entries with no link, as for a video since removed, share one row with a count.
   A feed replaces only its own rows, and only when it read its file, so
-  an unchanged file keeps last run's rows. A Maps file with no
-  `features` list is one `file:google_takeout/<feed>:<path>` row,
-  stamped with the file.
+  an unchanged file keeps last run's rows. A single-file feed's file in
+  a layout the reader does not know (a Maps file with no `features`
+  list, a watch history or Gemini page with no activity cells, a
+  subscriptions file whose header is not three columns, a file listing
+  entries none of which could be read) fails its feed: a
+  `phase:<feed>` row, nothing stored, deleted or stamped, so the next
+  run reads it again (`unknown_layout`, `require_some_read`).
 - **A file that will not read or parse** — a Chat `user_info.json`,
   `group_info.json` or `messages.json`, a Maps photo sidecar, a Voice
   record, `Bills.html` or a greeting — is a `skipped:<feed>:<hash>` row

@@ -359,7 +359,7 @@ impl RawDb {
     /// Scoped to one `org_uuid`, and that scope is load-bearing twice over.
     /// An org whose listing 403'd was never enumerated, so it must not be
     /// passed here at all. And rows with a NULL `org_uuid` are the ones
-    /// `claude_export` ingested — the two source types share this store, and
+    /// the `export` method ingested — the two methods share this store, and
     /// an API sync has no standing to say an export's conversations are
     /// gone.
     ///

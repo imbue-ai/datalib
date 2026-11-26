@@ -73,8 +73,8 @@ run ([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md
   review thread).
 
 A PR is owed when it is listed at a stamp its sidecar does not hold.
-The ones never fetched go first, fewest attempts first, then the ones
-held at an older stamp, by key. `max_prs` takes the first N of one run;
+The ones never fetched go first, then the ones held at an older stamp;
+within each, fewest attempts first, then by key. `max_prs` takes the first N of one run;
 the rest stay owed, with no row saying so. Each PR is a transaction of
 its own, sealed on the step's cadence, so a run that dies at any
 request leaves a store the next run finishes

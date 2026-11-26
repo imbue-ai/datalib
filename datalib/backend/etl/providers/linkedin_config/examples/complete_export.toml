@@ -1,6 +1,7 @@
 # LinkedIn's "Get a copy of your data" export, unzipped, with every option
-# set, and searchable. Render emits the message threads and your
-# connections as contacts. Unzip each newer export over the folder.
+# set, and searchable. Render emits the message threads, your posts and
+# comments, your skills, and your connections as contacts. Unzip each
+# newer export over the folder.
 [[groups]]
 id = "linkedin"
 name = "LinkedIn"

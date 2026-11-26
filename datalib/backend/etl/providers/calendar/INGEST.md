@@ -34,9 +34,10 @@ the event), and each invitee carries their answers to the booking
 form, which render shows as a "Booking answers" section. Render
 projects both onto the shared event (`calendar_render/src/render/calendly.rs`).
 
-`calendars.sync_token` is each calendar's `sync-collection` token. It
-is per calendar, so widening the `calendars` filter needs no scope
-record: a calendar added to the list has no token and is listed whole.
+`calendars.sync_token` is each calendar's sync token: CalDAV's
+`sync-collection` token, or Google's `nextSyncToken`. It is per
+calendar, so widening the `calendars` filter needs no scope record: a
+calendar added to the list has no token and is listed whole.
 
 What a CalDAV listing named is `dav_resources`, one row per object with
 the etag it was listed at; the etag the stored object satisfies is
@@ -91,7 +92,9 @@ Which credential to use, and how to make it read-only, is in
   every name as empty and every event as missing.
 - The home listing holds the calendars plus `Inbox` and `Outbox`, whose
   `resourcetype` is `schedule-inbox` / `schedule-outbox`, not
-  `calendar`. Only `calendar` collections are mirrored.
+  `calendar`. Only `calendar` collections that hold events are
+  mirrored: one whose `supported-calendar-component-set` names
+  components but not `VEVENT` (a task list) is skipped.
 - `sync-collection` with an empty token returned every object of a
   2,000-event calendar in one reply, with no 507 truncation. Asked for
   fewer with `<limit><nresults>2</nresults></limit>`, it answers 2

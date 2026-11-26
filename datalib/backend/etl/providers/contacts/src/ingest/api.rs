@@ -155,8 +155,9 @@ pub fn split_vcards(body: &str) -> Vec<String> {
 }
 
 /// Pull the `UID` line out of a vCard. RFC 6350 §6.7.6 mandates it,
-/// but we tolerate its absence and return `None` so the caller can
-/// synthesize a stable id from `(addressbook_id, href)` instead.
+/// but we tolerate its absence and return `None`: a server's card with
+/// none is not stored, and a `.vcf` file's card gets an id made from its
+/// name (`schema_raw::synthesized_name_uid`).
 pub fn vcard_uid(vcard: &str) -> Option<String> {
     extract_property(vcard, "UID")
 }

@@ -119,7 +119,7 @@ impl<'a> Task<'a> {
 
 /// A project's tasks. The sync's row wins over the completed list's: it
 /// is the newer word, and it says whether a completed task was opened
-/// again. A task either calls deleted is gone.
+/// again. A task the winning row calls deleted is gone.
 fn tasks_of<'a>(store: &'a Store, project: &str, inputs: &Inputs) -> Vec<Task<'a>> {
     let mut out = Vec::new();
     let ids = store

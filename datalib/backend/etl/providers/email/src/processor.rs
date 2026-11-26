@@ -103,7 +103,7 @@ pub struct EmailIngest {
     /// no requests and ignores it.
     latchkey: LatchkeySettings,
     /// Full mailbox label paths to limit extraction to (empty = every
-    /// mailbox). Applies to both JMAP and mbox modes.
+    /// mailbox). Every mode.
     only_extract_labels: Vec<String>,
     /// Keep the rest of the thread of a message `only_extract_labels`
     /// keeps. Every mode.
