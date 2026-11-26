@@ -1,7 +1,6 @@
-//! The UI's copies of the closed vocabularies this server serializes, and
-//! of the one list of names the UI writes into a config
-//! (`datalib/ui/src/generated/enums.ts`), generated from the Rust so a
-//! variant or name added there reaches the TypeScript without a hand edit.
+//! The UI's copies of the closed vocabularies this server serializes
+//! (`datalib/ui/src/generated/enums.ts`), generated from the enums so a
+//! variant added in Rust reaches the TypeScript union without a hand edit.
 
 #[cfg(test)]
 mod tests {
@@ -65,23 +64,7 @@ mod tests {
             out.push_str(&block);
             out.push('\n');
         }
-        out.push_str(&list(
-            "DATALIB_STEP_PASS_ENV",
-            "DATALIB_STEP_PASS_ENV in datalib/backend/env/src/lib.rs",
-            datalib_env::DATALIB_STEP_PASS_ENV,
-        ));
         out
-    }
-
-    fn list(name: &str, home: &str, words: &[&str]) -> String {
-        let quoted: Vec<String> = words
-            .iter()
-            .map(|w| serde_json::to_string(w).expect("a string serializes"))
-            .collect();
-        format!(
-            "/** `{home}`. */\nexport const {name} = [\n  {},\n] as const;\n",
-            quoted.join(",\n  ")
-        )
     }
 
     /// Regenerate with `bazel run //datalib/backend/http:ui_enums.update`.

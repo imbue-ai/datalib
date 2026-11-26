@@ -81,7 +81,8 @@ pub const DATALIB_SQL_CENSUS: &str = "DATALIB_SQL_CENSUS";
 
 /// How many threads the embedder computes on where its caller leaves that
 /// to llama.cpp, which otherwise takes four on any machine. Tests set it
-/// (`.bazelrc`), since several of them share CI's cores.
+/// (`.bazelrc`), since several of them share CI's cores, and name it in
+/// [`DATALIB_CHILD_ENV`] for it to reach a step.
 pub const DATALIB_EMBED_THREADS: &str = "DATALIB_EMBED_THREADS";
 
 /// A child process, for what of this process's environment it is handed
@@ -165,17 +166,6 @@ const LATCHKEY_ALSO: &[&str] = &[
     "XAUTHORITY",
     "PLAYWRIGHT_BROWSERS_PATH",
     "DATALIB_CURL_ROUTER",
-];
-
-/// The variables `datalib-step` reads from its environment beyond what
-/// every step is handed: where the fingerprint cache is, the URL prefix a
-/// Minds workspace routes some requests through, and how many threads
-/// `embed` takes. Its `[[programs]]` entry names them in `pass_env`; the
-/// runner knows them only from there.
-pub const DATALIB_STEP_PASS_ENV: &[&str] = &[
-    "DATALIB_CACHE_DIR",
-    "MINDS_VIA_DESKTOP_URL_PREFIX",
-    DATALIB_EMBED_THREADS,
 ];
 
 /// What an applet reads beyond every child's: how many threads its
@@ -299,6 +289,7 @@ mod tests {
             "DATALIB_HTTP_PLAYBACK_DELAY_MS",
             "DATALIB_SEARCH_NOW",
             "DATALIB_SEARCH_NO_WARM",
+            "DATALIB_CACHE_DIR",
             DATALIB_SQL_CENSUS,
         ];
         for name in switches {
@@ -309,16 +300,11 @@ mod tests {
         }
     }
 
-    /// Tests cap the embedder's threads; dropped on the way down, a step's
-    /// `embed` and the search applet would each spin four threads again.
-    /// A step gets it from `datalib-step`'s `pass_env`, and only from there.
+    /// Tests cap the embedder's threads; dropped on the way down, the
+    /// search applet would spin four threads again. A step gets the cap
+    /// only where a test names it in `DATALIB_CHILD_ENV`.
     #[test]
-    fn the_embedder_thread_cap_reaches_steps_and_applets() {
-        let pass_env: Vec<String> = DATALIB_STEP_PASS_ENV
-            .iter()
-            .map(|n| n.to_string())
-            .collect();
-        assert!(hands_down(DATALIB_EMBED_THREADS, Child::Step, &pass_env));
+    fn the_embedder_thread_cap_reaches_applets_and_steps_only_when_named() {
         assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Step, &[]));
         assert!(hands_down(DATALIB_EMBED_THREADS, Child::Applet, &[]));
         assert!(!hands_down(DATALIB_EMBED_THREADS, Child::Latchkey, &[]));

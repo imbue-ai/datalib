@@ -56,11 +56,8 @@ since its last success, covers `id`, `command`, `inputs`, `params`,
 Two top-level tables concern every step:
 
 - `[env]`: variables handed to every step, below each step's own `env`.
-- `[[programs]]`: what a program's steps get beyond their own entry,
-  keyed by the program, the first word of a step's `command`, compared
-  as written. `verbs` are the verbs it takes (§ "Verbs"); `pass_env`
-  names the variables of the runner's own environment its steps are
-  handed (§ "What your command receives").
+- `[[programs]]`: the verbs a program takes (§ "Verbs"). A step's
+  program is the first word of its `command`, compared as written.
 
 ```toml
 [[programs]]
@@ -143,30 +140,18 @@ a folder inside the library, and your temp files hold what the library
 holds. Rust's and Node's temp-file calls follow it; macOS's `mktemp`
 does not, so in a shell script write `mktemp "$TMPDIR/x.XXXXXX"`.
 
-**Nothing else of the runner's own environment reaches a step but
-what is named** (`datalib_env::inherit_only`):
-
-1. a short list every step gets: what any program needs to run
-   (`HOME`, `TMPDIR`, the locale and time zone, proxy and certificate
-   settings), latchkey's `LATCHKEY_*` variables and what latchkey
-   reads, since any step may run `latchkey curl`, and how this build
-   logs and finds its runtime;
-2. the names its program's `[[programs]]` entry lists in `pass_env`;
-3. a variable the step's `params` name under a key ending in
-   `_env_var`, at any depth (`key_env_var = "WHATSAPP_KEY"`);
-4. every name in `DATALIB_CHILD_ENV` (comma-separated) where the runner
-   or the server was started.
-
-Anything else a person exported, another tool's token or the server's
-own API token, never reaches a step. A value a step needs goes in its
-`env`; a variable a program reads from wherever it runs goes in its
-`pass_env`:
-
-```toml
-[[programs]]
-command = "fetch-weather"
-pass_env = ["WEATHER_API_HOST"]
-```
+**Nothing else of the runner's own environment reaches a step but a
+short list** (`datalib_env::inherit_only`): what any program needs to
+run (`HOME`, `TMPDIR`, the locale and time zone, proxy and certificate
+settings), latchkey's `LATCHKEY_*` variables and what latchkey reads,
+and how this build logs and finds its runtime. A variable the step's
+`params` name under a key ending in `_env_var`, at any depth
+(`key_env_var = "WHATSAPP_KEY"`), is handed too, and so is every name
+in `DATALIB_CHILD_ENV` (comma-separated) where the runner or the server
+was started. Anything else a person exported,
+another tool's token or the server's own API token, never reaches a
+step: a value a step needs goes in its `env`, or its name in
+`DATALIB_CHILD_ENV`.
 
 ## The rules you must follow
 
@@ -604,7 +589,6 @@ so a program that ignores its arguments is never sent one:
 [[programs]]
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect", "check"]
-pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 ```
 
 An invocation with a verb gets the same environment and params as a
@@ -880,10 +864,7 @@ envelope, the method table block, …), the render step only the render
 knobs (nothing for most providers; perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`). It
 honors `DATALIB_DAG_NOW` and the five verbs, which Datalib's configs
-declare for it in `[[programs]]`, beside the variables it reads where
-it runs (`pass_env`: where the fingerprint cache is, a Minds
-workspace's URL prefix, the embedder's thread cap;
-`datalib_env::DATALIB_STEP_PASS_ENV`); it stops at its next consistent point
+declare for it in `[[programs]]`; it stops at its next consistent point
 on SIGINT and commits there, and emits versions where it has them (the
 index reports its generation; the versions are in the [runner's
 README](../../datalib/backend/dag/README.md#versions-reported-by-the-step)). It reads three knobs a

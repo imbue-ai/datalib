@@ -72,7 +72,7 @@ async fn enterprise(root: &Path) -> (PathBuf, PathBuf) {
     std::fs::write(
         root.join("config.toml"),
         "[[programs]]\ncommand = \"datalib-step\"\n\
-         verbs = [\"reset\", \"prepare\", \"compact\", \"collect\", \"check\"]\npass_env = [\"DATALIB_CACHE_DIR\", \"MINDS_VIA_DESKTOP_URL_PREFIX\", \"DATALIB_EMBED_THREADS\"]\n\n\
+         verbs = [\"reset\", \"prepare\", \"compact\", \"collect\", \"check\"]\n\n\
          [[groups]]\nid = \"enterprise\"\ntype = \"slack\"\n\n\
          [[steps]]\nid = \"enterprise/ingest\"\ncommand = \"datalib-step run ingest slack\"\n\n\
          [[steps]]\nid = \"enterprise/render_markdown\"\n\

@@ -348,6 +348,8 @@ function logTail(file: string, lines = 30): string {
 // sets. The server and the runner hand a child only what they list, and
 // these they list only when `DATALIB_CHILD_ENV` names them.
 const TEST_SWITCHES = [
+  "DATALIB_CACHE_DIR",
+  "DATALIB_EMBED_THREADS",
   "DATALIB_SEARCH_NOW",
   "DATALIB_SEARCH_NO_WARM",
   "DATALIB_HTTP_PLAYBACK",

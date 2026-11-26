@@ -15,7 +15,6 @@ complete config with every line commented.
 [[programs]]
 command = "datalib-step"
 verbs = ["reset", "prepare", "compact", "collect", "check"]
-pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 [[locks]]
 name = "index"
@@ -93,8 +92,7 @@ since the runner infers nothing from the program's name:
 The file then declares those two locks in `[[locks]]` entries
 (`embedder` with 1 slot, `index` with 2), since a
 step that holds an undeclared lock is dropped, and lists the verbs
-`datalib-step` takes and the variables it reads where it runs
-(`pass_env`) in a `[[programs]]` entry. `datalib-step`'s own
+`datalib-step` takes in a `[[programs]]` entry. `datalib-step`'s own
 code for all of this is `datalib_step/src/step_entry.rs`, which the
 examples, `examples --append` and `check-params` share.
 
@@ -385,9 +383,8 @@ it next reads the file, and `datalib-migrate-config` from a terminal
 (§"The retired shapes").
 
 Warnings: a group with nothing filed under it; an applet filed under an
-undeclared group; a verb a `[[programs]]` entry lists that the
-runner does not know, and a `pass_env` entry that is not a variable's
-name, each of which is ignored. The Manage screen's System row
+undeclared group; and a verb a `[[programs]]` entry lists that the
+runner does not know, which is ignored. The Manage screen's System row
 counts the config's warnings and names them on hover; a double-click
 opens the config.
 
@@ -736,16 +733,7 @@ the next would put the first back:
     name, so without the line the step could not decrypt. A step whose
     `backup` table is inline is refused, naming the step, for a person
     to add the line.
-17. `datalib-step`'s variables (`upgrade_program_pass_env`,
-    `program_pass_env.rs`): a `[[programs]]` entry for `datalib-step`
-    that names no `pass_env` gets
-    `datalib_env::DATALIB_STEP_PASS_ENV` there. The runner hands a step
-    only the variables its program's entry names, beyond the short list
-    every step gets, so without the line `datalib-step` would lose
-    where the fingerprint cache is, a Minds workspace's URL prefix and
-    the embedder's thread cap. An entry written inline is refused,
-    naming it, for a person to add the line.
-18. The `check` verb (`upgrade_check_verb`, `check_verb.rs`): a
+17. The `check` verb (`upgrade_check_verb`, `check_verb.rs`): a
     `[[programs]]` entry for `datalib-step` whose `verbs` leave out
     `check` gets it, so a save and `datalib-pipeline check` ask each of
     its steps about its params. An entry with no `verbs` is left alone;
