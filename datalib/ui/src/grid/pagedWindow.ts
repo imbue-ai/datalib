@@ -3,8 +3,7 @@
 // search grid's list is a search, read on by offset; the run log's is the
 // log newest first, read back by `seq`, and it also grows at its near end
 // as lines are written. Pure: the card feeds it what it wants loaded and
-// what came back, and runs the fetches it asks for. See
-// docs/dev/plans/paged_grids.md.
+// what came back, and runs the fetches it asks for.
 
 /// Rows per request while scrolling.
 export const PAGE = 200;

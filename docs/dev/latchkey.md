@@ -78,7 +78,7 @@ plus the URLs its credential is good for and how to get one.
 
 | kind | examples | where it comes from |
 |---|---|---|
-| **built-in** | `slack`, `discord`, `google-gmail`, `google-calendar`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
+| **built-in** | `slack`, `discord`, `google-gmail`, `google-calendar`, `google-people`, `github`, `fastmail`, `fastmail-dav`, `linear`, `notion`, `todoist` | ships inside latchkey |
 | **plugin** | `garmin` | a package under `<latchkey dir>/plugins/<name>/`. Datalib vendors the ones it needs (`third-party/latchkey-garmin/`) and installs them on the first sign-in (`http/src/plugins.rs`); a copy without Datalib's stamp is the person's own and is never touched. |
 | **registered** | `claude-ai`, `chatgpt`, `babyconnect` | `latchkey services register`, run by the wizard on the first sign-in from the catalog entry's `credentialRegister`. latchkey refuses to re-register a name it already holds, so a registration someone made by hand stays theirs. |
 
@@ -89,8 +89,8 @@ so a stale sibling can shadow the service you just signed in to.
 
 ## An OAuth client of your own
 
-Google's services (`google-gmail`, `google-calendar`, `google-drive`,
-`google-docs`, `google-sheets`, `google-slides`) sign in through an
+Google's services (`google-gmail`, `google-calendar`, `google-people`,
+`google-drive`, `google-docs`, `google-sheets`, `google-slides`) sign in through an
 OAuth client in a Google Cloud project, and latchkey ships none. Until
 a service has one, `auth browser` refuses at once with "requires
 preparation first", which the wizard reads as
@@ -107,7 +107,7 @@ commands store one:
 - **`auth prepare <service> '{"clientId":…,"clientSecret":…}'`**
   stores a client made some other way, with no browser. Nothing ties a
   client to one service, so a single client whose project has every
-  API turned on can be given to all six.
+  API turned on can be given to all seven.
 
 Each service is still its own sign-in, because latchkey asks for each
 one's scopes separately; only the client is shared.

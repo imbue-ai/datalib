@@ -5,8 +5,7 @@
 //! doltlite store — its own commit. The tables every store shares climb
 //! a second ladder the framework keeps, counted by
 //! `shared_schema_version`. The reference is etl/README.md
-//! §"The migration ladder"; the design record is
-//! docs/dev/plans/completed/schema_migrations.md §3.3.
+//! §"The migration ladder".
 
 use std::future::Future;
 use std::pin::Pin;

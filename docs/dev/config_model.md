@@ -215,7 +215,7 @@ its own `path`. Each type declares its own:
 |---|---|
 | baby_connect, discord, garmin, github, gitlab, google_drive, linear, notion, slack, todoist, yolink | `api` |
 | chatgpt, claude | `api`, `export` |
-| contacts | `fastmail`, `carddav`, `vcf` |
+| contacts | `google`, `fastmail`, `carddav`, `vcf` |
 | email | `jmap`, `gmail`, `mbox`, `apple_mail` |
 | calendar | `google`, `fastmail`, `caldav`, `calendly`, `ics` |
 | lightroom | `catalog`, `backups` |

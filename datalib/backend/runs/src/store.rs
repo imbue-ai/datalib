@@ -1888,12 +1888,14 @@ async fn bump(
 /// that age with no run and no line left to name it.
 async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sqlx::Error> {
     let cutoff = cutoff_days_ago(retention.process_log_days);
-    sqlx::query("DELETE FROM log WHERE run_id IS NULL AND ts_utc < ?")
+    // Marked: each counts every line it keeps, once per open
+    // (`datalib_sql_work::judge::BY_DESIGN`).
+    sqlx::query("DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND ts_utc < ?")
         .bind(&cutoff)
         .execute(pool)
         .await?;
     sqlx::query(
-        "DELETE FROM log WHERE run_id IS NULL AND seq < \
+        "DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND seq < \
          (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
     )
     .bind(retention.process_log_lines.max(1) as i64 - 1)

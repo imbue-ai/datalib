@@ -404,14 +404,15 @@ it names, or the tab it names. The tab keeps its own source: the step is
 where to look this time, not what the card is. Every other view is the same card only by its exact source, near
 its opener, as above.
 
-A main window with no kept tree starts with three pinned tabs
+A main window with no kept tree starts with four pinned tabs
 (`defaultPins` in `ContainersView.vue`): the Dashboard, Search
-(`searchView()`) and Sources (`sourcesView()`). A kept tree written
-before tabs could be pinned says `pinned` on none of its tabs
-(`predatesPins`), and is given the same three once, pinning a tab it
-already has for one rather than adding a second. A tree written since
-says `pinned` on every tab, so a default the person unpinned or closed
-stays that way.
+(`searchView()`), Sources (`sourcesView()`) and Contacts
+(`contactsView()`). A kept tree counts how many of them it has been
+given (`pinsGiven`), and is given the rest once, pinning a tab it
+already has for one rather than adding a second; so a default the
+person unpinned or closed stays that way, and a new default goes last
+in the list. A tree from before the count had the first three, or none
+if it is from before tabs could be pinned.
 
 **What shows.** Outside edit mode a solidified subtree shows no card
 chrome, so a composite such as the Dashboard (a Page of its five
@@ -538,9 +539,8 @@ besides components:
   table keep a box beside them, which asks as it is typed in. Either box is
   the one search field (`search/SearchField.vue`, on CodeMirror 6), which the
   run log shares: it offers keys and values from the table's `…/keys` and
-  `…/values` and draws a source, group or step value as its chip
-  ([`plans/search_autocomplete.md`](plans/search_autocomplete.md)
-  § "The field"). The arrow in the toolbar's box opens the advanced panel
+  `…/values` and draws a source, group or step value as its chip.
+  The arrow in the toolbar's box opens the advanced panel
   (`components/SearchPanel.vue`): meaning on or off and its cutoff, one row
   per document, the sources the results come from with their counts
   (`/search/groups?by=source_ref`), which it leaves out once the search is
@@ -549,9 +549,8 @@ besides components:
   it from the query and writes it back, so what was clicked is what could have been
   typed. Free text has one answer, whichever view shows it: the search
   terms, the keyword index and the vectors merged by the server. A line
-  above the results says what the search could not reach: a part that
-  could not answer, and how many candidates have no vectors, with their
-  sources on hover (`grid/searchCoverage.ts`, from `query_echo`). A **Sort** control beside the views' tabs orders either view
+  above the results says what part of the search could not answer
+  (`grid/searchCoverage.ts`, from `query_echo`). A **Sort** control beside the views' tabs orders either view
   (best match, newest, oldest, largest, smallest, author, title;
   `grid/searchSort.ts`). The card keeps one order, its `sort` state,
   which the control and the table's headers both write and both views
@@ -717,15 +716,16 @@ besides components:
   (`cards/JsonTree.ce.vue`), the source link at the process's commit,
   the process itself. Its *keep* / *exclude* buttons narrow the log
   beside it through the bus (`log.query`, a token for the query bar).
-- `personView(handle, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
-  its rules in `cards/person.ts`): your contact, when the handle is
-  linked to one, and each source's record of them from `/people`, a
-  section per source, never merged. The source named by `seenIn` —
+- `personView(subject, { seenIn })` — one person (`cards/PersonCard.ce.vue`,
+  its rules in `cards/person.ts`), by a handle, `contact:<id>` or
+  `page:<a contact's page>`: your contact, when they are one, and each
+  source's record of them from `/people`, a section per source, never
+  merged. The source named by `seenIn` —
   where the chip that opened it was — leads, marked "seen here". A
   person chip's double-click opens it (`personSource` in
   `cards/cardSources.ts`); it offers the search for everything with
-  them, and *Create contact* for an unlinked handle where a contacts
-  app is configured.
+  them, and *Add to contacts* with their handles ticked for someone who
+  is not in them, where a contacts app is configured.
 - `contactsView()` — every contact in the contacts app
   (`cards/ContactsCard.ce.vue`), read straight from it
   (`GET /applet/datalib_contacts/contacts`, a typed table) and read

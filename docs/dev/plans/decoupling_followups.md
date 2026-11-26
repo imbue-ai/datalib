@@ -1,12 +1,11 @@
-# What is left after the runner stops knowing datalib-step
+# What is left after the runner stopped knowing datalib-step
 
 **Status: notes, partly built; checked against the tree 2026-11-20.**
-The step protocol redesign
-([`completed/dag_and_step_decoupling.md`](completed/dag_and_step_decoupling.md),
-#1894) took `datalib-step` out of the runner. This file lists what that
-redesign left alone on purpose, so it is not forgotten. Done: items 5a,
-5b and 6, and of item 7 all but one constant. Untouched: items 2 to 5 and
-8, and the reconciler in section 10. Items 1 and 9 are half done.
+The step protocol redesign (#1894) took `datalib-step` out of the
+runner. This file lists what that redesign left alone on purpose, so it
+is not forgotten. Done: items 5a, 5b and 6, and of item 7 all but one
+constant. Untouched: items 2 to 5 and 8, and the reconciler in section
+10. Items 1 and 9 are half done.
 
 ## The end state
 

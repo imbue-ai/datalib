@@ -135,6 +135,13 @@ impl ContactKind {
     }
 }
 
+/// The URI of a chip naming whoever one contact's page is about, by the
+/// page's id, for a card with no handle to name them by.
+/// `contactPageFromUri` in `ui/src/cards/chipLinks.js` reads it.
+pub fn contact_page_uri(page: &str) -> String {
+    format!("datalib:contact_page/{page}")
+}
+
 /// One way to reach the person, as the source wrote it. `handle` is the
 /// normalized identifier when there is one; a phone number written
 /// without its country code has none, and is kept anyway.
@@ -171,6 +178,14 @@ impl ContactHandle {
             value,
             stopped_working_by: None,
         }
+    }
+
+    /// The digits of a phone number written without its country code,
+    /// which makes no handle ([`datalib_handle::home_digits`]).
+    pub fn home_digits(&self) -> Option<String> {
+        (self.medium == Medium::Phone && self.handle.is_none())
+            .then(|| datalib_handle::home_digits(&self.value))
+            .flatten()
     }
 
     /// A handle with nothing the source wrote beside it: what chat-common

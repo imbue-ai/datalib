@@ -199,7 +199,7 @@ mod tests {
         assert!(has(
             "# [Jean-Luc Picard](mailto:picard@enterprise.starfleet"
         ));
-        assert!(has("# Q\n"));
+        assert!(has("# [Q](datalib:contact_page/"));
         assert!(has("<div class=\"contact-photo\">"));
         assert!(has("## Members"));
         assert!(has("<a class=\"source-link\""));

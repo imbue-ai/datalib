@@ -1,5 +1,6 @@
-//! vCard → grid_rows + rendered markdown.
+//! A stored card, vCard or Google's, → grid_rows + rendered markdown.
 
+pub mod google;
 pub mod parse;
 // `render/render.rs` inside `render/` is the repo-wide stage layout, not
 // an accident: the directory is the pipeline STAGE (mirroring

@@ -1,7 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # The examples every shipped binary's `--help` ends with, and the check
-# that each one still parses (docs/dev/plans/agent_help.md).
+# that each one still parses.
 rust_library(
     name = "datalib_cli_help",
     srcs = glob(["src/**/*.rs"]),

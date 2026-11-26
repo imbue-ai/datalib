@@ -2,10 +2,10 @@
 // requests say which card made them.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, SEARCH_SETTLE, tabLabels, runSearch } from "./grid-helpers";
+import { GRID, PINNED, SEARCH_SETTLE, tabLabels, runSearch } from "./grid-helpers";
 
-// The tab GRID opens, after the three pinned ones.
-const gridTab = (page: Page) => tabLabels(page).nth(3);
+// The tab GRID opens, after the pinned ones.
+const gridTab = (page: Page) => tabLabels(page).nth(PINNED.length);
 const nameBox = (page: Page) => page.getByLabel("Name", { exact: true });
 
 async function search(page: Page, q: string) {

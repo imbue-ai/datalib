@@ -2,6 +2,15 @@
 source: datalib/backend/applets/src/unified_grid_and_search_index/search_finds_itself_tests.rs
 expression: coverage.render(&sources)
 ---
+a number however written: from:
+  checked: beeper 5, google-takeout 10, signal 8, sms-backup-restore 8, whatsapp 17
+  never: chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, yolink
+a number however written: to:
+  checked: sms-backup-restore 3
+  never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
+a number however written: with:
+  checked: beeper 7, google-takeout 18, signal 16, sms-backup-restore 15, tng_contacts 4, tng_contacts-diff 2, whatsapp 25
+  never: chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_email, tng_pdfs, yolink
 account:
   checked: beeper 24, chatgpt-api 33, claude-api 82, discord 156, facebook 71, google-drive 6, linkedin 18, slack 37, slack-diff 13, tng_email 14
   never: claude-code, codex, datalib, garmin, github, gitlab, google-takeout, notion, ship-air, signal, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
@@ -12,25 +21,25 @@ change:
   checked: slack-diff 13, tng_contacts-diff 5
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, sms-backup-restore, tng_calendar, tng_contacts, tng_email, tng_pdfs, whatsapp, yolink
 channel:
-  checked: facebook 3, garmin 3, linkedin 3, ship-air 2, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, yolink 4
+  checked: facebook 3, garmin 3, linkedin 3, ship-air 2, tng_calendar 9, tng_contacts 10, tng_contacts-diff 5, yolink 4
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, github, gitlab, google-drive, google-takeout, notion, signal, slack, slack-diff, sms-backup-restore, tng_email, tng_pdfs, whatsapp
 created_at:
-  checked: beeper 24, chatgpt-api 33, claude-api 78, claude-code 29, codex 40, datalib 275, discord 156, facebook 70, garmin 4, github 10, gitlab 9, google-drive 8, google-takeout 53, linkedin 14, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 5, tng_contacts-diff 3, tng_email 14, tng_pdfs 5, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 78, claude-code 29, codex 40, datalib 278, discord 156, facebook 70, garmin 4, github 10, gitlab 9, google-drive 8, google-takeout 53, linkedin 14, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 6, tng_contacts-diff 3, tng_email 14, tng_pdfs 5, whatsapp 29, yolink 5
 datalib_document_id:
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 275, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 278, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 13, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 diff_changed_columns:
   checked: slack-diff 3, tng_contacts-diff 1
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, sms-backup-restore, tng_calendar, tng_contacts, tng_email, tng_pdfs, whatsapp, yolink
 id:
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 275, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 278, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 13, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 item_count:
-  checked: beeper 20, chatgpt-api 31, claude-api 50, claude-code 13, codex 17, datalib 236, discord 108, facebook 66, garmin 9, github 10, gitlab 9, google-drive 8, google-takeout 68, linkedin 17, notion 9, ship-air 1, signal 15, slack 30, slack-diff 9, sms-backup-restore 11, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 14, tng_pdfs 4, whatsapp 23, yolink 1
+  checked: beeper 20, chatgpt-api 31, claude-api 50, claude-code 13, codex 17, datalib 239, discord 108, facebook 66, garmin 9, github 10, gitlab 9, google-drive 8, google-takeout 68, linkedin 17, notion 9, ship-air 1, signal 15, slack 30, slack-diff 9, sms-backup-restore 11, tng_calendar 9, tng_contacts 10, tng_contacts-diff 5, tng_email 14, tng_pdfs 4, whatsapp 23, yolink 1
 kind:
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 275, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 278, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 13, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 meaning: its opening words
-  checked: beeper 5, chatgpt-api 5, claude-api 9, claude-code 3, codex 4, datalib 24, discord 24, facebook 22, garmin 9, github 2, gitlab 2, google-drive 3, google-takeout 18, linkedin 7, notion 5, ship-air 1, signal 2, slack 13, slack-diff 3, sms-backup-restore 4, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 6, tng_pdfs 4, whatsapp 5, yolink 1
+  checked: beeper 5, chatgpt-api 5, claude-api 9, claude-code 3, codex 4, datalib 24, discord 24, facebook 22, garmin 9, github 2, gitlab 2, google-drive 3, google-takeout 18, linkedin 7, notion 5, ship-air 1, signal 2, slack 13, slack-diff 3, sms-backup-restore 4, tng_calendar 9, tng_contacts 10, tng_contacts-diff 5, tng_email 6, tng_pdfs 4, whatsapp 5, yolink 1
 modified_at:
-  checked: beeper 5, chatgpt-api 5, claude-api 8, claude-code 3, codex 4, datalib 275, discord 24, facebook 19, garmin 1, github 2, gitlab 2, google-drive 4, google-takeout 14, linkedin 3, notion 6, ship-air 1, signal 2, slack 13, slack-diff 3, sms-backup-restore 4, tng_contacts 4, tng_contacts-diff 3, tng_email 6, whatsapp 5, yolink 1
+  checked: beeper 5, chatgpt-api 5, claude-api 8, claude-code 3, codex 4, datalib 278, discord 24, facebook 19, garmin 1, github 2, gitlab 2, google-drive 4, google-takeout 14, linkedin 3, notion 6, ship-air 1, signal 2, slack 13, slack-diff 3, sms-backup-restore 4, tng_contacts 5, tng_contacts-diff 3, tng_email 6, whatsapp 5, yolink 1
   never: tng_calendar, tng_pdfs
 notion_page:
   checked: notion 8
@@ -57,9 +66,9 @@ pasted: from
   checked: beeper 7, google-drive 4, google-takeout 19, linkedin 4, notion 8, signal 8, sms-backup-restore 8, tng_calendar 5, tng_email 8, whatsapp 17
   never: chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, ship-air, slack, slack-diff, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 pasted: id
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 275, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 278, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 13, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 pasted: its document
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 29, codex 40, datalib 275, discord 156, facebook 71, garmin 16, github 10, gitlab 9, google-drive 8, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 14, tng_pdfs 9, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 29, codex 40, datalib 278, discord 156, facebook 71, garmin 16, github 10, gitlab 9, google-drive 8, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 10, tng_contacts-diff 5, tng_email 14, tng_pdfs 9, whatsapp 29, yolink 5
 pasted: mention
   checked: signal 1, tng_email 1
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
@@ -85,9 +94,9 @@ project:
   checked: beeper 18, claude-api 16, claude-code 29, codex 40, facebook 42, github 10, gitlab 9, google-takeout 63, sms-backup-restore 14
   never: chatgpt-api, datalib, discord, garmin, google-drive, linkedin, notion, ship-air, signal, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_email, tng_pdfs, whatsapp, yolink
 source:
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 275, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 278, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 13, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 subject:
-  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 275, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 12, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 82, claude-code 30, codex 41, datalib 278, discord 169, facebook 71, garmin 16, github 11, gitlab 10, google-drive 16, google-takeout 74, linkedin 18, notion 9, ship-air 3, signal 15, slack 44, slack-diff 13, sms-backup-restore 14, tng_calendar 11, tng_contacts 13, tng_contacts-diff 5, tng_email 18, tng_pdfs 11, whatsapp 29, yolink 5
 terms: bcc:
   checked: tng_email 1
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, google-takeout, linkedin, notion, ship-air, signal, slack, slack-diff, sms-backup-restore, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, whatsapp, yolink
@@ -110,9 +119,9 @@ terms: to:
   checked: google-takeout 7, signal 10, sms-backup-restore 7, tng_email 8, whatsapp 13
   never: beeper, chatgpt-api, claude-api, claude-code, codex, datalib, discord, facebook, garmin, github, gitlab, google-drive, linkedin, notion, ship-air, slack, slack-diff, tng_calendar, tng_contacts, tng_contacts-diff, tng_pdfs, yolink
 terms: with:
-  checked: beeper 39, chatgpt-api 59, claude-api 148, claude-code 40, codex 55, discord 319, facebook 138, garmin 15, github 20, gitlab 18, google-drive 14, google-takeout 137, linkedin 26, notion 16, ship-air 2, signal 45, slack 73, slack-diff 27, sms-backup-restore 35, tng_calendar 10, tng_contacts 24, tng_contacts-diff 12, tng_email 44, tng_pdfs 7, whatsapp 70, yolink 4
+  checked: beeper 39, chatgpt-api 59, claude-api 148, claude-code 40, codex 55, discord 319, facebook 138, garmin 15, github 20, gitlab 18, google-drive 14, google-takeout 137, linkedin 26, notion 16, ship-air 2, signal 45, slack 73, slack-diff 27, sms-backup-restore 35, tng_calendar 10, tng_contacts 27, tng_contacts-diff 12, tng_email 44, tng_pdfs 7, whatsapp 70, yolink 4
   never: datalib
 touched_at:
-  checked: beeper 24, chatgpt-api 33, claude-api 78, claude-code 29, codex 40, datalib 275, discord 156, facebook 70, garmin 4, github 10, gitlab 9, google-drive 8, google-takeout 53, linkedin 14, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 5, tng_contacts-diff 3, tng_email 14, tng_pdfs 5, whatsapp 29, yolink 5
+  checked: beeper 24, chatgpt-api 33, claude-api 78, claude-code 29, codex 40, datalib 278, discord 156, facebook 70, garmin 4, github 10, gitlab 9, google-drive 8, google-takeout 53, linkedin 14, notion 9, ship-air 3, signal 15, slack 37, slack-diff 13, sms-backup-restore 14, tng_calendar 9, tng_contacts 6, tng_contacts-diff 3, tng_email 14, tng_pdfs 5, whatsapp 29, yolink 5
 words: its rarest word
-  checked: beeper 5, chatgpt-api 5, claude-api 9, claude-code 3, codex 4, datalib 24, discord 24, facebook 22, garmin 9, github 2, gitlab 2, google-drive 3, google-takeout 18, linkedin 7, notion 5, ship-air 1, signal 2, slack 13, slack-diff 3, sms-backup-restore 4, tng_calendar 9, tng_contacts 9, tng_contacts-diff 5, tng_email 6, tng_pdfs 4, whatsapp 5, yolink 1
+  checked: beeper 5, chatgpt-api 5, claude-api 9, claude-code 3, codex 4, datalib 24, discord 24, facebook 22, garmin 9, github 2, gitlab 2, google-drive 3, google-takeout 18, linkedin 7, notion 5, ship-air 1, signal 2, slack 13, slack-diff 3, sms-backup-restore 4, tng_calendar 9, tng_contacts 10, tng_contacts-diff 5, tng_email 6, tng_pdfs 4, whatsapp 5, yolink 1

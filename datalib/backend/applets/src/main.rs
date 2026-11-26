@@ -199,7 +199,7 @@ fn run(cli: Cli) -> Result<()> {
             let port = cli.port.context("-p <port> is required")?;
             unified_time_series_index::serve(port)
         }
-        // Builtins draw its chips and popovers; nothing to write first.
+        // Builtins draw its chips and cards; nothing to write first.
         Which::DatalibContacts => {
             let port = cli.port.context("-p <port> is required")?;
             datalib_contacts::serve(port)

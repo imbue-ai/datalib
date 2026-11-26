@@ -163,7 +163,7 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
             "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
         )
         .await,
-        ["4"]
+        ["5"]
     );
     db.close().await;
 }

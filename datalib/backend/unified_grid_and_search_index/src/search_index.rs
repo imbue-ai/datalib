@@ -149,15 +149,6 @@ impl HeldVectors {
         Ok(Some(vectors))
     }
 
-    /// The documents with at least one chunk embedded. `None` when no step
-    /// has written the index.
-    pub async fn documents(&self, root: &Path) -> Result<Option<HashSet<String>>> {
-        Ok(self
-            .current(root)
-            .await?
-            .map(|held| held.embedded().map(|d| d.markdown_uuid.clone()).collect()))
-    }
-
     /// The `limit` documents nearest `query` by cosine, each at its nearest
     /// chunk, of `sources` (all when `None`) and of what `among` keeps of
     /// each (all when `None`). `None` when no step has written the index.

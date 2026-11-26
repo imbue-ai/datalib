@@ -1417,7 +1417,7 @@ const signInWhere = computed<SignInWhere>(() => {
 /// filter matches only what emails are filed in, never a Gmail flag,
 /// which is why `mailboxes` is narrower than `labels`.
 const PROBE_KINDS: Record<ProbeNoun, ProbeItemKind[]> = {
-  labels: ["mailbox", "keyword"],
+  labels: ["mailbox", "keyword", "label"],
   mailboxes: ["mailbox"],
   conversations: ["conversation"],
   channels: ["channel"],

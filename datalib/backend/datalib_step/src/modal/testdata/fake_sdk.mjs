@@ -16,6 +16,23 @@
 //                         back only the first half of their output (rounded
 //                         up), however it is read: what a GPU Sandbox's
 //                         stdout did on Modal, with no error
+//   FAKE_MODAL_SILENT     how many calls in a row each Sandbox leaves
+//                         unanswered before it answers, as one still
+//                         starting does; Modal says it is running
+//   FAKE_MODAL_GONE       how many Sandboxes, the first ones made, end as
+//                         soon as they are made and answer nothing
+//   FAKE_MODAL_HANG       an `exec`'s `wait` never ends and keeps Node
+//                         alive, as the SDK's own does when nobody answers
+//   FAKE_MODAL_OFFLINE    how many calls in a row, to Modal and to a
+//                         Sandbox alike, find no network, counted from the
+//                         first Sandbox asked for; FAKE_MODAL_OFFLINE_FROM
+//                         is how many calls are answered before that
+//   FAKE_MODAL_QUEUED     how many Sandboxes, the first ones asked for,
+//                         wait for a GPU until they are ended: `create`
+//                         never returns them, as the SDK's does not, and
+//                         only `sandboxes.list` by their tags finds them.
+//                         Each appends `{"queued":id}` to `<log>.queue`
+//                         when asked for and `{"ended":id}` when ended
 
 import { spawn } from "node:child_process";
 import {
@@ -40,6 +57,22 @@ function nextSandbox() {
   } catch {}
   writeFileSync(counter, String(n + 1));
   return n + 1;
+}
+
+/// What nice-grpc throws for a call that reached nobody.
+function unavailable(why) {
+  const e = new Error(`/modal.client.ModalClient UNAVAILABLE: ${why}`);
+  e.name = "ClientError";
+  e.code = 14;
+  return e;
+}
+
+const offlineFrom = Number(process.env.FAKE_MODAL_OFFLINE_FROM ?? 0);
+const offline = Number(process.env.FAKE_MODAL_OFFLINE ?? 0);
+let calls = 0;
+function network() {
+  const n = calls++;
+  if (n >= offlineFrom && n < offlineFrom + offline) throw unavailable("ENETUNREACH");
 }
 
 /// The first half of `text`'s lines, rounded up.
@@ -71,12 +104,29 @@ class Sandbox {
     this.short = n <= Number(process.env.FAKE_MODAL_SHORT ?? 0);
     this.dir = mkdtempSync(join(tmpdir(), "fake-modal-sb-"));
     this.lines = 0;
+    this.gone = n <= Number(process.env.FAKE_MODAL_GONE ?? 0);
+    this.silent = Number(process.env.FAKE_MODAL_SILENT ?? 0);
+    const answer = () => {
+      network();
+      if (this.gone || this.silent-- > 0) throw unavailable("not answering");
+    };
+    // The SDK's file calls throw this for every transient code.
+    const answerFile = () => {
+      try {
+        answer();
+      } catch {
+        const e = new Error("The Sandbox is unavailable. This Sandbox may have already shut down.");
+        e.name = "NotFoundError";
+        throw e;
+      }
+    };
+    this.answer = answer;
     const local = (path) => {
       if (!path.startsWith(REMOTE)) throw new Error(`the stand-in has no ${path}`);
       return join(this.dir, path.slice(REMOTE.length));
     };
     const { child, exit } = run(
-      this.fail ? [process.execPath, "-e", "process.exit(1)"] : params.command,
+      this.fail || this.gone ? [process.execPath, "-e", "process.exit(1)"] : params.command,
       ["pipe", "pipe", "pipe"],
     );
     child.stdin.on("error", () => {});
@@ -95,11 +145,13 @@ class Sandbox {
     this.stderr = readable(child.stderr, false);
     this.filesystem = {
       writeText: async (text, path) => {
+        answerFile();
         this.lines += text.split("\n").filter((l) => l).length;
         mkdirSync(dirname(local(path)), { recursive: true });
         writeFileSync(local(path), text);
       },
       readText: async (path) => {
+        answerFile();
         const text = readFileSync(local(path), "utf8");
         return this.short ? halved(text) : text;
       },
@@ -107,6 +159,7 @@ class Sandbox {
     this.execs = [];
   }
   async exec(command) {
+    this.answer();
     const argv = this.fail
       ? [process.execPath, "-e", "process.exit(1)"]
       : command.map((a) => a.replaceAll(REMOTE, this.dir));
@@ -115,15 +168,52 @@ class Sandbox {
     return {
       stdout: readable(child.stdout, false),
       stderr: readable(child.stderr, false),
-      wait: async () => exit,
+      wait: async () => {
+        if (!process.env.FAKE_MODAL_HANG) return exit;
+        setInterval(() => {}, 1000);
+        return new Promise(() => {});
+      },
     };
   }
   async wait() {
     return this.exit;
   }
-  async terminate() {
-    this.child.kill();
+  async poll() {
+    network();
+    if (this.gone) return this.exit;
+    return this.child.exitCode;
   }
+  async terminate() {
+    network();
+    this.child.kill();
+    await this.logged;
+  }
+}
+
+/// Every Sandbox asked for and not yet ended, queued or placed, with the
+/// tags it was made with.
+const unended = new Map();
+
+function queued(n, params) {
+  const sandboxId = `sb-fake-${n}`;
+  const queue = `${log}.queue`;
+  mkdirSync(dirname(queue), { recursive: true });
+  appendFileSync(queue, JSON.stringify({ queued: sandboxId }) + "\n");
+  // Waiting on Modal keeps the SDK's Node alive.
+  const waiting = setInterval(() => {}, 1000);
+  unended.set(sandboxId, {
+    tags: params.tags ?? {},
+    sb: {
+      sandboxId,
+      terminate: async () => {
+        network();
+        clearInterval(waiting);
+        unended.delete(sandboxId);
+        appendFileSync(queue, JSON.stringify({ ended: sandboxId }) + "\n");
+      },
+    },
+  });
+  return new Promise(() => {});
 }
 
 export class ModalClient {
@@ -135,15 +225,19 @@ export class ModalClient {
             "Profile is missing credentials. Please set them in .modal.toml, as environment variables, or via the ModalClient constructor.",
           );
         }
-        return { name };
+        return { name, appId: `ap-fake-${name}` };
       },
     };
     this.images = { fromRegistry: (tag) => ({ tag }) };
     this.sandboxes = {
       create: async (app, image, params) => {
+        network();
         const n = nextSandbox();
+        if (n <= Number(process.env.FAKE_MODAL_QUEUED ?? 0)) return queued(n, params);
         const sb = new Sandbox(n, params);
-        sb.exit.then(() => {
+        unended.set(sb.sandboxId, { tags: params.tags ?? {}, sb });
+        sb.exit.then(() => unended.delete(sb.sandboxId));
+        sb.logged = sb.exit.then(() => {
           mkdirSync(dirname(log), { recursive: true });
           appendFileSync(
             log,
@@ -160,6 +254,13 @@ export class ModalClient {
           );
         });
         return sb;
+      },
+      list: async function* ({ appId, tags }) {
+        network();
+        if (!appId?.startsWith("ap-fake-")) throw new Error(`no app ${appId}`);
+        for (const { tags: has, sb } of [...unended.values()]) {
+          if (Object.entries(tags ?? {}).every(([k, v]) => has[k] === v)) yield sb;
+        }
       },
     };
   }

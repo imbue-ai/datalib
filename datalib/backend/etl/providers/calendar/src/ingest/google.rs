@@ -14,11 +14,8 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl::raw_store::Sealer;
 use datalib_etl::run_problems::{self, RunProblems};
-use datalib_etl::upstream::Upstream;
-use datalib_etl_web::http::{
-    default_retryability, latchkey_curl_classified, percent_encode, HttpRequest, HttpResponse,
-    HttpService, LatchkeySettings, Retryability,
-};
+use datalib_etl_web::google::{ApiError, GoogleApi};
+use datalib_etl_web::http::{percent_encode, HttpService, LatchkeySettings};
 use serde_json::Value;
 use tracing::warn;
 
@@ -26,7 +23,10 @@ use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, GoogleEventRow, GOOGLE_EVENT_VOLATILE_PATHS};
 use super::{noting_how_it_ended, select_calendars, FetchSummary, Window};
 
-pub const HTTP_SERVICE: HttpService = HttpService::GoogleCalendar;
+pub const API: GoogleApi = GoogleApi {
+    service: HttpService::GoogleCalendar,
+    latchkey_service: "google-calendar",
+};
 pub const BASE: &str = "https://www.googleapis.com/calendar/v3";
 
 pub struct FetchOptions {
@@ -131,7 +131,7 @@ pub(crate) async fn list_calendars(
     loop {
         let url = calendar_list_url(page.as_deref());
         summary.requests += 1;
-        let v = get_json(&url, lk).await.context("list calendars")?;
+        let v = API.get_json(&url, lk).await.context("list calendars")?;
         // As with events, Google sends `items` on every reply; without it
         // this is not a listing, and reading it as one would delete every
         // stored calendar.
@@ -215,9 +215,8 @@ async fn sync_calendar(
             None => events_url(calendar_id, token.as_deref(), page.as_deref()),
         };
         summary.requests += 1;
-        let v = match get_json(&url, lk).await {
+        let v = match API.get_json(&url, lk).await {
             Ok(v) => v,
-            // The token expired or Google dropped it: list again.
             Err(e) if token.is_some() && is_gone(&e) => {
                 warn!(
                     event = "google_calendar_sync_token_expired",
@@ -398,61 +397,9 @@ impl Seen {
     }
 }
 
-async fn get_json(url: &str, lk: &LatchkeySettings) -> Result<Value> {
-    let req = HttpRequest::get(HTTP_SERVICE, url)
-        .header("Accept", "application/json")
-        .latchkey(lk.clone());
-    let resp = latchkey_curl_classified(&req, retryability)
-        .await
-        .with_context(|| format!("GET {url}"))?;
-    if resp.status != 200 {
-        return Err(api_error(url, &resp));
-    }
-    serde_json::from_slice(&resp.body).with_context(|| format!("parse JSON from {url}"))
-}
-
-/// Google answers a per-user rate limit with a 403 whose body says so;
-/// that one is worth waiting out. Every other 403 is about access.
-fn retryability(resp: &HttpResponse) -> Retryability {
-    let body = resp.body_str();
-    if resp.status == 403
-        && (body.contains("rateLimitExceeded") || body.contains("userRateLimitExceeded"))
-    {
-        return Retryability::Retry { retry_after: None };
-    }
-    default_retryability(resp)
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-struct Gone(String);
-
+/// The token expired or Google dropped it.
 fn is_gone(e: &anyhow::Error) -> bool {
-    e.downcast_ref::<Gone>().is_some()
-}
-
-fn api_error(url: &str, resp: &HttpResponse) -> anyhow::Error {
-    let body = resp.body_str();
-    let message = serde_json::from_str::<Value>(&body)
-        .ok()
-        .and_then(|v| {
-            v.pointer("/error/message")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| body.chars().take(300).collect());
-    match resp.status {
-        410 => Gone(format!("GET {url}: 410: {message}")).into(),
-        401 | 403 => anyhow::Error::new(Upstream::CredentialRefused).context(format!(
-            "GET {url}: {}: {message}. {}.",
-            resp.status,
-            datalib_etl_web::latchkey::sign_in_advice(
-                "Log in with `latchkey auth browser google-calendar` and approve every scope \
-                 it asks for"
-            )
-        )),
-        s => Upstream::error(Upstream::of_status(s), format!("GET {url}: {s}: {message}")),
-    }
+    ApiError::in_chain(e).is_some_and(|e| e.status == 410)
 }
 
 fn str_of(v: &Value, key: &str) -> Option<String> {
@@ -476,28 +423,6 @@ mod tests {
         assert!(url.contains("singleEvents=false"));
         let url = events_url("picard@enterprise.test", Some("tok+1"), Some("p2"));
         assert!(url.ends_with("&syncToken=tok%2B1&pageToken=p2"), "{url}");
-    }
-
-    #[test]
-    fn a_403_is_retried_only_when_it_is_a_rate_limit() {
-        let resp = |body: &str| HttpResponse {
-            status: 403,
-            headers: Default::default(),
-            body: body.as_bytes().to_vec(),
-            duration_ms: 0,
-        };
-        assert!(matches!(
-            retryability(&resp(
-                r#"{"error":{"errors":[{"reason":"rateLimitExceeded"}]}}"#
-            )),
-            Retryability::Retry { .. }
-        ));
-        assert!(matches!(
-            retryability(&resp(
-                r#"{"error":{"errors":[{"reason":"insufficientPermissions"}]}}"#
-            )),
-            Retryability::Accept
-        ));
     }
 
     #[test]
