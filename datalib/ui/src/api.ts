@@ -1139,12 +1139,21 @@ export async function saveConfig(text: string, signal?: AbortSignal): Promise<Sa
 /// One build in a package manifest.
 export type PackageArtifact = { url: string; sha256: string; size?: number | null };
 
+/// What one function's step runs, and how the step reads and what it
+/// locks. Mirrors `StepCommand` in datalib/backend/packages/src/manifest.rs.
+export type PackageCommand = {
+  command: string;
+  reads?: "pinned" | "files" | null;
+  locks?: string[];
+};
+
 /// A source type a package adds: its group `type`, the command each
-/// function runs, its add-source form in the shape of `CatalogEntry`, and
-/// the applets each source of the type gets.
+/// function runs, the command that probes it, its add-source form in the
+/// shape of `CatalogEntry`, and the applets each source of the type gets.
 export type PackageSource = {
   type: string;
-  commands: Record<string, string>;
+  commands: Record<string, PackageCommand>;
+  probe?: string | null;
   wizard: Record<string, unknown>;
   applets: PackageApplet[];
 };
@@ -1165,6 +1174,8 @@ export type PackageManifest = {
   step_protocol?: number | null;
   artifacts: Record<string, PackageArtifact>;
   sources: PackageSource[];
+  /// The slots of each lock its steps hold.
+  locks?: Record<string, number>;
 };
 
 /// A manifest fetched for review: what adding it would pin.
