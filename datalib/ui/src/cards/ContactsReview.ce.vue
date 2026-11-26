@@ -18,7 +18,6 @@ import type { ColumnSpec } from "@/api";
 import { personSource, searchSource } from "./cardSources";
 import {
   CONTACTS_APPLET,
-  canLinkHandles,
   confirmReview,
   contactsById,
   movesPeople,
@@ -180,7 +179,6 @@ const actions = {
 
 const chips = {
   who: (handle: string) => people.lookup(handle),
-  canLink: () => canLinkHandles(),
   contact: (id: string) => contactsById.lookup(id),
 };
 

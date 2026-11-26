@@ -466,7 +466,7 @@ mod tests {
 
     /// A sender's HTML framed in a document view must not run, and must
     /// not reach the network even if it could — a read receipt is the
-    /// attack (audit 2026-10-02 finding 1).
+    /// attack.
     #[test]
     fn data_documents_run_nothing_and_reach_nothing() {
         let csp = DATA_DOCUMENT_CSP;

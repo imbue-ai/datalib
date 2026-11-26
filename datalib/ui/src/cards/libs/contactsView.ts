@@ -2,7 +2,6 @@
 // straight from it. See cards/ContactsCard.ce.vue.
 import ContactsCard from "../ContactsCard.ce.vue";
 import ContactsReview from "../ContactsReview.ce.vue";
-import HandlePopover from "../HandlePopover.ce.vue";
 import chipCss from "../chip.css?inline";
 import tableGridCss from "../tableGrid.css?inline";
 import slickCss from "@slickgrid-universal/common/dist/styles/css/slickgrid-theme-default.css?inline";
@@ -13,6 +12,6 @@ export function contactsView(): CardRender {
   return vueCard(
     ContactsCard,
     {},
-    { styleSources: [ContactsReview, HandlePopover, slickCss, tableGridCss, chipCss] },
+    { styleSources: [ContactsReview, slickCss, tableGridCss, chipCss] },
   );
 }

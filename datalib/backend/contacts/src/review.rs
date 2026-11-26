@@ -214,8 +214,8 @@ async fn awaiting_labels(
     .context("read the labels waiting for review")
 }
 
-/// Unlink `handle` inside `tx`, writing a turn-down where an agent made
-/// the link. Returns whether it was linked.
+/// Unlink `handle` inside `tx` and write down that it is not theirs.
+/// Returns whether it was linked.
 pub(crate) async fn unlink_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     handle: &str,
@@ -223,7 +223,7 @@ pub(crate) async fn unlink_in(
     tz: &str,
 ) -> Result<bool> {
     let Some(r) = sqlx::query(
-        "SELECT h.contact_id, h.linked_how, h.agent, h.reason, c.name \
+        "SELECT h.contact_id, h.agent, h.reason, c.name \
            FROM handles h LEFT JOIN contacts c USING (contact_id) WHERE h.handle = ?",
     )
     .bind(handle)
@@ -233,38 +233,35 @@ pub(crate) async fn unlink_in(
     else {
         return Ok(false);
     };
-    let how: String = r.get("linked_how");
-    if DecidedHow::parse(&how) == Some(DecidedHow::Agent) {
-        let contact_id: String = r.get("contact_id");
-        let row = NotLinkedRow {
-            handle: handle.to_string(),
-            contact_name: r
-                .get::<Option<String>, _>("name")
-                .unwrap_or_else(|| contact_id.clone()),
-            contact_id,
-            agent: r.get("agent"),
-            reason: r.get("reason"),
-            decided_at_utc: now.to_string(),
-            tz_offset: tz.to_string(),
-            contact_rejected: false,
-        };
-        sqlx::query(
-            "INSERT OR REPLACE INTO not_linked (handle, contact_id, contact_name, agent, \
-               reason, decided_at_utc, tz_offset, contact_rejected) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(&row.handle)
-        .bind(&row.contact_id)
-        .bind(&row.contact_name)
-        .bind(&row.agent)
-        .bind(&row.reason)
-        .bind(&row.decided_at_utc)
-        .bind(&row.tz_offset)
-        .bind(row.contact_rejected)
-        .execute(&mut **tx)
-        .await
-        .context("write down a turned-down link")?;
-    }
+    let contact_id: String = r.get("contact_id");
+    let row = NotLinkedRow {
+        handle: handle.to_string(),
+        contact_name: r
+            .get::<Option<String>, _>("name")
+            .unwrap_or_else(|| contact_id.clone()),
+        contact_id,
+        agent: r.get("agent"),
+        reason: r.get("reason"),
+        decided_at_utc: now.to_string(),
+        tz_offset: tz.to_string(),
+        contact_rejected: false,
+    };
+    sqlx::query(
+        "INSERT OR REPLACE INTO not_linked (handle, contact_id, contact_name, agent, \
+           reason, decided_at_utc, tz_offset, contact_rejected) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(&row.handle)
+    .bind(&row.contact_id)
+    .bind(&row.contact_name)
+    .bind(&row.agent)
+    .bind(&row.reason)
+    .bind(&row.decided_at_utc)
+    .bind(&row.tz_offset)
+    .bind(row.contact_rejected)
+    .execute(&mut **tx)
+    .await
+    .context("write down a turned-down link")?;
     sqlx::query("DELETE FROM handles WHERE handle = ?")
         .bind(handle)
         .execute(&mut **tx)
@@ -1286,10 +1283,23 @@ mod tests {
         store.close().await;
     }
 
-    /// A person's unlink of an agent's link is written down; their own
-    /// link of the same pair later takes the turn-down back.
+    fn lore_to_data(data: &str, lore: &Handle) -> Proposals {
+        Proposals {
+            agent: "claude-test".into(),
+            run: None,
+            contacts: vec![ProposedContact {
+                contact_id: Some(data.to_string()),
+                handles: vec![lore.as_str().to_string()],
+                ..Default::default()
+            }],
+            handles: vec![],
+        }
+    }
+
+    /// Taking a handle off a contact is written down, whoever put it
+    /// there; the person putting it back takes the record back.
     #[tokio::test]
-    async fn unlinking_an_agents_link_writes_it_down_until_a_person_relinks_it() {
+    async fn unlinking_writes_it_down_until_a_person_relinks_it() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
         let data = store
@@ -1297,28 +1307,17 @@ mod tests {
             .await
             .unwrap();
         let lore = Handle::parse(&email("lore@enterprise.org")).unwrap();
-        store
-            .propose(&Proposals {
-                agent: "claude-test".into(),
-                run: None,
-                contacts: vec![ProposedContact {
-                    contact_id: Some(data.clone()),
-                    handles: vec![lore.as_str().to_string()],
-                    ..Default::default()
-                }],
-                handles: vec![],
-            })
-            .await
-            .unwrap();
+        store.propose(&lore_to_data(&data, &lore)).await.unwrap();
         assert!(store.unlink(&lore).await.unwrap());
         assert_eq!(store.turned_down().await.unwrap().len(), 1);
         store.link(&lore, &data).await.unwrap();
         assert!(store.turned_down().await.unwrap().is_empty());
         assert!(store.unlink(&lore).await.unwrap());
-        assert!(
-            store.turned_down().await.unwrap().is_empty(),
-            "a person's own link is theirs to undo without a record"
-        );
+        let down = store.turned_down().await.unwrap();
+        assert_eq!(down.len(), 1, "a person's own link is written down too");
+        assert_eq!(down[0].agent, None);
+        let again = store.propose(&lore_to_data(&data, &lore)).await.unwrap();
+        assert_eq!(again.linked, 0, "{:?}", again.skipped);
         store.close().await;
     }
 

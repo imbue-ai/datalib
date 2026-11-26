@@ -1,7 +1,7 @@
 //! `DoltRepo` — production [`IndexRepo`](crate::repo::IndexRepo) backed
 //! by a `sqlx::SqlitePool` against the grid index on disk. Every request
-//! reads inside one read transaction: one commit, and the plain tables'
-//! indexes (`docs/dev/plans/paged_grids.md`, "Pinned and indexed").
+//! reads inside one read transaction, so it sees one state of the index
+//! (`docs/dev/grid_rows.md` § "Consumer side").
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -25,8 +25,9 @@ use crate::repo::{
 };
 use crate::search::SearchRow;
 use crate::sort::{default_order, order_by, Sort};
-use datalib_contact_schema::{NormalizedContact, Seen};
+use datalib_contact_schema::{ContactKind, NormalizedContact, Seen};
 use datalib_core::repo::RepoError;
+use datalib_handle::Handle;
 use datalib_pin::open_reader;
 use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
@@ -127,6 +128,45 @@ pub const PEOPLE_SQL: &str = "\
      WHERE h.handle IN (SELECT value FROM json_each(?1)) \
      ORDER BY h.handle, h.record_id";
 
+/// Each record writing a number with no country code that ends in one of
+/// the last digits in the JSON array `?1`, as [`PEOPLE_SQL`] reads a
+/// record, its `handle` the number's digits.
+pub const SAME_DIGITS_SQL: &str = "\
+    WITH written AS MATERIALIZED ( \
+      SELECT record_id, digits FROM contact_record_numbers \
+        INDEXED BY contact_record_numbers_by_last_digits \
+       WHERE substr(digits, -7) IN (SELECT value FROM json_each(?1))), \
+    seen AS MATERIALIZED ( \
+      SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
+             SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
+        FROM document_contacts INDEXED BY document_contacts_by_record \
+       WHERE record_id IN (SELECT record_id FROM written) \
+       GROUP BY record_id) \
+    SELECT w.digits AS handle, r.contact_json, s.items, s.last_at, s.credit \
+      FROM written w \
+      JOIN seen s ON s.record_id = w.record_id \
+      JOIN contact_records r ON r.record_id = w.record_id \
+     ORDER BY w.digits, w.record_id";
+
+/// Every full number a source knows that ends in one of the last digits
+/// in the JSON array `?1`.
+pub const FULL_NUMBERS_SQL: &str = "\
+    SELECT DISTINCT handle FROM contact_record_handles \
+      INDEXED BY contact_record_handles_by_last_digits \
+     WHERE substr(handle, 1, 4) = 'tel:' \
+       AND substr(handle, -7) IN (SELECT value FROM json_each(?1)) \
+     ORDER BY handle";
+
+/// The record of each contact's own page in the JSON array `?1`, by the
+/// page's id.
+pub const CONTACT_PAGES_SQL: &str = "\
+    SELECT g.uuid AS handle, r.contact_json, NULL AS items, NULL AS last_at, 1 AS credit \
+      FROM grid_rows g \
+      JOIN document_contacts d ON d.markdown_uuid = g.markdown_uuid \
+      JOIN contact_records r ON r.record_id = d.record_id \
+     WHERE g.uuid IN (SELECT value FROM json_each(?1)) \
+       AND g.uuid = g.markdown_uuid AND g.contact IS NOT NULL";
+
 #[derive(sqlx::FromRow)]
 struct PersonRecord {
     handle: String,
@@ -135,6 +175,11 @@ struct PersonRecord {
     items: Option<i64>,
     last_at: Option<String>,
     credit: i64,
+}
+
+fn json_array(values: &[String]) -> Result<String, RepoError> {
+    serde_json::to_string(values)
+        .map_err(|e| RepoError::Internal(format!("encode a set of values: {e}")))
 }
 
 /// Each row in a conversation named by its people gets them, read from
@@ -200,7 +245,8 @@ async fn add_subject_people<'r>(
 }
 
 /// Each contact's own row gets the handles its document's contact
-/// carries, so the Contact cell can be a chip by any of them.
+/// carries, so the Contact cell can be a chip by any of them, and its
+/// page where that contact is a person.
 async fn add_contact_handles<'r>(
     at: &mut At,
     rows: impl Iterator<Item = &'r mut SearchRow>,
@@ -218,9 +264,10 @@ async fn add_contact_handles<'r>(
     let docs: Vec<&String> = contacts.keys().collect();
     let wanted = serde_json::to_string(&docs)
         .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
-    let handles: Vec<(String, String)> = match sqlx::query_as(
-        "SELECT d.markdown_uuid, h.handle FROM document_contacts d \
-           JOIN contact_record_handles h ON h.record_id = d.record_id \
+    let read: Vec<(String, String, Option<String>)> = match sqlx::query_as(
+        "SELECT d.markdown_uuid, r.contact_json ->> '$.kind', h.handle FROM document_contacts d \
+           JOIN contact_records r ON r.record_id = d.record_id \
+           LEFT JOIN contact_record_handles h ON h.record_id = d.record_id \
           WHERE d.markdown_uuid IN (SELECT value FROM json_each(?)) \
           ORDER BY d.markdown_uuid, h.handle",
     )
@@ -228,12 +275,16 @@ async fn add_contact_handles<'r>(
     .fetch_all(&mut *at.tx)
     .await
     {
-        Ok(handles) => handles,
+        Ok(read) => read,
         Err(e) => return Err(RepoError::Internal(format!("read contact handles: {e}"))),
     };
-    for (doc, handle) in handles {
+    for (doc, kind, handle) in read {
+        let person = ContactKind::parse(&kind) == Some(ContactKind::Person);
         for row in contacts.get_mut(&doc).into_iter().flatten() {
-            row.contact_handles.push(handle.clone());
+            row.contact_handles.extend(handle.clone());
+            if person && row.uuid == doc {
+                row.contact_page = Some(doc.clone());
+            }
         }
     }
     Ok(())
@@ -286,25 +337,6 @@ const SEARCH_ROW_COLUMNS: &[GridRowColumn] = {
 fn search_row_select() -> String {
     let names: Vec<&str> = SEARCH_ROW_COLUMNS.iter().map(|c| c.as_str()).collect();
     names.join(", ")
-}
-
-/// What `documents_with_pages` runs. The searchable documents are listed
-/// once, from the step's `markdowns_searchable`, never looked up per grid
-/// row: a correlated look-up read each row's whole `markdowns` row, seconds
-/// on a large library. `INDEXED BY` refuses rather than fall back to that.
-/// The grid side is left to the planner, since the search's filters decide
-/// which of its indexes fits.
-pub fn documents_with_pages_sql(
-    grid_rows: &str,
-    markdowns: &str,
-    where_sql: &str,
-    joiner: &str,
-) -> String {
-    format!(
-        "SELECT DISTINCT markdown_uuid, source_id FROM {grid_rows}{where_sql}{joiner} \
-         markdown_uuid IN (SELECT markdown_uuid FROM {markdowns} \
-                           INDEXED BY markdowns_searchable WHERE searchable = 1)"
-    )
 }
 
 /// What `ordered_uuids` runs, with its parameters.
@@ -401,6 +433,7 @@ fn search_row_from(r: &sqlx::sqlite::SqliteRow) -> SearchRow {
             .ok()
             .flatten(),
         contact_handles: Vec::new(),
+        contact_page: None,
         contact_ref: None,
         subject_people: Vec::new(),
         subject_ref: Vec::new(),
@@ -639,6 +672,55 @@ fn grouping<R>(
 }
 
 impl At {
+    /// The records `sql` reads for the strings in `of`.
+    async fn person_records(
+        &mut self,
+        sql: &'static str,
+        of: &[String],
+    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        if of.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows: Vec<PersonRecord> = sqlx::query_as(sql)
+            .bind(json_array(of)?)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("read people: {e}")))?;
+        rows.into_iter()
+            .map(|row| {
+                let mut contact: NormalizedContact = serde_json::from_str(&row.contact_json)
+                    .map_err(|e| {
+                        RepoError::Internal(format!(
+                            "a source contact for {} will not read: {e}",
+                            row.handle
+                        ))
+                    })?;
+                contact.seen = row.items.map(|items| Seen {
+                    items: items.max(0) as u64,
+                    last_at: row.last_at,
+                });
+                Ok(crate::people::HandleRow {
+                    handle: row.handle,
+                    contact,
+                    credit: row.credit.max(0) as u64,
+                })
+            })
+            .collect()
+    }
+
+    /// Every full number a source knows ending in one of `last_digits`.
+    async fn full_numbers(&mut self, last_digits: &[String]) -> Result<Vec<Handle>, RepoError> {
+        if last_digits.is_empty() {
+            return Ok(Vec::new());
+        }
+        let handles: Vec<String> = sqlx::query_scalar(FULL_NUMBERS_SQL)
+            .bind(json_array(last_digits)?)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("read numbers by their digits: {e}")))?;
+        Ok(handles.iter().filter_map(|h| Handle::parse(h)).collect())
+    }
+
     /// `q` with each `at:` told what puts a row there, read at this commit.
     async fn read_at<'q>(
         &mut self,
@@ -1388,34 +1470,6 @@ impl IndexRepo for DoltRepo {
             .map_err(|e| RepoError::Internal(format!("decode a matching row: {e}")))
     }
 
-    async fn documents_with_pages(
-        &self,
-        q: &ParsedQuery,
-    ) -> Result<Vec<(String, String)>, RepoError> {
-        let Some(mut at) = self.pinned().await? else {
-            return Ok(Vec::new());
-        };
-        let q = at.read_at(q).await?;
-        let (where_sql, params) = build_where(&q);
-        let joiner = if where_sql.is_empty() {
-            " WHERE"
-        } else {
-            " AND"
-        };
-        // Audited: as `matching` — literal table names and `build_where`'s
-        // static column names; every value is bound.
-        let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(
-            documents_with_pages_sql(at.grid_rows, at.markdowns, &where_sql, joiner),
-        ));
-        for p in &params {
-            query = query.bind(p);
-        }
-        query
-            .fetch_all(&mut *at.tx)
-            .await
-            .map_err(|e| RepoError::Internal(e.to_string()))
-    }
-
     async fn documents_kept(
         &self,
         q: &ParsedQuery,
@@ -1486,40 +1540,37 @@ impl IndexRepo for DoltRepo {
             .collect())
     }
 
-    async fn people_for_handles(
+    async fn people(
         &self,
         handles: &[String],
-    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+        pages: &[String],
+    ) -> Result<crate::people::PeopleRows, RepoError> {
         let Some(mut at) = self.pinned().await? else {
-            return Ok(Vec::new());
+            return Ok(Default::default());
         };
-        let wanted = serde_json::to_string(handles)
-            .map_err(|e| RepoError::Internal(format!("encode handles: {e}")))?;
-        let rows: Vec<PersonRecord> = sqlx::query_as(PEOPLE_SQL)
-            .bind(wanted)
-            .fetch_all(&mut *at.tx)
-            .await
-            .map_err(|e| RepoError::Internal(format!("read people by handle: {e}")))?;
-        rows.into_iter()
-            .map(|row| {
-                let mut contact: NormalizedContact = serde_json::from_str(&row.contact_json)
-                    .map_err(|e| {
-                        RepoError::Internal(format!(
-                            "a source contact for {} will not read: {e}",
-                            row.handle
-                        ))
-                    })?;
-                contact.seen = row.items.map(|items| Seen {
-                    items: items.max(0) as u64,
-                    last_at: row.last_at,
-                });
-                Ok(crate::people::HandleRow {
-                    handle: row.handle,
-                    contact,
-                    credit: row.credit.max(0) as u64,
-                })
-            })
-            .collect()
+        let holding = at.person_records(PEOPLE_SQL, handles).await?;
+        let numbers: Vec<Handle> = handles.iter().filter_map(|h| Handle::parse(h)).collect();
+        let ends: Vec<String> = numbers
+            .iter()
+            .filter_map(|h| h.last_digits().map(str::to_string))
+            .collect();
+        let same_digits = at.person_records(SAME_DIGITS_SQL, &ends).await?;
+        let pages = at.person_records(CONTACT_PAGES_SQL, pages).await?;
+        let ends: std::collections::BTreeSet<String> = [&holding, &same_digits, &pages]
+            .into_iter()
+            .flatten()
+            .flat_map(|r| &r.contact.handles)
+            .filter_map(|h| h.home_digits())
+            .map(|d| datalib_handle::last_digits(&d).to_string())
+            .collect();
+        let ends: Vec<String> = ends.into_iter().collect();
+        let full_numbers = at.full_numbers(&ends).await?;
+        Ok(crate::people::PeopleRows {
+            holding,
+            same_digits: crate::people::for_each_number(&numbers, same_digits),
+            pages,
+            full_numbers,
+        })
     }
 
     async fn outgoing_edges(&self, markdown_uuid: &str) -> Result<Vec<EdgeRowOut>, RepoError> {

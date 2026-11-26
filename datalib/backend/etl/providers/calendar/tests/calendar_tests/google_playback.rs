@@ -19,7 +19,7 @@ pub(crate) const PRIMARY: &str = "picard@enterprise.test";
 pub(crate) const AWAY: &str = "c_awayteam@group.calendar.google.com";
 
 pub(crate) fn fixture(root: &Path, url: &str, resp: HttpResponse) {
-    let req = HttpRequest::get(google::HTTP_SERVICE, url).header("Accept", "application/json");
+    let req = HttpRequest::get(google::API.service, url).header("Accept", "application/json");
     write_fixture(root, &req, &resp).expect("write fixture");
 }
 
@@ -483,7 +483,7 @@ async fn an_event_with_no_id_is_asked_for_again() {
 /// A whole listing may delete what it does not name only if it named
 /// everything it listed. An event it could not identify (no `id`) used to
 /// be skipped and the stored copy deleted, and a reply with no `items`
-/// read as an empty calendar (audit 2026-10-02 §4). Google sends `items`
+/// read as an empty calendar. Google sends `items`
 /// on every reply, `[]` when empty — measured live across 7 calendars,
 /// incremental replies included — so its absence is not a listing.
 /// Either now deletes nothing and says why on the calendar's row; the

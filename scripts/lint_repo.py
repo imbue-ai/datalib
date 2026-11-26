@@ -1728,8 +1728,8 @@ def _check_card_children_carry_styles(root: Path) -> int:
 #
 # `datalib-pipeline` is a general supervisor: everything it does with a step
 # comes from the step's config entry, never from which program the step
-# runs (docs/dev/plans/completed/dag_and_step_decoupling.md). A
-# `datalib-step` in its code is how a special case for one program starts. Its tests may name
+# runs (datalib/backend/dag/README.md). A `datalib-step` in its
+# code is how a special case for one program starts. Its tests may name
 # it; a `#[cfg(test)] mod` block is cut out, its lines kept as blank so a
 # hit's line number is the file's.
 _RUNNER_SRC = "datalib/backend/dag/src/"

@@ -216,7 +216,9 @@ each row it answered, writes a `warn` line under the target
 counters, `fullscan_steps` among them. Work, unlike time, does not
 change with a cold disk, a lock or a busy machine, so such a line is a
 plan to look at: a missing index, or one that does not narrow the
-search. The runner keeps each at `debug` and writes one line as the
+search. A statement whose job is to walk what it keeps (the retention of
+this store's own lines) carries `/* walks by design */` and writes none.
+The runner keeps each at `debug` and writes one line as the
 attempt ends, naming the statement that did most of the work and its
 file; under ten million steps in all, that line is `debug` too. A bound
 value can be anything, a secret included, so the line names its shape;

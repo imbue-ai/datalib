@@ -59,7 +59,7 @@ describe("an identity cell that names a person", () => {
   };
 
   it("is a chip link with the handle, resolved to the contact when the grid knows one", () => {
-    const unresolved = draw({ who: () => undefined, canLink: () => false }, riker);
+    const unresolved = draw({ who: () => undefined }, riker);
     expect(unresolved.matches("a.chip.handle-chip.handle-unresolved[data-handle]")).toBe(true);
     expect(unresolved.dataset.handle).toBe("email:riker@enterprise.org");
     expect(unresolved.getAttribute("href")).toBe("mailto:riker@enterprise.org");
@@ -74,10 +74,7 @@ describe("an identity cell that names a person", () => {
       title: null,
       seen: null,
     };
-    const resolved = draw(
-      { who: () => ({ mine, sourceContacts: [] }), canLink: () => true },
-      riker,
-    );
+    const resolved = draw({ who: () => ({ mine, sourceContacts: [] }) }, riker);
     expect(resolved.classList.contains("handle-resolved")).toBe(true);
     expect(resolved.textContent).toBe("WWilliam T. Riker");
     expect(resolved.querySelector(".handle-initial")?.textContent).toBe("W");
@@ -85,7 +82,7 @@ describe("an identity cell that names a person", () => {
 
   it("draws an identity that is not a person as icon and label", () => {
     const group: Identity = { id: "slack", label: "Slack", icon: "slack" };
-    const cell = draw({ who: () => undefined, canLink: () => false }, group);
+    const cell = draw({ who: () => undefined }, group);
     expect(cell.classList.contains("tg-identity")).toBe(true);
     expect(cell.querySelector("a.chip")).toBeNull();
   });
@@ -108,7 +105,7 @@ describe("a group row of an identity column", () => {
   const title = (rows: Record<string, unknown>[] | undefined) => {
     const [col] = typedColumns<Record<string, unknown>>([spec], {
       groupable: true,
-      chips: { who: () => undefined, canLink: () => false, entity: () => undefined },
+      chips: { who: () => undefined, entity: () => undefined },
     });
     const format = col.grouping!.formatter as (g: unknown) => unknown;
     return format({
@@ -149,7 +146,7 @@ describe("a Name cell that is a chip", () => {
    *  plain label: the chip keeps them beside it. */
   it("keeps the problem counts beside the chip", () => {
     const [col] = typedColumns<Record<string, unknown>>([spec], {
-      chips: { who: () => undefined, canLink: () => false, entity: () => undefined },
+      chips: { who: () => undefined, entity: () => undefined },
     });
     const name: Identity = {
       id: "slack/ingest",

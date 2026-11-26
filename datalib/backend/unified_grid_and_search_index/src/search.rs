@@ -97,6 +97,11 @@ pub struct SearchRow {
     /// number makes one. Read beside the row; empty on any other row.
     #[serde(skip)]
     pub contact_handles: Vec<String>,
+    /// On a contact's own row, its page, where the contact is a person
+    /// rather than a group: what names them when no handle does. Read
+    /// beside the row, as `contact_handles` is.
+    #[serde(skip)]
+    pub contact_page: Option<String>,
     /// The Contact cell: `contact` for its label, and where the contact
     /// has an address or a number that makes a handle, that handle as a
     /// URI for its id. Resolved by the applet; never read from the index.

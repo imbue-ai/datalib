@@ -90,13 +90,8 @@ the grouping are all built from. The grid's own column ids
 
 Every request reads inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so it sees one state of the index.
-`grid_rows` carries one index for the newest-first order and one per
-key the search bar filters on, each `(key, touched_at_utc, is_document,
-uuid)`; a filter on a key without one reads and sorts the whole table
-([query plans](doltlite.md#query-plans-and-indexes)). They are declared
-on the struct (`#[portable_table(index = …)]`) and created only in the
-grid index, not in the render stores that also hold a `grid_rows`.
-`every_filter_key_is_served_by_an_index` fails when a key has none.
+Which index answers which key, and how SQLite is held to it, is in
+[`search.md`](search.md) §"The indexes".
 
 Free text never reaches `grid_rows`' SQL: the applet works out what the
 query's filters keep first, as `grid_rows` row ids read from the
@@ -269,7 +264,7 @@ group, and `email` and `phone` are the card's first address and number
 as the source wrote them, a number with or without its country code.
 The grid's Contact column, and the Subject cell on such a row, is the
 contact's chip, drawn from the three, else from the contact's handles
-in `contact_record_handles` ([`chips.md`](chips.md) §"In a grid"). A
+in `contact_record_handles`, else by its own page ([`chips.md`](chips.md) §"In a grid"). A
 card is its own subject, so `conversation_name` is the contact's name
 too, and `channel` holds the address book or list it is filed in.
 `author` stays null: nobody wrote a contact.
@@ -475,8 +470,7 @@ caption is a `caption:` term.
 **A document can be in the grid and not in the search index.** One its
 renderer hands over with `RenderedMarkdown::searchable` false has its rows
 and opens like any other, and is stored with `markdowns.searchable` false,
-which the keyword index, the source's `embed` and the "without vectors"
-count read. Use it for a document that only repeats what others say, so
+which the keyword index and the source's `embed` read. Use it for a document that only repeats what others say, so
 a free-text search does not return it and nothing embeds it: Notion's
 table of contents is the one. Its row is still found by its own
 columns.
@@ -505,6 +499,18 @@ wrote it.
 
 The terms live on the row so that they go wherever the row goes: a row
 that moves to another document takes its terms with it, in one write.
+
+What may be a term:
+
+- **A mention only where the source marks it up**: Slack's `<@U02>`, a
+  GitHub `@login`, each an exact id. Never an address found in running
+  text: quoted replies repeat every earlier message, and signatures add
+  noise.
+- **Every recipient, with no cap.** Dropping some would make the record
+  lie. If the size of long reply-all threads ever matters, store each
+  distinct recipient list once and point the emails at it.
+- **Never a message's text, nor its preview.** Words in the body are the
+  keyword index's.
 
 ## Storage rows: what a source weighs
 

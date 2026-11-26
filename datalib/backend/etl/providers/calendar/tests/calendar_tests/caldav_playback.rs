@@ -413,8 +413,7 @@ fn first_listing(root: &Path) {
 /// The stored token has expired, so the calendar is listed whole again;
 /// the server stops that listing short and then will not move past the
 /// point it stopped. Absence from a listing that never finished says
-/// nothing, so the reception it never reached stays (audit 2026-10-02
-/// §4). The next run carries on from the token the cut-short one kept;
+/// nothing, so the reception it never reached stays. The next run carries on from the token the cut-short one kept;
 /// when that listing reaches its end, the reception it never named is
 /// gone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

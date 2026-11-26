@@ -368,7 +368,8 @@ fn a_history_reader_never_makes_the_writers_commit_fail() {
 /// commits later. The first writer goes on committing as if nothing
 /// happened. The kernel releases the lock when the holder dies, so a
 /// SIGKILLed writer (the `hang` scenarios below) leaves no stale claim.
-/// The search applet's snapshot (`docs/dev/plans/paged_grids.md`): a
+/// A held read transaction as a snapshot (`docs/dev/doltlite.md`
+/// § "Three ways to read one commit"): a
 /// read-only connection on `main` holding a transaction reads one commit
 /// for as long as the transaction lives, with the writer sealing as fast
 /// as it can underneath, and the writer is never refused. A later

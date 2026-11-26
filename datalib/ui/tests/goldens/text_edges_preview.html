@@ -1134,9 +1134,10 @@ code.hljs {
    (docs/dev/chips.md). Shared by the document frame and the
    grid's cells, so both draw the same chip; each includes this file
    in its own root, since neither sees the page's styles. */
-/* A handle the contacts app can name: a chip. One it cannot yet: the
-   source's own text, marked as clickable to link it. */
 .handle-chip {
+  /* A click on one selects its row or does nothing; it is not a link to
+     follow. */
+  cursor: default;
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
@@ -1163,16 +1164,12 @@ code.hljs {
   direction: ltr;
   unicode-bidi: isolate;
 }
-.handle-resolved,
-.handle-linkable {
-  cursor: pointer;
-}
-/* A person chip says at a glance whether it is linked to one of your
-   contacts: pale blue when it is, grey while it is not (theme.css's
+/* A person chip says at a glance whether they are in your contacts:
+   pale blue when they are, grey when they are not (theme.css's
    `--datalib-chip-*`). A chip link not yet drawn (the render preview, or
    before the answer lands) is the grey; `:where` keeps that rule from
    outranking the blue. */
-:where(a.chip[data-handle]),
+:where(a.chip[data-handle], a.chip[data-contact-page]),
 .handle-unresolved,
 .handle-resolved {
   border-radius: 999px;
@@ -1221,11 +1218,6 @@ a.chip.handle-resolved,
   max-height: none;
   flex-shrink: 0;
   opacity: 0.6;
-}
-.handle-linkable::after {
-  content: "+";
-  font-weight: 400;
-  color: var(--datalib-muted, #94a3b8);
 }
 .handle-chip:hover {
   outline: 1px solid var(--datalib-border, #d8d8d8);
@@ -1334,10 +1326,6 @@ time.date-from-t0 {
 .chip-group > a.chip.chip-bare {
   padding: 0;
   background: none;
-}
-/* Between names a "+" reads as part of the list; a click still links. */
-.chip-group > .handle-linkable::after {
-  content: none;
 }
 
 

@@ -19,6 +19,8 @@ import { expect, type APIRequestContext, type Locator, type Page } from "@playwr
 export const SHOWN_CARDS = ".ct-main .ct-card:not(.ct-hidden-pane, .ct-hidden-pane .ct-card)";
 export const shownCards = (page: Page) => page.locator(SHOWN_CARDS);
 export const tabLabels = (page: Page) => page.locator(".ct-tab .ct-tab-label");
+/// The tabs a new window has pinned, in order.
+export const PINNED = ["Dashboard", "Search", "Sources", "Contacts"];
 // The shown card whose source contains `source`.
 export const cardOf = (page: Page, source: string) =>
   page.locator(`${SHOWN_CARDS}[data-card-source*=${JSON.stringify(source)}]`);

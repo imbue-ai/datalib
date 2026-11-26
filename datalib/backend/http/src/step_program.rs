@@ -1,7 +1,7 @@
 //! What the app knows about the configs it writes for `datalib-step`, the
 //! step program datalib ships: how to tell a command runs it, and the
 //! group types and ids datalib gives meaning to. The runner knows
-//! none of this (`docs/dev/plans/completed/dag_and_step_decoupling.md`).
+//! none of this (`datalib/backend/dag/README.md`).
 
 /// The `type` of a group that renders what changed in another group's raw
 /// store between two commits (`docs/dev/plans/completed/diff_renderer.md`).

@@ -468,6 +468,34 @@ impl Handle {
             .or_else(|| Self::tel(name))
     }
 
+    /// A number's last [`SHARED_DIGITS`] digits, which any way of writing
+    /// it at home ends in too; `None` for a handle that is no number.
+    pub fn last_digits(&self) -> Option<&str> {
+        (self.kind() == HandleKind::Tel).then(|| last_digits(self.value()))
+    }
+
+    /// How this number may be dialled at home, as [`home_digits`] reads
+    /// one: with its country code, or without.
+    /// Empty for a handle that is no number.
+    pub fn dialled_at_home(&self) -> Vec<String> {
+        if self.kind() != HandleKind::Tel {
+            return Vec::new();
+        }
+        let digits = self.value().trim_start_matches('+');
+        let national = &digits[calling_code_len(digits).min(digits.len())..];
+        let mut out: Vec<String> = [digits, national]
+            .into_iter()
+            .filter_map(home_digits)
+            .collect();
+        out.dedup();
+        out
+    }
+
+    /// Whether a number [`home_digits`] read as `home` may be this one.
+    pub fn may_be(&self, home: &str) -> bool {
+        self.dialled_at_home().iter().any(|d| d == home)
+    }
+
     /// The handle beside the name a source showed, as a person writes
     /// one: `Will Riker <riker@enterprise.org>`, `Will Riker
     /// (+15550123456)`, `Data (slack:T01/U02)`. The identifier alone when
@@ -515,6 +543,72 @@ impl Handle {
     fn of(kind: HandleKind, value: &str) -> Self {
         Self(format!("{}:{value}", kind.as_str()))
     }
+}
+
+/// How many trailing digits the spellings of one number share: the fewest
+/// a number may have.
+pub const SHARED_DIGITS: usize = 7;
+
+/// How many of a full number's first digits are its country code, which
+/// ITU-T E.164 decides by those digits alone: 1 and 7 stand alone, some
+/// codes are two digits, and every other is three.
+fn calling_code_len(digits: &str) -> usize {
+    let lead = |n: usize| digits.get(..n).and_then(|d| d.parse::<u8>().ok());
+    match (lead(1), lead(2)) {
+        (Some(1 | 7), _) => 1,
+        (
+            _,
+            Some(
+                20
+                | 27
+                | 30..=34
+                | 36
+                | 39..=41
+                | 43..=49
+                | 51..=58
+                | 60..=66
+                | 81
+                | 82
+                | 84
+                | 86
+                | 90..=95
+                | 98,
+            ),
+        ) => 2,
+        _ => 3,
+    }
+}
+
+/// The last [`SHARED_DIGITS`] of a number's `digits`.
+pub fn last_digits(digits: &str) -> &str {
+    &digits[digits.len().saturating_sub(SHARED_DIGITS)..]
+}
+
+/// The digits of a phone number written without its country code, the way
+/// it is dialled at home: `(202) 555-0101` is `2025550101`. Less what is
+/// dialled before a number and is no part of it: any leading zero, and the
+/// 1 before ten digits. `None` for one written in international form, and for anything else.
+pub fn home_digits(number: &str) -> Option<String> {
+    let number = number.trim();
+    let number = strip_prefix_ignore_case(number, "tel:").unwrap_or(number);
+    let number = number.split_once(';').map_or(number, |(n, _params)| n);
+    let mut digits = String::with_capacity(number.len());
+    for c in number.chars() {
+        match c {
+            '0'..='9' => digits.push(c),
+            '(' | ')' => {}
+            c if is_separator(c) => {}
+            _ => return None,
+        }
+    }
+    let digits = digits.trim_start_matches('0');
+    let digits = match digits.strip_prefix('1') {
+        Some(ten) if ten.len() == 10 => ten,
+        _ => digits,
+    };
+    (SHARED_DIGITS..=15)
+        .contains(&digits.len())
+        .then(|| digits.to_string())
 }
 
 /// A character that changes how a handle shows without showing itself:
@@ -656,6 +750,54 @@ mod tests {
         ] {
             assert_eq!(Handle::spelled_by(name), None, "{name:?}");
         }
+    }
+
+    #[test]
+    fn a_number_written_for_home_is_its_digits_less_any_leading_zero() {
+        for (written, want) in [
+            ("(202) 555-0101", Some("2025550101")),
+            ("202.555.0101", Some("2025550101")),
+            ("1-202-555-0101", Some("2025550101")),
+            ("001 202 555 0101", Some("2025550101")),
+            ("tel:202-555-0101;ext=4", Some("2025550101")),
+            ("020 7946 0958", Some("2079460958")),
+            ("0044 20 7946 0958", Some("442079460958")),
+            ("555-0101", Some("5550101")),
+            ("+1 202 555 0101", None),
+            ("555-010", None),
+            ("555-WARP-FAC", None),
+            ("", None),
+        ] {
+            assert_eq!(home_digits(written).as_deref(), want, "{written:?}");
+        }
+    }
+
+    /// A number dialled at home is the full number less its country code,
+    /// and nothing longer is taken off it: `555-0101` without its area
+    /// code could be anyone's.
+    #[test]
+    fn a_number_is_matched_only_with_its_country_code_off() {
+        let is = |full: &str, home: &str| {
+            Handle::tel(full)
+                .unwrap()
+                .may_be(&home_digits(home).unwrap())
+        };
+        assert!(is("+1 202 555 0101", "(202) 555-0101"));
+        assert!(is("+1 202 555 0101", "1-202-555-0101"));
+        assert!(is("+44 20 7946 0958", "020 7946 0958"));
+        assert!(is("+44 20 7946 0958", "0044 20 7946 0958"));
+        assert!(is("+39 06 698 1234", "06 698 1234"));
+        assert!(is("+353 1 555 0101", "01 555 0101"));
+        assert!(is("+86 138 0000 0101", "138 0000 0101"));
+        assert!(!is("+1 202 555 0101", "555-0101"));
+        assert!(!is("+1 202 555 0101", "(202) 555-0102"));
+        assert!(!is("+44 20 7946 0958", "7946 0958"));
+        assert!(!is("+353 1 555 0101", "531 555 0101"));
+        let riker = Handle::email("2025550101@enterprise.org").unwrap();
+        assert!(!riker.may_be("2025550101"));
+        assert_eq!(riker.last_digits(), None);
+        let tel = Handle::tel("+1 202 555 0101").unwrap();
+        assert_eq!(tel.last_digits(), Some("5550101"));
     }
 
     #[test]

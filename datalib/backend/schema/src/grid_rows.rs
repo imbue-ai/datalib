@@ -24,19 +24,22 @@ use serde::{Deserialize, Serialize};
     // the same within each key the search bar filters on. Without its own
     // index a filter reads every row: walking the sort index took 38 s
     // for one provider's single row over 74k rows, 0.08 s with this shape
-    // (docs/dev/plans/paged_grids.md). A key added to the search bar
+    // (docs/dev/grid_rows.md). A key added to the search bar
     // wants an index here, and an index no key uses costs every write
     // for nothing: `every_filter_key_is_served_by_an_index` names both.
+    // A key whose value many rows share ends in `source_id`, so the same
+    // key in one source reads no row of any other; a conversation does,
+    // because `at:<label>` reads every one filed there.
     index = "grid_rows_by_touched:touched_at_utc,is_document,uuid",
     index = "grid_rows_by_source_id:source_id,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_subject:conversation_name,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_kind:kind,touched_at_utc,is_document,uuid,source_id",
+    index = "grid_rows_by_channel:channel,touched_at_utc,is_document,uuid,source_id",
+    index = "grid_rows_by_conversation:conversation_uuid,touched_at_utc,is_document,uuid,source_id",
+    index = "grid_rows_by_subject:conversation_name,touched_at_utc,is_document,uuid,source_id",
+    index = "grid_rows_by_account:account,touched_at_utc,is_document,uuid,source_id",
+    index = "grid_rows_by_project:project,touched_at_utc,is_document,uuid,source_id",
     index = "grid_rows_by_notion_page:notion_page_uuid,touched_at_utc,is_document,uuid",
-    index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid",
+    index = "grid_rows_by_diff_status:diff_status,touched_at_utc,is_document,uuid,source_id",
     index = "grid_rows_by_upstream_id:upstream_id,touched_at_utc,is_document,uuid",
     // Its last two columns are what a search narrowed to documents reads,
     // so it reads no row (`DOCUMENTS_INDEX` in unified_grid_and_search_index).

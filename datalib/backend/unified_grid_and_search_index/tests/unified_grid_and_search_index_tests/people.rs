@@ -9,8 +9,10 @@ use datalib_etl_render::grid_index::{apply_one, seal, RenderedMarkdown, WriteLoc
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
-use datalib_unified_grid_and_search_index::dolt_repo::{DoltRepo, PEOPLE_SQL};
-use datalib_unified_grid_and_search_index::people::merge_and_rank;
+use datalib_unified_grid_and_search_index::dolt_repo::{
+    DoltRepo, CONTACT_PAGES_SQL, FULL_NUMBERS_SQL, PEOPLE_SQL, SAME_DIGITS_SQL,
+};
+use datalib_unified_grid_and_search_index::people::People;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
 use crate::dolt_backend_integration::{unique_db_path, writer};
@@ -75,8 +77,13 @@ async fn index_of(documents: &[RenderedMarkdown]) -> (DoltRepo, sqlx::SqlitePool
 }
 
 async fn people(repo: &DoltRepo, handles: &[&str]) -> BTreeMap<String, Vec<NormalizedContact>> {
-    let asked: Vec<String> = handles.iter().map(|h| h.to_string()).collect();
-    merge_and_rank(repo.people_for_handles(&asked).await.expect("people"))
+    asked(repo, handles, &[]).await.people
+}
+
+async fn asked(repo: &DoltRepo, handles: &[&str], pages: &[&str]) -> People {
+    let owned = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let rows = repo.people(&owned(handles), &owned(pages)).await;
+    People::of(rows.expect("people"))
 }
 
 /// A person in many documents is one answer, what they wrote in each
@@ -206,7 +213,7 @@ async fn a_contacts_row_gets_its_handles() {
 
 /// What answering for Riker does when `n` documents carry them: the rows
 /// the statements that read contacts answered with, and the steps they took.
-async fn cost_of_a_person_in(n: usize) -> (u64, u64) {
+async fn cost_of_a_person_in(n: usize) -> (Vec<(String, u64)>, u64) {
     let root = Arc::new(unique_db_path().parent().unwrap().to_path_buf());
     let recording = datalib_sql_work::record_under(&root);
     let pool = writer(&root).await;
@@ -231,7 +238,7 @@ async fn cost_of_a_person_in(n: usize) -> (u64, u64) {
         "the read was not recorded; this checks nothing: {ran:#?}"
     );
     (
-        ran.iter().map(|r| r.work.rows).sum(),
+        ran.iter().map(|r| (r.sql.clone(), r.work.rows)).collect(),
         ran.iter().map(|r| r.work.vm_steps).sum(),
     )
 }
@@ -282,4 +289,116 @@ async fn who_a_handle_is_is_read_by_its_handle() {
         ),
         "{plan:#?}"
     );
+}
+
+/// Kalita's card writes her number the way it is dialled at home, so it
+/// makes no handle. It is found from the full number a chat knows, and the
+/// full number from it, by its digits. A number another country also ends
+/// in the same digits is both, and one no source knows is neither.
+#[tokio::test]
+async fn a_number_with_no_country_code_is_matched_by_its_digits() {
+    let card = |key: &str, name: &str, number: &str| {
+        let mut c = NormalizedContact::new("book", key, ContactKind::Person);
+        c.names = vec![name.into()];
+        c.handles = vec![ContactHandle::phone(None, number)];
+        let mut md = document(key, vec![c]);
+        md.rows[0].contact = Some(name.into());
+        md
+    };
+    let caller = |n: usize, number: &str| {
+        let mut c = NormalizedContact::new("calls", number, ContactKind::Person);
+        c.handles = vec![ContactHandle::phone(None, number)];
+        c.seen = Some(Seen {
+            items: 1,
+            last_at: None,
+        });
+        document(&format!("call-{n}"), vec![c])
+    };
+    let (repo, _w) = index_of(&[
+        card("kalita", "Kalita", "(202) 555-0147"),
+        card("ro", "Ro Laren", "079 5550 0199"),
+        card("hugh", "Hugh", "(907) 555-0111"),
+        caller(1, "+12025550147"),
+        caller(2, "+447955500199"),
+        caller(3, "+337955500199"),
+        // Ends in the same seven digits, and is another number.
+        caller(4, "+19075550147"),
+    ])
+    .await;
+
+    let got = asked(&repo, &["tel:+12025550147", "tel:+19075550147"], &[]).await;
+    assert_eq!(
+        got.same_digits.keys().collect::<Vec<_>>(),
+        ["tel:+12025550147"]
+    );
+    assert_eq!(got.same_digits["tel:+12025550147"][0].names, ["Kalita"]);
+    assert_eq!(got.people["tel:+12025550147"].len(), 1, "not by a guess");
+
+    let got = asked(&repo, &[], &["kalita", "ro", "hugh", "call-1", "nobody"]).await;
+    assert_eq!(
+        got.pages.keys().collect::<Vec<_>>(),
+        ["hugh", "kalita", "ro"]
+    );
+    let full: BTreeMap<&str, Vec<&str>> = got
+        .full_numbers
+        .iter()
+        .map(|(v, hs)| (v.as_str(), hs.iter().map(|h| h.as_str()).collect()))
+        .collect();
+    assert_eq!(
+        full,
+        BTreeMap::from([
+            ("(202) 555-0147", vec!["tel:+12025550147"]),
+            (
+                "079 5550 0199",
+                vec!["tel:+337955500199", "tel:+447955500199"]
+            ),
+        ])
+    );
+}
+
+/// A number's digits are looked up, and a page by its id; no table is
+/// read whole.
+#[tokio::test]
+async fn numbers_and_pages_are_read_by_index() {
+    let (_repo, w) = index_of(&[]).await;
+    for (sql, bound, wanted) in [
+        (
+            SAME_DIGITS_SQL,
+            r#"["5550147"]"#,
+            "SEARCH contact_record_numbers USING COVERING INDEX contact_record_numbers_by_last_digits",
+        ),
+        (
+            FULL_NUMBERS_SQL,
+            r#"["5550147"]"#,
+            "SEARCH contact_record_handles USING COVERING INDEX contact_record_handles_by_last_digits",
+        ),
+        (CONTACT_PAGES_SQL, r#"["kalita"]"#, "SEARCH d USING"),
+    ] {
+        // Audited: a constant statement of ours.
+        let rows: Vec<(i64, i64, i64, String)> =
+            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                .bind(bound)
+                .fetch_all(&w)
+                .await
+                .expect("explain");
+        let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
+        assert!(
+            plan.iter().any(|d| d.starts_with(wanted)),
+            "no {wanted:?} in {plan:#?}"
+        );
+        assert!(
+            !plan.iter().any(|d| {
+                [
+                    "g",
+                    "r",
+                    "d",
+                    "contact_record_numbers",
+                    "contact_record_handles",
+                ]
+                .iter()
+                .any(|t| d.starts_with(&format!("SCAN {t}")))
+            }),
+            "{plan:#?}"
+        );
+    }
 }

@@ -1,7 +1,8 @@
 # Contacts: a simpler UI
 
-*Proposal (2026-11-24, revised 2026-11-25 after Thad's notes and answers);
-nothing here is built. What the screens do was seen by using the TNG
+*Plan (2026-11-24, revised 2026-11-25 after Thad's notes and answers).
+Steps 1 and 2 of §"Order of work" are built, and
+[`../contacts.md`](../contacts.md) says how they work; the rest is not. "The problem" is as it was before. What the screens do was seen by using the TNG
 demo. The numbers are counts from copies of real libraries and from one
 real address book. If this is agreed, it replaces
 [`contact_linking.md`](contact_linking.md)'s "Where links are made".
@@ -217,8 +218,9 @@ The store's `handles` table is keyed by handle alone; it becomes
 (handle, contact), with a rung, and *No longer works* is then on one
 person's use of it. `POST /resolve` answers a list, and `Who.mine`
 becomes one, possibly empty; a chip's look, tooltip and menu read the
-list, so nothing is drawn by a second path. This is also what group contacts were for ("a shared address belongs to a group
-contact"), which were never built past the table.
+list, so nothing is drawn by a second path. This is also what group
+contacts were for ("a shared address belongs to a group contact"), which
+were never built past the table.
 
 Neither the address book nor the library measured holds a handle that
 two differently named records share, so the TNG fixture gets the two
@@ -295,14 +297,17 @@ message renames nobody, and that would have to move to the grid's rows.
 
 Each step stands alone; the first two change no stored data.
 
-1. **Clicks, place and words.** A click does nothing but select, the box
-   and the "+" go, Contacts is pinned, the page loses its data-model
-   sentences.
-2. **Adding the whole person**: the ticked handles, numbers without a
-   country code, adding many rows from an address book, a page for a
-   contact with no handle.
+1. **Clicks, place and words.** Built (#2010). A click does nothing but
+   select, the box and the "+" go, Contacts is pinned, the page loses its
+   data-model sentences, and *Not theirs* is remembered.
+2. **Adding the whole person.** Built: the ticked handles, numbers
+   without a country code, adding many rows from an address book, a page
+   for a contact with no handle and for a card with none. A handle
+   another contact has cannot be ticked yet (step 3), and the search
+   finds a number however it is written, which was not in this plan.
 3. **Shared handles**, with the store's rung, then **one line per
-   address** in the editor, which needs them.
+   address** in the editor, which needs them. The rung is also where a
+   handle added from a card keeps its label and which card it came from.
 4. **The list**: the three sorts, and *Unfiled*.
 5. **Suggestions.**
 6. **What goes, goes**, with the store's rung, the routes and

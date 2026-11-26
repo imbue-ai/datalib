@@ -146,9 +146,6 @@ export type QueryEcho = {
   search_index_missing?: boolean;
   // What part of the search could not answer, when the rest did.
   partial?: string | null;
-  // How many documents the search could find have no vectors; on a search
-  // by meaning's first page.
-  without_vectors?: { total: number; by_source: [string, number][] } | null;
   [key: string]: unknown;
 };
 
@@ -2007,8 +2004,8 @@ export type ServiceRegistration = {
 /// `mailbox` (emails are filed here), `keyword` (a Gmail flag —
 /// downloadable, but never matched by the render-side filter),
 /// `conversation` (one chat thread — a Claude chat, a Slack DM),
-/// `channel` (a Slack or Discord channel), `calendar`, `address_book`, a
-/// Linear `team` or `project`, or a Discord `server`.
+/// `channel` (a Slack or Discord channel), `calendar`, `address_book`, `label`
+/// (one in Google Contacts), a Linear `team` or `project`, or a Discord `server`.
 export type ProbeItemKind =
   | "mailbox"
   | "keyword"
@@ -2016,6 +2013,7 @@ export type ProbeItemKind =
   | "channel"
   | "calendar"
   | "address_book"
+  | "label"
   | "team"
   | "project"
   | "server";
