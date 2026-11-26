@@ -47,3 +47,28 @@ fn a_probe_that_succeeds_is_silent_on_stderr_unless_asked() {
         "{asked:?}"
     );
 }
+
+/// The probe reads its params from `DATALIB_DAG_PARAMS`, as a step does,
+/// so params the server hands it that way are the ones it asks with: a
+/// value that is not JSON there is refused by the variable's name.
+#[test]
+fn a_probe_reads_its_params_from_the_environment() {
+    let d = tempfile::tempdir().unwrap();
+    let api = d.path().join("input_raw");
+    let playback = d.path().join("playback");
+    record_workspace(&api, &["C1"], |_, _| json!([])).unwrap();
+    SlackSynth::new(&api).synthesize(&playback).unwrap();
+
+    let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
+        .args(["probe", "slack"])
+        .env("DATALIB_HTTP_PLAYBACK", &playback)
+        .env("DATALIB_DAG_PARAMS", "not json")
+        .env_remove("RUST_LOG")
+        .output()
+        .expect("run datalib-step probe");
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("DATALIB_DAG_PARAMS"),
+        "{out:?}"
+    );
+}

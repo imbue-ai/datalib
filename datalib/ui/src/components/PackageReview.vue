@@ -49,7 +49,11 @@ const programs = computed(() => {
   const m = found.value?.manifest;
   if (!m) return [];
   const words = m.sources
-    .flatMap((s) => [...Object.values(s.commands), ...s.applets.map((a) => a.command)])
+    .flatMap((s) => [
+      ...Object.values(s.commands).map((c) => c.command),
+      ...(s.probe ? [s.probe] : []),
+      ...s.applets.map((a) => a.command),
+    ])
     .map((c) => c.trim().split(/\s+/)[0]);
   return [...new Set(words)];
 });

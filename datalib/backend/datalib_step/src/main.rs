@@ -117,8 +117,8 @@ const EXAMPLES: &[Example] = &[
         command: "datalib-step probe slack",
     },
     Example {
-        what: "the same, with the source's ingest params as JSON, and the channels a picker would offer",
-        command: "datalib-step probe slack --params-file slack-params.json --list channels",
+        what: "the same, with the source's ingest params as JSON in DATALIB_DAG_PARAMS, and the channels a picker would offer",
+        command: "datalib-step probe slack --list channels",
     },
     Example {
         what: "ask a source with more than one way in through one of them, and list its labels",
@@ -255,24 +255,22 @@ enum Cmd {
     /// Utility (not a pipeline step): ask a provider which account
     /// these credentials reach — and, with `--list`, one list a picker
     /// offers — and print one JSON object on stdout. Progress goes to
-    /// stderr while a list pages. Writes nothing and needs no data root.
+    /// stderr while a list pages. The source's ingest params, when it
+    /// needs any, are JSON in `DATALIB_DAG_PARAMS`, as a step's are: not
+    /// an argument, since params carry tokens and argv is readable by every
+    /// user on the machine. Writes nothing and needs no data root.
     Probe {
         /// Source type (`slack`, `claude`, …): the provider to ask.
         source_type: String,
         /// Which live way in to ask through (`gmail` or `jmap` for
         /// email). Needed only when the source has more than one and the
-        /// params file names none.
+        /// params name none.
         #[arg(long)]
         method: Option<String>,
         /// The list to load as well: `channels`, `conversations`,
         /// `labels`, `mailboxes`, `calendars` or `addressbooks`.
         #[arg(long)]
         list: Option<String>,
-        /// A JSON file holding the source's ingest params. A file, not an
-        /// argument: params carry tokens, and argv is readable by every
-        /// user on the machine.
-        #[arg(long = "params-file")]
-        params_file: Option<PathBuf>,
     },
     /// Utility (not a pipeline step): put the pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
@@ -537,16 +535,9 @@ async fn main() {
         source_type,
         method,
         list,
-        params_file,
     } = &cli.cmd
     {
-        probe::run_cli(
-            source_type,
-            method.as_deref(),
-            list.as_deref(),
-            params_file.as_deref(),
-        )
-        .await;
+        probe::run_cli(source_type, method.as_deref(), list.as_deref()).await;
     }
     // `pull-models` likewise: nothing here is a step.
     if let Cmd::PullModels { models_dir } = &cli.cmd {

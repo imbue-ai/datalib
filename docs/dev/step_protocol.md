@@ -719,6 +719,47 @@ A step has thirty seconds to answer. Up to eight are asked at once.
 schema, its method tables, and the keys that no longer do anything,
 which it runs without and names as warnings.
 
+## Probe
+
+A probe is not a step and the runner never starts one. The app runs it
+when a person clicks "Check connection" in the "Add source" form, or
+"Load" beside a field that picks from a list. A package names the
+command that probes its type in its manifest (`packages.md`, `probe`);
+`datalib-step probe <type>` is Datalib's own. The app starts the
+command:
+
+- with `--list <list>` appended when it asks for one list (`channels`,
+  `conversations`, `labels`, `mailboxes`, `calendars`, `addressbooks`,
+  `teams`, `projects` or `servers`: `ProbeList` in
+  `datalib/backend/probe/src/lib.rs`), and nothing appended for
+  "Check connection";
+- with the source's ingest params, as the form would write them, as
+  JSON in `DATALIB_DAG_PARAMS`, the same variable a step's params come
+  in;
+- in the data root, with the environment a step gets less what only the
+  runner sets, and the variables its params name under a key ending in
+  `_env_var`;
+- with nothing on stdin.
+
+It owes one JSON object on stdout and an exit status:
+
+- **Success**, exit 0: a `ProbeReport`
+  (`datalib/backend/probe/src/lib.rs`): `mode`, the ingest method it
+  asked through; `account`, with `id` and optionally `address`,
+  `display_name` and `message_estimate`; `items`, the list asked for,
+  each with `path`, `kind` and the optional `title`, `role`,
+  `messages`, `members` and `updated_at`; and `notes`, sentences to
+  show the person.
+- **Failure**, nonzero exit: `{"failure": {"issue": "<kind>", "detail":
+  "<what went wrong>"}}`, where the kind is one of `IssueKind`
+  (`datalib/backend/probe/src/issue.rs`). Without that line the app
+  reads the stderr lines that start with `error: `.
+
+While it pages through a long list it may write
+`probe-progress: {"done": 120, "total": 400}` lines on stderr, which
+the form shows. Any other stderr line is log. A probe that has not
+answered within two minutes is killed.
+
 ## Compact and collect
 
 `datalib-pipeline free-disk-space`, or the app's `POST /api/free_disk_space`
