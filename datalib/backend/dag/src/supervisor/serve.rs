@@ -123,8 +123,11 @@ pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
     let path = crate::config::root_config_path(root);
     if !path.is_file() {
         return Err(format!(
-            "no config at {} — create one from the Setup tab before syncing",
-            path.display()
+            "no config at {} — create one before syncing: in the app's Setup tab, or from \
+             a shell with `datalib-pipeline init {}` and then the steps `datalib-step help` \
+             prints",
+            path.display(),
+            root.display()
         ));
     }
     let (checked, _) = crate::config::load_graded(&path).map_err(|e| format!("{e:#}"))?;

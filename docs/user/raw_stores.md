@@ -14,12 +14,13 @@ grid, the documents, the search
 Come here when you need a field the render dropped, an upstream id to
 call the service with, or the original bytes.
 
-This guide covers Gmail and the other mail sources (`email`), Slack
-(`slack`) and calendars (`calendar`), and the store that lists a
-calendar's occurrences one per date. For any other source, `.schema` in
-the shell below lists its tables; their meanings are not written down
-here. A test holds every table and column named here to what the code
-creates.
+Each source has a section here, named for it and its `type`: what its
+tables and columns hold, which upstream id is which, how to tell the
+account's own records from everyone else's, and how to check that the
+copy is complete. `datalib-step help <type>` prints the same section
+after the source's setup and limitations. A test holds every table and
+column named here to what the code creates, and every query to the
+tables it names.
 
 **Before upgrading a reader, read the release notes.** Each release
 lists, under "Changes to the raw stores", every table and column added,
@@ -156,9 +157,9 @@ datalib-doltlite -readonly slack/ingest/entities.doltlite_db "SELECT dolt_hashof
 The store's *version*, the commit the loop hands a step that reads it,
 is the branch `datalib_content`: the last commit at which the source's
 content or its problems moved. Every sync commits its own record
-(`sync_runs`, its stamps) whether or not it found anything, so `main`
-moves on every run and `datalib_content` only when there is something
-new to read.
+(`sync_runs`, its stamps) whether or not it found anything, where the
+source keeps `sync_runs`, so `main` moves on every run and
+`datalib_content` only when there is something new to read.
 
 **To read several queries at one moment**, open that commit by path
 (with `/` in the shell, not `@`). The open is read-only and stays on
@@ -204,7 +205,8 @@ reading; the others are listed so nothing in `.tables` is a mystery.
 
 One sidecar per record table, keyed like it (`emails_bookkeeping` for
 `emails`): what fetching that record cost and what is set aside from
-its payload.
+its payload. The tables made from an export's files, as Facebook's and
+LinkedIn's are, have none.
 
 | column | what it holds |
 |---|---|
@@ -234,7 +236,7 @@ document.
 | `outcome` | what became of the record: `dropped` (not in the mirror), `nulled` (in it, missing something), `ok` |
 | `reason` | why: `fetch_failed`, `over_size_limit`, `not_found`, `forbidden`, … |
 | `scope_kind` | `entity` in a raw store |
-| `scope_key` | what it is about, as `<table>:<id>` for a record (`emails:018f…`), or `listing:…`, `phase:…` |
+| `scope_key` | what it is about: mostly `<table>:<id>` for a record (`emails:018f…`), `listing:…` for a listing, `phase:…` for a part of the run; some sources write other forms (`record:<table>:<id>`, `config:<setting>:<value>`, `file:…`), and each source's section says which of its rows mean something is missing |
 | `item_uuid` | empty here; the app's problems list fills it from what render recorded of the record's grid row |
 | `field` | the field it is about, when it is one field |
 | `path` | where in the payload, as a JSON pointer, when known |
@@ -347,9 +349,34 @@ the first Google account the browser is signed in to.
 `content_type` is `message/rfc822` and `bytes` is the message as the
 server sent it. Its headers are raw: folded across lines and, for
 anything not ASCII, RFC 2047-encoded (`=?UTF-8?B?…?=`). Hand the bytes
-to a mail parser rather than reading headers by hand. An `.eml` larger
-than the source's `blob_size_limit_bytes` is not stored; its
-`email_blobs.blake3` stays NULL and a warning in `problems` says so.
+to a mail parser rather than reading headers by hand. For Gmail and
+JMAP, an `.eml` larger than the source's `blob_size_limit_bytes` is not
+stored; its `email_blobs.blake3` stays NULL and a warning in `problems`
+says so. The mbox and Apple Mail methods store every message whole. A
+message whose `.eml` is not stored renders with no sender and no body,
+because render reads both from the `.eml`.
+
+**Who "me" is.** The account's own address is `accounts.email_address`.
+It is set for Gmail, and for JMAP when the sign-in name is an address;
+for mbox and Apple Mail, only when the config sets it. The messages you
+sent:
+
+```sql
+SELECT e.id, e.subject, e.received_at
+  FROM emails e JOIN accounts a ON a.id = e.account_id
+ WHERE a.email_address IS NOT NULL
+   AND EXISTS (SELECT 1 FROM json_each(e.from_json) f
+                WHERE lower(json_extract(f.value, '$.email')) = lower(a.email_address))
+ ORDER BY datetime(e.received_at) DESC;
+```
+
+**Which id is which, for mbox and Apple Mail.** A message's `emails.id`
+from an mbox that is not Gmail's is its `Message-ID` without angle
+brackets, or the blake3 of the `.eml` when it has none; a second message
+with the same id in one read is dropped. From Apple Mail it is
+`<account id>:<Message-ID>`, or `<account id>:<blake3 of the .eml>`, and
+its `thread_id` is the `emails.id` of the earliest message in Mail's
+conversation.
 
 **Labels are split two ways**, the way JMAP models them. A label that
 files mail (Inbox, Sent, a label you made, the inbox categories) is a
@@ -410,10 +437,10 @@ One row per mail account the source mirrors.
 
 | column | what it holds |
 |---|---|
-| `id` | JMAP's account id; for Gmail the configured `account_id`, by default the address Gmail reports; for mbox the configured `account_id` |
+| `id` | JMAP's account id; for Gmail the configured `account_id`, by default the address Gmail reports; for mbox the configured `account_id`, by default the last part of `mbox.path` without its extension, lowercase with underscores (`takeout` for one `.zip` or `.tgz`); for Apple Mail `apple_mail_` and the start of Mail's account UUID, unless `apple_mail.account_id` is set |
 | `payload` | the account object (JMAP's; for Gmail `{id, name, email, isPersonal, _source}`, where `_source` names the API it came from) |
 | `name` | its display name |
-| `email_address` | the address it signs in as: Gmail's, a JMAP server's sign-in name on the personal account when that is an address, mbox's configured one; NULL when none is known |
+| `email_address` | the address it signs in as: Gmail's, a JMAP server's sign-in name on the personal account when that is an address, the one mbox's or Apple Mail's config sets; NULL when none is known |
 | `is_personal` | 1 for the person's own account, 0 for a shared one |
 | `is_read_only` | 1 if the server says it is read-only |
 
@@ -423,7 +450,7 @@ One row per mailbox or label.
 
 | column | what it holds |
 |---|---|
-| `id` | JMAP's mailbox id; for Gmail `gmail:<account id>:<label id>`; for a Takeout label known only by name, `mbox-` and a hash of the name |
+| `id` | JMAP's mailbox id; for Gmail `gmail:<account id>:<label id>`; for a Takeout label known only by name, and for every Apple Mail mailbox, `mbox-` and a hash of the name |
 | `payload` | the mailbox object; for Gmail `{id, name, role}`. Its message counts are in `volatile_payload` |
 | `account_id` | the `accounts.id` it belongs to |
 | `name` | its name; for Gmail the full label path (`Work/Projects`) |
@@ -450,20 +477,20 @@ One row per message.
 | column | what it holds |
 |---|---|
 | `id` | the message's id (see "Which id is which") |
-| `payload` | the envelope: `id`, `blobId`, `threadId`, `mailboxIds`, `keywords`, `size`, `hasAttachment`, `receivedAt`, `sentAt`, `subject`, `from`, `to`, `cc`, `messageId`, `inReplyTo`, `references`; for a message the Gmail API answered for, also `_source: {"via": "gmail.googleapis.com"}` |
+| `payload` | the envelope: `id`, `blobId`, `threadId`, `mailboxIds`, `keywords`, `size`, `hasAttachment`, `receivedAt`, `sentAt`, `subject`, `from`, `to`, `cc`, `messageId`, `inReplyTo`, `references`; for a message the Gmail API answered for, also `_source: {"via": "gmail.googleapis.com"}`. JMAP's has no `to`, `cc`, `inReplyTo` or `references`, which the download does not ask for, and has `attachments`, JMAP's list of the message's parts |
 | `account_id` | the account it belongs to |
 | `thread_id` | its thread: Gmail's thread id in the same padded hex as `id`; JMAP's own thread id; for an mbox message with no `X-GM-THRID`, its own `id` |
-| `blob_id` | the id of its `.eml`: blake3 of the bytes for Gmail and mbox, JMAP's own blob id for JMAP |
+| `blob_id` | the id of its `.eml`: blake3 of the bytes for Gmail, mbox and Apple Mail, JMAP's own blob id for JMAP |
 | `message_id` | its `Message-ID:`, without angle brackets |
-| `in_reply_to` | its `In-Reply-To:`, without angle brackets |
-| `references_header` | its `References:`, space-separated, without angle brackets |
+| `in_reply_to` | its `In-Reply-To:`, without angle brackets; NULL for JMAP (read the `.eml`) |
+| `references_header` | its `References:`, space-separated, without angle brackets; NULL for JMAP |
 | `received_at` | see "Traps": an RFC 3339 time with the sender's offset |
 | `sent_at` | its `Date:` header |
 | `size` | the `.eml`'s size in bytes |
 | `subject` | the subject, decoded |
 | `from_json` | the senders, as JSON text: `[{"name": …, "email": …}]` |
-| `to_json` | the `To:` addresses, the same way |
-| `cc_json` | the `Cc:` addresses, the same way (there is no Bcc column) |
+| `to_json` | the `To:` addresses, the same way; NULL for JMAP (read the `.eml`) |
+| `cc_json` | the `Cc:` addresses, the same way (there is no Bcc column); NULL for JMAP |
 | `has_attachment` | 1 if the message has an attachment |
 | `label_ids` | Gmail only: its label ids as a sorted JSON array (see "Labels") |
 | `preview` | a line of the body as plain text, at most about 256 characters: Gmail's snippet with its HTML entities decoded, a JMAP server's `preview`, or, where those give none, made from the `.eml`. Empty for a message with no text, NULL until the `.eml` is held or if it will not parse. Not in `payload` |
@@ -881,10 +908,13 @@ instead (§ "A calendar's occurrences" below).
 
 **Google's `etag` and `updated` are not in `payload`.** Google moves
 them on hundreds of events at once with nothing else changed, so they
-are in `google_events_bookkeeping.volatile_payload`.
+are in `google_events_bookkeeping.volatile_payload` (a row an older
+build wrote may still carry them in `payload`).
 
 When the source sets `since` or `until`, only events with an
 occurrence in that window are mirrored; ask the service for the rest.
+The window is whole UTC days. Calendly keeps a meeting only when it
+starts in the window; `.ics` files take no window.
 A windowed calendar is listed whole every run, and an event the window
 has moved past is **dropped** from the mirror, so a relative window
 (`since = "-30d"`) keeps only what is inside it now.
@@ -897,9 +927,9 @@ The login this source mirrors. One row.
 |---|---|
 | `id` | `google` for Google, `calendly` for Calendly, `ics` for files, the server's host for CalDAV |
 | `method` | `google`, `calendly`, `caldav` or `ics` |
-| `server_url` | the CalDAV server's URL; Calendly's API |
+| `server_url` | the CalDAV server's URL; Calendly's API; for Google `https://www.googleapis.com/calendar/v3`; for `.ics` `file://` and the configured path |
 | `principal_href` | the CalDAV principal it found; the Calendly user's URI |
-| `login` | whose calendars these are: the CalDAV user, Google's primary calendar id (the account's address), or the Calendly user's address |
+| `login` | whose calendars these are: for CalDAV the first `mailto:` address the principal lists, else the last part of its URL; Google's primary calendar id (the account's address); the Calendly user's address; NULL for `.ics` |
 
 ### `calendars`
 
@@ -909,12 +939,12 @@ One row per calendar the account lists.
 |---|---|
 | `id` | Google's calendar id; for CalDAV the last segment of the calendar's URL; for Calendly the user's id (one calendar per user); for a file, its path under the folder without `.ics` |
 | `account_id` | the `accounts.id` |
-| `href` | the calendar's URL on a CalDAV server |
-| `display_name` | its name |
-| `description` | its description |
+| `href` | the calendar's URL on a CalDAV server; the user's URI for Calendly; the file's path under the folder for `.ics`; NULL for Google |
+| `display_name` | its name: for Google your own name for it when you gave one, else its `summary`; for a file its `X-WR-CALNAME`, else the file's name; always `Calendly` for Calendly |
+| `description` | its description; for Calendly the user's scheduling page URL |
 | `color` | its color |
-| `time_zone` | the zone a floating time on it is in, where the service says |
-| `sync_token` | the token the next incremental listing starts from; NULL when the calendar is listed whole each run |
+| `time_zone` | the zone a floating time on it is in, where the service says: a file's `X-WR-TIMEZONE`, the Calendly user's `timezone` |
+| `sync_token` | the token the next incremental listing starts from; NULL when the calendar is listed whole each run, for every `.ics` and Calendly calendar, and for a Google calendar whose first whole listing has not finished |
 
 ### `google_events`
 
@@ -946,7 +976,10 @@ sync lists them whole, and one the listing no longer names is dropped.
 ### `calendly_invitees`
 
 The invitees of one scheduled event, with their answers to the booking
-form. Read again only when the event's `listing_hash` moves.
+form. Read again when the event's `listing_hash` moves, or when the
+last try failed: the version held is
+`calendly_invitees_bookkeeping.held_version`. `payload` is NULL for a
+meeting whose invitees have never been fetched.
 
 | column | what it holds |
 |---|---|
@@ -969,8 +1002,11 @@ One iCalendar object per event `UID`.
 ### `dav_resources`
 
 What a CalDAV listing named: one row per object, with the version it
-was listed at. An object listed here whose `ics_objects` row is missing
-or older is still owed.
+was listed at. An object is owed when `dav_resources_bookkeeping` has
+no landed fetch of it, or holds it at a different `held_version` than
+this row's `etag`. An object with no event `UID` has no `ics_objects`
+row and is not owed: it is held at its etag, with a `no_identity`
+warning in `problems`.
 
 | column | what it holds |
 |---|---|
