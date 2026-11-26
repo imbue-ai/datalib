@@ -1,5 +1,5 @@
-//! LinkedIn data-export ("takeout") ingester — dead simple, one table
-//! per file.
+//! LinkedIn data-export ("takeout") ingester: one table per CSV, named
+//! for its path, and one `articles` table for every article's HTML.
 
 pub mod schema_raw;
 
@@ -37,9 +37,6 @@ pub struct RawDb {
 }
 
 impl RawDb {
-    /// Open the raw store. CSV tables are created lazily during
-    /// [`fetch`] (their names aren't known until we walk the export), so
-    /// we open with just the shared bookkeeping DDL.
     /// Open this store to *read* it, for the render pass.
     ///
     /// The download step owns this store; render only reads it. An ordinary
@@ -59,6 +56,9 @@ impl RawDb {
         }))
     }
 
+    /// Open the raw store. CSV tables are created lazily during
+    /// [`fetch`] (their names aren't known until we walk the export), so
+    /// we open with just the shared bookkeeping DDL.
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = dr::open(db_path, &[]).await?;
         Ok(Self { pool, pin: None })

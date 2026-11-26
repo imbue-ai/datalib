@@ -1,4 +1,4 @@
-//! Port of `src/ingest/providers/openai/parse.py`. Reads the doltlite
+//! Reads the doltlite
 //! database written by [`datalib_etl_chatgpt::ingest`] (or, when no DB is present,
 //! the legacy JSON tree under
 //! `me.json` + `conversations.json` + `conversations/<id>.json`) and

@@ -68,8 +68,7 @@ pub struct YolinkReadingRow {
 impl YolinkReadingRow {
     /// Mint a row with its synthesized PK plus the per-CSV-row
     /// payload. `payload_json` is the JSON-encoded
-    /// `{header: value}` map of the source CSV row — see the DDL
-    /// docstring for the rationale.
+    /// `{header: value}` map of the source CSV row.
     pub fn new(
         device_name: &str,
         ts_ms: i64,
@@ -97,7 +96,7 @@ pub const YOLINK_READINGS_BY_DEVICE_TS_INDEX_DDL: &str =
     "CREATE INDEX IF NOT EXISTS yolink_readings_by_device_ts
         ON yolink_readings(device_name, ts_ms)";
 
-/// Recipe for the synthesized [`YOLINK_READINGS_DDL`] primary key.
+/// Recipe for the synthesized `yolink_readings` primary key.
 pub fn reading_id_recipe(device_name: &str, ts_ms: i64, metric: &str) -> String {
     format!("{device_name}#{ts_ms}#{metric}")
 }

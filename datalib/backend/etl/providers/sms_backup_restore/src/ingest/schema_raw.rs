@@ -44,9 +44,11 @@ pub fn sha8(s: &str) -> String {
 #[wire_payload_row(table = "sms_messages")]
 pub struct SmsMessageRow {
     pub id_and_payload: WirePayload,
-    /// Channel key — the normalized other-party phone number.
+    /// Channel key — the normalized other-party phone number. A group
+    /// MMS's `~`-joined address normalizes to every member's digits run
+    /// together.
     pub conversation_key: Option<String>,
-    /// RFC3339 (millis) event time, for sorting + month bucketing.
+    /// RFC3339 (millis) event time, for sorting.
     pub when_ts: Option<String>,
     /// `sms|mms`.
     pub kind: Option<String>,

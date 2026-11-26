@@ -91,8 +91,9 @@ pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String
 /// tens of MB of protobuf for nothing. This lets fetch short-circuit before
 /// any of that work.
 ///
-/// PK choice: `fingerprint`, the blake3 of `metadata`, `main` and `files`
-/// joined in that order and read through the host-wide cache, so an unchanged
+/// PK choice: `fingerprint`, the blake3 of each of `metadata`, `main` and
+/// `files`, joined with `:` in that order and read through the host-wide
+/// cache, so an unchanged
 /// snapshot costs three `stat()`s and no reads. `blake3` is the digest of the
 /// three concatenated, computed only once the skip misses and kept purely so
 /// someone inspecting the table can verify which bytes these were — never read

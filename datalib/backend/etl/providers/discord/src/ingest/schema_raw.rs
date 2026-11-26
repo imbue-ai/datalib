@@ -151,7 +151,8 @@ pub fn split_message_key(key: &str) -> Option<(&str, String)> {
     Some((channel, snowflake::from_key(id)?.to_string()))
 }
 
-/// The `coverage` scope of one conversation's messages, as message keys.
+/// The `coverage` scope of one conversation's messages, its spans over
+/// message ids padded to 20 digits (`snowflake::key`).
 pub fn history_scope(channel_id: &str) -> String {
     format!("history:{channel_id}")
 }

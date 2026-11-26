@@ -47,8 +47,8 @@ pub struct FetchOptions {
     /// Directory holding the encrypted attachment blobs (the shared
     /// `files/XX/<media_name>` tree). When `None`, defaults to
     /// `snapshot_root.join("files")` — the layout Signal Android
-    /// produces. Override exists so a user can point at a separated
-    /// files tree (e.g. on a different volume) without symlinking.
+    /// produces. The config has no key for it, so the processor always
+    /// passes `None`.
     pub files_root: Option<PathBuf>,
     /// The account entropy pool the backup is encrypted under.
     pub aep: String,
@@ -411,7 +411,7 @@ async fn read_snapshot(
                 });
             }
             // StickerPack, AdHocCall, NotificationProfile, ChatFolder: not
-            // modelled yet.
+            // modelled yet, and not stored; only counted.
             Some(other) => not_shown.frame(other),
             None => {}
         }

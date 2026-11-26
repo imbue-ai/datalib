@@ -104,7 +104,6 @@ fn person(store: &Store, inputs: &Inputs, by: Option<String>) -> Option<Person> 
     Some(Person { name, handle })
 }
 
-/// `2068-10` as "October 2068".
 /// One child's document: what the store holds of them. `inputs` gets
 /// every raw row it read.
 pub fn build(

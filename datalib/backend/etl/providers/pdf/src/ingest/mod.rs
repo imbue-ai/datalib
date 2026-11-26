@@ -23,9 +23,10 @@ use datalib_etl_files::fswalk;
 pub use db::{db_path_for, RawDb, RenderTarget};
 use schema_raw::{PdfDocumentRow, PdfKind, PdfPathRow, PdfScanMetaRow};
 
-/// Rows are flushed to the store in batches of this size so a long scan
-/// is resumable-ish and memory stays bounded. Document corpora are
-/// small enough that this is rarely reached.
+/// Rows are flushed to the store in batches of this size so memory stays
+/// bounded. Nothing is committed until the scan ends, so a scan that is
+/// killed starts over. Document corpora are small enough that this is
+/// rarely reached.
 const BATCH_SIZE: usize = 2_000;
 
 pub struct FetchOptions {
@@ -52,7 +53,8 @@ pub struct FetchSummary {
     pub pdfs_seen: usize,
     /// Files whose bytes we actually read and hashed.
     pub hashed: usize,
-    /// Files skipped via the `(mtime, size, inode, dev)` cursor.
+    /// Files the host cache vouched for by their `(mtime, size, ctime,
+    /// inode, dev)`.
     pub reused: usize,
     /// Distinct documents (by content) behind those paths.
     pub documents: usize,

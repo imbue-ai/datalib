@@ -132,9 +132,13 @@ fn disagreements(doc: &Doc, shapes: &BTreeMap<String, Tables>) -> Vec<String> {
     let mut shared_seen = BTreeSet::new();
     for (source_type, said) in &doc.sources {
         let Some(real) = shapes.get(source_type) else {
-            out.push(format!(
-                "`{source_type}` is not a source type with a raw store"
-            ));
+            // A type that keeps no raw store still has a section, to say so.
+            let storeless = crate::source_type::SourceType::parse(source_type).is_some();
+            if !storeless || !said.is_empty() {
+                out.push(format!(
+                    "`{source_type}` is not a source type with a raw store"
+                ));
+            }
             continue;
         };
         for (table, columns) in real {
@@ -191,14 +195,23 @@ fn the_raw_stores_doc_names_every_table_and_column_of_what_it_covers() {
             .expect("compiled in")
             .text,
     );
-    for covered in ["email", "slack", "calendar"] {
-        assert!(
-            doc.sources.get(covered).is_some_and(|t| !t.is_empty()),
-            "raw_stores.md has no tables under a `## … (`{covered}`)` heading; \
-             did the headings change shape?"
-        );
+    let shapes = current_shapes();
+    let mut wrong = disagreements(&doc, &shapes);
+    for (source_type, tables) in &shapes {
+        let own = tables
+            .keys()
+            .any(|t| !t.ends_with("_bookkeeping") && !doc.shared.contains_key(t));
+        if !doc
+            .sources
+            .get(source_type)
+            .is_some_and(|t| !own || !t.is_empty())
+        {
+            wrong.push(format!(
+                "`{source_type}`: no tables under a `## … (`{source_type}`)` heading; \
+                 every source with a raw store has a section"
+            ));
+        }
     }
-    let wrong = disagreements(&doc, &current_shapes());
     assert!(
         wrong.is_empty(),
         "docs/user/raw_stores.md disagrees with raw_shapes/current.json:\n{}",
@@ -362,4 +375,170 @@ async fn the_docs_slack_permalink_sql_builds_the_renders_link() {
         );
         assert_eq!(link, want, "{id}");
     }
+}
+
+/// Each source's `## … (`<type>`)` section, with the statements of every
+/// ```sql block in it. A statement on doltlite's own functions
+/// (`dolt_…`) is left out: plain SQLite has none of them.
+fn sql_by_source(doc: &str) -> BTreeMap<String, Vec<String>> {
+    let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut source: Option<String> = None;
+    let mut block: Option<String> = None;
+    for line in doc.lines() {
+        if let Some(code) = block.as_mut() {
+            if line.starts_with("```") {
+                let code = block.take().unwrap_or_default();
+                if let Some(t) = &source {
+                    out.entry(t.clone()).or_default().extend(
+                        code.split(';')
+                            .map(str::trim)
+                            .filter(|s| {
+                                !s.is_empty() && !s.contains("dolt_") && !s.starts_with("ATTACH")
+                            })
+                            .map(str::to_string),
+                    );
+                }
+            } else {
+                code.push_str(without_comment(line));
+                code.push('\n');
+            }
+        } else if line.starts_with("```sql") {
+            block = Some(String::new());
+        } else if let Some(heading) = line.strip_prefix("## ") {
+            source = heading
+                .trim_end()
+                .strip_suffix("`)")
+                .and_then(|rest| rest.rsplit_once("(`"))
+                .map(|(_, t)| t.to_string());
+        }
+    }
+    out
+}
+
+/// `line` up to a `--` comment outside a string literal.
+fn without_comment(line: &str) -> &str {
+    let mut quoted = false;
+    let bytes = line.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'\'' => quoted = !quoted,
+            b'-' if !quoted && bytes.get(i + 1) == Some(&b'-') => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
+#[test]
+fn a_comment_ends_at_its_line_and_a_quoted_dash_pair_is_kept() {
+    assert_eq!(without_comment("SELECT '--x'; -- why"), "SELECT '--x'; ");
+    assert_eq!(without_comment("-- all of it"), "");
+}
+
+/// `sql` with each named parameter (`:channel`, `@ts`, `$id`) outside a
+/// string literal written `?`, the one spelling sqlx's SQLite driver takes.
+fn positional(sql: &str) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut chars = sql.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        let named = !quoted
+            && matches!(c, ':' | '@' | '$')
+            && chars
+                .peek()
+                .is_some_and(|n| n.is_ascii_alphabetic() || *n == '_');
+        if named {
+            while chars
+                .peek()
+                .is_some_and(|n| n.is_ascii_alphanumeric() || *n == '_')
+            {
+                chars.next();
+            }
+            out.push('?');
+            continue;
+        }
+        if c == '\'' {
+            quoted = !quoted;
+        }
+        out.push(c);
+    }
+    out
+}
+
+#[test]
+fn a_named_parameter_is_positional_and_a_quoted_colon_is_left() {
+    assert_eq!(
+        positional("SELECT ':x', :channel, @ts, $id, ?"),
+        "SELECT ':x', ?, ?, ?, ?"
+    );
+}
+
+/// The sources whose store copies tables of an upstream file or export
+/// under their own names, which `current.json` cannot list: a query on
+/// one of those can be checked for its syntax only.
+const MIRRORS_UPSTREAM_TABLES: &[&str] = &[
+    "apple_messages",
+    "apple_photos",
+    "beeper",
+    "facebook",
+    "lightroom",
+    "linkedin",
+    "whatsapp",
+];
+
+/// An agent copies a doc's query as it stands, so one naming a column the
+/// store does not have costs it a wrong turn; every query in a source's
+/// section must compile against that source's tables.
+#[tokio::test]
+async fn every_query_in_a_sources_section_compiles_against_its_store() {
+    let path = runfiles::Runfiles::create()
+        .expect("runfiles tree")
+        .rlocation("_main/datalib/backend/datalib_step/raw_shapes/current.json")
+        .expect("rlocation for current.json");
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let mut wrong = Vec::new();
+    for (source_type, statements) in sql_by_source(raw_stores_doc()) {
+        let ddl: Vec<String> = serde_json::from_value(json[&source_type]["sql"].clone())
+            .unwrap_or_else(|_| panic!("`{source_type}` has no shape in current.json"));
+        use sqlx::Connection;
+        let mut db = sqlx::SqliteConnection::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        // current.json lists an index before its table, alphabetically.
+        let (tables, indexes): (Vec<&String>, Vec<&String>) =
+            ddl.iter().partition(|sql| sql.starts_with("CREATE TABLE"));
+        // A section's queries reach the bytes through its blob store,
+        // attached as `cas`; its own ATTACH names a file that is not here.
+        let blob_store = [
+            "ATTACH ':memory:' AS cas".to_string(),
+            datalib_blob_store::CAS_OBJECTS_DDL
+                .replace("EXISTS cas_objects", "EXISTS cas.cas_objects"),
+        ];
+        for sql in tables.into_iter().chain(indexes).chain(&blob_store) {
+            // Safe: the store's own DDL, compiled into this test.
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
+                .execute(&mut db)
+                .await
+                .unwrap();
+        }
+        for statement in statements {
+            // Safe: a query of the doc's own, run against an empty
+            // in-memory database; EXPLAIN compiles it and reads nothing.
+            let explain = format!("EXPLAIN {}", positional(&statement));
+            if let Err(e) = Sql::dynamic(test_sql_id!(), explain)
+                .query()
+                .fetch_all(&mut db)
+                .await
+            {
+                let upstream_table = MIRRORS_UPSTREAM_TABLES.contains(&source_type.as_str())
+                    && e.to_string().contains("no such table");
+                if !upstream_table {
+                    wrong.push(format!("{source_type}: {e}\n{statement}"));
+                }
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n\n"));
 }

@@ -39,7 +39,7 @@ pub fn plan_ingest(
 }
 
 /// file_inventory's download processor. Owns its raw doltlite store end to end (open,
-/// register interrupt hook, scan the tree, commit+close).
+/// scan the tree, then commit and close through `run_store`).
 struct FileInventoryIngest {
     id: String,
     raw_path: PathBuf,

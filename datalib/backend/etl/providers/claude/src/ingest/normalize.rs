@@ -1,5 +1,5 @@
-//! Port of `_normalize_to_export_shape` + `_synthesize_message_text`
-//! from `src/ingest/claude_web.py`. The live API:
+//! A conversation from the live API, put into the bulk-export shape the
+//! parser reads. The live API:
 //!   - omits `account` (we synthesize from a known account_uuid)
 //!   - leaves `message.text` empty and puts prose in `content[].text`
 //!   - drops `flags` from content blocks (export has `flags: null`)

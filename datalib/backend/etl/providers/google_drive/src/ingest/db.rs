@@ -41,7 +41,8 @@ pub enum Body {
     /// Bytes the CAS holds, under this hash: fetched by this capture and
     /// written as they arrived, or held from an earlier capture.
     Held(String),
-    /// An export Google declined to make.
+    /// No bytes: an export Google declined to make, or an image larger
+    /// than one plain download takes.
     Declined,
 }
 

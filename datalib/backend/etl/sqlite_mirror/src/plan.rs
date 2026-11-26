@@ -23,8 +23,9 @@ pub struct ColumnSpec {
 impl ColumnSpec {
     /// The `"name" TYPE [NOT NULL]` fragment, usable both inside
     /// `CREATE TABLE` and after `ALTER TABLE … ADD COLUMN`. No
-    /// `DEFAULT`: see the module docs for why the mirror does not carry
-    /// one.
+    /// `DEFAULT`: the mirror names every column in its `INSERT … SELECT`,
+    /// so a default could never apply (`lightroom/INGEST.md` §"What gets
+    /// mirrored").
     pub fn decl(&self) -> String {
         let mut s = quote_ident(&self.name);
         if !self.decl_type.is_empty() {

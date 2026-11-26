@@ -1,6 +1,7 @@
 //! Render the Takeout feeds into markdown via the shared chat renderer:
 //! a document per Google Chat space, Google Voice conversation and
-//! activity feed (Gemini, YouTube, Google Maps — see [`crate::feeds`]).
+//! activity feed (Gemini, YouTube, Google Maps — see [`crate::feeds`]),
+//! and per Saved list, My Maps map and Play Books book ([`crate::pages`]).
 
 use std::collections::BTreeMap;
 use std::path::Path;

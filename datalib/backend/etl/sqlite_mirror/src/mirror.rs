@@ -41,7 +41,8 @@ pub struct MirrorOptions {
     pub exclude_columns: Vec<String>,
     pub stable_key_columns: Vec<String>,
     pub primary_keys: BTreeMap<String, Vec<String>>,
-    /// Run `dolt_gc()` at the start of the run. See [`run`].
+    /// Run `dolt_gc()` at the start of the run. A collection that fails
+    /// is logged and the run goes on.
     pub gc: bool,
     /// Tables the provider keeps in the same store beside the mirror
     /// (whatsapp's media registry). Never dropped by the per-run
@@ -720,7 +721,7 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     // double-quotes and escapes embedded quotes. Nothing else from the
     // catalog reaches these statements: column DEFAULTs, the one other
     // piece of SQL text `table_xinfo` reports, are not mirrored at all
-    // (see the `plan` module docs).
+    // (`ColumnSpec::decl` says why).
     Sql::dynamic(
         sql_id!("etl.sqlite_mirror.rebuild_create_table"),
         spec.create_ddl(),
