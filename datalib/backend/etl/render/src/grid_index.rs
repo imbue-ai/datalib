@@ -18,7 +18,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
@@ -49,6 +48,7 @@ use datalib_sql::{sql, sql_id, Sql};
 
 pub(crate) mod contact_records;
 mod nodes;
+mod page;
 mod planner_ranks;
 
 /// Serializes concurrent writers against one doltlite index pool, and
@@ -1358,7 +1358,14 @@ fn misfiled(md: &RenderedMarkdown) -> Option<String> {
 /// names are settled and its rows filed under their source here
 /// ([`crate::names`]).
 pub async fn apply_one(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
-    apply_markdown(write_lock, &crate::names::settled(md)).await
+    apply_page(write_lock, std::slice::from_ref(md)).await
+}
+
+/// [`apply_one`] for a page of documents, each table's rows in a few
+/// statements: what it writes is what applying them one after another, in
+/// order, would. Returns how many grid rows the page holds.
+pub async fn apply_page(write_lock: &WriteLock, page: &[RenderedMarkdown]) -> Result<usize> {
+    page::apply_page(write_lock, page).await
 }
 
 /// Every source under the data root with a render store: the directory
@@ -1492,22 +1499,60 @@ pub async fn build_grid_index_for(
                 SourceRead::Failed(why)
             }
         };
-        if stopped_before(stop, &stanza) {
-            break;
+        // The load reads the store a page at a time; it is closed once the
+        // source's transaction ends, however it ends.
+        let open = match &read {
+            SourceRead::Read { store, .. } => Some(std::sync::Arc::clone(store)),
+            _ => None,
+        };
+        let applied = if stopped_before(stop, &stanza) {
+            drop(read);
+            Ok(false)
+        } else {
+            let read_ms = millis(reading.elapsed());
+            apply_source(
+                &write_lock,
+                &stanza,
+                read,
+                read_ms,
+                (!building).then_some(held),
+                &now,
+                &progress,
+                stop,
+                &mut summary,
+            )
+            .await
+        };
+        if let Some(store) = open {
+            close_store(store);
         }
-        let read_ms = millis(reading.elapsed());
-        let applied = apply_source(
-            &write_lock,
-            &stanza,
-            read,
-            read_ms,
-            (!building).then_some(held),
-            &now,
-            &progress,
-            stop,
-            &mut summary,
-        )
-        .await?;
+        // A page the load could not read costs only its own source, as a
+        // read that fails before the load does: its transaction rolled
+        // back, the source keeps its rows and gets the problem.
+        let applied = match applied {
+            Err(e) if e.downcast_ref::<UnreadPage>().is_some() => {
+                let why = format!("{e:#}");
+                tracing::error!(
+                    source = %stanza,
+                    error = %why,
+                    "could not read this render store; indexing the other \
+                     sources and leaving this one as it was"
+                );
+                apply_source(
+                    &write_lock,
+                    &stanza,
+                    SourceRead::Failed(why),
+                    0,
+                    (!building).then_some(held),
+                    &now,
+                    &progress,
+                    stop,
+                    &mut summary,
+                )
+                .await?
+            }
+            other => other?,
+        };
         if !applied {
             tracing::info!(
                 source = %stanza,
@@ -1690,7 +1735,11 @@ enum SourceRead {
     /// and cursor stay as the index has them.
     Failed(String),
     Read {
-        docs: Vec<RenderedMarkdown>,
+        /// The store, open at the commit read, which the load reads a page
+        /// of documents at a time.
+        store: std::sync::Arc<crate::indexed_markdown::IndexedMarkdownStore>,
+        /// The documents to read and write, in order.
+        to_read: Vec<String>,
         /// Documents the index holds for this source that the store no
         /// longer does.
         removed: Vec<String>,
@@ -1702,7 +1751,7 @@ enum SourceRead {
 }
 
 /// `None` when the store names no commit, so there is nothing committed
-/// to index.
+/// to index. A store read is left open, for the load to page through.
 fn read_source(
     stanza: &str,
     rendered_root: &Path,
@@ -1732,10 +1781,31 @@ fn read_source(
         }
         Err(e) => return Err(e.context(format!("open render store for {stanza}"))),
     };
-    let read = read_open_store(&store, stanza, cursor, indexed, pass);
-    store.close();
-    read.map(Some)
+    let store = std::sync::Arc::new(store);
+    match read_open_store(&store, stanza, cursor, indexed, pass) {
+        Ok((to_read, removed, head)) => Ok(Some(SourceRead::Read {
+            store,
+            to_read,
+            removed,
+            head,
+        })),
+        Err(e) => {
+            close_store(store);
+            Err(e)
+        }
+    }
 }
+
+fn close_store(store: std::sync::Arc<crate::indexed_markdown::IndexedMarkdownStore>) {
+    match std::sync::Arc::into_inner(store) {
+        Some(store) => store.close(),
+        None => tracing::warn!("a render store still in use was left to close on drop"),
+    }
+}
+
+/// What a pass reads of `store`: the documents to load, in order, those
+/// the store no longer holds, and the commit read with its tree.
+type ToRead = (Vec<String>, Vec<String>, Option<(String, String)>);
 
 fn read_open_store(
     store: &crate::indexed_markdown::IndexedMarkdownStore,
@@ -1743,7 +1813,7 @@ fn read_open_store(
     cursor: Option<&Cursor>,
     indexed: Option<&HashSet<String>>,
     pass: &mut PassCounts,
-) -> Result<SourceRead> {
+) -> Result<ToRead> {
     let pin = store.pin().expect("a reader is pinned at open").clone();
     let from = match cursor {
         Some(c) => store
@@ -1793,15 +1863,26 @@ fn read_open_store(
             )
         }
     }
-    let docs = store
-        .documents_matching(scan.render.as_ref(), &pin)
-        .with_context(|| format!("read documents from {stanza}"))?;
-    let present: HashSet<&str> = docs.iter().map(|d| d.markdown_uuid.as_str()).collect();
-    let removed = match &scan.render {
+    // Only the documents' ids here; the load reads them a page at a time.
+    let mut present: Vec<String> = match &scan.render {
+        Some(changed) if changed.is_empty() => Vec::new(),
+        Some(changed) => store
+            .markdown_rows_in(&changed.iter().cloned().collect::<Vec<_>>())
+            .with_context(|| format!("read which changed documents {stanza} holds"))?
+            .into_iter()
+            .map(|m| m.markdown_uuid)
+            .collect(),
+        None => store
+            .all_document_uuids()
+            .with_context(|| format!("list the documents of {stanza}"))?,
+    };
+    present.sort_unstable();
+    let held: HashSet<&str> = present.iter().map(String::as_str).collect();
+    let mut removed: Vec<String> = match &scan.render {
         // An id the diff named that the store no longer has is a deletion.
         Some(changed) => changed
             .iter()
-            .filter(|u| !present.contains(u.as_str()))
+            .filter(|u| !held.contains(u.as_str()))
             .cloned()
             .collect(),
         // The store was read whole, so it is the complete answer: a
@@ -1812,10 +1893,11 @@ fn read_open_store(
         None => indexed
             .into_iter()
             .flatten()
-            .filter(|u| !present.contains(u.as_str()))
+            .filter(|u| !held.contains(u.as_str()))
             .cloned()
             .collect(),
     };
+    removed.sort_unstable();
     let head = match scan.new_head {
         Some(commit) => {
             let tree = store
@@ -1825,11 +1907,7 @@ fn read_open_store(
         }
         None => None,
     };
-    Ok(SourceRead::Read {
-        docs,
-        removed,
-        head,
-    })
+    Ok((present, removed, head))
 }
 
 /// Write one source's changes, problems and cursor in one transaction
@@ -1876,12 +1954,14 @@ async fn apply_source(
                 return Ok(Some(true));
             }
             SourceRead::Read {
-                docs,
+                store,
+                to_read,
                 removed,
                 head,
-            } => (docs, removed, head),
+            } => (Some((store, to_read)), removed, head),
         };
-        summary.markdowns_total += docs.len();
+        let (store, to_read) = docs.expect("read above");
+        summary.markdowns_total += to_read.len();
         let removed_remade = remove_documents(write_lock, stanza, &removed, held, progress)
             .await
             .with_context(|| format!("delete the documents {stanza} dropped"))?;
@@ -1890,12 +1970,21 @@ async fn apply_source(
         // Too few documents to change a sixteenth of the index, whatever
         // they hold, are not worth measuring.
         let probe = match held {
-            Some(held) if !removed_remade && docs.len() * 16 >= held && docs.len() > 1 => {
+            Some(held) if !removed_remade && to_read.len() * 16 >= held && to_read.len() > 1 => {
                 Some(RemakeProbe::start(write_lock).await?)
             }
             _ => None,
         };
-        let loaded = load_source(write_lock, stanza, &docs, probe.as_ref(), progress, stop).await?;
+        let loaded = load_source(
+            write_lock,
+            stanza,
+            &store,
+            &to_read,
+            probe.as_ref(),
+            progress,
+            stop,
+        )
+        .await?;
         let Some(Loaded {
             markdowns,
             rows,
@@ -1911,7 +2000,7 @@ async fn apply_source(
         summary.rows_inserted += rows;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        if !docs.is_empty() || !removed.is_empty() {
+        if !to_read.is_empty() || !removed.is_empty() {
             let settled = nodes::settle(conn, write_lock)
                 .await
                 .with_context(|| format!("settle {stanza}'s nodes"))?;
@@ -1957,7 +2046,7 @@ async fn apply_source(
             .await?;
         }
         Ok::<Option<bool>, anyhow::Error>(Some(
-            !docs.is_empty() || !removed.is_empty() || problems_moved,
+            !to_read.is_empty() || !removed.is_empty() || problems_moved,
         ))
     }
     .await;
@@ -2127,43 +2216,75 @@ async fn remove_documents(
     Ok(remade)
 }
 
-/// Apply one source's documents. `None` when the stop came first. With
-/// a `probe`, a twentieth of the way in it decides whether the rest is
-/// written without the search indexes.
+/// A page of a render store the load could not read.
+#[derive(Debug)]
+struct UnreadPage(String);
+
+impl std::fmt::Display for UnreadPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for UnreadPage {}
+
+/// Documents read from a render store and written into the index together:
+/// what one source costs in memory, however large it is.
+const LOAD_PAGE: usize = 500;
+
+/// Apply one source's documents, read from `store` a page at a time.
+/// `None` when the stop came first. With a `probe`, a twentieth of the way
+/// in it decides whether the rest is written without the search indexes.
+#[allow(clippy::too_many_arguments)]
 async fn load_source(
     write_lock: &WriteLock,
     stanza: &str,
-    docs: &[RenderedMarkdown],
+    store: &crate::indexed_markdown::IndexedMarkdownStore,
+    to_read: &[String],
     probe: Option<&RemakeProbe>,
     progress: &impl Fn(&str),
     stop: &StopFlag,
 ) -> Result<Option<Loaded>> {
+    let pin = store.pin().expect("a reader is pinned at open").clone();
     let mut rows = 0;
     let mut remade = false;
-    let probe_after = (docs.len() / 20).max(1);
-    for (i, md) in docs.iter().enumerate() {
+    let mut applied = 0;
+    let probe_after = (to_read.len() / 20).max(1);
+    let mut probe = probe;
+    for page in to_read.chunks(LOAD_PAGE) {
         if stop.requested() {
             return Ok(None);
         }
+        let wanted: HashSet<String> = page.iter().cloned().collect();
         // The stanza name is authoritative. Everything else comes through
         // from the store unchanged: every document the diff named is
         // applied, and the rows of it that differ are written.
-        let md = RenderedMarkdown {
-            source_id: stanza.to_string(),
-            // Already rows in the store; re-applying would double-count.
-            problems: Vec::new(),
-            ..md.clone()
-        };
-        rows += apply_one(write_lock, &md)
+        let docs: Vec<RenderedMarkdown> = store
+            .documents_matching(Some(&wanted), &pin)
+            .map_err(|e| UnreadPage(format!("read documents from {stanza}: {e:#}")))?
+            .into_iter()
+            .map(|md| RenderedMarkdown {
+                source_id: stanza.to_string(),
+                // Already rows in the store; re-applying would double-count.
+                problems: Vec::new(),
+                ..md
+            })
+            .collect();
+        rows += apply_page(write_lock, &docs)
             .await
-            .with_context(|| format!("load {} from {stanza}", md.markdown_uuid))?;
-        progress(&format!("{stanza}: loaded {}/{}", i + 1, docs.len()));
-        if let Some(probe) = probe.filter(|_| i + 1 == probe_after) {
-            remade = probe.decide(write_lock, i + 1, docs.len()).await?;
+            .with_context(|| format!("load {} documents from {stanza}", docs.len()))?;
+        applied += page.len();
+        progress(&format!("{stanza}: loaded {applied}/{}", to_read.len()));
+        if stop.requested() {
+            return Ok(None);
+        }
+        if let Some(p) = probe.filter(|_| applied >= probe_after) {
+            remade = p.decide(write_lock, applied, to_read.len()).await?;
+            probe = None;
         }
     }
     Ok(Some(Loaded {
-        markdowns: docs.len(),
+        markdowns: to_read.len(),
         rows,
         remade,
     }))
@@ -2368,145 +2489,6 @@ pub(crate) async fn delete_document_rows(
     Ok(Removed { rows, nodes })
 }
 
-async fn apply_markdown(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
-    // Inside `begin_transaction` every guard hands back the same connection,
-    // so the per-doc statements accumulate in one batch; otherwise each takes
-    // a fresh connection and auto-commits.
-    let mut guard = write_lock.acquire().await?;
-    let conn = guard.conn();
-
-    // A document is its rows: the grid reaches it through them and
-    // nothing else does. One that ends with none — every row rejected
-    // by validation — is absent, and its `markdowns` row goes with the
-    // rest, or a stale `render_unit_key` and title would outlive the render
-    // that replaced them. The problems recording why stay.
-    if md.rows.is_empty() {
-        let removed = delete_document_rows(
-            conn,
-            write_lock.store(),
-            std::slice::from_ref(&md.markdown_uuid),
-        )
-        .await?;
-        removed.note(write_lock);
-        tracing::info!(
-            document = %md.markdown_uuid,
-            "this document has no rows left; dropped it",
-        );
-        return Ok(0);
-    }
-    let canonical = document_row(&md.rows, &md.markdown_uuid)?;
-    if let Some(why) = misfiled(md) {
-        bail!("{why}");
-    }
-
-    let uuids: Vec<&str> = md.rows.iter().map(|r| r.uuid.as_str()).collect();
-    if let Some(twice) = first_repeated(&uuids) {
-        bail!(
-            "document {}: two of its rows have the uuid {twice}",
-            md.markdown_uuid
-        );
-    }
-    // Only the rows it no longer has; the rest are written in place, and
-    // one that did not change is not written at all.
-    let gone = sql!(
-        "etl.render.grid.delete_rows_document_dropped",
-        "DELETE FROM grid_rows WHERE markdown_uuid = ? \
-         AND uuid NOT IN (SELECT value FROM json_each(?)) RETURNING uuid"
-    )
-    .query_scalar()
-    .bind(&md.markdown_uuid)
-    .bind(serde_json::to_string(&uuids)?)
-    .fetch_all(&mut **conn)
-    .await
-    .context("delete the rows this document no longer has")?;
-    write_lock.note_gone(gone);
-
-    for row in &md.rows {
-        let row = GridRow {
-            source_id: Some(datalib_schema::grid_rows::filed_under(
-                &row.provider,
-                &md.source_id,
-            )),
-            ..row.clone()
-        };
-        put_grid_row(conn, write_lock, &row).await?;
-    }
-
-    // Each markdown owns the edges whose `src_markdown_uuid` matches, so a
-    // re-render replaces its outgoing set. Incoming edges belong to the other
-    // markdown's row set and survive.
-    sql!(
-        "etl.render.grid.delete_edges_of_document",
-        "DELETE FROM edges WHERE src_markdown_uuid = ?"
-    )
-    .query()
-    .bind(&md.markdown_uuid)
-    .execute(&mut **conn)
-    .await
-    .context("delete prior edges")?;
-    for edge in &md.edges {
-        insert_edge(conn, edge).await?;
-    }
-    let carried = sql!(
-        "etl.render.grid.delete_nodes_of_document",
-        "DELETE FROM data_nodes WHERE markdown_uuid = ? RETURNING uuid"
-    )
-    .query_scalar()
-    .bind(&md.markdown_uuid)
-    .fetch_all(&mut **conn)
-    .await
-    .context("delete prior containers")?;
-    write_lock.touch_nodes(carried);
-    for node in &md.data_nodes {
-        insert_node(conn, &md.markdown_uuid, node).await?;
-    }
-    write_lock.touch_nodes(md.data_nodes.iter().map(|n| n.uuid.clone()));
-    sql!(
-        "etl.render.grid.delete_filings_of_document",
-        "DELETE FROM filings WHERE markdown_uuid = ?"
-    )
-    .query()
-    .bind(&md.markdown_uuid)
-    .execute(&mut **conn)
-    .await
-    .context("delete prior filings")?;
-    for filing in &md.filings {
-        insert_filing(conn, &md.markdown_uuid, filing).await?;
-    }
-    let this_document = serde_json::to_string(&[&md.markdown_uuid])?;
-    for sql in write_lock.store().delete_contacts() {
-        sql.query()
-            .bind(&this_document)
-            .execute(&mut **conn)
-            .await
-            .context("delete prior source contacts")?;
-    }
-    for contact in &md.contacts {
-        match write_lock.store() {
-            Store::Render => insert_source_contact(conn, &md.markdown_uuid, contact).await?,
-            Store::Index => contact_records::insert(conn, &md.markdown_uuid, contact).await?,
-        }
-    }
-    sql!(
-        "etl.render.grid.delete_photos_of_document",
-        "DELETE FROM source_photos WHERE markdown_uuid = ?"
-    )
-    .query()
-    .bind(&md.markdown_uuid)
-    .execute(&mut **conn)
-    .await
-    .context("delete prior source photos")?;
-    for photo in &md.photos {
-        insert_source_photo(conn, &md.markdown_uuid, photo).await?;
-    }
-    upsert_markdown(conn, md, canonical)
-        .await
-        .context("upsert markdowns")?;
-    write_lock.note_written(&md.markdown_uuid);
-
-    Ok(md.rows.len())
-}
-
 /// The one row that is the document — the chat/thread/PR/page row, the
 /// renderer having said so with `is_document`. Anything but exactly one
 /// is a renderer bug, and a bug here is one the grid cannot show, so it
@@ -2543,251 +2525,10 @@ fn run_stamp(now_override: Option<&str>) -> datalib_time::StoredStamp {
     }
 }
 
-async fn upsert_markdown(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    md: &RenderedMarkdown,
-    canonical: &GridRow,
-) -> Result<()> {
-    let kind = doc_kind_for(&canonical.kind);
-    let version_str = format!("{RENDERER_VERSION}.{}", md.render_version);
-
-    let content_hash = if md.sections.is_empty() {
-        md.content_hash.clone()
-    } else {
-        Some(crate::section::content_hash(&md.sections))
-    };
-
-    sql!(
-        "etl.render.grid.delete_markdowns_row",
-        "DELETE FROM markdowns WHERE markdown_uuid = ?"
-    )
-    .query()
-    .bind(&md.markdown_uuid)
-    .execute(&mut **conn)
-    .await
-    .context("delete prior markdowns row")?;
-    sql!(
-        "etl.render.grid.insert_markdowns_row",
-        "INSERT INTO markdowns \
-         (markdown_uuid, source_id, provider, kind, title, created_at, modified_at, \
-          item_count, upstream_cursor, renderer_version, render_unit_key, content_hash, front, \
-          searchable) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .query()
-    .bind(&md.markdown_uuid)
-    .bind(&md.source_id)
-    .bind(&canonical.provider)
-    .bind(kind)
-    .bind(&canonical.conversation_name)
-    .bind(canonical.created_at.as_deref())
-    .bind(canonical.modified_at.as_deref())
-    .bind(canonical.item_count)
-    .bind(md.upstream_cursor.as_deref())
-    .bind(&version_str)
-    .bind(&md.render_unit_key)
-    .bind(content_hash)
-    .bind((!md.front.is_empty()).then(|| md.front.to_json()))
-    .bind(md.searchable)
-    .execute(&mut **conn)
-    .await
-    .context("insert markdowns row")?;
-    Ok(())
-}
-
-/// In a render store, one source's account of a person, and each handle
-/// it ties to them, under the document that carried it. Two accounts of
-/// one person in one document are one row: the later wins.
-async fn insert_source_contact(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    markdown_uuid: &str,
-    contact: &NormalizedContact,
-) -> Result<()> {
-    let json = serde_json::to_string(contact).context("serialize a source contact")?;
-    let seen = contact.seen.as_ref();
-    sql!(
-        "etl.render.grid.upsert_source_contact",
-        "INSERT OR REPLACE INTO source_contacts \
-         (markdown_uuid, contact_key, source_id, name, seen_items, last_seen_at, contact_json) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .query()
-    .bind(markdown_uuid)
-    .bind(&contact.key)
-    .bind(&contact.source_id)
-    .bind(contact.name())
-    .bind(seen.map_or(0, |s| s.items as i64))
-    .bind(seen.and_then(|s| s.last_at.as_deref()))
-    .bind(json)
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("insert source contact {}", contact.key))?;
-    for handle in contact.handles.iter().filter_map(|h| h.handle.as_ref()) {
-        sql!(
-            "etl.render.grid.insert_source_contact_handle",
-            "INSERT OR IGNORE INTO source_contact_handles (markdown_uuid, contact_key, handle) \
-             VALUES (?, ?, ?)"
-        )
-        .query()
-        .bind(markdown_uuid)
-        .bind(&contact.key)
-        .bind(handle.as_str())
-        .execute(&mut **conn)
-        .await
-        .with_context(|| format!("insert handle {handle} of {}", contact.key))?;
-    }
-    Ok(())
-}
-
-async fn insert_source_photo(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    markdown_uuid: &str,
-    photo: &NormalizedPhoto,
-) -> Result<()> {
-    let json = serde_json::to_string(photo).context("serialize a source photo")?;
-    sql!(
-        "etl.render.grid.upsert_source_photo",
-        "INSERT OR REPLACE INTO source_photos (markdown_uuid, photo_uuid, source_id, photo_json) \
-         VALUES (?, ?, ?, ?)"
-    )
-    .query()
-    .bind(markdown_uuid)
-    .bind(&photo.uuid)
-    .bind(&photo.source_id)
-    .bind(json)
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("insert source photo {}", photo.uuid))?;
-    Ok(())
-}
-
-async fn insert_edge(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    edge: &EdgeRow,
-) -> Result<()> {
-    sql!(
-        "etl.render.grid.insert_edge",
-        "INSERT INTO edges \
-         (edge_uuid, src_markdown_uuid, src_anchor_uuid, dst_markdown_uuid, dst_anchor_uuid, \
-          label, kind) \
-         VALUES (?, ?, ?, ?, ?, ?, ?)"
-    )
-    .query()
-    .bind(&edge.edge_uuid)
-    .bind(&edge.src_markdown_uuid)
-    .bind(&edge.src_anchor_uuid)
-    .bind(&edge.dst_markdown_uuid)
-    .bind(&edge.dst_anchor_uuid)
-    .bind(&edge.label)
-    .bind(edge.kind)
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("insert edge {}", edge.edge_uuid))?;
-    Ok(())
-}
-
-/// One container under the document that carries it. A renderer that
-/// names another document as the carrier has a bug: the row would
-/// outlive the document that wrote it.
-async fn insert_node(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    markdown_uuid: &str,
-    node: &DataNodeRow,
-) -> Result<()> {
-    if node.markdown_uuid != markdown_uuid {
-        bail!(
-            "document {markdown_uuid} carries container {} under document {}",
-            node.uuid,
-            node.markdown_uuid
-        );
-    }
-    sql!(
-        "etl.render.grid.upsert_data_node",
-        "INSERT OR REPLACE INTO data_nodes \
-         (markdown_uuid, uuid, source_id, kind, name, parent_uuid, sort_key, read_together, \
-          is_place, read_uuid, place_uuid, upstream_entity_kind, upstream_id, upstream_account) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .query()
-    .bind(&node.markdown_uuid)
-    .bind(&node.uuid)
-    .bind(&node.source_id)
-    .bind(&node.kind)
-    .bind(&node.name)
-    .bind(&node.parent_uuid)
-    .bind(&node.sort_key)
-    .bind(node.read_together)
-    .bind(node.is_place)
-    .bind(&node.read_uuid)
-    .bind(&node.place_uuid)
-    .bind(&node.upstream_entity_kind)
-    .bind(&node.upstream_id)
-    .bind(&node.upstream_account)
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("insert container {}", node.uuid))?;
-    Ok(())
-}
-
-async fn insert_filing(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    markdown_uuid: &str,
-    filing: &FilingRow,
-) -> Result<()> {
-    if filing.markdown_uuid != markdown_uuid {
-        bail!(
-            "document {markdown_uuid} carries a filing of {} under document {}",
-            filing.node_uuid,
-            filing.markdown_uuid
-        );
-    }
-    sql!(
-        "etl.render.grid.insert_filing",
-        "INSERT OR IGNORE INTO filings (markdown_uuid, node_uuid, under_uuid) VALUES (?, ?, ?)"
-    )
-    .query()
-    .bind(&filing.markdown_uuid)
-    .bind(&filing.node_uuid)
-    .bind(&filing.under_uuid)
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("file {} under {}", filing.node_uuid, filing.under_uuid))?;
-    Ok(())
-}
-
 fn first_repeated<'a>(uuids: &[&'a str]) -> Option<&'a str> {
     let mut seen = HashSet::with_capacity(uuids.len());
     uuids.iter().copied().find(|u| !seen.insert(*u))
 }
-
-/// Insert one `GridRow`; on a uuid its own document already holds,
-/// rewrite the row only where it differs. An unchanged row then costs no
-/// index write and, in the grid index, no new search terms: a source read
-/// whole again rewrites only what moved.
-static PUT_GRID_ROW_SQL: LazyLock<String> = LazyLock::new(|| {
-    let columns = GridRow::TYPED_COLUMNS;
-    let list = |prefix: &str| -> String {
-        columns
-            .iter()
-            .map(|c| format!("{prefix}{c}"))
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-    let set: Vec<String> = columns
-        .iter()
-        .map(|c| format!("{c} = excluded.{c}"))
-        .collect();
-    format!(
-        "{} ON CONFLICT ({id}) DO UPDATE SET {} \
-         WHERE {table}.markdown_uuid IS excluded.markdown_uuid AND ({}) IS NOT ({})",
-        datalib_etl::bulk::insert_sql::<GridRow>(),
-        set.join(", "),
-        list(&format!("{}.", GridRow::TABLE)),
-        list("excluded."),
-        id = GridRow::ID_COLUMN,
-        table = GridRow::TABLE,
-    )
-});
 
 /// `row` with a uuid in `account` or `project` lowercase with dashes,
 /// however the source spelled it, so their keys compare it once. Both
@@ -2808,91 +2549,6 @@ fn uuids_one_way(row: &GridRow) -> std::borrow::Cow<'_, GridRow> {
     row.account = account.or(row.account);
     row.project = project.or(row.project);
     std::borrow::Cow::Owned(row)
-}
-
-/// Write one row, and settle a uuid another document holds by *who*
-/// wrote that document. One an earlier run wrote means the row has
-/// moved — a message re-bucketed into another period, a chat whose
-/// document id is minted from a name that changed — and the incoming
-/// document takes it over; the old owner, when it re-renders, no longer
-/// emits it. One *this* run wrote means two documents minted one id,
-/// which is a finding and fails.
-async fn put_grid_row(
-    conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
-    write_lock: &WriteLock,
-    row: &GridRow,
-) -> Result<()> {
-    let row = &*uuids_one_way(row);
-    let written = row
-        .bind_into(
-            Sql::dynamic(
-                sql_id!("etl.render.grid.upsert_grid_row"),
-                PUT_GRID_ROW_SQL.as_str(),
-            )
-            .query(),
-        )
-        .execute(&mut **conn)
-        .await
-        .with_context(|| format!("write grid_row {}", row.uuid))?;
-    if written.rows_affected() == 1 {
-        write_lock.note_changed([row.uuid.clone()]);
-        return Ok(());
-    }
-
-    // Nothing written: the row is here unchanged, or another document
-    // holds its uuid.
-    let (provider, md): (String, String) = sql!(
-        "etl.render.grid.find_grid_row_owner",
-        "SELECT provider, IFNULL(markdown_uuid, '') FROM grid_rows WHERE uuid = ?"
-    )
-    .query_as()
-    .bind(&row.uuid)
-    .fetch_one(&mut **conn)
-    .await
-    .with_context(|| format!("find who holds grid_row {}", row.uuid))?;
-    if md == row.markdown_uuid.as_deref().unwrap_or("") {
-        return Ok(());
-    }
-    let moved = provider == row.provider && !write_lock.written_this_run(&md);
-    if !moved {
-        bail!(
-            "insert grid_row {}: an existing {provider} row already holds that \
-             uuid (markdown {md}, written this run); the incoming row is a {} \
-             from markdown {}",
-            row.uuid,
-            row.provider,
-            row.markdown_uuid.as_deref().unwrap_or("<none>"),
-        );
-    }
-    tracing::info!(
-        uuid = %row.uuid,
-        from = %md,
-        to = row.markdown_uuid.as_deref().unwrap_or("<none>"),
-        "grid_row moved to another document"
-    );
-    sql!(
-        "etl.render.grid.delete_moved_grid_row",
-        "DELETE FROM grid_rows WHERE uuid = ?"
-    )
-    .query()
-    .bind(&row.uuid)
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("release moved grid_row {}", row.uuid))?;
-    // Audited: `insert_sql` is built from `GridRow`'s associated consts,
-    // never from row data; every value is bound.
-    row.bind_into(
-        Sql::dynamic(
-            sql_id!("etl.render.grid.insert_moved_grid_row"),
-            datalib_etl::bulk::insert_sql::<GridRow>(),
-        )
-        .query(),
-    )
-    .execute(&mut **conn)
-    .await
-    .with_context(|| format!("insert moved grid_row {}", row.uuid))?;
-    write_lock.note_gone(vec![row.uuid.clone()]);
-    Ok(())
 }
 
 /// Fails unless SQLite plans every one of `statements` through an index.
@@ -3105,9 +2761,9 @@ mod insert_round_trip_tests {
         let row = fully_populated_row();
         let mut conn = pool.acquire().await.expect("acquire");
         let lock = WriteLock::for_index(pool.clone());
-        put_grid_row(&mut conn, &lock, &row)
+        page::write_grid_rows(&mut conn, &lock, std::slice::from_ref(&row))
             .await
-            .expect("put_grid_row");
+            .expect("write_grid_rows");
         drop(conn);
 
         // `SELECT *` on purpose: the point is to see every column the DDL
@@ -4947,7 +4603,7 @@ mod source_cursor_tests {
             root,
             &sources,
             |m| {
-                if m.starts_with("b: loaded 1/") {
+                if m.starts_with("b: loaded ") {
                     stop.request();
                 }
             },
@@ -5082,7 +4738,7 @@ mod source_cursor_tests {
             root,
             &sources,
             |m| {
-                if m.starts_with("b: loaded 1/") {
+                if m.starts_with("b: loaded ") {
                     stop.request();
                 }
             },

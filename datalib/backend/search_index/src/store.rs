@@ -16,7 +16,8 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::SqliteConnection;
 
 use crate::IndexDoc;
-use datalib_sql::sql;
+use datalib_sql::{sql, sql_id};
+use sqlx::Row;
 
 /// The keyword index's tables: a part of the grid index's file
 /// (`grid_index::Part::Keywords`), whose writer makes them, and empties
@@ -140,13 +141,10 @@ impl Index {
                 .count();
             let (now, later) = rest.split_at(take);
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-            let mut changed = false;
-            for doc in now {
-                changed |= put_one(&mut tx, doc)
-                    .await
-                    .with_context(|| format!("index document {}", doc.markdown_uuid))?;
-            }
-            if changed {
+            if put_batch(&mut tx, now)
+                .await
+                .context("index a batch of documents")?
+            {
                 moved(&mut tx).await?;
             }
             tx.commit().await.context("commit the indexed documents")?;
@@ -261,83 +259,143 @@ impl Index {
     }
 }
 
-/// `false` when the document was already held as it is.
-async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
-    let held: Option<(i64, String, String)> = sql!(
-        "search_index.store.find_document_by_uuid",
-        "SELECT doc_id, source_id, content_hash FROM search_documents WHERE markdown_uuid = ?"
+/// Indexes `docs` in a few statements: those already held with the same
+/// source and hash are left alone, a changed one has its sections
+/// replaced under the id it had, a new one gets one. `false` when every
+/// one was already held as it is.
+async fn put_batch(conn: &mut SqliteConnection, docs: &[IndexDoc]) -> Result<bool> {
+    let held: BTreeMap<String, (i64, String, String)> = sql!(
+        "search_index.store.find_documents_of_batch",
+        "SELECT markdown_uuid, doc_id, source_id, content_hash FROM search_documents \
+          WHERE markdown_uuid IN (SELECT value FROM json_each(?))"
     )
-    .query_as()
-    .bind(&doc.markdown_uuid)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let doc_id = match held {
-        Some((_, source, hash)) if source == doc.source_id && hash == doc.content_hash => {
-            return Ok(false);
-        }
-        Some((doc_id, _, _)) => {
-            clear(conn, &[doc_id]).await?;
-            sql!(
-                "search_index.store.update_document",
-                "UPDATE search_documents SET source_id = ?, content_hash = ?, conversation = ? \
-                 WHERE doc_id = ?"
-            )
-            .query()
-            .bind(&doc.source_id)
-            .bind(&doc.content_hash)
-            .bind(doc.is_conversation())
-            .bind(doc_id)
-            .execute(&mut *conn)
-            .await?;
-            doc_id
-        }
-        None => {
-            sql!(
-            "search_index.store.insert_document",
-            "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, conversation) \
-                 VALUES (?, ?, ?, ?) RETURNING doc_id"
-        )
-            .query_scalar()
-            .bind(&doc.source_id)
-            .bind(&doc.markdown_uuid)
-            .bind(&doc.content_hash)
-            .bind(doc.is_conversation())
-            .fetch_one(&mut *conn)
-            .await?
-        }
-    };
-
-    let sections = doc.sections_or_one();
-    let mut at = 0i64;
-    for (seq, section) in sections.iter().enumerate() {
-        let end = at + section.text.len() as i64;
-        let section_id: i64 = sql!(
-            "search_index.store.insert_section",
-            "INSERT INTO search_sections (doc_id, seq, uuid, start_byte, end_byte) \
-             VALUES (?, ?, ?, ?, ?) RETURNING section_id"
-        )
-        .query_scalar()
-        .bind(doc_id)
-        .bind(seq as i64)
-        .bind(&section.uuid)
-        .bind(at)
-        .bind(end)
-        .fetch_one(&mut *conn)
-        .await?;
-        let title = if seq == 0 { doc.title.as_str() } else { "" };
-        sql!(
-            "search_index.store.insert_fts_text",
-            "INSERT INTO search_fts (rowid, title, body) VALUES (?, ?, ?)"
-        )
-        .query()
-        .bind(section_id)
-        .bind(title)
-        .bind(&section.text)
-        .execute(&mut *conn)
-        .await?;
-        at = end;
+    .query_as::<(String, i64, String, String)>()
+    .bind(serde_json::to_string(
+        &docs
+            .iter()
+            .map(|d| d.markdown_uuid.as_str())
+            .collect::<Vec<_>>(),
+    )?)
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|(uuid, id, source, hash)| (uuid, (id, source, hash)))
+    .collect();
+    // The last of a document named twice is the one indexed.
+    let mut last: BTreeMap<&str, &IndexDoc> = BTreeMap::new();
+    for doc in docs {
+        last.insert(&doc.markdown_uuid, doc);
     }
+    let owed: Vec<&IndexDoc> = last
+        .into_values()
+        .filter(|d| {
+            held.get(&d.markdown_uuid)
+                .is_none_or(|(_, source, hash)| *source != d.source_id || *hash != d.content_hash)
+        })
+        .collect();
+    if owed.is_empty() {
+        return Ok(false);
+    }
+    let replaced: Vec<i64> = owed
+        .iter()
+        .filter_map(|d| held.get(&d.markdown_uuid).map(|(id, _, _)| *id))
+        .collect();
+    clear(conn, &replaced).await?;
+    let ids: BTreeMap<String, i64> = datalib_sql::values::fetch(
+        conn,
+        sql_id!("search_index.store.upsert_documents"),
+        "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, conversation)",
+        4,
+        "ON CONFLICT (markdown_uuid) DO UPDATE SET source_id = excluded.source_id, \
+         content_hash = excluded.content_hash, conversation = excluded.conversation \
+         RETURNING markdown_uuid, doc_id",
+        &owed,
+        |q, d| {
+            q.bind(&d.source_id)
+                .bind(&d.markdown_uuid)
+                .bind(&d.content_hash)
+                .bind(d.is_conversation())
+        },
+    )
+    .await?
+    .iter()
+    .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+    .collect::<Result<_, sqlx::Error>>()?;
+    let mut sections: Vec<Placed> = Vec::new();
+    for doc in &owed {
+        let doc_id = *ids
+            .get(&doc.markdown_uuid)
+            .with_context(|| format!("no id for document {}", doc.markdown_uuid))?;
+        let mut at = 0i64;
+        for (seq, section) in doc.sections_or_one().iter().enumerate() {
+            let end = at + section.text.len() as i64;
+            sections.push(Placed {
+                doc_id,
+                seq: seq as i64,
+                uuid: section.uuid.clone(),
+                start: at,
+                end,
+                title: if seq == 0 {
+                    doc.title.clone()
+                } else {
+                    String::new()
+                },
+                text: section.text.clone(),
+            });
+            at = end;
+        }
+    }
+    let section_ids: BTreeMap<(i64, i64), i64> = datalib_sql::values::fetch(
+        conn,
+        sql_id!("search_index.store.insert_sections"),
+        "INSERT INTO search_sections (doc_id, seq, uuid, start_byte, end_byte)",
+        5,
+        "RETURNING doc_id, seq, section_id",
+        &sections,
+        |q, s| {
+            q.bind(s.doc_id)
+                .bind(s.seq)
+                .bind(&s.uuid)
+                .bind(s.start)
+                .bind(s.end)
+        },
+    )
+    .await?
+    .iter()
+    .map(|r| Ok(((r.try_get(0)?, r.try_get(1)?), r.try_get(2)?)))
+    .collect::<Result<_, sqlx::Error>>()?;
+    let texts = sections
+        .iter()
+        .map(|s| {
+            let id = *section_ids
+                .get(&(s.doc_id, s.seq))
+                .with_context(|| format!("no id for section {} of document {}", s.seq, s.doc_id))?;
+            Ok((id, s))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    datalib_sql::values::fetch(
+        conn,
+        sql_id!("search_index.store.insert_fts_texts"),
+        "INSERT INTO search_fts (rowid, title, body)",
+        3,
+        "",
+        &texts,
+        |q, (id, s)| q.bind(*id).bind(&s.title).bind(&s.text),
+    )
+    .await?;
     Ok(true)
+}
+
+/// One section of a document as the index places it: where it falls in
+/// the document, and the words it indexes.
+struct Placed {
+    doc_id: i64,
+    seq: i64,
+    uuid: Option<String>,
+    start: i64,
+    end: i64,
+    title: String,
+    text: String,
 }
 
 async fn moved(conn: &mut SqliteConnection) -> Result<()> {

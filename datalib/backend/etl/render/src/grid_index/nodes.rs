@@ -19,7 +19,7 @@ use datalib_schema::grid_rows::{filed_under, GridRow};
 use datalib_schema::nodes::NodeRow;
 use datalib_schema::providers::Provider;
 
-use super::{put_grid_row, WriteLock};
+use super::WriteLock;
 use datalib_sql::{sql, sql_id, Sql};
 
 /// How the index derives the nodes and their rows. It is part of the grid
@@ -197,6 +197,7 @@ pub(super) async fn settle(
             .fetch_all(&mut **conn)
             .await
             .context("read the nodes that have no row")?;
+        let mut rows = Vec::with_capacity(unrowed.len());
         for node in &unrowed {
             let Some(row) = node_row(node) else {
                 tracing::warn!(
@@ -207,9 +208,10 @@ pub(super) async fn settle(
                 );
                 continue;
             };
-            put_grid_row(conn, write_lock, &row).await?;
-            settled.rows_kept += 1;
+            rows.push(row);
         }
+        super::page::write_grid_rows(conn, write_lock, &rows).await?;
+        settled.rows_kept += rows.len();
     }
     Ok(settled)
 }
