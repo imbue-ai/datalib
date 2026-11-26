@@ -219,7 +219,7 @@ async fn sync_collecting<F: Forge>(
     found: RunProblems,
 ) -> Result<F::Summary> {
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
-    let run = DownloadRun::start(forge.pool(), &opts.run_config).await?;
+    let run = DownloadRun::start(&found, forge.pool(), &opts.run_config).await?;
     let fetcher = ChangeRequests {
         forge,
         client,
@@ -229,7 +229,7 @@ async fn sync_collecting<F: Forge>(
     let result = work(forge, client, &opts, &found, &fetcher).await;
     let mut summary = fetcher.summary.into_inner();
     forge.record_requests(&mut summary, client.request_count());
-    run.finish(found.ended_early(), &result, &summary).await;
+    run.summarize(&summary);
     result?;
     Ok(summary)
 }

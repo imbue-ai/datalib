@@ -323,14 +323,18 @@ The commits are the durable record: `dolt_diff` between any two refs
 answers this for any window, for every provider.
 
 There is also a precomputed per-run summary, and it is narrower than it
-looks. `DownloadRun::finish`
-([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) counts
-`dolt_diff_<table>` by `diff_type` for every table in the store and
+looks. A download opens its row with `DownloadRun::start`
+([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) inside
+its problem collector (`run_problems::collecting`), and hands it a
+summary with `summarize`. The collector closes the row once it has
+written the run's problems: it counts `dolt_diff_<table>` by
+`diff_type` for every table in the store, `problems` included, and
 writes `{table: {added, modified, removed}}` to
-`sync_runs.summary.deltas`. The one table it leaves out is `problems`:
-a seal writes the problems a run has found so far and the rest are
-written after the count, so counting them would depend on whether a
-seal happened to land after a problem was found.
+`sync_runs.summary.deltas`, with the status the download's own result
+decides. The order is the collector's, not the download's: a seal
+writes the problems found so far and the rest are written when the
+run ends, so a count taken any earlier would hold a run's problems
+only when a seal happened to follow them.
 
 The diff runs from the HEAD the run *started* at, which `DownloadRun`
 captures before the provider writes anything. That has to be the

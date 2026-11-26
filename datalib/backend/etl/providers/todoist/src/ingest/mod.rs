@@ -336,7 +336,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "completed": opts.sync.completed,
         "since": opts.sync.since,
     });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let now = opts
         .now
         .clone()
@@ -354,7 +354,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     let result = run_ended::settle(result, "Todoist", s.syncs > 0, &found);
     s.requests = ctx.requests;
     let result = ctx.writes.settle(result).await;
-    run.finish(found.ended_early(), &result, &s).await;
+    run.summarize(&s);
     result.map(|()| s)
 }
 

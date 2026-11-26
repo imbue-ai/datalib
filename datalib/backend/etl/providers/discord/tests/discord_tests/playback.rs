@@ -398,12 +398,10 @@ async fn signing_in_as_another_account_leaves_one() {
     assert!(payload(&store, "account", RIKER).await.is_some());
 }
 
-/// A run that seals after it finds a name Discord does not have, as a
-/// run past the seal cadence does, used to count that problem in its
-/// `sync_runs` deltas, and a shorter one did not; so the bake's golden
-/// changed from one run to the next.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_run_that_seals_after_a_problem_leaves_it_out_of_its_deltas() {
+/// A first sync where `holodeck` is configured and the server has no such
+/// channel, sealing at every point the download calls consistent or
+/// never. Returns the commits the store has and the run's deltas.
+async fn first_sync_missing_a_channel(seal_as_it_goes: bool) -> (i64, Value) {
     let d = tempfile::tempdir().unwrap();
     let store = d.path().join("store");
     let tape = World::before().tape(d.path(), "before");
@@ -412,33 +410,37 @@ async fn a_run_that_seals_after_a_problem_leaves_it_out_of_its_deltas() {
         threads: false,
         ..sync()
     };
-    let control = DownloadControl {
-        checkpoint_cadence: Some(Cadence {
-            at_most_every: Duration::ZERO,
-        }),
-        ..Default::default()
-    };
-    let (progress, now) = (Progress::noop(), world::now().to_string());
-    let ctx = RunCtx::new(
-        "discord",
-        &store,
-        &now,
-        &progress,
-        &control,
-        DownloadMetrics::new(),
-        Diagnostics::new(),
-    );
-    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
-    let sealing = ctx.run_store(pool, Some(cas_pool), |sealer| async {
-        let opts = ingest::FetchOptions {
-            control: control.clone(),
-            sealer: Some(sealer),
-            ..options(db.clone(), sync, world::now())
+    if seal_as_it_goes {
+        let control = DownloadControl {
+            checkpoint_cadence: Some(Cadence {
+                at_most_every: Duration::ZERO,
+            }),
+            ..Default::default()
         };
-        ingest::fetch(opts).await.map(|s| s.line())
-    });
-    playback::scope(&tape, sealing).await.unwrap();
+        let (progress, now) = (Progress::noop(), world::now().to_string());
+        let ctx = RunCtx::new(
+            "discord",
+            &store,
+            &now,
+            &progress,
+            &control,
+            DownloadMetrics::new(),
+            Diagnostics::new(),
+        );
+        let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        let sealing = ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let opts = ingest::FetchOptions {
+                control: control.clone(),
+                sealer: Some(sealer),
+                ..options(db.clone(), sync, world::now())
+            };
+            ingest::fetch(opts).await.map(|s| s.line())
+        });
+        playback::scope(&tape, sealing).await.unwrap();
+    } else {
+        run_at(&store, &tape, sync, world::now()).await.unwrap();
+    }
 
     let got = problems(&store).await;
     assert!(
@@ -446,7 +448,7 @@ async fn a_run_that_seals_after_a_problem_leaves_it_out_of_its_deltas() {
         "the store holds the one problem: {got:?}"
     );
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let seals: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log")
+    let commits: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log")
         .query_scalar()
         .fetch_one(db.pool())
         .await
@@ -457,11 +459,24 @@ async fn a_run_that_seals_after_a_problem_leaves_it_out_of_its_deltas() {
         .await
         .unwrap();
     db.close().await;
-    assert!(seals > 2, "the run sealed as it went: {seals} commits");
     let summary: Value = serde_json::from_str(&summary).unwrap();
-    let deltas = summary["deltas"]
-        .as_object()
-        .expect("the summary has deltas");
-    assert!(deltas.contains_key("messages"), "{deltas:?}");
-    assert!(!deltas.contains_key("problems"), "{deltas:?}");
+    (commits, summary["deltas"].clone())
+}
+
+/// The bake's run 1 counted the missing channel in its `sync_runs` deltas
+/// only when a seal landed after the listing found it, so its golden
+/// changed from one bake to the next. The deltas are counted after the
+/// run's problems are written, so they count it either way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runs_deltas_count_its_problem_whether_or_not_a_seal_followed_it() {
+    let (sealed, with_seals) = first_sync_missing_a_channel(true).await;
+    let (unsealed, without) = first_sync_missing_a_channel(false).await;
+    assert!(
+        sealed > unsealed,
+        "the sealing run committed as it went: {sealed} commits against {unsealed}"
+    );
+    for deltas in [&with_seals, &without] {
+        assert!(deltas.get("messages").is_some(), "{deltas}");
+        assert_eq!(deltas["problems"]["added"], 1, "{deltas}");
+    }
 }

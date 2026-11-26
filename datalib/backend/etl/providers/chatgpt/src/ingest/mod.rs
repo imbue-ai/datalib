@@ -186,7 +186,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "export": opts.export,
     });
     let export = opts.export.as_deref().map(ExportFiles::open).transpose()?;
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let held = db.load_me().await?;
     let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
         .holding_account(
@@ -212,7 +212,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     summary.new_blobs = ctx.counts.new_blobs.load(Ordering::Relaxed);
     summary.skipped_blobs = ctx.counts.skipped_blobs.load(Ordering::Relaxed);
     summary.blobs_from_export = ctx.counts.blobs_from_export.load(Ordering::Relaxed);
-    run.finish(found.ended_early(), &result, &summary).await;
+    run.summarize(&summary);
     result?;
     Ok(summary)
 }
