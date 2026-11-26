@@ -52,9 +52,21 @@ export type NormalizedContact = {
 
 export type ContactSummary = { contact_id: string; name: string; kind: string };
 
+/** Each number written with no country code, as its record writes it, with
+ *  the full numbers a source knows that it may be. */
+export type FullNumbers = Record<string, string[]>;
+
 /** For one handle: the contact a person made, if any, and every source's
  *  record of whoever holds it, ranked. */
-export type Who = { mine: NormalizedContact | null; sourceContacts: NormalizedContact[] };
+export type Who = {
+  mine: NormalizedContact | null;
+  sourceContacts: NormalizedContact[];
+  /** For a number: the records that write it with no country code, so are
+   *  theirs only by its digits. Absent when there are none. */
+  sameDigits?: NormalizedContact[];
+  /** The numbers the records above write with no country code. */
+  fullNumbers?: FullNumbers;
+};
 
 // ── Pure rules ─────────────────────────────────────────────────────────
 
@@ -337,6 +349,15 @@ export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boole
     a.textContent = text;
     chip.replaceWith(a);
   }
+  // A chip by a contact's page copies as its name, linked to the page.
+  const paged = Array.from(fragment.querySelectorAll<HTMLElement>("a.chip[data-contact-page]"));
+  for (const chip of paged) {
+    const a = chip.ownerDocument.createElement("a");
+    a.href = chip.getAttribute("href") ?? "";
+    a.dataset.contactPage = chip.dataset.contactPage;
+    a.textContent = chip.dataset.label ?? chip.textContent ?? "";
+    chip.replaceWith(a);
+  }
   const chips = Array.from(fragment.querySelectorAll<HTMLElement>(".handle-chip[data-handle]"));
   for (const chip of chips) {
     const handle = chip.dataset.handle ?? "";
@@ -349,7 +370,7 @@ export function rewriteChipsForCopy(fragment: DocumentFragment | Element): boole
     a.textContent = text;
     chip.replaceWith(a);
   }
-  return chips.length + named.length > 0;
+  return chips.length + named.length + paged.length > 0;
 }
 
 /** Every chip link under `root`: the links `chipLinks.js` marked because
@@ -405,16 +426,25 @@ export async function resolveHandles(
   return (JSON.parse(text) as { resolved: Record<string, NormalizedContact> }).resolved;
 }
 
-/** Every source's record of whoever holds each handle, ranked; a handle
- *  no source mentions is absent. */
-export async function peopleFor(handles: string[]): Promise<Record<string, NormalizedContact[]>> {
+/** What the index says about some handles and some contacts' pages
+ *  (`unified_grid_and_search_index::people::People`, hand-kept). */
+export type PeopleAnswer = {
+  people: Record<string, NormalizedContact[]>;
+  same_digits: Record<string, NormalizedContact[]>;
+  pages: Record<string, NormalizedContact>;
+  full_numbers: FullNumbers;
+};
+
+/** Every source's record of whoever holds each handle, ranked, and of who
+ *  each contact's page is about; one no source mentions is absent. */
+export async function peopleFor(handles: string[], pages: string[] = []): Promise<PeopleAnswer> {
   const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/people`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ handles }),
+    body: JSON.stringify({ handles, pages }),
   });
   if (!r.ok) throw new Error(`people → ${r.status}: ${await r.text()}`);
-  return ((await r.json()) as { people: Record<string, NormalizedContact[]> }).people;
+  return (await r.json()) as PeopleAnswer;
 }
 
 export async function searchContacts(q: string): Promise<ContactSummary[]> {
@@ -443,17 +473,60 @@ export async function linkHandle(handle: string, contactId: string): Promise<voi
   const before = people.get(handle)?.mine?.key;
   await post("/link", { handle, contact_id: contactId });
   people.forget([...withItsContact(handle, contactId), ...withItsContact(handle, before)]);
+  contactsById.revalidate();
+}
+
+export type NewPerson = { name: string; handles: string[] };
+
+/** What adding many people came to (`datalib_contacts::AddedPeople`). */
+export type AddedPeople = {
+  created: number;
+  added_to: number;
+  already: number;
+  skipped: { what: string; why: string }[];
+};
+
+/** Add each person to your contacts, in one commit. */
+export async function addPeople(added: NewPerson[]): Promise<AddedPeople> {
+  const r = await post<AddedPeople>("/contacts/add", { people: added });
+  people.revalidate();
+  contactsById.revalidate();
+  return r;
+}
+
+/** What adding many people came to, in words. */
+export function addedSummary(r: AddedPeople): string {
+  const count = (n: number) => `${n} ${n === 1 ? "person" : "people"}`;
+  const parts = [
+    r.created || !r.added_to ? `Added ${count(r.created)} to contacts` : "",
+    r.added_to
+      ? `added handles to ${r.added_to === 1 ? "1 contact" : `${r.added_to} contacts`}`
+      : "",
+    r.already ? `${r.already} already there` : "",
+    ...r.skipped.map((s) => `${s.what || "One"} skipped: ${s.why}`),
+  ].filter(Boolean);
+  const text = parts.join("; ");
+  return text[0].toUpperCase() + text.slice(1);
+}
+
+/** The handles you took off `contactId` as not theirs. */
+export async function notTheirs(contactId: string): Promise<Set<string>> {
+  type Row = { handle: string; contact_id: string };
+  const r = await call<{ not_linked: Row[] }>("/not_linked");
+  return new Set(r.not_linked.filter((n) => n.contact_id === contactId).map((n) => n.handle));
 }
 
 export async function unlinkHandle(handle: string): Promise<void> {
   const owner = people.get(handle)?.mine?.key;
   await post("/unlink", { handle });
   people.forget(withItsContact(handle, owner));
+  contactsById.revalidate();
 }
 
 export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
   await post("/stopped_working", { handle, by });
   people.forget(withItsContact(handle, people.get(handle)?.mine?.key));
+  contactsById.revalidate();
 }
 
 /** Mark your contact as you, or stop: `from:me` then finds what its
@@ -588,17 +661,39 @@ export const NOBODY: Who = { mine: null, sourceContacts: [] };
 
 let contactsApp = false;
 
+export function noteContactsApp(there: boolean): void {
+  contactsApp = there;
+}
+
+/** What `answer` says of `handle`, and no more: an answer about one handle
+ *  that held another's numbers would change with what it was asked beside. */
+export function whoFrom(answer: PeopleAnswer, handle: string, mine: Who["mine"]): Who {
+  const sourceContacts = answer.people[handle] ?? [];
+  const sameDigits = answer.same_digits[handle] ?? [];
+  const fullNumbers = numbersOf([...sourceContacts, ...sameDigits], answer.full_numbers);
+  return {
+    mine,
+    sourceContacts,
+    ...(sameDigits.length ? { sameDigits } : {}),
+    ...(Object.keys(fullNumbers).length ? { fullNumbers } : {}),
+  };
+}
+
+/** The part of `full` that is about numbers `contacts` write. */
+export function numbersOf(contacts: NormalizedContact[], full: FullNumbers): FullNumbers {
+  const written = contacts.flatMap((c) => c.handles).filter((h) => !h.handle && full[h.value]);
+  return Object.fromEntries(written.map((h) => [h.value, full[h.value]]));
+}
+
 /** Who each handle is: the contact a person made, if any, and every
  *  source's record of them. One resolver for every document and grid
  *  (`resolver.ts`). */
 export const people = new Resolver<Who>(
   async (handles) => {
     followLive();
-    const [mine, sourceContacts] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
-    contactsApp = mine !== null;
-    return new Map(
-      handles.map((h) => [h, { mine: mine?.[h] ?? null, sourceContacts: sourceContacts[h] ?? [] }]),
-    );
+    const [mine, answer] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
+    noteContactsApp(mine !== null);
+    return new Map(handles.map((h) => [h, whoFrom(answer, h, mine?.[h] ?? null)]));
   },
   // The toast dedupes itself, so a page of chips failing says so once.
   (e) => pushToast(`Contacts: ${e.message}`),

@@ -25,6 +25,7 @@ use axum::{
 };
 use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
 use datalib_contact_schema::{Medium, NormalizedContact};
+use datalib_contacts::add_people::{AddedPeople, NewPerson};
 use datalib_contacts::drafts::ContactEdit;
 use datalib_contacts::{ContactKind, Store};
 use datalib_handle::Handle;
@@ -122,6 +123,15 @@ fn api() -> Api {
             Person,
             "`{name, kind?, handles?}`: make a contact, linking the handles at once",
             create,
+        )
+        .add(
+            Post,
+            "/contacts/add",
+            Person,
+            "`{people: [{name, handles}]}`: each a contact, in one commit; one whose handle is \
+             on a contact is that contact, which gets the rest. Answers `{created, added_to, \
+             already, skipped: [{what, why}]}`",
+            add_people,
         )
         .add(
             Get,
@@ -430,6 +440,36 @@ async fn create(
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "contact_id": contact_id })))
+}
+
+#[derive(Deserialize)]
+struct AddBody {
+    people: Vec<PersonBody>,
+}
+
+#[derive(Deserialize)]
+struct PersonBody {
+    name: String,
+    handles: Vec<String>,
+}
+
+async fn add_people(
+    State(store): AppState,
+    Json(body): Json<AddBody>,
+) -> Result<Json<AddedPeople>, ApiError> {
+    let people = body
+        .people
+        .into_iter()
+        .map(|p| {
+            let handles = p.handles.iter().map(|h| handle(h));
+            Ok(NewPerson {
+                name: p.name,
+                handles: handles.collect::<Result<_, ApiError>>()?,
+            })
+        })
+        .collect::<Result<Vec<_>, ApiError>>()?;
+    let added = store.add_people(&people).await.map_err(refused)?;
+    Ok(Json(added))
 }
 
 async fn contact(

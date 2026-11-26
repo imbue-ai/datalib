@@ -279,11 +279,13 @@ fn text_clause<C>(set: &str, pk: &str, term: &FilterTerm<C>) -> (String, Vec<Str
 /// of their terms or, as one of [`FROM_THE_DOCUMENT`], in their
 /// document's; or with `-`, do not.
 /// Both spellings are asked for, as a person key asks: the handle, and the
-/// address as typed, which an author with no handle is filed under.
+/// address as typed, which an author with no handle is filed under. A
+/// number is asked for without its country code too, as a card may have it.
 fn names_clause<C>(set: &str, term: &FilterTerm<C>) -> (String, Vec<String>) {
     let not = if term.negate { "NOT " } else { "" };
     let mut values = vec![term.value.clone()];
     if let Some(id) = crate::query::identifier(&term.value).filter(|id| *id != term.value) {
+        values.extend(terms_keys::spelled_at_home(&id));
         values.push(id);
     }
     let any = vec!["value = ? COLLATE NOCASE"; values.len()].join(" OR ");
@@ -346,7 +348,11 @@ fn terms_clause<C>(set: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, 
         }
         // `vals_fts` tokenizes the value as the terms were, so the phrase
         // is the words in order, each whole.
-        TermsValue::Words { text, by_name } => {
+        TermsValue::Words {
+            text,
+            by_name,
+            digits,
+        } => {
             let phrase = format!("\"{}\"", text.replace('"', "\"\""));
             let names = if by_name {
                 " OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
@@ -355,20 +361,22 @@ fn terms_clause<C>(set: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, 
             } else {
                 String::new()
             };
-            let bound = if by_name {
-                vec![phrase, text]
-            } else {
-                vec![phrase]
-            };
+            let mut bound = vec![phrase];
+            bound.extend(by_name.then_some(text));
+            let number = or_ending_in(digits.as_deref(), &mut bound);
             (
                 format!(
                     " AND (t.val_id IN (SELECT rowid FROM vals_fts \
-                     WHERE vals_fts MATCH ?){names})"
+                     WHERE vals_fts MATCH ?){names}{number})"
                 ),
                 bound,
             )
         }
-        TermsValue::Partial { text, by_name } => {
+        TermsValue::Partial {
+            text,
+            by_name,
+            digits,
+        } => {
             let (held, needle) = vals_holding("t.val_id", &text);
             let names = if by_name {
                 " OR t.val_id IN (SELECT val_id FROM vals WHERE value IN \
@@ -377,12 +385,10 @@ fn terms_clause<C>(set: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, 
             } else {
                 String::new()
             };
-            let bound = if by_name {
-                vec![needle, like_pattern(&text)]
-            } else {
-                vec![needle]
-            };
-            (format!(" AND ({held}{names})"), bound)
+            let mut bound = vec![needle];
+            bound.extend(by_name.then(|| like_pattern(&text)));
+            let number = or_ending_in(digits.as_deref(), &mut bound);
+            (format!(" AND ({held}{names}{number})"), bound)
         }
         // A contact, or the owner, is its handles, read before the query
         // runs; none read is no row (an empty array), and the applet refuses
@@ -404,6 +410,21 @@ fn terms_clause<C>(set: &str, key: &TermsKey, term: &FilterTerm<C>) -> (String, 
             codes(&key.kinds())
         ),
         bound,
+    )
+}
+
+/// The values ending in a phone number's `digits`, as one more arm of a
+/// clause, and what it binds. Digits alone, so nothing in them is a
+/// wildcard.
+fn or_ending_in(digits: Option<&str>, bound: &mut Vec<String>) -> String {
+    let Some(digits) = digits else {
+        return String::new();
+    };
+    let (held, needle) = vals_holding("v.val_id", digits);
+    bound.extend([needle, format!("%{digits}")]);
+    format!(
+        " OR t.val_id IN (SELECT v.val_id FROM vals v \
+             WHERE {held} AND v.value LIKE ?)"
     )
 }
 

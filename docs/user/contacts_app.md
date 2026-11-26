@@ -78,8 +78,10 @@ why.
 
 The other kinds, and who writes which, are in [the
 reference](../dev/contacts.md#handles). A number written without its
-country code gets no handle, so it cannot be linked. Copy handles from the
-query below rather than building them.
+country code gets no handle, so it cannot be linked as it is: `POST
+/applet/unified_grid_and_search_index/people` answers which full numbers
+it may be, in `full_numbers`. Copy handles from the query below rather
+than building them.
 
 ## 1. See what is known
 
