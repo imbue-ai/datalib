@@ -1,5 +1,13 @@
 import { test, expect } from "@playwright/test";
-import { cardOf, GRID, SHOWN_CARDS, shownCards, shownTabName, tabLabels } from "./grid-helpers";
+import {
+  cardOf,
+  GRID,
+  PINNED,
+  SHOWN_CARDS,
+  shownCards,
+  shownTabName,
+  tabLabels,
+} from "./grid-helpers";
 
 // A URL naming cards — a link, a popped-out card, a `/chat/<uuid>` link
 // every renderer writes into a document body — opens those cards as a
@@ -12,8 +20,8 @@ const chatPreview = `${SHOWN_CARDS} .chat-preview`;
 test("a URL naming cards opens them as a tab, and the address goes back to /", async ({ page }) => {
   await page.goto(GRID);
   await expect(cardOf(page, "searchView()")).toHaveCount(1);
-  // The three pinned tabs, then the grid's, which also calls itself Search.
-  await expect(tabLabels(page)).toHaveText(["Dashboard", "Search", "Sources", "Search"]);
+  // The pinned tabs, then the grid's, which also calls itself Search.
+  await expect(tabLabels(page)).toHaveText([...PINNED, "Search"]);
   await expect.poll(() => page.evaluate(() => location.pathname)).toBe("/");
 });
 

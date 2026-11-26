@@ -154,7 +154,6 @@ onMounted(() => {
 // it says what its dot would.
 const chips = {
   who: () => undefined,
-  canLink: () => false,
   entity: (uri: string) => entities.lookup(uri),
   keepLabels: true,
   quiet: true,

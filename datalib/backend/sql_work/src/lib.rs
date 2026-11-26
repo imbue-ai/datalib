@@ -188,7 +188,7 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
     if recording {
         recording::note(&sql, &file, work);
     }
-    if !work.is_heavy() {
+    if !work.is_heavy() || judge::walks_by_design(&sql) {
         return;
     }
     let expanded = unsafe { sqlite3_expanded_sql(stmt) };

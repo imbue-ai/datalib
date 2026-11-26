@@ -11,7 +11,7 @@ use datalib_etl_render::html::{
     escape_attr, escape_name_inline, escape_name_text, escape_text, without_bidi_controls,
 };
 use datalib_etl_render::inputs::{RenderUnit, RenderUnits};
-use datalib_etl_render::message::chip_link;
+use datalib_etl_render::message::{chip_link, entity_link};
 use datalib_etl_render::photo::{photo_address, with_photo_url};
 use datalib_etl_render::section::Section;
 use datalib_schema::data_nodes::{DataNodeRow, Lineage};
@@ -21,7 +21,9 @@ use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 
-use datalib_contact_schema::{ContactHandle, ContactKind, Medium, NormalizedContact, Photo};
+use datalib_contact_schema::{
+    contact_page_uri, ContactHandle, ContactKind, Medium, NormalizedContact, Photo,
+};
 use datalib_handle::Handle;
 
 use crate::types::ContactDoc;
@@ -331,14 +333,19 @@ fn split_qualifier(label: &str) -> (String, Option<String>) {
     }
 }
 
-/// Who the card is about, as `with:` finds it: each handle it holds and
-/// each name it gives.
+/// Who the card is about, as `with:` finds it: each handle it holds, each
+/// number it writes without a country code, by its digits, and each name
+/// it gives.
 fn about_terms(contact: &NormalizedContact) -> impl Iterator<Item = SearchTerm> + '_ {
     let handles = contact
         .handles
         .iter()
         .filter_map(|h| h.handle.as_ref())
         .map(|h| h.as_str().to_string());
+    let numbers = contact
+        .handles
+        .iter()
+        .filter_map(ContactHandle::home_digits);
     let names = contact
         .names
         .iter()
@@ -346,6 +353,7 @@ fn about_terms(contact: &NormalizedContact) -> impl Iterator<Item = SearchTerm> 
         .filter(|n| !n.is_empty())
         .map(str::to_string);
     handles
+        .chain(numbers)
         .chain(names)
         .map(|value| SearchTerm::new(SearchTermKind::About, value))
 }
@@ -436,8 +444,8 @@ fn render_markdown(
     vec![frontmatter, Section::keyed(m_uuid, out)]
 }
 
-/// The top of the page: the photo, the person as a chip (the right-click
-/// that links them to a contact), their role and the groups they are
+/// The top of the page: the photo, the person as a chip (by a handle, else
+/// by this page; its double-click is how to add them), their role and the groups they are
 /// filed in. The heading is a markdown `#` so the chip link inside it is
 /// marked; the copy-page-id button finds it through the wrapper's
 /// `data-page-title-uuid`.
@@ -457,6 +465,10 @@ fn head(doc: &ContactDoc, photo: Option<&str>) -> String {
     out.push_str("<div class=\"contact-who\">\n\n");
     let heading = match head_handle(contact) {
         Some(handle) => chip_link(name, &handle),
+        None if contact.kind == ContactKind::Person => {
+            let page = contact_page_uri(&doc.doc_uuid);
+            entity_link(name, &page, "No address or full number")
+        }
         None => escape_name_inline(name),
     };
     out.push_str(&format!("# {heading}"));
@@ -825,7 +837,11 @@ mod tests {
             ),
             "{md}"
         );
-        assert!(md.contains("# Jean-Luc Picard <a class=\"source-link\" href=\"https://www.linkedin.com/in/jlp\""), "{md}");
+        assert!(md.contains("\n\n# [Jean-Luc Picard]("), "{md}");
+        assert!(
+            md.contains(" <a class=\"source-link\" href=\"https://www.linkedin.com/in/jlp\""),
+            "{md}"
+        );
         assert!(
             md.contains("<p class=\"contact-role\">Captain | USS Enterprise · Starfleet</p>"),
             "{md}"
@@ -901,7 +917,7 @@ mod tests {
             "{md}"
         );
         assert!(
-            md.contains("# &lt;script&gt;x&lt;/script&gt; &amp; co\\]"),
+            md.contains("# [&lt;script&gt;x&lt;/script&gt; &amp; co\\]](datalib:contact_page/"),
             "{md}"
         );
         assert!(
@@ -1097,8 +1113,8 @@ mod tests {
         assert_eq!(h(None, Some("(202) 555-0101")), None);
     }
 
-    /// `with:` finds a card by each handle it holds and each name it
-    /// gives; a number with no country code makes no handle, so no term.
+    /// `with:` finds a card by each handle it holds, each name it gives,
+    /// and the digits of a number with no country code.
     #[test]
     fn a_card_is_about_its_handles_and_names() {
         let mut c = mk_contact().contact;
@@ -1119,11 +1135,36 @@ mod tests {
         assert_eq!(
             terms,
             [
+                about("5550101234"),
                 about("Number One"),
                 about("Will Riker"),
                 about("email:riker@enterprise.org")
             ]
         );
+    }
+
+    /// A person with no handle is a chip naming their own page, so there is
+    /// still something to add; a group is a plain heading.
+    #[test]
+    fn a_card_with_no_handle_is_headed_by_its_own_page() {
+        let mut doc = mk_contact();
+        doc.contact.names = vec!["Kalita".into()];
+        doc.contact.handles = vec![ContactHandle::phone(None, "(555) 010-1234")];
+        let heading = |doc: &ContactDoc| {
+            let md = join(&render_markdown(&mk_profile(), doc, "book", None));
+            let line = md.lines().find(|l| l.starts_with("# ")).unwrap();
+            line.to_string()
+        };
+        assert!(
+            heading(&doc).starts_with(&format!(
+                "# [Kalita](datalib:contact_page/{} \"No address or full number\")",
+                doc.doc_uuid
+            )),
+            "{}",
+            heading(&doc)
+        );
+        doc.contact.kind = ContactKind::Group;
+        assert!(heading(&doc).starts_with("# Kalita"), "{}", heading(&doc));
     }
 
     /// A group's page lists its members, each a chip where the member has

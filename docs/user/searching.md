@@ -83,11 +83,8 @@ A source's words are searchable once `unified_grid_and_search_index` has run
 after its render; until then words to rank by, and the quoted, `+` and `-`
 filters, find nothing there, and the answer says why. A source that step's `not_searched` lists is never searched. Meaning covers
 a source only once its own `embed` step has run, so a source with that step
-turned off is found by its words alone. A line above the results
-says how many of the documents the search could have found have no vectors,
-and hovering says which sources they are in; from a shell or the API it is
-`query_echo.without_vectors`. While a sync is writing the index, meaning and
-that line answer from what the search last read, so a search stays quick; what
+turned off is found by its words alone. While a sync is writing the index,
+meaning answers from what the search last read, so a search stays quick; what
 the sync added counts once the index has been still for half a minute.
 
 A turned-off source does not re-render, so it can drop out of search when an
@@ -96,8 +93,8 @@ it on and sync it to bring it back; what it has already embedded is kept.
 
 ### Ids as free text
 
-An id, an address or a number typed as free text (`picard@enterprise.org`,
-`+12025550101`, a row's uuid) is a filter: every row that names it, in any
+An id, an address or a number with its country code typed as free text
+(`picard@enterprise.org`, `+12025550101`, a row's uuid) is a filter: every row that names it, in any
 role, newest first. A source's own id for a record counts too, where it is
 a uuid, dashed or not, and so does a link that ends in one: paste a Notion
 page's link to find the page, or a link a 🔗 in the document viewer
@@ -225,7 +222,12 @@ The value can be:
 
 - **An address or number** (`riker@enterprise.org`, `+12025550101`), or
   any handle as Datalib writes it (`email:…`, `tel:…`,
-  `slack:T…/U…`, `github:jlpicard`): that person exactly.
+  `slack:T…/U…`, `github:jlpicard`): that person exactly. A number is
+  one number however it is written: `from:+12025550101`,
+  `from:"+1 (202) 555-0101"` and `from:"(202) 555-0101"` find the same
+  rows, whichever way each source wrote it. Without its country code it
+  finds every number that ends in those digits, and either way `with:`
+  finds an address-book card that has the number with no country code.
 - **A quoted name** (`from:"Will Riker"`): any name holding those
   words in that order, each whole (`from:"Riker"` finds "Will Riker
   <riker@…>", `from:"Rik"` does not), and every handle a source showed

@@ -82,24 +82,28 @@ pub fn subject_identities(
 
 /// The Contact cell: the contact's name, a chip where its first address,
 /// else its first number, makes a handle, else by any handle the contact
-/// has (a LinkedIn profile, a Slack user); plain text where it has none
-/// (a group, a number with no country code). Only a contact's own row
-/// has one.
+/// has (a LinkedIn profile, a Slack user), else by its own page where it
+/// is a person (`page`); plain text for a group with no handle. Only a
+/// contact's own row has one.
 pub fn contact_identity(
     contact: Option<&str>,
     email: Option<&str>,
     phone: Option<&str>,
     handles: &[String],
+    page: Option<&str>,
 ) -> Option<Identity> {
     let name = contact.filter(|c| !c.is_empty())?;
     let handle = email
         .and_then(Handle::email)
         .or_else(|| phone.and_then(Handle::tel))
         .or_else(|| handles.iter().find_map(|h| Handle::parse(h)));
+    let id = match (&handle, page) {
+        (Some(handle), _) => handle.to_uri(),
+        (None, Some(page)) => datalib_contact_schema::contact_page_uri(page),
+        (None, None) => name.to_string(),
+    };
     Some(Identity {
-        id: handle
-            .as_ref()
-            .map_or_else(|| name.to_string(), Handle::to_uri),
+        id,
         label: name.to_string(),
         icon: handle.as_ref().map(|h| handle_mark(h.kind()).to_string()),
         detail: handle.as_ref().map(|h| h.describe(name)),
@@ -498,6 +502,7 @@ impl Sources {
             row.email.as_deref(),
             row.phone.as_deref(),
             &row.contact_handles,
+            row.contact_page.as_deref(),
         );
         row.document_ref = row
             .markdown_uuid
@@ -584,13 +589,13 @@ mod tests {
     }
 
     /// A contact's cell is a chip by its address, else its number, else
-    /// any handle the contact has; plain text where it has none, and any
-    /// other row has none.
+    /// any handle the contact has, else its page; plain text where it has
+    /// none, and any other row has none.
     #[test]
     fn a_contacts_cell_is_its_address_else_its_number_else_any_handle() {
         let id = |c, e, p, h: &[&str]| {
             let h: Vec<String> = h.iter().map(|s| s.to_string()).collect();
-            contact_identity(c, e, p, &h).map(|i| (i.id, i.label))
+            contact_identity(c, e, p, &h, None).map(|i| (i.id, i.label))
         };
         let riker = Some("Will Riker");
         assert_eq!(
@@ -618,6 +623,14 @@ mod tests {
             Some(("Bridge crew".into(), "Bridge crew".into()))
         );
         assert_eq!(id(None, Some("riker@enterprise.org"), None, &[]), None);
+        let kalita = contact_identity(
+            Some("Kalita"),
+            None,
+            Some("(202) 555-0147"),
+            &[],
+            Some("c-1"),
+        );
+        assert_eq!(kalita.unwrap().id, "datalib:contact_page/c-1");
     }
 
     /// A conversation named by its people shows a chip for each, by
@@ -656,7 +669,13 @@ mod tests {
             [("#bridge".into(), "#bridge".into())]
         );
         assert!(subject_identities(None, &[], " ").is_empty());
-        let riker = contact_identity(Some("Will Riker"), None, None, &["linkedin:wriker".into()]);
+        let riker = contact_identity(
+            Some("Will Riker"),
+            None,
+            None,
+            &["linkedin:wriker".into()],
+            None,
+        );
         assert_eq!(
             ids(subject_identities(riker.as_ref(), &people, "Will Riker")),
             [(
@@ -813,6 +832,7 @@ mod tests {
             email: Some("riker@enterprise.org".into()),
             phone: Some("+1 202 555 0101".into()),
             contact_handles: Vec::new(),
+            contact_page: None,
             contact_ref: None,
             subject_people: Vec::new(),
             subject_ref: Vec::new(),

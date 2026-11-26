@@ -48,6 +48,7 @@ use crate::section::Section;
 
 pub(crate) mod contact_records;
 mod nodes;
+mod planner_ranks;
 
 /// Serializes concurrent writers against one doltlite index pool, and
 /// optionally batches every write into one transaction.
@@ -478,7 +479,9 @@ async fn record_unreadable_store(
 /// tables, so adding one costs creating it rather than a rebuild.
 pub fn shape() -> datalib_store_meta::Shape {
     datalib_store_meta::Shape {
-        indexes: Some(datalib_store_meta::schema_hash(indexes())),
+        indexes: Some(datalib_store_meta::schema_hash(
+            indexes().chain(planner_ranks::statements().iter().map(String::as_str)),
+        )),
         ..shape_without_indexes()
     }
 }
@@ -549,11 +552,9 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
 pub(crate) const AUTHORS_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
 
-/// What the search applet lists a search's searchable documents from, for
-/// its count of those search by meaning cannot reach
-/// (`DoltRepo::documents_with_pages`, which names `markdowns_searchable`).
-/// Without them it read every grid row and its document's whole
-/// `markdowns` row, seconds on a large library, on every search.
+/// For listing a search's searchable documents from indexes alone. No
+/// statement reads by them now: they are kept for a count of the documents
+/// search by meaning cannot reach, which no answer may wait for.
 pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS markdowns_searchable ON markdowns (searchable, markdown_uuid)",
     "CREATE INDEX IF NOT EXISTS grid_rows_by_markdown_source ON grid_rows (markdown_uuid, source_id)",
@@ -585,13 +586,15 @@ fn index_ddl() -> impl Iterator<Item = &'static str> {
 /// grid reads wants to pay for the search indexes on every write.
 pub async fn init_schema(pool: &SqlitePool) -> Result<()> {
     drop_other_indexes(pool).await?;
+    let conn = &mut *pool.acquire().await?;
+    planner_ranks::write(conn).await?;
     for ddl in index_ddl().chain(indexes()) {
         sqlx::query(ddl)
-            .execute(pool)
+            .execute(&mut *conn)
             .await
             .with_context(|| format!("create: {ddl}"))?;
     }
-    Ok(())
+    planner_ranks::load(conn).await
 }
 
 /// Drop each index of the file that this build does not make: one it
@@ -648,13 +651,14 @@ async fn drop_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 }
 
 async fn create_search_indexes(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    planner_ranks::write(conn).await?;
     for ddl in read_indexes() {
         sqlx::query(ddl)
             .execute(&mut *conn)
             .await
             .with_context(|| format!("create index: {ddl}"))?;
     }
-    Ok(())
+    planner_ranks::load(conn).await
 }
 
 /// Whether the rest of a source's load should drop the search indexes
@@ -4256,12 +4260,15 @@ mod source_cursor_tests {
             .unwrap()
     }
 
+    /// Those not made, or that the planner is told nothing of: dropping an
+    /// index drops that too.
     async fn missing_search_indexes(pool: &SqlitePool) -> Vec<&'static str> {
-        let present: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'index'")
-                .fetch_all(pool)
-                .await
-                .unwrap();
+        let present: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master JOIN sqlite_stat1 ON idx = name WHERE type = 'index'",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap();
         datalib_schema::grid_rows::INDEXES
             .iter()
             .map(|(_table, ddl)| crate::grid_index::index_name(ddl).unwrap())

@@ -317,6 +317,51 @@ async fn a_problems_table_in_another_shape_is_reported_by_its_recorded_shape() {
     assert!(read.unread.is_empty(), "{:?}", read.unread);
 }
 
+/// A render store whose step an older build ran last, and nothing has run
+/// since: the folder of a source taken out of the config keeps one for
+/// good. It lacks a table this build reads, and was logged as an error at
+/// every start.
+#[tokio::test]
+async fn a_render_store_without_the_table_this_build_reads_is_in_another_shape() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join("slack/render_markdown/indexed_markdown.sqlite");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .idle_timeout(None)
+        .max_lifetime(None)
+        .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
+        .await
+        .unwrap();
+    sqlx::query(datalib_problems::DDL[0].1)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let shape = datalib_store_meta::Shape {
+        versions: StepFile::shape().versions,
+        ..datalib_store_meta::Shape::of_tables("an older build's".into())
+    };
+    datalib_store_meta::write(&pool, datalib_store_meta::StoreKind::Render, &shape)
+        .await
+        .unwrap();
+    let read = of_step(dir.path(), "slack/render_markdown").await;
+    assert!(read.unread.is_empty(), "{:?}", read.unread);
+    assert_eq!(read.other_shape, std::slice::from_ref(&path));
+
+    // The same file once its step has run again.
+    sqlx::query("CREATE TABLE entity_items (entity_key TEXT PRIMARY KEY, item_uuid TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
+    insert(&pool, &row("messages:1")).await;
+    pool.close().await;
+    let read = of_step(dir.path(), "slack/render_markdown").await;
+    assert!(read.unread.is_empty() && read.other_shape.is_empty());
+    assert_eq!(keys(&read.rows), ["messages:1"]);
+}
+
 /// A step's own file from before it recorded its shape is in another
 /// shape, said so rather than read as holding nothing.
 #[tokio::test]

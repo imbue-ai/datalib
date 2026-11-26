@@ -434,9 +434,9 @@ it came from, so it gets its own section.
   source; no test greps the log for prompt text.
 - **What is stored of the remote work is how much of it there was**: the
   vectors, the step's log, and the run's counts as metrics (chunks sent,
-  Sandboxes and their seconds by GPU, an estimated cost). No prompt, no
-  Sandbox's id and no job to resume, so a stopped run leaves no record
-  of what went where.
+  Sandboxes and their seconds by GPU, an estimated cost). The log names
+  each Sandbox by its id, so a run can be held against Modal's own list;
+  no prompt and no job to resume are kept.
 - **The SDK is pinned** by a lockfile with integrity hashes and no
   install scripts (`third-party/modal/runtime/`), like latchkey's.
 
@@ -482,3 +482,12 @@ code before repeating it as current.
 | A source's text goes to Modal without the person choosing it | us, by a bug | Only an `embed` step with `embed_on_modal_from_n_chunks` set sends anything, and only what it owes | § "What leaves the machine for Modal" above |
 | A downloaded runtime or model is swapped | whoever controls the host | Every Bazel download, the runtime and CUDA module fetches and the embedding models are pinned by sha256; the docker image fetches nothing at run time (`DATALIB_NO_FETCH`) | [`runtime_fetch.md`](runtime_fetch.md) |
 | A person's data lands in this public repo | us, by accident | A rule, not a check | AGENTS.md §"Real data stays out of the repo" |
+
+Two guards were considered against script from outside and not built:
+
+- **Letting only the bearer token, and never the page's cookie, change a
+  step's `command`.** It limits what the next script bug could do rather
+  than preventing one, and it costs the config editor its command
+  editing. Revisit it if another such bug turns up.
+- **Running a card's code in a sandboxed frame.** A card's source is
+  data, so there is no code to contain.

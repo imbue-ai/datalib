@@ -27,9 +27,9 @@ import {
   type NormalizedContact,
   type Who,
   people,
-  canLinkHandles,
   NOBODY,
 } from "./contacts";
+import { contactPages, decorateContactPages, movesPages } from "./contactPages";
 import ChipMenu from "./ChipMenu.ce.vue";
 import {
   chipDragQuery,
@@ -46,7 +46,6 @@ import { decorateChatDays, decorateDates, rewriteDatesForCopy } from "./dates";
 import { decorateLabels } from "./labelChip";
 import { timeView } from "@/config/timeView";
 import { decorateEntities, entities } from "./entities";
-import HandlePopover from "./HandlePopover.ce.vue";
 import { renderDocument } from "./renderDocument";
 import { NEAR_END_PX, growth } from "./pieceWindow";
 import { mountTimeSeries } from "./timeSeriesEmbed";
@@ -170,18 +169,13 @@ watch(
   },
 );
 
-type ChipTarget = {
-  handle: string;
-  shownAs: string;
-  resolved: NormalizedContact | null;
-  x: number;
-  y: number;
-};
-const chipTarget = ref<ChipTarget | null>(null);
-
 async function redrawHandles() {
   if (!body.value) return;
   await decorateHandles(body.value);
+}
+
+async function redrawContactPages() {
+  if (body.value) await decorateContactPages(body.value);
 }
 
 // An answer changed somewhere — a link made in another document, or in
@@ -194,6 +188,17 @@ const stopPeople = people.subscribe((handles) => {
 });
 onBeforeUnmount(stopPeople);
 
+const stopPages = contactPages.subscribe(() => void redrawContactPages());
+const stopPagePeople = people.subscribe((handles) => {
+  const shown = Array.from(
+    body.value?.querySelectorAll<HTMLElement>("a.chip[data-contact-page]") ?? [],
+  );
+  const pages = shown.map((a) => a.dataset.contactPage ?? "");
+  if (movesPages(handles, pages)) void redrawContactPages();
+});
+onBeforeUnmount(stopPagePeople);
+onBeforeUnmount(stopPages);
+
 // The same for the group and step chips, answered by `entities`.
 const stopEntities = entities.subscribe((uris) => {
   const root = body.value;
@@ -203,8 +208,8 @@ const stopEntities = entities.subscribe((uris) => {
 });
 onBeforeUnmount(stopEntities);
 
-/// Where the frame's viewport sits in this window: the popover and the
-/// chip menu are drawn out here, over the frame, from points inside it.
+/// Where the frame's viewport sits in this window: the chip menu
+/// is drawn out here, over the frame, from a point inside it.
 function frameOrigin(): { x: number; y: number } {
   const r = frameEl.value?.getBoundingClientRect();
   return { x: r?.left ?? 0, y: r?.top ?? 0 };
@@ -214,48 +219,26 @@ function chipAt(ev: MouseEvent): HTMLElement | null {
   return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-handle]") ?? null;
 }
 
-function whoIs(chip: HTMLElement): Who {
-  return people.get(chip.dataset.handle ?? "") ?? NOBODY;
-}
-
-/// The link/create popover for `chip`, at a point in this window.
-function openPopover(chip: HTMLElement, x: number, y: number) {
-  chipTarget.value = {
-    handle: chip.dataset.handle ?? "",
-    shownAs: chip.dataset.shownAs ?? "",
-    resolved: whoIs(chip).mine,
-    x,
-    y,
-  };
-}
-
 function entityChipAt(ev: MouseEvent): HTMLElement | null {
-  return asElement(ev.target)?.closest<HTMLElement>("a.chip[data-entity]") ?? null;
+  return (
+    asElement(ev.target)?.closest<HTMLElement>("a.chip[data-entity], a.chip[data-contact-page]") ??
+    null
+  );
 }
 
-/// A group or step chip's href names something in this app, not a page:
-/// no click on it, plain or modified, leaves for the browser or the OS.
+/// A `datalib:` chip's href names something in this app, not a page: no
+/// click on it, plain or modified, leaves for the browser or the OS.
 function onEntityChipClick(ev: MouseEvent) {
   if (!entityChipAt(ev)) return;
   ev.preventDefault();
   ev.stopPropagation();
 }
 
+/// A click on a person does nothing, and above all does not open the mail
+/// client its href names. A modifier click stays the browser's, as on any
+/// link.
 function onHandleChipClick(ev: MouseEvent) {
-  const chip = chipAt(ev);
-  // A chip is a link; a plain click on it is for the chip, not for the
-  // mail client its href would open. A modifier click stays the
-  // browser's, as on any link.
-  if (!chip || isBrowserClick(ev)) return;
-  ev.preventDefault();
-  // The second click of a double-click is the double-click's.
-  if (ev.detail > 1) return;
-  // Without a contacts app there is nothing to change; the tooltip is
-  // all a chip has to say.
-  if (!canLinkHandles()) return;
-  ev.stopPropagation();
-  const at = frameOrigin();
-  openPopover(chip, at.x + ev.clientX, at.y + ev.clientY);
+  if (chipAt(ev) && !isBrowserClick(ev)) ev.preventDefault();
 }
 
 /// Double-click opens the chip's card: a person's, led by this
@@ -266,22 +249,18 @@ function onChipDblClick(ev: MouseEvent) {
   if (!el || !chip || (chip.ref.kind === "person" && isBrowserClick(ev))) return;
   ev.preventDefault();
   ev.stopPropagation();
-  void runChipAction("open", chip, chipHost(el, 0, 0));
+  void runChipAction("open", chip, chipHost);
 }
 
 /// What a chip's entries do in a document: open a card or a search
-/// beside it, and link a handle in the popover where the chip was pressed.
-function chipHost(el: HTMLElement, x: number, y: number): ChipHost {
-  return {
-    openCard: (source) => {
-      chipTarget.value = null;
-      emit("open-card", source);
-    },
-    search: (q) => emit("open-search", q),
-    editLink: () => openPopover(el, x, y),
-    seenIn: props.sourceId ?? null,
-  };
-}
+/// beside it.
+const chipHost: ChipHost = {
+  openCard: (source) => emit("open-card", source),
+  search: (q) => emit("open-search", q),
+  get seenIn() {
+    return props.sourceId ?? null;
+  },
+};
 
 /// A chip dragged into a search bar drops the search it stands for, as
 /// text the field takes like any typed (docs/dev/chips.md § "A date"),
@@ -294,7 +273,7 @@ function onChipDragStart(ev: DragEvent) {
   ev.dataTransfer.setData("text/plain", ` ${q} `);
 }
 
-type ChipMenuAt = { el: HTMLElement; chip: Chip; entries: ChipEntry[]; x: number; y: number };
+type ChipMenuAt = { chip: Chip; entries: ChipEntry[]; x: number; y: number };
 const chipMenuAt = ref<ChipMenuAt | null>(null);
 
 /// Right-click on a chip is the chip's menu, not the document's.
@@ -305,9 +284,8 @@ function onChipContextMenu(ev: MouseEvent): boolean {
   ev.preventDefault();
   const at = frameOrigin();
   chipMenuAt.value = {
-    el,
     chip,
-    entries: chipMenuOf(chip, canLinkHandles()),
+    entries: chipMenuOf(chip),
     x: at.x + ev.clientX,
     y: at.y + ev.clientY,
   };
@@ -317,7 +295,7 @@ function onChipContextMenu(ev: MouseEvent): boolean {
 async function onChipMenuPick(id: string) {
   const menu = chipMenuAt.value;
   chipMenuAt.value = null;
-  if (menu) await runChipAction(id as ChipEntryId, menu.chip, chipHost(menu.el, menu.x, menu.y));
+  if (menu) await runChipAction(id as ChipEntryId, menu.chip, chipHost);
 }
 
 function onRemoteChipClick(ev: MouseEvent) {
@@ -518,6 +496,7 @@ function paint() {
   decorateRemoteMedia(el);
   decorateLongMessages(el);
   void redrawHandles();
+  void redrawContactPages();
   void decorateEntities(el);
   decorateDates(el);
   decorateChatDays(el);
@@ -671,13 +650,6 @@ onMounted(paint);
     :y="chipMenuAt.y"
     @pick="onChipMenuPick"
     @close="chipMenuAt = null"
-  />
-  <HandlePopover
-    v-if="chipTarget"
-    :key="chipTarget.handle"
-    v-bind="chipTarget"
-    @close="chipTarget = null"
-    @changed="redrawHandles"
   />
 </template>
 

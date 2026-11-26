@@ -7,9 +7,9 @@ point cost on disk?
 
 `scripts/doltlite_time_series_cost.py` loads 1,000 series of equal
 length into `time_series_points` keyed `(time_series_id, t)`, then
-applies one sync of 10 new points per series three ways. The design
-that rests on these numbers is
-[`docs/dev/plans/completed/time_series.md`](../../docs/dev/plans/completed/time_series.md).
+applies one sync of 10 new points per series three ways. The stores
+have kept encoded chunks instead of one row per point since
+([`docs/dev/time_series.md`](../../docs/dev/time_series.md)).
 
 ```sh
 bazelisk build //third-party/doltlite:doltlite

@@ -142,6 +142,31 @@ async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
     pool.close().await;
 }
 
+/// A retention pass walks what it keeps, so it says so and is not logged;
+/// the same statement without the mark is.
+#[tokio::test]
+async fn a_statement_marked_as_walking_by_design_is_not_logged() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, pool) = store(dir.path()).await;
+    for (mark, logged) in [("/* walks by design */", 0), ("", 1)] {
+        // Safe: the two marks are the literals above.
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "DELETE FROM t {mark} WHERE k < ?"
+        )))
+        .bind(0)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            lines_about(&path).len(),
+            logged,
+            "{:#?}",
+            lines_about(&path)
+        );
+    }
+    pool.close().await;
+}
+
 /// Guards the Library card's node query (#1926): it searched an index of a
 /// two-valued column and so read half the table, scanning none of it.
 #[tokio::test]

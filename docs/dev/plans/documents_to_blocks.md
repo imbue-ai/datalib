@@ -377,8 +377,8 @@ during the scroll, lands in its place and moves nothing on screen. A
 moment means nothing among children the source orders without times (a
 page's blocks); those are anchored on an item. The UI keeps the window
 the way the grid already does, in the pure core of `pagedWindow.ts`,
-which holds the reader still when a page lands above them
-([`paged_grids.md`](paged_grids.md)); the two are one design.
+which holds the reader still when a page lands above them; the two are
+one design.
 
 **A view per kind of node.** Opening a node shows it the way its kind
 is read: a message in its context, a thread's items a page at a time,

@@ -339,8 +339,7 @@ async fn stored_uids(store: &Path) -> Option<String> {
 /// RFC 6578 answers a sync token the server no longer honours with 403
 /// `valid-sync-token`. That used to read as "sync-collection
 /// unsupported": the run logged a fallback that did not exist, kept the
-/// dead token, and the address book never synced again (audit
-/// 2026-10-02 §5). Now the token is dropped and the book listed whole,
+/// dead token, and the address book never synced again. Now the token is dropped and the book listed whole,
 /// and a card the whole listing does not name — deleted while no token
 /// was held — goes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
