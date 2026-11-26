@@ -664,30 +664,6 @@ pub fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 /// the value; on a gateway's later router, `1` means its default profile.
 pub const IMPERSONATE_MARKER_HEADER: &str = "X-Imbue-Impersonate: 1";
 
-/// URL prefix that makes a request leave from the user's own machine rather
-/// than from the workspace's own egress. Kept so that workspaces created by
-/// a minds that still publishes it keep working; a current minds decides
-/// this inside the gateway instead, by the router curl's
-/// `LATCHKEY_DESKTOP_PROXY_CONFIG` file, with no help from datalib. Remove
-/// this once no supported minds publishes the prefix.
-///
-/// Only the impersonating providers ask for it: a remote workspace runs on a
-/// VPS and reaches third parties through a gateway on that same VPS, so its
-/// requests carry a datacenter IP — and the providers that need TLS
-/// impersonation are the same ones that block those ranges outright, where a
-/// fingerprint fix does not help.
-pub const VIA_DESKTOP_URL_PREFIX_ENV: &str = "MINDS_VIA_DESKTOP_URL_PREFIX";
-
-fn maybe_via_desktop_url(url: &str, service: HttpService, bypass_latchkey: bool) -> String {
-    if bypass_latchkey || !service.impersonates() {
-        return url.to_string();
-    }
-    match std::env::var(VIA_DESKTOP_URL_PREFIX_ENV) {
-        Ok(prefix) if !prefix.is_empty() => format!("{prefix}/{url}"),
-        _ => url.to_string(),
-    }
-}
-
 /// Issue an HTTP request and return the full response, with the shared retry
 /// policy applied — 429, 5xx and transient transport failures, honoring
 /// `Retry-After` else backing off exponentially, bounded by the ambient
@@ -998,11 +974,7 @@ mod live {
             // A URL someone else wrote cannot be read as an option.
             cmd.arg("--url");
         }
-        cmd.arg(maybe_via_desktop_url(
-            &req.url,
-            req.service,
-            req.bypass_latchkey,
-        ));
+        cmd.arg(&req.url);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -1410,82 +1382,6 @@ mod tests {
         ] {
             assert!(!e.to_string().contains("s3cret"), "{e}");
         }
-    }
-
-    fn with_via_desktop_prefix<T>(prefix: Option<&str>, body: impl FnOnce() -> T) -> T {
-        static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _lock = GUARD.lock().unwrap_or_else(|poison| poison.into_inner());
-        match prefix {
-            Some(value) => std::env::set_var(VIA_DESKTOP_URL_PREFIX_ENV, value),
-            None => std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV),
-        }
-        let out = body();
-        std::env::remove_var(VIA_DESKTOP_URL_PREFIX_ENV);
-        out
-    }
-
-    const TEST_VIA_DESKTOP_PREFIX: &str = "https://latchkey-self.invalid/via-desktop";
-
-    #[test]
-    fn via_desktop_prefix_wraps_impersonating_providers_when_minds_sets_one() {
-        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            assert_eq!(
-                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, false),
-                "https://latchkey-self.invalid/via-desktop/https://slack.com/api/auth.test",
-            );
-        });
-    }
-
-    #[test]
-    fn via_desktop_prefix_leaves_the_url_alone_when_it_would_change_nothing() {
-        // A local workspace gets an empty prefix, and outside minds the variable
-        // is unset. Both must leave the URL byte-identical rather than
-        // producing a bare "/".
-        for prefix in [Some(""), None] {
-            with_via_desktop_prefix(prefix, || {
-                assert_eq!(
-                    maybe_via_desktop_url(
-                        "https://slack.com/api/auth.test",
-                        HttpService::Slack,
-                        false
-                    ),
-                    "https://slack.com/api/auth.test",
-                );
-            });
-        }
-    }
-
-    #[test]
-    fn via_desktop_prefix_is_scoped_to_impersonating_latchkey_requests() {
-        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            assert_eq!(
-                maybe_via_desktop_url("https://example.com/x", HttpService::Notion, false),
-                "https://example.com/x",
-            );
-            assert_eq!(
-                maybe_via_desktop_url("https://slack.com/api/auth.test", HttpService::Slack, true),
-                "https://slack.com/api/auth.test",
-            );
-        });
-    }
-
-    #[test]
-    fn via_desktop_prefix_preserves_the_target_url_verbatim() {
-        // The gateway slices the prefix back off the raw path, so anything that
-        // re-encoded or normalized the target here would change the request the
-        // provider actually receives.
-        with_via_desktop_prefix(Some(TEST_VIA_DESKTOP_PREFIX), || {
-            for url in [
-                "https://slack.com/api/conversations.history?channel=C1&limit=100",
-                "https://slack.com/files/a%20b?u=x%2Fy",
-            ] {
-                let wrapped = maybe_via_desktop_url(url, HttpService::Slack, false);
-                assert_eq!(
-                    wrapped.strip_prefix(&format!("{TEST_VIA_DESKTOP_PREFIX}/")),
-                    Some(url),
-                );
-            }
-        });
     }
 
     #[test]

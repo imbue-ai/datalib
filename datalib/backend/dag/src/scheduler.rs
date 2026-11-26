@@ -340,13 +340,7 @@ impl Runner {
             .get(step)
             .ok_or_else(|| InvokeError::Failed("no such step".to_string()))?;
         let spec = &graph.steps[i];
-        let StepRun::Subprocess {
-            argv,
-            env,
-            params,
-            pass_env,
-        } = &spec.run
-        else {
+        let StepRun::Subprocess { argv, env, params } = &spec.run else {
             return Err(InvokeError::Failed("not a subprocess step".to_string()));
         };
         let ctx = StepCtx {
@@ -366,12 +360,9 @@ impl Runner {
             attempt: 1,
         });
         let result = crate::subprocess::run_subprocess(
-            crate::subprocess::Launch {
-                argv: &argv,
-                env,
-                params: params.as_deref(),
-                pass_env,
-            },
+            &argv,
+            env,
+            params.as_deref(),
             &self.child_env,
             1,
             &ctx,
@@ -895,19 +886,11 @@ pub(crate) async fn invoke_with_retry(
         });
         let res = match run {
             StepRun::InProcess(f) => f(ctx.clone()).await,
-            StepRun::Subprocess {
-                argv,
-                env,
-                params,
-                pass_env,
-            } => {
+            StepRun::Subprocess { argv, env, params } => {
                 crate::subprocess::run_subprocess(
-                    crate::subprocess::Launch {
-                        argv,
-                        env,
-                        params: params.as_deref(),
-                        pass_env,
-                    },
+                    argv,
+                    env,
+                    params.as_deref(),
                     child_env,
                     attempt,
                     &ctx,

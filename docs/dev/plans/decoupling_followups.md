@@ -94,15 +94,25 @@ the variable's name into a WhatsApp or Signal source's params
 unattended rewrite `backup_secrets.rs` names the default in an existing
 config that relies on it, and the server hands nothing by name.
 
-### 5b. The runner hands every step the variables datalib-step reads (done)
+### 5b. The runner hands every step three variables datalib-step reads (done)
 
 `datalib_env` used to list, in `STEP_ALSO`, three variables only
-`datalib-step` reads (`DATALIB_CACHE_DIR`,
-`MINDS_VIA_DESKTOP_URL_PREFIX`, `DATALIB_EMBED_THREADS`), and the runner
-handed them to every step. Now a `[[programs]]` entry names the
-variables its steps get in `pass_env`; `datalib-step`'s entry names its
-three (`datalib_env::DATALIB_STEP_PASS_ENV`), and the unattended rewrite
-`program_pass_env.rs` writes them into an existing config.
+`datalib-step` reads, and the runner handed them to every step. None is
+set by anything Datalib ships:
+
+- `DATALIB_CACHE_DIR` moves the fingerprint cache, and only tests set
+  it; without it the cache goes under `XDG_CACHE_HOME` or `HOME`, which
+  every step gets.
+- `DATALIB_EMBED_THREADS` caps the embedder's threads, and only
+  `.bazelrc` sets it.
+- `MINDS_VIA_DESKTOP_URL_PREFIX` was a URL prefix minds published for
+  some requests. minds no longer publishes it and the route behind it is
+  gone, so the code that read it is deleted.
+
+The first two are now test switches: a test names them in
+`DATALIB_CHILD_ENV` (`.bazelrc` does so for every bazel test). A
+program that needs a variable of its own has no way to say so in its
+`[[programs]]` entry yet; that waits for a package that needs one.
 
 ## Where datalib-http and datalib-pipeline are not yet separate
 
