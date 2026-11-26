@@ -10,6 +10,7 @@ use sqlx::Sqlite;
 use uuid::Uuid;
 
 use super::api::{split_vcards, vcard_categories, vcard_is_group, vcard_members};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const DATA_TABLES: &[&str] = &[
     "accounts",
@@ -357,11 +358,13 @@ pub const LADDER: &[Migration] = &[
                 create(conn, GroupMemberRow::all_ddl()).await?;
                 for (id, book, vcard) in stored_cards(conn).await? {
                     for m in GroupMemberRow::from_vcard(&id, &book, &vcard) {
-                        sqlx::query(
+                        sql!(
+                            "contacts.migrate.insert_group_members_from_cards",
                             "INSERT INTO contact_group_members \
                              (id, group_id, addressbook_id, member, member_id) \
-                             VALUES (?, ?, ?, ?, ?)",
+                             VALUES (?, ?, ?, ?, ?)"
                         )
+                        .query()
                         .bind(&m.id)
                         .bind(&m.group_id)
                         .bind(&m.addressbook_id)
@@ -383,10 +386,12 @@ pub const LADDER: &[Migration] = &[
                 create(conn, ContactCategoryRow::all_ddl()).await?;
                 for (id, book, vcard) in stored_cards(conn).await? {
                     for c in ContactCategoryRow::from_vcard(&id, &book, &vcard) {
-                        sqlx::query(
+                        sql!(
+                            "contacts.migrate.insert_categories_from_cards",
                             "INSERT INTO contact_categories \
-                             (id, contact_id, addressbook_id, category) VALUES (?, ?, ?, ?)",
+                             (id, contact_id, addressbook_id, category) VALUES (?, ?, ?, ?)"
                         )
+                        .query()
                         .bind(&c.id)
                         .bind(&c.contact_id)
                         .bind(&c.addressbook_id)
@@ -404,9 +409,13 @@ pub const LADDER: &[Migration] = &[
         name: "drop contact_photos; a photo stays in its vCard",
         apply: |conn| {
             Box::pin(async move {
-                sqlx::query("DROP TABLE IF EXISTS contact_photos")
-                    .execute(&mut *conn)
-                    .await?;
+                sql!(
+                    "contacts.migrate.drop_contact_photos",
+                    "DROP TABLE IF EXISTS contact_photos"
+                )
+                .query()
+                .execute(&mut *conn)
+                .await?;
                 Ok(())
             })
         },
@@ -456,7 +465,8 @@ fn google_ddl() -> Vec<String> {
 async fn create(conn: &mut sqlx::SqliteConnection, ddl: Vec<String>) -> anyhow::Result<()> {
     for stmt in ddl {
         // Audited: the derive's own DDL; nothing from upstream.
-        sqlx::query(sqlx::AssertSqlSafe(stmt))
+        Sql::dynamic(sql_id!("contacts.migrate.create_table_from_ddl"), stmt)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
@@ -467,11 +477,13 @@ async fn create(conn: &mut sqlx::SqliteConnection, ddl: Vec<String>) -> anyhow::
 async fn stored_cards(
     conn: &mut sqlx::SqliteConnection,
 ) -> anyhow::Result<Vec<(String, String, String)>> {
-    Ok(
-        sqlx::query_as("SELECT id, addressbook_id, json_extract(payload, '$.vcard') FROM contacts")
-            .fetch_all(&mut *conn)
-            .await?,
+    Ok(sql!(
+        "contacts.migrate.list_stored_vcards",
+        "SELECT id, addressbook_id, json_extract(payload, '$.vcard') FROM contacts"
     )
+    .query_as()
+    .fetch_all(&mut *conn)
+    .await?)
 }
 
 /// Frozen UUIDv5 namespace for synthesized contacts identity. Changing

@@ -17,6 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_whatsapp_backup::{decode_hex_key, decrypt_file};
 
 // Diagnostic tool; stdout is its whole output and nothing draws bars.
@@ -91,10 +92,13 @@ async fn open(path: &Path) -> Result<SqlitePool> {
 }
 
 async fn inventory(pool: &SqlitePool) -> Result<()> {
-    let kinds =
-        sqlx::query("SELECT type, count(*) AS n FROM sqlite_master GROUP BY type ORDER BY type")
-            .fetch_all(pool)
-            .await?;
+    let kinds = sql!(
+        "whatsapp.probe.count_schema_objects_by_type",
+        "SELECT type, count(*) AS n FROM sqlite_master GROUP BY type ORDER BY type"
+    )
+    .query()
+    .fetch_all(pool)
+    .await?;
     for r in &kinds {
         out!(
             "  {:>8}: {}",
@@ -103,9 +107,7 @@ async fn inventory(pool: &SqlitePool) -> Result<()> {
         );
     }
 
-    let tables = sqlx::query(
-        "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-    )
+    let tables = sql!("whatsapp.probe.list_tables_with_sql", "SELECT name, sql FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").query()
     .fetch_all(pool)
     .await?;
     let mut autoinc = 0;
@@ -128,10 +130,14 @@ async fn inventory(pool: &SqlitePool) -> Result<()> {
             has_unique += 1;
             out!("  UNIQUE in DDL: {name}");
         }
-        let pk: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT name FROM pragma_table_info('{}') WHERE pk > 0 ORDER BY pk",
-            name.replace('\'', "''")
-        )))
+        let pk: Vec<String> = Sql::dynamic(
+            sql_id!("whatsapp.probe.list_primary_key_columns"),
+            format!(
+                "SELECT name FROM pragma_table_info('{}') WHERE pk > 0 ORDER BY pk",
+                name.replace('\'', "''")
+            ),
+        )
+        .query()
         .fetch_all(pool)
         .await?
         .iter()
@@ -142,10 +148,11 @@ async fn inventory(pool: &SqlitePool) -> Result<()> {
         } else if pk.len() > 1 {
             composite_pk += 1;
         }
-        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT count(*) FROM \"{}\"",
-            name.replace('"', "\"\"")
-        )))
+        let n: i64 = Sql::dynamic(
+            sql_id!("whatsapp.probe.count_table_rows"),
+            format!("SELECT count(*) FROM \"{}\"", name.replace('"', "\"\"")),
+        )
+        .query_scalar()
         .fetch_one(pool)
         .await?;
         counted.push((name, n, pk.join(",")));
@@ -168,9 +175,11 @@ async fn inventory(pool: &SqlitePool) -> Result<()> {
     for (name, n, pk) in counted.iter().take(25) {
         out!("    {:>9}  [{}]  {}", n, pk, name);
     }
-    let idx_sql: Vec<String> = sqlx::query_scalar(
-        "SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY tbl_name",
+    let idx_sql: Vec<String> = sql!(
+        "whatsapp.probe.list_index_sql",
+        "SELECT sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY tbl_name"
     )
+    .query_scalar()
     .fetch_all(pool)
     .await?;
     out!("  declared indexes:");
@@ -182,11 +191,15 @@ async fn inventory(pool: &SqlitePool) -> Result<()> {
 
 async fn stability(pool: &SqlitePool, other: &Path) -> Result<()> {
     let uri = format!("file:{}?mode=ro", other.display());
-    sqlx::query("ATTACH DATABASE ? AS b")
-        .bind(uri)
-        .execute(pool)
-        .await
-        .context("attach second msgstore")?;
+    sql!(
+        "whatsapp.probe.attach_second_msgstore",
+        "ATTACH DATABASE ? AS b"
+    )
+    .query()
+    .bind(uri)
+    .execute(pool)
+    .await
+    .context("attach second msgstore")?;
 
     let checks: &[(&str, &'static str)] = &[
         (
@@ -212,10 +225,14 @@ async fn stability(pool: &SqlitePool, other: &Path) -> Result<()> {
         ),
     ];
     for (name, sql) in checks {
-        let r = sqlx::query(*sql)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("stability {name}"))?;
+        let r = Sql::dynamic(
+            sql_id!("whatsapp.probe.count_rows_matched_by_natural_key"),
+            *sql,
+        )
+        .query()
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("stability {name}"))?;
         let matched: i64 = r.get(0);
         let renumbered: Option<i64> = r.get(1);
         out!(
@@ -225,20 +242,16 @@ async fn stability(pool: &SqlitePool, other: &Path) -> Result<()> {
             renumbered.unwrap_or(0)
         );
     }
-    let only_a: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM main.message a WHERE NOT EXISTS (
+    let only_a: i64 = sql!("whatsapp.probe.count_messages_only_in_first", "SELECT count(*) FROM main.message a WHERE NOT EXISTS (
             SELECT 1 FROM b.message b JOIN b.chat cb ON cb._id = b.chat_row_id JOIN b.jid jb ON jb._id = cb.jid_row_id
              JOIN main.jid ja ON ja.raw_string = jb.raw_string JOIN main.chat ca ON ca.jid_row_id = ja._id
-             WHERE ca._id = a.chat_row_id AND b.key_id = a.key_id AND b.from_me = a.from_me)",
-    )
+             WHERE ca._id = a.chat_row_id AND b.key_id = a.key_id AND b.from_me = a.from_me)").query_scalar()
     .fetch_one(pool)
     .await?;
-    let only_b: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM b.message b WHERE NOT EXISTS (
+    let only_b: i64 = sql!("whatsapp.probe.count_messages_only_in_second", "SELECT count(*) FROM b.message b WHERE NOT EXISTS (
             SELECT 1 FROM main.message a JOIN main.chat ca ON ca._id = a.chat_row_id JOIN main.jid ja ON ja._id = ca.jid_row_id
              JOIN b.jid jb ON jb.raw_string = ja.raw_string JOIN b.chat cb ON cb.jid_row_id = jb._id
-             WHERE cb._id = b.chat_row_id AND a.key_id = b.key_id AND a.from_me = b.from_me)",
-    )
+             WHERE cb._id = b.chat_row_id AND a.key_id = b.key_id AND a.from_me = b.from_me)").query_scalar()
     .fetch_one(pool)
     .await?;
     out!("  message  only in first: {only_a}   only in second: {only_b}");

@@ -509,8 +509,10 @@ fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::new(Body::from(r.body));
     *resp.status_mut() = StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY);
     embed::set_data_headers(resp.headers_mut(), &r.content_type);
-    resp.extensions_mut()
-        .insert(request_log::AppletRowsRead(r.rows_read));
+    resp.extensions_mut().insert(request_log::AppletWork {
+        rows_read: r.rows_read,
+        sql_work: r.sql_work,
+    });
     resp
 }
 
@@ -2283,6 +2285,7 @@ mod tests {
             status: 200,
             content_type: content_type.into(),
             rows_read: None,
+            sql_work: None,
             body: b"<script>1</script>".to_vec(),
         })
     }

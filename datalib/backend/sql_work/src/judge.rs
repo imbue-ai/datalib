@@ -47,16 +47,29 @@ pub fn walks_by_design(sql: &str) -> bool {
 /// Whether a statement's work says anything about how it reads. A
 /// `CREATE INDEX` or a `PRAGMA` does its work by design.
 pub fn reads_or_writes_rows(sql: &str) -> bool {
-    let first: String = sql
+    matches!(
+        first_word(sql).as_str(),
+        "SELECT" | "WITH" | "INSERT" | "REPLACE" | "UPDATE" | "DELETE" | "VALUES"
+    )
+}
+
+/// Whether a statement can change rows, so the connection's count of
+/// changes is its own.
+pub fn changes_rows(sql: &str) -> bool {
+    matches!(
+        first_word(sql).as_str(),
+        "WITH" | "INSERT" | "REPLACE" | "UPDATE" | "DELETE"
+    )
+}
+
+/// The statement's first word, after its name, uppercased.
+fn first_word(sql: &str) -> String {
+    datalib_sql::tag::after_name(sql)
         .trim_start_matches(|c: char| c.is_whitespace() || c == '(')
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>()
-        .to_ascii_uppercase();
-    matches!(
-        first.as_str(),
-        "SELECT" | "WITH" | "INSERT" | "REPLACE" | "UPDATE" | "DELETE" | "VALUES"
-    )
+        .to_ascii_uppercase()
 }
 
 #[cfg(test)]
@@ -93,9 +106,20 @@ mod tests {
         assert!(reads_or_writes_rows("with m as (select 1) select * from m"));
         assert!(reads_or_writes_rows("(SELECT 1) UNION SELECT 2"));
         assert!(reads_or_writes_rows("DELETE FROM t"));
+        assert!(reads_or_writes_rows("/* sql:runs.count_tables */ SELECT 1"));
         assert!(!reads_or_writes_rows("CREATE INDEX i ON t (a)"));
         assert!(!reads_or_writes_rows("PRAGMA incremental_vacuum"));
         assert!(!reads_or_writes_rows("COMMIT"));
+    }
+
+    #[test]
+    fn only_a_write_takes_the_connections_count_of_changes() {
+        assert!(changes_rows("/* sql:a.b */ DELETE FROM t"));
+        assert!(changes_rows("INSERT INTO t VALUES (1)"));
+        assert!(!changes_rows(
+            "/* sql:a.b */ SELECT 1 FROM sqlite_master LIMIT 1"
+        ));
+        assert!(!changes_rows("PRAGMA user_version"));
     }
 
     #[test]

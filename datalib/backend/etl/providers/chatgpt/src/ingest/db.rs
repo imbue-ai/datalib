@@ -19,6 +19,7 @@ use datalib_etl_web::owed::Listed;
 use super::schema_raw::{
     full_ddl, ConversationAttachmentRow, ConversationRow, ATTACHMENTS, LADDER,
 };
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -53,10 +54,14 @@ impl RawDb {
     // ── `me` ────────────────────────────────────────────────────────
 
     pub async fn load_me(&self) -> Result<Option<Value>> {
-        let row = sqlx::query("SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("select me")?;
+        let row = sql!(
+            "chatgpt.read_me",
+            "SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("select me")?;
         let Some(row) = row else { return Ok(None) };
         let payload: Option<String> = row.try_get("payload").context("me payload")?;
         payload
@@ -76,11 +81,13 @@ impl RawDb {
     /// conversation, and a file chatgpt.com no longer serves is asked for
     /// again only when the conversation changes.
     pub async fn attachments_listed(&self) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "chatgpt.list_attachments_with_held_version",
             "SELECT a.id, b.held_version FROM chatgpt_attachments a \
              LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_id \
-             ORDER BY a.conversation_id, a.file_id",
+             ORDER BY a.conversation_id, a.file_id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("list the attachments")?;
@@ -94,10 +101,12 @@ impl RawDb {
     /// their hash: signed URLs rotate, bytes do not, so a file landed
     /// under one conversation is not fetched for another.
     pub async fn blake3_of_file(&self, file_id: &str) -> Result<Option<String>> {
-        sqlx::query_scalar(
+        sql!(
+            "chatgpt.find_blake3_by_file_id",
             "SELECT blake3 FROM chatgpt_attachments \
-             WHERE file_id = ? AND blake3 IS NOT NULL LIMIT 1",
+             WHERE file_id = ? AND blake3 IS NOT NULL LIMIT 1"
         )
+        .query_scalar()
         .bind(file_id)
         .fetch_optional(self.pool())
         .await
@@ -117,10 +126,14 @@ impl RawDb {
         keep: &HashSet<String>,
         when: datalib_etl_chatgpt_config::WhenDeletedUpstream,
     ) -> Result<(usize, usize)> {
-        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM conversations")
-            .fetch_one(self.pool())
-            .await
-            .context("count conversations for prune")?;
+        let held: i64 = sql!(
+            "chatgpt.count_conversations",
+            "SELECT COUNT(*) FROM conversations"
+        )
+        .query_scalar()
+        .fetch_one(self.pool())
+        .await
+        .context("count conversations for prune")?;
         let mut tx = self.pool().begin().await.context("begin prune tx")?;
         let unlisted =
             datalib_etl::prune::follow_deletions_in_tx(&mut tx, when, "conversations", &[], keep)
@@ -143,21 +156,28 @@ impl RawDb {
     }
 
     pub async fn has_any_conversation(&self) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM conversations LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("has_any_conversation")?;
+        let row = sql!(
+            "chatgpt.has_any_conversation",
+            "SELECT 1 FROM conversations LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("has_any_conversation")?;
         Ok(row.is_some())
     }
 
     /// The conversation as stored, `None` for one never fetched.
     pub async fn load_conversation_payload(&self, id: &str) -> Result<Option<Value>> {
-        let payload: Option<Option<String>> =
-            sqlx::query_scalar("SELECT json(payload) FROM conversations WHERE id = ?")
-                .bind(id)
-                .fetch_optional(self.pool())
-                .await
-                .context("select one conversation")?;
+        let payload: Option<Option<String>> = sql!(
+            "chatgpt.read_conversation_payload",
+            "SELECT json(payload) FROM conversations WHERE id = ?"
+        )
+        .query_scalar()
+        .bind(id)
+        .fetch_optional(self.pool())
+        .await
+        .context("select one conversation")?;
         payload
             .flatten()
             .map(|s| serde_json::from_str(&s).context("parse a stored conversation"))
@@ -192,11 +212,13 @@ impl RawDb {
             .map(serde_json::to_string)
             .transpose()
             .context("serialize a conversation's volatile fields")?;
-        sqlx::query(
+        sql!(
+            "chatgpt.upsert_conversation_volatile_fields",
             "INSERT INTO conversations_bookkeeping (id, attempt_count, volatile_payload) \
              VALUES (?, 0, jsonb(?)) \
-             ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload",
+             ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload"
         )
+        .query()
         .bind(&c.id)
         .bind(volatile)
         .execute(&mut **tx)
@@ -205,20 +227,24 @@ impl RawDb {
         let mut keep: HashSet<String> = HashSet::new();
         for f in &c.files {
             let id = ConversationAttachmentRow::pk_recipe(&c.id, &f.id);
-            sqlx::query(
+            sql!(
+                "chatgpt.insert_attachment_edge",
                 "INSERT INTO chatgpt_attachments (id, conversation_id, file_id, blake3) \
-                 VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING",
+                 VALUES (?, ?, ?, NULL) ON CONFLICT(id) DO NOTHING"
             )
+            .query()
             .bind(&id)
             .bind(&c.id)
             .bind(&f.id)
             .execute(&mut **tx)
             .await
             .with_context(|| format!("list attachment {id}"))?;
-            sqlx::query(
+            sql!(
+                "chatgpt.insert_attachment_bookkeeping",
                 "INSERT INTO chatgpt_attachments_bookkeeping (id, attempt_count) VALUES (?, 0) \
-                 ON CONFLICT(id) DO NOTHING",
+                 ON CONFLICT(id) DO NOTHING"
             )
+            .query()
             .bind(&id)
             .execute(&mut **tx)
             .await
@@ -249,11 +275,15 @@ impl RawDb {
             &[id.to_string()],
         )
         .await?;
-        sqlx::query("DELETE FROM conversations WHERE id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("forget conversation {id}"))?;
+        sql!(
+            "chatgpt.delete_conversation",
+            "DELETE FROM conversations WHERE id = ?"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget conversation {id}"))?;
         Ok(())
     }
 
@@ -264,26 +294,32 @@ impl RawDb {
         edge_id: &str,
         blake3: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE chatgpt_attachments SET blake3 = ? WHERE id = ?")
-            .bind(blake3)
-            .bind(edge_id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("record the bytes of {edge_id}"))?;
+        sql!(
+            "chatgpt.update_attachment_blake3",
+            "UPDATE chatgpt_attachments SET blake3 = ? WHERE id = ?"
+        )
+        .query()
+        .bind(blake3)
+        .bind(edge_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("record the bytes of {edge_id}"))?;
         Ok(())
     }
 
     // ── loads ───────────────────────────────────────────────────────
 
     pub async fn load_conversations(&self) -> Result<Vec<LoadedConversation>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "chatgpt.load_conversations_with_bookkeeping",
             "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc,
                     json(b.volatile_payload) AS volatile
              FROM conversations c
              LEFT JOIN conversations_bookkeeping b ON b.id = c.id
              WHERE c.payload IS NOT NULL
-             ORDER BY c.id",
+             ORDER BY c.id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select conversations")?;
@@ -363,6 +399,7 @@ mod tests {
     use datalib_etl_web::owed;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn me_round_trips() {
         use crate::ingest::schema_raw::MeRow;
@@ -400,14 +437,16 @@ mod tests {
     async fn a_me_that_does_not_parse_is_an_error() {
         let d = tempfile::tempdir().unwrap();
         let db = RawDb::open(&d.path().join("c.doltlite_db")).await.unwrap();
-        sqlx::query(r#"INSERT INTO me (id, payload) VALUES ('u1', '{"id": "u1"}')"#)
+        test_sql!(r#"INSERT INTO me (id, payload) VALUES ('u1', '{"id": "u1"}')"#)
+            .query()
             .execute(db.pool())
             .await
             .unwrap();
         let me = db.load_me().await.unwrap().expect("a parsed me");
         assert_eq!(me["id"], "u1");
 
-        sqlx::query(r#"UPDATE me SET payload = '{"id": "u1", "warp": 1e999}'"#)
+        test_sql!(r#"UPDATE me SET payload = '{"id": "u1", "warp": 1e999}'"#)
+            .query()
             .execute(db.pool())
             .await
             .unwrap();

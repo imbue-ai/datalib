@@ -39,6 +39,7 @@ use super::envelope::{self, header_text, GmailId};
 use super::labels::{self, mailbox_id, map_label, split_gmail_labels, LabelMap};
 use super::schema_raw::{AccountRow, EmailKeywordRow, EmailMailboxRow, EmlBlobRow, FetchedEmail};
 use datalib_etl::read_marks::{self, ReadMarkRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Maximum emails accumulated in memory before we flush a bulk batch
 /// to disk. Keeps peak RSS bounded while still amortizing doltlite's
@@ -855,12 +856,14 @@ fn walk_problem(input: &Path, errors: &[fswalk::WalkError]) -> Option<RunProblem
 /// the config named before. Once every file has been read under the one
 /// it names now, what is left under them is no file's.
 async fn other_accounts(db: &RawDb, account_id: &str) -> Result<Vec<String>> {
-    sqlx::query_scalar(
+    sql!(
+        "email.mbox.list_other_accounts",
         "SELECT account_id FROM emails WHERE account_id <> ?1 \
          UNION SELECT account_id FROM threads WHERE account_id <> ?1 \
          UNION SELECT account_id FROM mailboxes WHERE account_id <> ?1 \
-         UNION SELECT id FROM accounts WHERE id <> ?1",
+         UNION SELECT id FROM accounts WHERE id <> ?1"
     )
+    .query_scalar()
     .bind(account_id)
     .fetch_all(db.pool())
     .await
@@ -870,10 +873,14 @@ async fn other_accounts(db: &RawDb, account_id: &str) -> Result<Vec<String>> {
 /// How many stored emails a clean read would have deleted: under another
 /// account, or in no file this run read.
 async fn stored_but_unseen(db: &RawDb, account_id: &str, seen: &BTreeSet<String>) -> Result<usize> {
-    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, account_id FROM emails")
-        .fetch_all(db.pool())
-        .await
-        .context("list the stored emails")?;
+    let stored: Vec<(String, String)> = sql!(
+        "email.mbox.list_stored_emails",
+        "SELECT id, account_id FROM emails"
+    )
+    .query_as()
+    .fetch_all(db.pool())
+    .await
+    .context("list the stored emails")?;
     Ok(stored
         .iter()
         .filter(|(id, account)| account != account_id || !seen.contains(id))
@@ -895,11 +902,13 @@ async fn retire_account(db: &RawDb, account_id: &str) -> Result<usize> {
         .collect();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     super::refile_mailboxes(db, &now, &labels).await?;
-    let still_named: i64 = sqlx::query_scalar(
+    let still_named: i64 = sql!(
+        "email.mbox.count_rows_of_account",
         "SELECT (SELECT count(*) FROM emails WHERE account_id = ?1) \
               + (SELECT count(*) FROM threads WHERE account_id = ?1) \
-              + (SELECT count(*) FROM mailboxes WHERE account_id = ?1)",
+              + (SELECT count(*) FROM mailboxes WHERE account_id = ?1)"
     )
+    .query_scalar()
     .bind(account_id)
     .fetch_one(db.pool())
     .await
@@ -1599,7 +1608,7 @@ async fn bulk_insert_email_mailboxes(
         sql.push(')');
         // Audited: static template; the only interpolation is a `?,?,?` run sized
         // from the chunk length. Every value is bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("email.mbox.clear_mailboxes_of_emails"), sql).query();
         for r in chunk {
             q = q.bind(r.id());
         }
@@ -1628,7 +1637,7 @@ async fn bulk_insert_email_keywords(
         let mut sql = String::from("DELETE FROM email_keywords WHERE email_id IN (");
         push_placeholder_list(&mut sql, chunk.len());
         sql.push(')');
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("email.mbox.clear_keywords_of_emails"), sql).query();
         for r in chunk {
             q = q.bind(r.id());
         }
@@ -1671,7 +1680,7 @@ pub(super) async fn bulk_insert_mailboxes(
                 role = COALESCE(excluded.role, mailboxes.role),
                 payload = jsonb(excluded.payload)",
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("email.mbox.insert_mailboxes"), sql).query();
         for (id, name, role, payload) in chunk {
             q = q
                 .bind(id)
@@ -1708,7 +1717,7 @@ pub(super) async fn bulk_insert_threads(
                 upstream_email_count = excluded.upstream_email_count,
                 payload = jsonb(excluded.payload)",
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("email.mbox.insert_threads"), sql).query();
         for (id, count, upstream, payload) in chunk {
             q = q
                 .bind(id)
@@ -1765,6 +1774,7 @@ mod tests {
     use super::*;
     use datalib_etl::store_handle::RawStoreHandle;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     const TWO_MSG_MBOX: &str = concat!(
         "From 1111@xxx Wed Jun 03 22:30:48 +0000 2026\n",
         "X-GM-THRID: 1111\n",
@@ -1914,19 +1924,19 @@ mod tests {
         assert_eq!(picard.thread_id, "0000000000000457");
         // .eml is in CAS keyed by emails.blob_id. The path goes
         // emails.blob_id → email_blobs.blake3 → cas_objects.bytes.
-        let blake3: Option<String> =
-            sqlx::query_scalar("SELECT blake3 FROM email_blobs WHERE email_id = ?")
-                .bind(&picard.id)
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let blake3: Option<String> = test_sql!("SELECT blake3 FROM email_blobs WHERE email_id = ?")
+            .query_scalar()
+            .bind(&picard.id)
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         let blake3 = blake3.expect("email_blobs.blake3 set by mbox flush");
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
-                .bind(&blake3)
-                .fetch_one(db.cas().pool())
-                .await
-                .unwrap();
+        let exists: bool = test_sql!("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
+            .query_scalar()
+            .bind(&blake3)
+            .fetch_one(db.cas().pool())
+            .await
+            .unwrap();
         assert!(exists);
         // The Unread label leaves Picard's message unread; Riker's (no
         // Unread) is read. Either way the mark is all there is of it.
@@ -1938,7 +1948,8 @@ mod tests {
         assert_eq!(joins.keywords[&picard.id], ["$flagged"]);
         assert!(!joins.keywords.contains_key(&riker.id));
         // An mbox has no snippet, so the row's line comes from the message.
-        let preview: Option<String> = sqlx::query_scalar("SELECT preview FROM emails WHERE id = ?")
+        let preview: Option<String> = test_sql!("SELECT preview FROM emails WHERE id = ?")
+            .query_scalar()
             .bind(&picard.id)
             .fetch_one(db.pool())
             .await
@@ -1965,11 +1976,11 @@ mod tests {
         })
         .await
         .unwrap();
-        let muted: Vec<(String, i64)> =
-            sqlx::query_as("SELECT id, muted FROM read_marks ORDER BY id")
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+        let muted: Vec<(String, i64)> = test_sql!("SELECT id, muted FROM read_marks ORDER BY id")
+            .query_as()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         assert_eq!(
             muted,
             [
@@ -2062,7 +2073,8 @@ mod tests {
             assert_eq!(s.emails_upserted, held, "whole_threads={whole_threads}");
             let db = RawDb::open(&db_path).await.unwrap();
             let thread: (i64, Option<i64>) =
-                sqlx::query_as("SELECT email_count, upstream_email_count FROM threads")
+                test_sql!("SELECT email_count, upstream_email_count FROM threads")
+                    .query_as()
                     .fetch_one(db.pool())
                     .await
                     .unwrap();
@@ -2181,11 +2193,13 @@ mod tests {
 
     async fn stored(db_path: &Path) -> (Vec<String>, Vec<String>) {
         let db = RawDb::open(db_path).await.unwrap();
-        let emails = sqlx::query_scalar("SELECT id FROM emails ORDER BY id")
+        let emails = test_sql!("SELECT id FROM emails ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
-        let threads = sqlx::query_scalar("SELECT id FROM threads ORDER BY id")
+        let threads = test_sql!("SELECT id FROM threads ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -2357,9 +2371,11 @@ mod tests {
         let accounts_of = |table: &'static str| {
             let pool = db.pool().clone();
             async move {
-                sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(format!(
-                    "SELECT DISTINCT account_id FROM {table} ORDER BY account_id"
-                )))
+                Sql::dynamic(
+                    test_sql_id!(),
+                    format!("SELECT DISTINCT account_id FROM {table} ORDER BY account_id"),
+                )
+                .query_scalar::<String>()
                 .fetch_all(&pool)
                 .await
                 .unwrap()
@@ -2368,7 +2384,8 @@ mod tests {
         assert_eq!(accounts_of("emails").await, ["defiant"]);
         assert_eq!(accounts_of("threads").await, ["defiant"]);
         assert_eq!(accounts_of("mailboxes").await, ["defiant"]);
-        let accounts: Vec<String> = sqlx::query_scalar("SELECT id FROM accounts")
+        let accounts: Vec<String> = test_sql!("SELECT id FROM accounts")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -2411,7 +2428,8 @@ mod tests {
 
     async fn problems(db_path: &Path) -> Vec<(String, String)> {
         let db = RawDb::open(db_path).await.unwrap();
-        let rows = sqlx::query_as("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+        let rows = test_sql!("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -2660,15 +2678,18 @@ mod tests {
 
         let db = RawDb::open(&db_path).await.unwrap();
         for table in ["emails", "threads", "mailboxes"] {
-            let accounts: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "SELECT DISTINCT account_id FROM {table} ORDER BY account_id"
-            )))
+            let accounts: Vec<String> = Sql::dynamic(
+                test_sql_id!(),
+                format!("SELECT DISTINCT account_id FROM {table} ORDER BY account_id"),
+            )
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
             assert_eq!(accounts, ["voyager"], "{table}");
         }
-        let accounts: Vec<String> = sqlx::query_scalar("SELECT id FROM accounts ORDER BY id")
+        let accounts: Vec<String> = test_sql!("SELECT id FROM accounts ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();

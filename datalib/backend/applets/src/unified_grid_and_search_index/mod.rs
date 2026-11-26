@@ -246,10 +246,14 @@ pub(crate) async fn require_gateway(
         gate.admits(header("host"), header(crate::gate::SECRET_HEADER))
     };
     if admitted {
-        let (mut resp, rows_read) = datalib_sql_work::counted(next.run(req)).await;
-        if let Some(n) = rows_read {
+        let (mut resp, counted) = datalib_sql_work::counted(next.run(req)).await;
+        if let Some(c) = counted {
             resp.headers_mut()
-                .insert(datalib_sql_work::ROWS_READ_HEADER, n.into());
+                .insert(datalib_sql_work::ROWS_READ_HEADER, c.rows.into());
+            if let Ok(v) = datalib_sql_work::header_value(&c.statements).parse() {
+                resp.headers_mut()
+                    .insert(datalib_sql_work::SQL_WORK_HEADER, v);
+            }
         }
         return resp;
     }
@@ -1903,6 +1907,7 @@ async fn chat(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// A chat whose last message falls in a date window keeps its own row
     /// as well as that day's messages; meaning must rank it by those
     /// messages, not by every day of it. The row itself stays kept: a
@@ -2829,7 +2834,8 @@ mod tests {
             .connect()
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .query()
             .execute(&mut conn)
             .await
             .unwrap();
@@ -3349,12 +3355,13 @@ mod tests {
         .await
         .unwrap();
         for ddl in [
-            "DROP TABLE grid_rows",
-            "CREATE TABLE grid_rows (only_column TEXT)",
+            test_sql!("DROP TABLE grid_rows"),
+            test_sql!("CREATE TABLE grid_rows (only_column TEXT)"),
         ] {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            ddl.query().execute(&pool).await.unwrap();
         }
-        sqlx::query("UPDATE store_generation SET generation = generation + 1")
+        test_sql!("UPDATE store_generation SET generation = generation + 1")
+            .query()
             .execute(&pool)
             .await
             .unwrap();

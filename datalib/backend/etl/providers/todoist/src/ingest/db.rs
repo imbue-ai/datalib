@@ -10,6 +10,7 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
 use super::schema_raw::*;
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -122,11 +123,15 @@ async fn write_as<T: Table>(
 
 /// The token the next `/sync` sends: `*` (everything) when none is held.
 pub async fn sync_token(tx: &mut Transaction<'_, Sqlite>) -> Result<Option<String>> {
-    sqlx::query_scalar("SELECT sync_token FROM sync_state WHERE id = ?")
-        .bind(SYNC_STATE_ROW)
-        .fetch_optional(&mut **tx)
-        .await
-        .context("read the sync token")
+    sql!(
+        "todoist.read_sync_token",
+        "SELECT sync_token FROM sync_state WHERE id = ?"
+    )
+    .query_scalar()
+    .bind(SYNC_STATE_ROW)
+    .fetch_optional(&mut **tx)
+    .await
+    .context("read the sync token")
 }
 
 pub async fn set_sync_token(
@@ -134,11 +139,13 @@ pub async fn set_sync_token(
     token: &str,
     full_sync_date_utc: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "todoist.upsert_sync_token",
         "INSERT INTO sync_state (id, sync_token, full_sync_date_utc) VALUES (?, ?, ?) \
          ON CONFLICT(id) DO UPDATE SET sync_token = excluded.sync_token, \
-         full_sync_date_utc = COALESCE(excluded.full_sync_date_utc, sync_state.full_sync_date_utc)",
+         full_sync_date_utc = COALESCE(excluded.full_sync_date_utc, sync_state.full_sync_date_utc)"
     )
+    .query()
     .bind(SYNC_STATE_ROW)
     .bind(token)
     .bind(full_sync_date_utc)
@@ -150,11 +157,14 @@ pub async fn set_sync_token(
 
 /// The account's `joined_at`, as the stored `user` row has it.
 pub async fn joined_at(tx: &mut Transaction<'_, Sqlite>) -> Result<Option<String>> {
-    let payloads: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT json(payload) FROM user ORDER BY id")
-            .fetch_all(&mut **tx)
-            .await
-            .context("read the user row")?;
+    let payloads: Vec<Option<String>> = sql!(
+        "todoist.list_user_payloads",
+        "SELECT json(payload) FROM user ORDER BY id"
+    )
+    .query_scalar()
+    .fetch_all(&mut **tx)
+    .await
+    .context("read the user row")?;
     Ok(payloads
         .into_iter()
         .flatten()

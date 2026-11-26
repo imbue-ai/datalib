@@ -16,6 +16,7 @@ use super::schema_raw::{
     full_ddl, CapturePartRow, CaptureRow, CommentRow, DriveRow, FileParentsRow, FileRow, FolderRow,
     RevisionExportRow, RevisionRow, CAPTURES, COMMENTS, FILES, LADDER, REVISIONS,
 };
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -72,13 +73,15 @@ impl HeldImages {
 
 impl RawDb {
     pub async fn held_images(&self, file_ids: &[&str]) -> Result<HeldImages> {
-        let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String, String, String)> = sql!(
+            "google_drive.list_held_images",
             "SELECT c.file_id, c.native_revision_id, p.part, p.blake3 \
              FROM captures c JOIN capture_parts p ON p.capture_id = c.id \
              WHERE c.file_id IN (SELECT value FROM json_each(?)) \
                AND c.native_revision_id IS NOT NULL \
-               AND p.part LIKE 'image:%' AND p.blake3 IS NOT NULL",
+               AND p.part LIKE 'image:%' AND p.blake3 IS NOT NULL"
         )
+        .query_as()
         .bind(serde_json::to_string(file_ids)?)
         .fetch_all(self.pool())
         .await
@@ -184,11 +187,13 @@ impl RawDb {
     /// Every stored revision of every file whose listing entry has
     /// `mime_type`, oldest file id first.
     pub async fn revisions_of_kind(&self, mime_type: &str) -> Result<Vec<StoredRevision>> {
-        let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, String, Option<String>)> = sql!(
+            "google_drive.list_revisions_of_mime_type",
             "SELECT r.id, r.file_id, json_extract(r.payload, '$.exportLinks') \
              FROM revisions r JOIN files f ON f.id = r.file_id \
-             WHERE json_extract(f.payload, '$.mimeType') = ? ORDER BY r.id",
+             WHERE json_extract(f.payload, '$.mimeType') = ? ORDER BY r.id"
         )
+        .query_as()
         .bind(mime_type)
         .fetch_all(self.pool())
         .await

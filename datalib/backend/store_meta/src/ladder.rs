@@ -12,6 +12,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::SqlitePool;
 
 /// A migration's body: runs against a store at `version - 1`, inside
@@ -161,7 +162,8 @@ pub async fn run_statements(
         tracing::info!(statement = i + 1, of = statements.len(), "migrating: {msg}");
         let rung = RUNG.lock().unwrap_or_else(|e| e.into_inner()).clone();
         report(&format!("{rung}; {msg}"));
-        sqlx::query(s.sql)
+        Sql::dynamic(sql_id!("store_meta.ladder.run_rung_statement"), s.sql)
+            .query()
             .execute(&mut *conn)
             .await
             .with_context(|| msg.clone())?;
@@ -195,12 +197,14 @@ pub async fn apply(pool: &SqlitePool, m: &Migration, climb: &Climb) -> Result<()
         .await
         .with_context(|| format!("migration v{} ({})", m.version, m.name))?;
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
+    sql!(
+        "store_meta.ladder.upsert_rung_version",
         "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) \
          VALUES (?, ?, ?, ?) \
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
-         written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset",
+         written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset"
     )
+    .query()
     .bind(ladder.key())
     .bind(m.version.to_string())
     .bind(&now)
@@ -234,13 +238,15 @@ pub async fn stored_version(pool: &SqlitePool, ladder: Ladder) -> Result<u32> {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     fn rung(version: u32) -> Migration {
         Migration {
             version,
             name: "test",
             apply: |c| {
                 Box::pin(async move {
-                    sqlx::query("INSERT INTO log (v) VALUES (1)")
+                    test_sql!("INSERT INTO log (v) VALUES (1)")
+                        .query()
                         .execute(&mut *c)
                         .await?;
                     Ok(())
@@ -266,8 +272,13 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::query(crate::DDL).execute(&pool).await.unwrap();
-        sqlx::query("CREATE TABLE log (v INTEGER)")
+        Sql::dynamic(test_sql_id!(), crate::DDL)
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
+        test_sql!("CREATE TABLE log (v INTEGER)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();

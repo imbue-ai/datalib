@@ -18,13 +18,15 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 const NOTE: &str = "*This page is in Notion's trash.*";
 const LATER: &str = "2026-09-02T00:00:00.000Z";
 
 async fn flagged(store: &Path, id: &str) -> bool {
     let db = RawDb::open(store).await.unwrap();
-    let in_trash: i64 = sqlx::query_scalar("SELECT in_trash FROM pages WHERE id = ?")
+    let in_trash: i64 = test_sql!("SELECT in_trash FROM pages WHERE id = ?")
+        .query_scalar()
         .bind(id)
         .fetch_one(db.pool())
         .await

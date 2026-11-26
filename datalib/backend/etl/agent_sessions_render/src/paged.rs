@@ -25,6 +25,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::TRANSCRIPT_RENDER_UNITS_SQL;
+use datalib_sql::sql;
 
 /// What a record's JSON comes to on average: 4.3 KB across a 2.2 GB
 /// Claude Code store, with no session's average over four times that.
@@ -365,11 +366,14 @@ fn pages(weights: &[u64], size: PageSize) -> Vec<Range<usize>> {
 /// How many records each transcript has, from an index that leads with
 /// `transcript_id` (the key, or `records_transcript`): no record is read.
 async fn record_counts(pool: &SqlitePool) -> Result<HashMap<String, u64>> {
-    let rows: Vec<(String, i64)> =
-        sqlx::query_as("SELECT transcript_id, count(*) FROM records GROUP BY transcript_id")
-            .fetch_all(pool)
-            .await
-            .context("count each transcript's records")?;
+    let rows: Vec<(String, i64)> = sql!(
+        "etl.agent_sessions_render.count_records_by_transcript",
+        "SELECT transcript_id, count(*) FROM records GROUP BY transcript_id"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("count each transcript's records")?;
     Ok(rows
         .into_iter()
         .map(|(id, n)| (id, n.max(0) as u64))

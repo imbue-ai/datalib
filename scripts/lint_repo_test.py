@@ -1,4 +1,4 @@
-"""lint_repo.py's checks on what can be misspelled: checks 11, 20 and 23."""
+"""lint_repo.py's checks on what can be misspelled: checks 11, 20, 23 and 24."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import unittest
 
 from lint_repo import (
     checkout_token_settings,
+    duplicate_sql_names,
     floating_images,
     floating_npx,
     reader_grant_problems,
@@ -445,6 +446,35 @@ class StepProgramMentionTest(unittest.TestCase):
     def test_a_cfg_test_on_one_item_hides_nothing_after_it(self) -> None:
         source = '#[cfg(test)]\nfn helper() {}\nconst P: &str = "datalib-step";\n'
         self.assertEqual(step_program_mentions(source), [3])
+
+
+class SqlNamesTest(unittest.TestCase):
+    """Check 24: a statement's name is written in one place."""
+
+    def test_a_name_written_twice_is_found_with_both_places(self):
+        files = {
+            "a.rs": 'let a = sql!("runs.count_tables", "SELECT 1");\n',
+            "b.rs": 'fn f() {\n    Sql::dynamic(\n        sql_id!("runs.count_tables"),\n        t,\n    );\n}\n',
+        }
+        self.assertEqual(
+            duplicate_sql_names(files), {"runs.count_tables": ["a.rs:1", "b.rs:3"]}
+        )
+
+    def test_a_name_on_the_line_after_the_macro_is_read(self):
+        files = {
+            "a.rs": 'sql!(\n    "runs.count_tables",\n    "SELECT 1"\n)\n',
+            "b.rs": 'sql!("runs.count_tables", "SELECT 2")\n',
+        }
+        self.assertEqual(
+            duplicate_sql_names(files), {"runs.count_tables": ["a.rs:2", "b.rs:1"]}
+        )
+
+    def test_examples_in_comments_and_tests_places_are_not_names(self):
+        files = {
+            "a.rs": '//! sql!("runs.count_tables", "…")\nlet a = sql!("runs.count_tables", "SELECT 1");\n',
+            "b.rs": 'test_sql!("SELECT 1"); test_sql!("SELECT 1");\n',
+        }
+        self.assertEqual(duplicate_sql_names(files), {})
 
 
 if __name__ == "__main__":

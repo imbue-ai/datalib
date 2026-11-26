@@ -539,7 +539,8 @@ pub const LADDER: &[Migration] = &[Migration {
     version: 1,
     name: "messages.body becomes messages.text",
     apply: |conn| Box::pin(async move {
-        sqlx::query("ALTER TABLE messages RENAME COLUMN body TO text")
+        sql!("chat.migrate_body_to_text", "ALTER TABLE messages RENAME COLUMN body TO text")
+            .query()
             .execute(&mut *conn).await?;
         Ok(())
     }),
@@ -689,11 +690,12 @@ with the big mailbox: email render did, on a full render (#1156).
 So a set to match is bound as **one JSON array**:
 
 ```rust
-sqlx::query("SELECT … FROM emails WHERE thread_id IN (SELECT value FROM json_each(?))")
+sql!("email.list_emails_of_threads", "SELECT … FROM emails WHERE thread_id IN (SELECT value FROM json_each(?))")
+    .query()
     .bind(serde_json::to_string(&thread_ids)?)
 ```
 
-It has no size limit, the SQL text is fixed (no `AssertSqlSafe`), and the
+It has no size limit, the SQL text is fixed (a `sql!`, not `Sql::dynamic`), and the
 planner still searches the column's index. Checked with `EXPLAIN QUERY
 PLAN` on doltlite: the plan is the same as for a literal `IN` list, with
 or without `ANALYZE`.

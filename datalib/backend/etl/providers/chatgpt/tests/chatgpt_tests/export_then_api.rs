@@ -22,6 +22,7 @@ use datalib_etl_render::section::join;
 use datalib_etl_web::owed;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::test_sql;
 use serde_json::Value;
 
 fn fixture(var: &str, rel: &str) -> PathBuf {
@@ -214,7 +215,8 @@ fn deleted_on(api: &Path, id: &str) {
 }
 
 async fn conversation_ids(db: &RawDb) -> Vec<String> {
-    sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
+    test_sql!("SELECT id FROM conversations ORDER BY id")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap()

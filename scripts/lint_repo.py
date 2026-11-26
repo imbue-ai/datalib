@@ -361,6 +361,7 @@ def main() -> int:
     rc |= _check_card_children_carry_styles(root)
     rc |= _check_stores_open_by_literal_path(root)
     rc |= _check_runner_names_no_step_program(root)
+    rc |= _check_sql_names_are_unique(root)
     return rc
 
 
@@ -1770,6 +1771,59 @@ def _check_runner_names_no_step_program(root: Path) -> int:
         + "\n\n  The runner treats every step program alike. Give the behaviour a\n"
         "  config key, a verb, an event or an environment variable any program\n"
         "  may use, and leave the program's name out. See lint_repo.py check 23.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 24: every statement's name is written once -------------------
+#
+# A statement is named where it is written, `sql!("runs.count_tables",
+# "…")` or `Sql::dynamic(sql_id!("…"), …)` (datalib/backend/sql), and its
+# work is counted under that name. Clippy refuses a statement without one;
+# this refuses two places that share one, which would add two statements'
+# work together under a name that is true of neither. A test's statements
+# are named for their place (`test_sql!`) and need no check.
+_SQL_NAME = re.compile(r'(?<![\w:])(?:sql|sql_id)!\(\s*"([^"]*)"')
+
+
+def sql_names(text: str) -> list[tuple[int, str]]:
+    """Each statement name `text` writes, with its 1-based line. A line
+    comment's examples are not names."""
+    kept = "\n".join(
+        "" if line.lstrip().startswith("//") else line for line in text.splitlines()
+    )
+    return [
+        (kept.count("\n", 0, m.start(1)) + 1, m.group(1))
+        for m in _SQL_NAME.finditer(kept)
+    ]
+
+
+def duplicate_sql_names(files: dict[str, str]) -> dict[str, list[str]]:
+    """Every name written in more than one place, with each place."""
+    places: dict[str, list[str]] = {}
+    for rel, text in files.items():
+        for line, name in sql_names(text):
+            places.setdefault(name, []).append(f"{rel}:{line}")
+    return {n: p for n, p in sorted(places.items()) if len(p) > 1}
+
+
+def _check_sql_names_are_unique(root: Path) -> int:
+    files = {}
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        path = root / rel
+        if path.is_file():
+            files[rel] = path.read_text(encoding="utf-8")
+    dups = duplicate_sql_names(files)
+    if not dups:
+        print("OK: every SQL statement's name is written once.")
+        return 0
+    lines = [f"  {name}: {', '.join(places)}" for name, places in dups.items()]
+    print(
+        "ERROR: two statements share a name:\n\n"
+        + "\n".join(lines)
+        + "\n\n  A statement's name says what that one statement does, and its work\n"
+        "  is counted under it. Give each its own. See lint_repo.py check 24.",
         file=sys.stderr,
     )
     return 1

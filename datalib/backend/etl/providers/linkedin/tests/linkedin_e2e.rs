@@ -14,6 +14,7 @@ use datalib_etl_linkedin_render::skills;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
+use datalib_sql::test_sql;
 
 fn build_export(root: &Path) -> Result<()> {
     // Who the export belongs to. The primary address is deliberately not
@@ -108,7 +109,8 @@ fn build_export(root: &Path) -> Result<()> {
 }
 
 async fn problems(db: &RawDb) -> Vec<(String, String)> {
-    sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+    test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap()

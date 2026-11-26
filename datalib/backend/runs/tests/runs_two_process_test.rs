@@ -21,6 +21,7 @@ use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
 use datalib_runs::{open_or_create, runs_path};
+use datalib_sql::{test_sql, Sql};
 use serde_json::Value;
 
 /// Lines each writer publishes, as rounds of that many. Spread over
@@ -62,7 +63,9 @@ fn a_store_from_another_schema_version_is_remade_once_under_four_writers() {
     t.plant_a_store_from_another_version();
     four_writers(&t);
     assert_eq!(
-        t.count("SELECT COUNT(*) FROM sqlite_master WHERE name = 'ancient'"),
+        t.count(test_sql!(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'ancient'"
+        )),
         0,
         "the old store's table survived, so nothing remade the file"
     );
@@ -105,12 +108,12 @@ fn four_writers(t: &Scratch) {
         );
     }
     assert_eq!(
-        t.count("SELECT COUNT(*) FROM processes"),
+        t.count(test_sql!("SELECT COUNT(*) FROM processes")),
         WRITERS.len() as i64,
         "every writer records the process it wrote under"
     );
     assert_eq!(
-        t.count("SELECT COUNT(*) FROM runs"),
+        t.count(test_sql!("SELECT COUNT(*) FROM runs")),
         1,
         "the one run is recorded once"
     );
@@ -149,7 +152,7 @@ impl Scratch {
             let live = children
                 .iter_mut()
                 .any(|(_, c)| c.try_wait().expect("try_wait").is_none());
-            let count = self.count("SELECT COUNT(*) FROM log");
+            let count = self.count(test_sql!("SELECT COUNT(*) FROM log"));
             assert!(
                 count >= last,
                 "the log shrank under the reader: {last} → {count}"
@@ -227,7 +230,8 @@ impl Scratch {
         let msgs = self.read(|pool| {
             let like = format!("{tag}-%");
             async move {
-                sqlx::query_scalar::<_, String>("SELECT msg FROM log WHERE msg LIKE ?")
+                test_sql!("SELECT msg FROM log WHERE msg LIKE ?")
+                    .query_scalar::<String>()
                     .bind(like)
                     .fetch_all(&pool)
                     .await
@@ -245,8 +249,11 @@ impl Scratch {
         ns
     }
 
-    fn count(&self, sql: &'static str) -> i64 {
-        self.read(|pool| async move { sqlx::query_scalar::<_, i64>(sql).fetch_one(&pool).await })
+    fn count(&self, sql: Sql) -> i64 {
+        self.read(|pool| {
+            let q = sql.query_scalar::<i64>();
+            async move { q.fetch_one(&pool).await }
+        })
     }
 
     /// A store already on disk carrying another build's schema, so the
@@ -255,11 +262,13 @@ impl Scratch {
         let db = runs_path(&self.dir.path().join("root"));
         block_on(async move {
             let pool = open_or_create(&db).await.expect("plant the store");
-            sqlx::raw_sql("CREATE TABLE ancient (x TEXT)")
+            test_sql!("CREATE TABLE ancient (x TEXT)")
+                .raw()
                 .execute(&pool)
                 .await
                 .expect("plant a table");
-            sqlx::raw_sql("PRAGMA user_version = 1")
+            test_sql!("PRAGMA user_version = 1")
+                .raw()
                 .execute(&pool)
                 .await
                 .expect("plant a version");

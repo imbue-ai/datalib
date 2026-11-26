@@ -19,6 +19,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_calendar::ingest::calendly;
 use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
 use datalib_etl_web::http::LatchkeySettings;
+use datalib_sql::{test_sql, Sql};
 
 async fn run(store: &std::path::Path) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
@@ -40,9 +41,9 @@ async fn run(store: &std::path::Path) -> FetchSummary {
     r.expect("calendly fetch")
 }
 
-async fn count(store: &std::path::Path, sql: &'static str) -> i64 {
+async fn count(store: &std::path::Path, sql: Sql) -> i64 {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let n = sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap();
+    let n = sql.query_scalar().fetch_one(db.pool()).await.unwrap();
     db.close().await;
     n
 }
@@ -60,20 +61,22 @@ async fn meetings_and_invitees_land_and_a_second_run_owes_nothing() {
     let first = run(&store).await;
     eprintln!("[test] first run: {}", first.line());
     assert_eq!(first.errors, 0, "{first:?}");
-    let events = count(&store, "SELECT count(*) FROM calendly_events").await;
-    let invitees = count(&store, "SELECT count(*) FROM calendly_invitees").await;
+    let events = count(&store, test_sql!("SELECT count(*) FROM calendly_events")).await;
+    let invitees = count(&store, test_sql!("SELECT count(*) FROM calendly_invitees")).await;
     assert_eq!(events, invitees, "every meeting's invitees were read");
     let shapeless = count(
         &store,
-        "SELECT count(*) FROM calendly_events WHERE start_time IS NULL \
-         OR json_extract(payload, '$.event_memberships') IS NULL",
+        test_sql!(
+            "SELECT count(*) FROM calendly_events WHERE start_time IS NULL \
+         OR json_extract(payload, '$.event_memberships') IS NULL"
+        ),
     )
     .await;
     assert_eq!(shapeless, 0, "a meeting without the fields render reads");
     let unanswered = count(
         &store,
-        "SELECT count(*) FROM calendly_invitees, json_each(json_extract(payload, '$.invitees')) \
-         WHERE json_type(value, '$.questions_and_answers') IS NOT 'array'",
+        test_sql!("SELECT count(*) FROM calendly_invitees, json_each(json_extract(payload, '$.invitees')) \
+         WHERE json_type(value, '$.questions_and_answers') IS NOT 'array'"),
     )
     .await;
     assert_eq!(unanswered, 0, "an invitee without `questions_and_answers`");

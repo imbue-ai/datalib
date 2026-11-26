@@ -26,6 +26,7 @@ use sqlx::{ConnectOptions, Connection};
 
 use super::tests::{index_over, search, search_part, uuids, Part};
 use super::Index;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// 2369-04-15 08:30:00 UTC.
 const T0: i64 = 12602794200000;
@@ -374,12 +375,12 @@ async fn how_it_is_filed(
     let mut columns: BTreeMap<String, Vec<(&str, String)>> = BTreeMap::new();
     for col in COLUMNS {
         // Audited: `col` is one of the `grid_rows` column names above.
-        let values: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT uuid, {col} FROM grid_rows"
-        )))
-        .fetch_all(&mut grid)
-        .await
-        .unwrap();
+        let values: Vec<(String, Option<String>)> =
+            Sql::dynamic(test_sql_id!(), format!("SELECT uuid, {col} FROM grid_rows"))
+                .query_as()
+                .fetch_all(&mut grid)
+                .await
+                .unwrap();
         for (uuid, value) in values {
             let shown = columns.entry(uuid).or_default();
             if let Some(v) = value.filter(|v| !v.is_empty()) {
@@ -393,11 +394,12 @@ async fn how_it_is_filed(
         .connect()
         .await
         .unwrap();
-    let terms: Vec<(String, i64, String)> = sqlx::query_as(
+    let terms: Vec<(String, i64, String)> = test_sql!(
         "SELECT r.uuid, t.kind, v.value FROM terms t \
          JOIN rows r ON r.row_id = t.row_id JOIN vals v ON v.val_id = t.val_id \
-         ORDER BY r.uuid, t.kind, v.value",
+         ORDER BY r.uuid, t.kind, v.value"
     )
+    .query_as()
     .fetch_all(&mut file)
     .await
     .unwrap();

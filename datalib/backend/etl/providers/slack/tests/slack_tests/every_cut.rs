@@ -23,6 +23,7 @@ use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::Tree;
+use datalib_sql::test_sql;
 
 const DM_TYPES: &str = "public_channel,private_channel,im,mpim";
 const HISTORY_PAGE: usize = 3;
@@ -358,10 +359,11 @@ impl Rig for Slack {
         let db = self.open(dir).await?;
         let out = async {
             let mut out = dump_tables(db.pool(), MIRRORED).await?;
-            let held: Vec<String> = sqlx::query_scalar(
+            let held: Vec<String> = test_sql!(
                 "SELECT id || ' ' || held_version FROM threads_bookkeeping \
-                 WHERE held_version IS NOT NULL ORDER BY id",
+                 WHERE held_version IS NOT NULL ORDER BY id"
             )
+            .query_scalar()
             .fetch_all(db.pool())
             .await?;
             out.push_str("== held threads\n");

@@ -788,6 +788,13 @@ it back. The one exception is a `judged_by: ran` statement that walked
 no rows this run, which is a note. Two entries for one statement fail
 too: only one reason can be the one that holds.
 
+The same test refuses a statement the sync ran without a name
+(`datalib/backend/sql`): the compiler refuses one in our code, so one
+here is SQLite or doltlite running a statement of its own inside ours,
+and the allowlist's `[[unnamed]]` entries name each such shape, with
+a reason. An entry nothing matches any more fails like a `[[scan]]`
+entry does.
+
 A fixture's tables hold a few rows, so the scan costs nothing here; on a
 library it costs the whole table on every call. When the test fails on
 a new statement, give the statement an index, or paste the stanza it

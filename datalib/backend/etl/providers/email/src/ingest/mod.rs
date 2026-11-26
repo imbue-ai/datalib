@@ -1455,6 +1455,7 @@ fn string_array(v: &Value, key: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// Guards the batch that made re-listing a 277k-email Fastmail
     /// account an hour of 50-id requests: the server's stated limit is
     /// used, up to 500.
@@ -1489,7 +1490,8 @@ mod tests {
     }
 
     async fn payload_mailboxes(db: &RawDb, id: &str) -> Vec<String> {
-        let p: String = sqlx::query_scalar("SELECT json(payload) FROM emails WHERE id = ?")
+        let p: String = test_sql!("SELECT json(payload) FROM emails WHERE id = ?")
+            .query_scalar()
             .bind(id)
             .fetch_one(db.pool())
             .await
@@ -1533,24 +1535,23 @@ mod tests {
             .unwrap();
         dr::commit_run(db.pool(), "two").await.unwrap();
 
-        let content: String = sqlx::query_scalar("SELECT json(payload) FROM mailboxes")
+        let content: String = test_sql!("SELECT json(payload) FROM mailboxes")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
         assert!(!content.contains("totalEmails"), "{content}");
-        let counts: String = sqlx::query_scalar(
-            "SELECT json(volatile_payload) FROM mailboxes_bookkeeping WHERE id = 'M1'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let counts: String =
+            test_sql!("SELECT json(volatile_payload) FROM mailboxes_bookkeeping WHERE id = 'M1'")
+                .query_scalar()
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&counts).unwrap(),
             json!({"totalEmails": 2, "unreadEmails": 2})
         );
-        let changed: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM dolt_diff_mailboxes WHERE from_ref = 'HEAD~1' AND to_ref = 'HEAD'",
-        )
+        let changed: i64 = test_sql!("SELECT count(*) FROM dolt_diff_mailboxes WHERE from_ref = 'HEAD~1' AND to_ref = 'HEAD'").query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -1615,7 +1616,8 @@ mod tests {
         refile_mailboxes(&db, &now, &[("M1".to_string(), Some("M2".to_string()))])
             .await
             .unwrap();
-        let preview: Option<String> = sqlx::query_scalar("SELECT preview FROM emails")
+        let preview: Option<String> = test_sql!("SELECT preview FROM emails")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();

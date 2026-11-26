@@ -10,6 +10,7 @@
 //! sit under a `##` heading that says "every raw store", and
 //! `<table>_bookkeeping` there stands for each table's sidecar.
 
+use datalib_sql::{test_sql_id, Sql};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Columns = BTreeSet<String>;
@@ -265,7 +266,11 @@ async fn memory_db(setup: &[&'static str]) -> sqlx::SqliteConnection {
         .await
         .unwrap();
     for statement in setup {
-        sqlx::query(*statement).execute(&mut db).await.unwrap();
+        Sql::dynamic(test_sql_id!(), *statement)
+            .query()
+            .execute(&mut db)
+            .await
+            .unwrap();
     }
     db
 }
@@ -292,7 +297,8 @@ async fn the_docs_gmail_id_sql_turns_a_mirror_id_into_the_apis_and_back() {
     ])
     .await;
     // Safe: the statements are the doc's own, compiled into this binary.
-    let rows: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(to_api.clone()))
+    let rows: Vec<(String, String, String)> = Sql::dynamic(test_sql_id!(), &to_api)
+        .query_as()
         .fetch_all(&mut db)
         .await
         .unwrap();
@@ -305,7 +311,8 @@ async fn the_docs_gmail_id_sql_turns_a_mirror_id_into_the_apis_and_back() {
             "18f2a3b4c5d6e7f0"
         };
         assert_eq!(*api_thread_id, api(thread), "{to_api}");
-        let found: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(from_api.clone()))
+        let found: Vec<(String, String)> = Sql::dynamic(test_sql_id!(), &from_api)
+            .query_as()
             .bind(api_id.to_uppercase())
             .fetch_all(&mut db)
             .await
@@ -334,7 +341,8 @@ async fn the_docs_slack_permalink_sql_builds_the_renders_link() {
     ])
     .await;
     // Safe: the statement is the doc's own, compiled into this binary.
-    let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(permalink.clone()))
+    let rows: Vec<(String, String)> = Sql::dynamic(test_sql_id!(), permalink.clone())
+        .query_as()
         .fetch_all(&mut db)
         .await
         .unwrap();

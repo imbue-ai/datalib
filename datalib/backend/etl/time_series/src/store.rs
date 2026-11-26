@@ -8,6 +8,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::{self, StoreKind};
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_time_series_schema::{
     TimeKind, TimeSeriesChunkRow, TimeSeriesRow, TimeSeriesSourceRow, ValueType,
 };
@@ -82,9 +83,13 @@ const ROW_COLUMNS: &str = "source_id, ts_key, time_series_id, about_uuid, about_
 
 /// Every time series a store holds, without its points.
 pub async fn rows(pool: &SqlitePool) -> Result<Vec<TimeSeriesRow>> {
-    let sql = format!("SELECT {ROW_COLUMNS} FROM time_series ORDER BY source_id, ts_key");
+    let sql = Sql::dynamic(
+        sql_id!("etl.time_series.list_series"),
+        format!("SELECT {ROW_COLUMNS} FROM time_series ORDER BY source_id, ts_key"),
+    );
     // Safe: the column list is a constant.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .context("read time_series")?;
@@ -116,12 +121,15 @@ fn row_of(r: &sqlx::sqlite::SqliteRow) -> Result<TimeSeriesRow> {
 }
 
 pub async fn write_row(conn: &mut SqliteConnection, row: &TimeSeriesRow) -> Result<()> {
-    let sql = format!(
-        "INSERT OR REPLACE INTO time_series ({ROW_COLUMNS}) \
+    let sql = Sql::dynamic(
+        sql_id!("etl.time_series.upsert_series"),
+        format!(
+            "INSERT OR REPLACE INTO time_series ({ROW_COLUMNS}) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
     );
     // Safe: the column list is a constant and every value is bound.
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    sql.query()
         .bind(&row.source_id)
         .bind(row.ts_key)
         .bind(&row.time_series_id)
@@ -142,12 +150,16 @@ pub async fn write_row(conn: &mut SqliteConnection, row: &TimeSeriesRow) -> Resu
 }
 
 pub async fn remove_row(conn: &mut SqliteConnection, source_id: &str, ts_key: i64) -> Result<()> {
-    sqlx::query("DELETE FROM time_series WHERE source_id = ? AND ts_key = ?")
-        .bind(source_id)
-        .bind(ts_key)
-        .execute(conn)
-        .await
-        .context("delete a time series")?;
+    sql!(
+        "etl.time_series.delete_series",
+        "DELETE FROM time_series WHERE source_id = ? AND ts_key = ?"
+    )
+    .query()
+    .bind(source_id)
+    .bind(ts_key)
+    .execute(conn)
+    .await
+    .context("delete a time series")?;
     Ok(())
 }
 
@@ -174,12 +186,16 @@ pub async fn chunks(
     from: i64,
     to: i64,
 ) -> Result<Vec<TimeSeriesChunkRow>> {
-    let sql = format!(
-        "SELECT {CHUNK_COLUMNS} FROM time_series_chunks \
+    let sql = Sql::dynamic(
+        sql_id!("etl.time_series.list_chunks_in_range"),
+        format!(
+            "SELECT {CHUNK_COLUMNS} FROM time_series_chunks \
          WHERE ts_key = ? AND first_t <= ? AND last_t >= ? ORDER BY first_t"
+        ),
     );
     // Safe: the column list is a constant and every value is bound.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .bind(ts_key)
         .bind(to)
         .bind(from)
@@ -195,12 +211,15 @@ pub async fn all_chunks(pool: &SqlitePool, ts_key: i64) -> Result<Vec<TimeSeries
 }
 
 pub async fn write_chunk(conn: &mut SqliteConnection, c: &TimeSeriesChunkRow) -> Result<()> {
-    let sql = format!(
-        "INSERT OR REPLACE INTO time_series_chunks ({CHUNK_COLUMNS}) \
+    let sql = Sql::dynamic(
+        sql_id!("etl.time_series.upsert_chunk"),
+        format!(
+            "INSERT OR REPLACE INTO time_series_chunks ({CHUNK_COLUMNS}) \
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ),
     );
     // Safe: the column list is a constant and every value is bound.
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    sql.query()
         .bind(c.ts_key)
         .bind(c.first_t)
         .bind(c.last_t)
@@ -217,29 +236,39 @@ pub async fn write_chunk(conn: &mut SqliteConnection, c: &TimeSeriesChunkRow) ->
 }
 
 pub async fn remove_chunk(conn: &mut SqliteConnection, ts_key: i64, first_t: i64) -> Result<()> {
-    sqlx::query("DELETE FROM time_series_chunks WHERE ts_key = ? AND first_t = ?")
-        .bind(ts_key)
-        .bind(first_t)
-        .execute(conn)
-        .await
-        .context("delete a time series' chunk")?;
+    sql!(
+        "etl.time_series.delete_chunk",
+        "DELETE FROM time_series_chunks WHERE ts_key = ? AND first_t = ?"
+    )
+    .query()
+    .bind(ts_key)
+    .bind(first_t)
+    .execute(conn)
+    .await
+    .context("delete a time series' chunk")?;
     Ok(())
 }
 
 pub async fn remove_chunks(conn: &mut SqliteConnection, ts_key: i64) -> Result<()> {
-    sqlx::query("DELETE FROM time_series_chunks WHERE ts_key = ?")
-        .bind(ts_key)
-        .execute(conn)
-        .await
-        .context("delete a time series' chunks")?;
+    sql!(
+        "etl.time_series.delete_chunks_of_series",
+        "DELETE FROM time_series_chunks WHERE ts_key = ?"
+    )
+    .query()
+    .bind(ts_key)
+    .execute(conn)
+    .await
+    .context("delete a time series' chunks")?;
     Ok(())
 }
 
 /// The index's record of every source store it read.
 pub async fn sources(pool: &SqlitePool) -> Result<Vec<TimeSeriesSourceRow>> {
-    let rows = sqlx::query(
-        "SELECT source_id, store, commit_hash FROM time_series_sources ORDER BY source_id",
+    let rows = sql!(
+        "etl.time_series.list_sources",
+        "SELECT source_id, store, commit_hash FROM time_series_sources ORDER BY source_id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read time_series_sources")?;
@@ -255,10 +284,12 @@ pub async fn sources(pool: &SqlitePool) -> Result<Vec<TimeSeriesSourceRow>> {
 }
 
 pub async fn write_source(conn: &mut SqliteConnection, s: &TimeSeriesSourceRow) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "etl.time_series.upsert_source",
         "INSERT OR REPLACE INTO time_series_sources (source_id, store, commit_hash) \
-         VALUES (?, ?, ?)",
+         VALUES (?, ?, ?)"
     )
+    .query()
     .bind(&s.source_id)
     .bind(&s.store)
     .bind(&s.commit_hash)
@@ -270,16 +301,24 @@ pub async fn write_source(conn: &mut SqliteConnection, s: &TimeSeriesSourceRow) 
 
 /// Forget a source: its row in `time_series_sources` and its rows.
 pub async fn remove_source(conn: &mut SqliteConnection, source_id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM time_series WHERE source_id = ?")
-        .bind(source_id)
-        .execute(&mut *conn)
-        .await
-        .context("delete a source's time series")?;
-    sqlx::query("DELETE FROM time_series_sources WHERE source_id = ?")
-        .bind(source_id)
-        .execute(&mut *conn)
-        .await
-        .context("delete a source from the index")?;
+    sql!(
+        "etl.time_series.delete_series_of_source",
+        "DELETE FROM time_series WHERE source_id = ?"
+    )
+    .query()
+    .bind(source_id)
+    .execute(&mut *conn)
+    .await
+    .context("delete a source's time series")?;
+    sql!(
+        "etl.time_series.delete_source",
+        "DELETE FROM time_series_sources WHERE source_id = ?"
+    )
+    .query()
+    .bind(source_id)
+    .execute(&mut *conn)
+    .await
+    .context("delete a source from the index")?;
     Ok(())
 }
 
@@ -287,6 +326,7 @@ pub async fn remove_source(conn: &mut SqliteConnection, source_id: &str) -> Resu
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// `open` wrote `_datalib_meta` again after the shared open had
     /// recorded the ladder's top, with version 0, so every later open
     /// ran the shared rung again: a live root logged `migrated` five
@@ -303,12 +343,12 @@ mod tests {
                 .await;
         }
         let pool = open(&path, StoreKind::TimeSeries).await.unwrap();
-        let migrations: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM dolt_log() WHERE message LIKE 'migrate shared%'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let migrations: i64 =
+            test_sql!("SELECT COUNT(*) FROM dolt_log() WHERE message LIKE 'migrate shared%'")
+                .query_scalar()
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         pool.close().await;
         assert_eq!(migrations, 0);
     }

@@ -550,7 +550,7 @@ Every download is shaped the same at the bottom: for some entity table `<t>`, up
 
 The principle: **every provider's download uses the shared chunked-multi-row helpers for the entity-table UPSERT, the `<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs are an anti-pattern outside ad-hoc maintenance code.
 
-Because those statements are built at runtime, they go through `sqlx::AssertSqlSafe` — see [`AGENTS.md`](/AGENTS.md) §"Dynamic SQL needs `AssertSqlSafe` and a reason".
+Because those statements are built at runtime, they go through `Sql::dynamic` — see [`AGENTS.md`](/AGENTS.md) §"Dynamic SQL needs a reason".
 
 ### The shared pieces, all in `datalib_etl`:
 

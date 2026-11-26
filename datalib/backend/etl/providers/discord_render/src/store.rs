@@ -21,6 +21,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::ids;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Maps a file's id to its bytes in the CAS, for a batch of conversations.
 pub const ATTACHMENTS_PROJECTION_SQL: &str = "
@@ -187,17 +188,21 @@ async fn open_async(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Res
 
 /// Each conversation, found by a seek past the one before it: there are few
 /// beside the messages, and this is asked on every render.
-const CONVERSATIONS_SQL: &str = "
+const CONVERSATIONS_SQL: Sql = sql!(
+    "discord_render.list_conversations",
+    "
     WITH RECURSIVE c(id) AS (
         SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel
         UNION ALL
         SELECT (SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel
                  WHERE channel_id > c.id)
           FROM c WHERE c.id IS NOT NULL)
-    SELECT id FROM c WHERE id IS NOT NULL";
+    SELECT id FROM c WHERE id IS NOT NULL"
+);
 
 async fn conversation_ids(pool: &SqlitePool) -> Result<Vec<String>> {
-    sqlx::query_scalar(CONVERSATIONS_SQL)
+    CONVERSATIONS_SQL
+        .query_scalar()
         .fetch_all(pool)
         .await
         .context("list conversations")
@@ -210,9 +215,12 @@ async fn rows(
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<(String, Value)>> {
     // Audited: `table` is one of the store's own names.
-    let sql =
-        format!("SELECT id, json(payload) FROM {table} WHERE payload IS NOT NULL ORDER BY id");
-    let raw: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("discord_render.list_payloads"),
+        format!("SELECT id, json(payload) FROM {table} WHERE payload IS NOT NULL ORDER BY id"),
+    );
+    let raw: Vec<(String, String)> = sql
+        .query_as()
         .fetch_all(pool)
         .await
         .with_context(|| format!("read {table}"))?;
@@ -328,11 +336,13 @@ impl Store {
         keys: &[String],
         unparsed: &mut Vec<Unparsed>,
     ) -> Result<Vec<Conversation>> {
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String, String)> = sql!(
+            "discord_render.list_messages_of_conversations",
             "SELECT id, channel_id, json(payload) FROM messages INDEXED BY messages_by_channel \
              WHERE channel_id IN (SELECT value FROM json_each(?)) AND payload IS NOT NULL \
-             ORDER BY channel_id, id",
+             ORDER BY channel_id, id"
         )
+        .query_as()
         .bind(serde_json::to_string(keys)?)
         .fetch_all(pool)
         .await

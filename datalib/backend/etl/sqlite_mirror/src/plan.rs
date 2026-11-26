@@ -1,6 +1,7 @@
 //! Schema introspection and DDL synthesis for the SQLite→doltlite mirror.
 
 use anyhow::{Context, Result};
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::sqlite::SqliteConnection;
 use sqlx::Row;
 
@@ -161,10 +162,12 @@ pub struct SourceTable {
 /// not listed. `PRAGMA table_list` is what tells a shadow table from a
 /// real one; `sqlite_master` calls both `table`.
 pub async fn source_tables(conn: &mut SqliteConnection, schema: &str) -> Result<Vec<SourceTable>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "etl.sqlite_mirror.list_source_tables",
         "SELECT name, type FROM pragma_table_list \
-         WHERE schema = ? AND name NOT LIKE 'sqlite_%' ORDER BY name",
+         WHERE schema = ? AND name NOT LIKE 'sqlite_%' ORDER BY name"
     )
+    .query()
     .bind(schema)
     .fetch_all(&mut *conn)
     .await
@@ -210,12 +213,16 @@ pub async fn table_columns(
     schema: &str,
     table: &str,
 ) -> Result<Vec<SourceColumn>> {
-    let sql = format!(
-        "PRAGMA {}.table_xinfo({})",
-        quote_ident(schema),
-        quote_ident(table)
+    let sql = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.list_table_columns"),
+        format!(
+            "PRAGMA {}.table_xinfo({})",
+            quote_ident(schema),
+            quote_ident(table)
+        ),
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("table_xinfo({schema}.{table})"))?;
@@ -256,12 +263,16 @@ pub async fn unique_indexes(
     schema: &str,
     table: &str,
 ) -> Result<Vec<UniqueIndex>> {
-    let sql = format!(
-        "PRAGMA {}.index_list({})",
-        quote_ident(schema),
-        quote_ident(table)
+    let sql = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.list_table_indexes"),
+        format!(
+            "PRAGMA {}.index_list({})",
+            quote_ident(schema),
+            quote_ident(table)
+        ),
     );
-    let idx_rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let idx_rows = sql
+        .query()
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("index_list({schema}.{table})"))?;
@@ -276,12 +287,16 @@ pub async fn unique_indexes(
         if idx_name.is_empty() {
             continue;
         }
-        let info_sql = format!(
-            "PRAGMA {}.index_info({})",
-            quote_ident(schema),
-            quote_ident(&idx_name)
+        let info_sql = Sql::dynamic(
+            sql_id!("etl.sqlite_mirror.list_index_columns"),
+            format!(
+                "PRAGMA {}.index_info({})",
+                quote_ident(schema),
+                quote_ident(&idx_name)
+            ),
         );
-        let cols = sqlx::query(sqlx::AssertSqlSafe(info_sql))
+        let cols = info_sql
+            .query()
             .fetch_all(&mut *conn)
             .await
             .with_context(|| format!("index_info({schema}.{idx_name})"))?;

@@ -6,6 +6,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl_file_inventory::ingest::{self, FetchOptions, RawDb};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use sqlx::Row;
 
 fn write(root: &Path, rel: &str, body: &str) {
@@ -60,7 +61,8 @@ async fn scan_and_commit(
 
 async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
     let db = RawDb::open(db_path).await.unwrap();
-    let commit: String = sqlx::query_scalar("SELECT dolt_hashof(?)")
+    let commit: String = test_sql!("SELECT dolt_hashof(?)")
+        .query_scalar()
         .bind(branch)
         .fetch_one(db.pool())
         .await
@@ -68,9 +70,11 @@ async fn files_on_branch(db_path: &Path, branch: &str) -> Vec<String> {
     // Audited for `AssertSqlSafe`: `commit` is a hex digest that
     // doltlite just produced from `dolt_hashof`, not caller input, and
     // the table-valued function takes it as a literal.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM dolt_at_files('{commit}') WHERE kind = 'file' ORDER BY id"
-    )))
+    let rows = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT id FROM dolt_at_files('{commit}') WHERE kind = 'file' ORDER BY id"),
+    )
+    .query()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -106,7 +110,8 @@ async fn two_roots_land_on_their_own_branches() {
 
     // The branch was created.
     let db = RawDb::open(&db_path).await.unwrap();
-    let branches = sqlx::query("SELECT name FROM dolt_branches ORDER BY name")
+    let branches = test_sql!("SELECT name FROM dolt_branches ORDER BY name")
+        .query()
         .fetch_all(db.pool())
         .await
         .unwrap()
@@ -211,7 +216,8 @@ async fn a_branchless_scan_is_on_main_when_sealed() {
         .connect_with(opts)
         .await
         .unwrap();
-    let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM files ORDER BY id")
+    let ids: Vec<String> = test_sql!("SELECT id FROM files ORDER BY id")
+        .query_scalar()
         .fetch_all(&reader)
         .await
         .unwrap();
@@ -234,7 +240,8 @@ async fn checkout_reports_the_branch_it_actually_selected() {
     let db = RawDb::open(&db_path).await.unwrap();
 
     db.checkout_branch("feature").await.unwrap();
-    let active: String = sqlx::query("SELECT active_branch() AS b")
+    let active: String = test_sql!("SELECT active_branch() AS b")
+        .query()
         .fetch_one(db.pool())
         .await
         .unwrap()

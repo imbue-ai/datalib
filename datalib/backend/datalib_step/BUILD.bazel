@@ -18,6 +18,7 @@ rust_binary(
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/core:datalib_core",
@@ -278,6 +279,7 @@ rust_test(
         "//datalib/backend/etl/render:datalib_etl_render",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:flate2",
         "@datalib_crates//:insta",
         "@datalib_crates//:libc",

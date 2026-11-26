@@ -11,6 +11,7 @@ use datalib_etl_web::playback::{self, Asked, Playback};
 use serde_json::Value;
 
 use crate::tape::{self, Edition};
+use datalib_sql::{test_sql, Sql};
 
 async fn run(
     store: &Path,
@@ -34,21 +35,21 @@ async fn run(
     (r, asked)
 }
 
-async fn rows(store: &Path, sql: &'static str) -> Vec<(String, String)> {
+async fn rows(store: &Path, sql: Sql) -> Vec<(String, String)> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let v: Vec<(String, String)> = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+    let v: Vec<(String, String)> = sql.query_as().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     v
 }
 
 async fn entry(store: &Path, id: u64) -> Option<Value> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let p: Option<Option<String>> =
-        sqlx::query_scalar("SELECT json(payload) FROM entries WHERE id = ?")
-            .bind(id.to_string())
-            .fetch_optional(db.pool())
-            .await
-            .unwrap();
+    let p: Option<Option<String>> = test_sql!("SELECT json(payload) FROM entries WHERE id = ?")
+        .query_scalar()
+        .bind(id.to_string())
+        .fetch_optional(db.pool())
+        .await
+        .unwrap();
     db.close().await;
     p.flatten().map(|p| serde_json::from_str(&p).unwrap())
 }
@@ -70,34 +71,41 @@ async fn the_first_run_reads_every_day_since_the_eldest_birthday() {
     let s = r.unwrap();
     assert_eq!((s.kids, s.days, s.days_settled), (1, 5, 3), "{}", s.line());
     assert_eq!(asked.count("StatusList"), 5);
-    let ids: Vec<(String, String)> =
-        rows(store.path(), "SELECT id, '' FROM kids ORDER BY id").await;
+    let ids: Vec<(String, String)> = rows(
+        store.path(),
+        test_sql!("SELECT id, '' FROM kids ORDER BY id"),
+    )
+    .await;
     assert_eq!(
         ids.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
         vec![tape::WESLEY.to_string()]
     );
     let coverage = rows(
         store.path(),
-        "SELECT lo, hi FROM coverage WHERE scope = 'days'",
+        test_sql!("SELECT lo, hi FROM coverage WHERE scope = 'days'"),
     )
     .await;
     assert_eq!(
         coverage,
         vec![("2048-10-12".to_string(), "2048-10-14".to_string())]
     );
-    let users = rows(store.path(), "SELECT id, '' FROM users ORDER BY id").await;
+    let users = rows(
+        store.path(),
+        test_sql!("SELECT id, '' FROM users ORDER BY id"),
+    )
+    .await;
     assert_eq!(users.len(), 2);
 
     let spilled = entry(store.path(), tape::SPILLED).await.unwrap();
     assert_eq!(spilled["Pdt"], 481013, "kept from its own day's answer");
     let diary = rows(
         store.path(),
-        "SELECT id, json_extract(payload, '$.n') FROM entries WHERE json_extract(payload, '$.Cat') = 2600",
+        test_sql!("SELECT id, json_extract(payload, '$.n') FROM entries WHERE json_extract(payload, '$.Cat') = 2600"),
     )
     .await;
     assert_eq!(diary.len(), 1);
     assert!(diary[0].1.contains("would not let go"), "{diary:?}");
-    let all = rows(store.path(), "SELECT id, '' FROM entries").await;
+    let all = rows(store.path(), test_sql!("SELECT id, '' FROM entries")).await;
     assert_eq!(
         all.len(),
         s.entries,
@@ -135,7 +143,7 @@ async fn later_runs_read_only_the_days_not_yet_settled() {
     );
     let coverage = rows(
         store.path(),
-        "SELECT lo, hi FROM coverage WHERE scope = 'days'",
+        test_sql!("SELECT lo, hi FROM coverage WHERE scope = 'days'"),
     )
     .await;
     assert_eq!(
@@ -174,7 +182,7 @@ async fn a_nursery_account_asks_for_every_child_at_once() {
     assert_eq!(asked.count("StatusList"), 1);
     let kids = rows(
         store.path(),
-        "SELECT DISTINCT CAST(json_extract(payload, '$.Kid') AS TEXT), '' FROM entries",
+        test_sql!("SELECT DISTINCT CAST(json_extract(payload, '$.Kid') AS TEXT), '' FROM entries"),
     )
     .await;
     assert_eq!(kids, vec![(tape::ALEXANDER.to_string(), String::new())]);

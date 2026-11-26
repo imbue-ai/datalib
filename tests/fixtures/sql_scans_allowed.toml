@@ -12,923 +12,963 @@
 # should change, and says what to look at; #1959 tracks the renders that
 # read a whole table each pass.
 
+
+# Statements SQLite and doltlite run on their own, inside one of ours, which
+# therefore carry no name. Every other statement the sync runs has one
+# (datalib/backend/sql), and sql_scans_test.py refuses one that does not.
+# `like` is a regular expression the whole statement matches.
+
+[[unnamed]]
+like = "(DELETE FROM|INSERT INTO|REPLACE INTO|SELECT .* FROM) 'main'\\.'\\w+_(data|docsize|idx|config)'.*"
+why = "SQLite's FTS5 keeping a full-text index's shadow tables, inside our write to the index."
+
+[[unnamed]]
+like = "SELECT sql FROM main\\.sqlite_master WHERE type='table' AND name='\\w+'"
+why = "Doltlite reading one table's schema from the catalog."
+
+[[unnamed]]
+like = "SELECT name, rootpage, sql FROM \"main\"\\.sqlite_master WHERE type IN \\('table','index'\\) AND sql IS NOT NULL AND rootpage>0"
+why = "Doltlite reading the catalog as it opens a store."
+
+[[unnamed]]
+like = "SELECT 1 FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%' LIMIT 1"
+why = "Doltlite asking whether a store holds any table of ours."
+
+[[unnamed]]
+like = "SELECT pattern, ignored=1 FROM main\\.dolt_ignore"
+why = "Doltlite reading which tables a commit leaves out."
+
+[[unnamed]]
+like = "SELECT tbl,idx,stat FROM 'main'\\.sqlite_stat1"
+why = "SQLite loading the planner's statistics as it opens a file."
+
 [[scan]]
-statement = "SELECT g.id, g.addressbook_id, g.resource_name, json(g.payload) AS payload, json(b.volatile_payload) AS volatile FROM google_contact_groups g LEFT JOIN google_contact_groups_bookkeeping b ON b.id = g.id ORDER BY g.id"
+statement = "/* sql:contacts.google.load_contact_groups */ SELECT g.id, g.addressbook_id, g.resource_name, json(g.payload) AS payload, json(b.volatile_payload) AS volatile FROM google_contact_groups g LEFT JOIN google_contact_groups_bookkeeping b ON b.id = g.id ORDER BY g.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT p.id, p.addressbook_id, p.resource_name, json(p.payload) AS payload, json(b.volatile_payload) AS volatile, ph.id AS photo_id, ph.blake3 AS photo_blake3 FROM google_people p LEFT JOIN google_people_bookkeeping b ON b.id = p.id LEFT JOIN google_photos ph ON ph.person_id = p.id ORDER BY p.id"
+statement = "/* sql:contacts.google.load_people_with_photos */ SELECT p.id, p.addressbook_id, p.resource_name, json(p.payload) AS payload, json(b.volatile_payload) AS volatile, ph.id AS photo_id, ph.blake3 AS photo_blake3 FROM google_people p LEFT JOIN google_people_bookkeeping b ON b.id = p.id LEFT JOIN google_photos ph ON ph.person_id = p.id ORDER BY p.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs INDEXED BY runs_by_start ORDER BY started_at_utc DESC, run_id DESC LIMIT 1"
+statement = "/* sql:runs.read_latest_run */ SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs INDEXED BY runs_by_start ORDER BY started_at_utc DESC, run_id DESC LIMIT 1"
 files = ["*/runs/runs.sqlite"]
 why = "Reads one row: it walks `runs_by_start` from its newest end and stops at LIMIT 1. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
 
 [[scan]]
-statement = "DELETE FROM contact_record_handles WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_record_handles.record_id)"
+statement = "/* sql:etl.render.grid.delete_uncarried_contact_records */ DELETE FROM contact_record_handles WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_record_handles.record_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
 
 [[scan]]
-statement = "DELETE FROM contact_records WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_records.record_id)"
+statement = "/* sql:etl.render.grid.delete_uncarried_contact_records */ DELETE FROM contact_records WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_records.record_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
 
 [[scan]]
-statement = "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
+statement = "/* sql:pdf.ingest.db.prune_unnamed.delete_pdf_documents */ DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
 
 [[scan]]
-statement = "DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)"
+statement = "/* sql:pdf.ingest.db.prune_unnamed.delete_pdf_documents_bookkeeping */ DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
 
 [[scan]]
-statement = "DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)"
+statement = "/* sql:pdf.ingest.db.prune_unnamed.delete_pdf_paths_bookkeeping */ DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after the scan: rows for PDFs no path names any more, in tables of one row per PDF."
 
 [[scan]]
-statement = "DELETE FROM problems WHERE stage = ?"
+statement = "/* sql:etl.render.store.delete_problems_of_stage */ DELETE FROM problems WHERE stage = ?"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass, clearing one stage's rows. A render store's problems are one row per record its render could not fully do, a few beside the documents the pass reads."
 
 [[scan]]
-statement = "DELETE FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 AND (started_at_utc, run_id) < (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) RETURNING run_id"
+statement = "/* sql:runs.delete_runs_past_max */ DELETE FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 AND (started_at_utc, run_id) < (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) RETURNING run_id"
 files = ["*/runs/runs.sqlite"]
 why = "Retention, once per run. It walks `runs_by_start` from its newest end to the `max_runs`-th run (100 by default), then deletes below that through the same index. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
 
 [[scan]]
-statement = "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
+statement = "/* sql:search_index.store.delete_passes_of_dropped_sources */ DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per index pass: `search_sources` holds one row per source."
 
 [[scan]]
-statement = "DELETE FROM temp.dropped WHERE EXISTS (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
+statement = "/* sql:etl.render.search_terms.write_part.delete_temp_4 */ DELETE FROM temp.dropped WHERE EXISTS (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads this pass's own staging table, `temp.dropped`, whole by design."
 
 [[scan]]
-statement = "DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)"
+statement = "/* sql:email.ingest.db.prune_emails_to.delete_threads */ DELETE FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per account after a walk that listed all of its mail: a sweep for threads left with no email, which has to read every thread of the account."
 
 [[scan]]
-statement = "DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))"
+statement = "/* sql:email.ingest.db.prune_emails_to.delete_threads_bookkeeping */ DELETE FROM threads_bookkeeping WHERE id IN (SELECT id FROM threads WHERE account_id = ? AND id NOT IN (SELECT thread_id FROM emails))"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per account after a walk that listed all of its mail: the sidecars of the sweep beside it, which reads every thread of the account."
 
 [[scan]]
-statement = "INSERT INTO main.\"chat\" (\"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\") SELECT \"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\" FROM \"datalib_mirror_src\".\"chat\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"chat\" (\"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\") SELECT \"_id\", \"jid_row_id\", \"hidden\", \"subject\", \"created_timestamp\", \"display_message_row_id\", \"last_message_row_id\", \"last_read_message_row_id\", \"last_read_receipt_sent_message_row_id\", \"last_important_message_row_id\", \"archived\", \"sort_timestamp\", \"mod_tag\", \"gen\", \"spam_detection\", \"unseen_earliest_message_received_time\", \"unseen_message_count\", \"unseen_missed_calls_count\", \"unseen_row_count\", \"plaintext_disabled\", \"vcard_ui_dismissed\", \"change_number_notified_message_row_id\", \"show_group_description\", \"ephemeral_expiration\", \"ephemeral_setting_timestamp\", \"ephemeral_displayed_exemptions\", \"ephemeral_disappearing_messages_initiator\", \"unseen_important_message_count\", \"group_type\", \"last_message_reaction_row_id\", \"last_seen_message_reaction_row_id\", \"unseen_message_reaction_count\", \"unseen_comment_message_count\", \"growth_lock_level\", \"growth_lock_expiration_ts\", \"last_read_message_sort_id\", \"display_message_sort_id\", \"last_message_sort_id\", \"last_read_receipt_sent_message_sort_id\", \"has_new_community_admin_dialog_been_acknowledged\", \"history_sync_progress\", \"chat_lock\", \"chat_origin\", \"participation_status\", \"account_jid_row_id\", \"chat_encryption_state\", \"group_member_count\", \"limited_sharing\", \"limited_sharing_setting_timestamp\", \"is_contact\", \"ephemeral_after_read_duration\", \"business_chat_state\" FROM \"datalib_mirror_src\".\"chat\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO main.\"jid\" (\"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\") SELECT \"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\" FROM \"datalib_mirror_src\".\"jid\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"jid\" (\"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\") SELECT \"_id\", \"user\", \"server\", \"agent\", \"device\", \"type\", \"raw_string\" FROM \"datalib_mirror_src\".\"jid\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO main.\"jid_map\" (\"lid_row_id\", \"jid_row_id\", \"sort_id\") SELECT \"lid_row_id\", \"jid_row_id\", \"sort_id\" FROM \"datalib_mirror_src\".\"jid_map\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"jid_map\" (\"lid_row_id\", \"jid_row_id\", \"sort_id\") SELECT \"lid_row_id\", \"jid_row_id\", \"sort_id\" FROM \"datalib_mirror_src\".\"jid_map\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO main.\"message\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\" FROM \"datalib_mirror_src\".\"message\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"message\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"status\", \"broadcast\", \"recipient_count\", \"participant_hash\", \"origination_flags\", \"origin\", \"timestamp\", \"received_timestamp\", \"receipt_server_timestamp\", \"message_type\", \"text_data\", \"starred\", \"lookup_tables\", \"message_add_on_flags\", \"view_mode\", \"sort_id\", \"translated_text\", \"view_replies_thread_id\", \"server_sts\" FROM \"datalib_mirror_src\".\"message\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO main.\"message_add_on\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\" FROM \"datalib_mirror_src\".\"message_add_on\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"message_add_on\" (\"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\") SELECT \"_id\", \"chat_row_id\", \"from_me\", \"key_id\", \"sender_jid_row_id\", \"parent_message_row_id\", \"timestamp\", \"status\", \"message_add_on_type\", \"received_timestamp\", \"expiry_duration_in_secs\", \"server_timestamp\", \"expiry_timestamp\", \"expiry_type\" FROM \"datalib_mirror_src\".\"message_add_on\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO main.\"message_add_on_reaction\" (\"message_add_on_row_id\", \"reaction\", \"sender_timestamp\") SELECT \"message_add_on_row_id\", \"reaction\", \"sender_timestamp\" FROM \"datalib_mirror_src\".\"message_add_on_reaction\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"message_add_on_reaction\" (\"message_add_on_row_id\", \"reaction\", \"sender_timestamp\") SELECT \"message_add_on_row_id\", \"reaction\", \"sender_timestamp\" FROM \"datalib_mirror_src\".\"message_add_on_reaction\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO main.\"message_media\" (\"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\") SELECT \"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\" FROM \"datalib_mirror_src\".\"message_media\""
+statement = "/* sql:etl.sqlite_mirror.rebuild_copy_rows */ INSERT INTO main.\"message_media\" (\"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\") SELECT \"message_row_id\", \"chat_row_id\", \"autotransfer_retry_enabled\", \"transferred\", \"face_x\", \"face_y\", \"has_streaming_sidecar\", \"page_count\", \"thumbnail_height_width_ratio\", \"first_scan_sidecar\", \"first_scan_length\", \"message_url\", \"media_upload_handle\", \"sticker_flags\", \"raw_transcription_text\", \"first_viewed_timestamp\", \"is_animated_sticker\", \"premium_message\", \"media_caption\", \"metadata_url\", \"motion_photo_presentation_offset_ms\", \"qr_url\", \"media_key_domain\", \"e2ee_media_key\", \"emoji_tags\", \"multicast_id\", \"media_job_uuid\", \"transcoded\", \"file_path\", \"file_size\", \"suspicious_content\", \"trim_from\", \"trim_to\", \"media_key\", \"media_key_timestamp\", \"width\", \"height\", \"gif_attribution\", \"direct_path\", \"mime_type\", \"file_length\", \"media_name\", \"file_hash\", \"media_duration\", \"enc_file_hash\", \"partial_media_hash\", \"partial_media_enc_hash\", \"original_file_hash\", \"mute_video\", \"doodle_id\", \"media_source_type\", \"accessibility_label\", \"media_transcode_quality\", \"is_offloaded\" FROM \"datalib_mirror_src\".\"message_media\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true ON CONFLICT (value) DO NOTHING"
+statement = "/* sql:etl.render.terms.insert_new_vals */ INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true ON CONFLICT (value) DO NOTHING"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads this pass's own staging table, `temp.incoming`, whole by design."
 
 [[scan]]
-statement = "INSERT OR IGNORE INTO terms (val_id, kind, row_id) SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i JOIN vals v ON v.value = i.value"
+statement = "/* sql:etl.render.search_terms.write_part.insert_terms */ INSERT OR IGNORE INTO terms (val_id, kind, row_id) SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i JOIN vals v ON v.value = i.value"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads this pass's own staging table, `temp.incoming`, whole by design; each value is a seek on `vals`."
 
 [[scan]]
-statement = "INSERT OR REPLACE INTO main.\"message\" (\"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\") SELECT \"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\" FROM \"datalib_mirror_src\".\"message\""
+statement = "/* sql:etl.sqlite_mirror.append_upsert_rows */ INSERT OR REPLACE INTO main.\"message\" (\"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\") SELECT \"bridge_id\", \"id\", \"part_id\", \"mxid\", \"room_id\", \"room_receiver\", \"sender_id\", \"sender_mxid\", \"timestamp\", \"edit_count\", \"double_puppeted\", \"thread_root_id\", \"reply_to_id\", \"reply_to_part_id\", \"send_txn_id\", \"metadata\" FROM \"datalib_mirror_src\".\"message\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT OR REPLACE INTO main.\"mx_reactions\" (\"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\") SELECT \"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\" FROM \"datalib_mirror_src\".\"mx_reactions\""
+statement = "/* sql:etl.sqlite_mirror.append_upsert_rows */ INSERT OR REPLACE INTO main.\"mx_reactions\" (\"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\") SELECT \"roomID\", \"reactionID\", \"eventID\", \"senderID\", \"description\", \"path\", \"order\", \"timestamp\", \"isEdited\", \"isDeleted\", \"isSentByMe\", \"echoInfo\", \"sendStatus\", \"reaction\" FROM \"datalib_mirror_src\".\"mx_reactions\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT OR REPLACE INTO main.\"mx_room_messages\" (\"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\") SELECT \"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\" FROM \"datalib_mirror_src\".\"mx_room_messages\""
+statement = "/* sql:etl.sqlite_mirror.append_upsert_rows */ INSERT OR REPLACE INTO main.\"mx_room_messages\" (\"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\") SELECT \"roomID\", \"eventID\", \"senderContactID\", \"timestamp\", \"isEdited\", \"lastEditionID\", \"isDetached\", \"lastEditionTimestamp\", \"lastEditionOrder\", \"isDeleted\", \"isEncrypted\", \"inReplyToID\", \"isReplyThreadFallback\", \"type\", \"hsOrder\", \"isSentByMe\", \"replyThreadID\", \"replyCount\", \"replyThreadRootID\", \"protocol\", \"shouldNotify\", \"shouldPreview\", \"countsAsUnread\", \"lastDeletionID\", \"editedType\", \"mentions\", \"message\", \"sendStatus\", \"text_content\", \"text_formattedContent\", \"text_format\", \"echo_echoID\", \"echo_state\", \"echo_canAutoRetry\", \"echo_isRetryScheduled\", \"echo_retryCount\", \"echo_errorCode\", \"echo_errorMessage\", \"echo_groupID\", \"echo_groupIndex\", \"seenByMeAt\", \"message_size\", \"recipientReadTimerStartedAt\", \"threadRootEventID\", \"countsAsUnreadInThread\" FROM \"datalib_mirror_src\".\"mx_room_messages\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT OR REPLACE INTO main.\"participant_identifiers\" (\"account_id\", \"participant_id\", \"identifier\", \"identifier_type\") SELECT \"account_id\", \"participant_id\", \"identifier\", \"identifier_type\" FROM \"datalib_mirror_src\".\"participant_identifiers\""
+statement = "/* sql:etl.sqlite_mirror.append_upsert_rows */ INSERT OR REPLACE INTO main.\"participant_identifiers\" (\"account_id\", \"participant_id\", \"identifier\", \"identifier_type\") SELECT \"account_id\", \"participant_id\", \"identifier\", \"identifier_type\" FROM \"datalib_mirror_src\".\"participant_identifiers\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT OR REPLACE INTO main.\"participants\" (\"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\") SELECT \"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\" FROM \"datalib_mirror_src\".\"participants\""
+statement = "/* sql:etl.sqlite_mirror.append_upsert_rows */ INSERT OR REPLACE INTO main.\"participants\" (\"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\") SELECT \"account_id\", \"room_id\", \"id\", \"full_name\", \"nickname\", \"img_url\", \"is_verified\", \"cannot_message\", \"is_self\", \"is_network_bot\", \"added_by\", \"is_admin\", \"is_pending\", \"has_exited\" FROM \"datalib_mirror_src\".\"participants\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "INSERT OR REPLACE INTO main.\"threads\" (\"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\") SELECT \"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\" FROM \"datalib_mirror_src\".\"threads\""
+statement = "/* sql:etl.sqlite_mirror.append_upsert_rows */ INSERT OR REPLACE INTO main.\"threads\" (\"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\") SELECT \"threadID\", \"accountID\", \"thread\", \"timestamp\", \"is_label\", \"room_type\" FROM \"datalib_mirror_src\".\"threads\""
 files = ["*/ingest/entities.doltlite_db"]
 why = "The SQLite mirror copies each table of the source file whole on every run that finds the file changed, by design (`etl/sqlite_mirror`)."
 
 [[scan]]
-statement = "SELECT * FROM markdowns ORDER BY markdown_uuid"
+statement = "/* sql:etl.render.store.list_markdowns_rows */ SELECT * FROM markdowns ORDER BY markdown_uuid"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT * FROM steps"
+statement = "/* sql:etl.render.store.read_back_all_markdowns */ SELECT * FROM markdowns ORDER BY markdown_uuid"
+files = ["*/render_markdown/indexed_markdown.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "/* sql:dag.supervisor.list_step_records */ SELECT * FROM steps"
 files = ["*/supervisor.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT COUNT(*) FROM (SELECT DISTINCT account_id, thread_id FROM emails WHERE account_id != '' AND thread_id != '')"
+statement = "/* sql:email_render.count_threads */ SELECT COUNT(*) FROM (SELECT DISTINCT account_id, thread_id FROM emails WHERE account_id != '' AND thread_id != '')"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per render pass, the source's Items count for Manage: it reads every email's thread."
 
 [[scan]]
-statement = "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL"
+statement = "/* sql:garmin_render.count_activity_files_held */ SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per render pass, the source's Items count for Manage: it reads every activity file."
 
 [[scan]]
-statement = "SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL"
+statement = "/* sql:slack.count_messages */ SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, after a walk: whether the download holds any message at all, to say when a run found none. It counts every message where one row would answer."
 
 [[scan]]
-statement = "SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL"
+statement = "/* sql:yolink_render.count_failed_readings */ SELECT COUNT(*) FROM yolink_readings_bookkeeping WHERE last_error IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per render pass: the readings that failed, for the page's banner; it reads every reading's sidecar."
 
 [[scan]]
-statement = "SELECT COUNT(*), COALESCE(SUM(item_count), 0) FROM markdowns WHERE ? IS NULL OR markdown_uuid <> ?"
+statement = "/* sql:etl.render.store.count_documents_and_items */ SELECT COUNT(*), COALESCE(SUM(item_count), 0) FROM markdowns WHERE ? IS NULL OR markdown_uuid <> ?"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Suspect: every seal of a render counts the whole store (`holdings`), so a full render of a large source reads all of `markdowns` once per checkpoint. The totals could be kept as documents are written."
 
 [[scan]]
-statement = "SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL"
+statement = "/* sql:slack_render.count_threads */ SELECT COUNT(DISTINCT thread_root_uuid) FROM messages WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per render pass, the source's Items count for Manage: it reads every message's thread."
 
 [[scan]]
-statement = "SELECT DISTINCT chat_id FROM chat_items"
+statement = "/* sql:signal_render.list_chat_ids_with_messages */ SELECT DISTINCT chat_id FROM chat_items"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT DISTINCT id FROM (SELECT j.value AS id FROM pages p, json_tree(p.payload) j WHERE p.payload IS NOT NULL AND j.key = 'id' AND j.type = 'text' AND (j.path IN ('$.created_by', '$.\"created_by\"', '$.last_edited_by', '$.\"last_edited_by\"') OR j.path LIKE '$.properties.%people[%]') UNION ALL SELECT json_extract(c.payload, '$.created_by.id') AS id FROM comments c WHERE c.payload IS NOT NULL) WHERE id IS NOT NULL AND id <> '' ORDER BY id"
+statement = "/* sql:notion.list_users_named_by_pages */ SELECT DISTINCT id FROM (SELECT j.value AS id FROM pages p, json_tree(p.payload) j WHERE p.payload IS NOT NULL AND j.key = 'id' AND j.type = 'text' AND (j.path IN ('$.created_by', '$.\"created_by\"', '$.last_edited_by', '$.\"last_edited_by\"') OR j.path LIKE '$.properties.%people[%]') UNION ALL SELECT json_extract(c.payload, '$.created_by.id') AS id FROM comments c WHERE c.payload IS NOT NULL) WHERE id IS NOT NULL AND id <> '' ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: once per run the download walks the JSON of every stored page to find the users it names (`users_named_in_store`); on a large workspace that is every page's payload. Users could be recorded as pages are stored."
 
 [[scan]]
-statement = "SELECT DISTINCT input_table FROM render_inputs ORDER BY input_table"
+statement = "/* sql:etl.render.store.list_input_tables */ SELECT DISTINCT input_table FROM render_inputs ORDER BY input_table"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT DISTINCT renderer_version FROM markdowns WHERE renderer_version IS NOT NULL AND kind <> ? AND markdown_uuid NOT IN ( SELECT scope_key FROM problems WHERE scope_kind = ? AND stage = ? AND reason IN (?…))"
+statement = "/* sql:etl.render.store.list_renderer_versions */ SELECT DISTINCT renderer_version FROM markdowns WHERE renderer_version IS NOT NULL AND kind <> ? AND markdown_uuid NOT IN ( SELECT scope_key FROM problems WHERE scope_kind = ? AND stage = ? AND reason IN (?…))"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Twice per render pass: which versions every document carries, so it reads every row of markdowns, which holds no text. The problems it leaves out are read once, as a set."
 
 [[scan]]
-statement = "SELECT DISTINCT thread_id FROM emails WHERE thread_id IS NOT NULL ORDER BY thread_id LIMIT ?1"
+statement = "/* sql:etl.render.first_page_of_keys */ SELECT DISTINCT thread_id FROM emails WHERE thread_id IS NOT NULL ORDER BY thread_id LIMIT ?1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A full render pages through every thread, by design; a narrowed pass names its threads."
 
 [[scan]]
-statement = "SELECT DISTINCT thread_root_uuid FROM messages WHERE payload IS NOT NULL"
+statement = "/* sql:slack_render.list_thread_keys */ SELECT DISTINCT thread_root_uuid FROM messages WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: once per render pass this reads every message's thread to place read marks, whatever changed: #1959's shape on a source it calls narrowed."
 
 [[scan]]
-statement = "SELECT DISTINCT thread_root_uuid FROM messages WHERE thread_root_uuid IS NOT NULL ORDER BY thread_root_uuid LIMIT ?1"
+statement = "/* sql:etl.render.first_page_of_keys */ SELECT DISTINCT thread_root_uuid FROM messages WHERE thread_root_uuid IS NOT NULL ORDER BY thread_root_uuid LIMIT ?1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A full render pages through every thread, by design; a narrowed pass names its threads."
 
 [[scan]]
-statement = "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)"
+statement = "/* sql:dag.supervisor.is_request_taken_on */ SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)"
 files = ["*/supervisor.sqlite"]
 why = "steps holds one row per configured step, and a sync request asks this for at most three seconds while it waits to be taken on."
 
 [[scan]]
-statement = "SELECT _id, chat_row_id, key_id, from_me, sender_jid_row_id, timestamp, message_type, text_data FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id"
+statement = "/* sql:whatsapp_render.list_messages */ SELECT _id, chat_row_id, key_id, from_me, sender_jid_row_id, timestamp, message_type, text_data FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM jid"
+statement = "/* sql:whatsapp_render.list_jids */ SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM jid"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM chat ORDER BY _id"
+statement = "/* sql:whatsapp_render.list_chats */ SELECT _id, jid_row_id, subject, last_read_message_row_id FROM chat ORDER BY _id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT a._id, a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, a.parent_message_row_id, a.timestamp, r.reaction FROM message_add_on a JOIN message_add_on_reaction r ON r.message_add_on_row_id = a._id WHERE a.parent_message_row_id IS NOT NULL"
+statement = "/* sql:whatsapp_render.list_reactions */ SELECT a._id, a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, a.parent_message_row_id, a.timestamp, r.reaction FROM message_add_on a JOIN message_add_on_reaction r ON r.message_add_on_row_id = a._id WHERE a.parent_message_row_id IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT a.id || '#fit', a.listing_hash FROM garmin_activities a LEFT JOIN garmin_activity_files f ON f.id = a.id || '#fit' WHERE a.listing_hash IS NOT NULL AND f.blake3 IS NULL ORDER BY a.start_time_gmt DESC, a.id"
+statement = "/* sql:garmin.list_activity_files_without_bytes */ SELECT a.id || '#fit', a.listing_hash FROM garmin_activities a LEFT JOIN garmin_activity_files f ON f.id = a.id || '#fit' WHERE a.listing_hash IS NOT NULL AND f.blake3 IS NULL ORDER BY a.start_time_gmt DESC, a.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every activity's file to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT a.id, b.held_version FROM chatgpt_attachments a LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_id ORDER BY a.conversation_id, a.file_id"
+statement = "/* sql:chatgpt.list_attachments_with_held_version */ SELECT a.id, b.held_version FROM chatgpt_attachments a LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_id ORDER BY a.conversation_id, a.file_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT a.id, coalesce(b.held_version, c.held_version) FROM claude_attachments a LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid LEFT JOIN cowork_sessions_bookkeeping c ON c.id = a.conversation_uuid ORDER BY a.conversation_uuid, a.file_uuid"
+statement = "/* sql:claude.list_attachments_with_held_version */ SELECT a.id, coalesce(b.held_version, c.held_version) FROM claude_attachments a LEFT JOIN conversations_bookkeeping b ON b.id = a.conversation_uuid LEFT JOIN cowork_sessions_bookkeeping c ON c.id = a.conversation_uuid ORDER BY a.conversation_uuid, a.file_uuid"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, (SELECT f.blake3 FROM garmin_activity_files f WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL ORDER BY f.id LIMIT 1) AS fit FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id ORDER BY a.start_time_gmt, a.id"
+statement = "/* sql:garmin_render.list_activities_with_details */ SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, (SELECT f.blake3 FROM garmin_activity_files f WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL ORDER BY f.id LIMIT 1) AS fit FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id ORDER BY a.start_time_gmt, a.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Garmin renders as one unit, so any change re-reads every activity; #1959 (case C) tracks a unit per document."
 
 [[scan]]
-statement = "SELECT accountID FROM threads t WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)"
+statement = "/* sql:beeper_render.list_accounts_with_messages */ SELECT accountID FROM threads t WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per render pass: the mirror keeps no index on `mx_room_messages.roomID`, so SQLite builds an automatic one, one read of the messages per pass."
 
 [[scan]]
-statement = "SELECT account_id FROM emails WHERE account_id <> ?1 UNION SELECT account_id FROM threads WHERE account_id <> ?1 UNION SELECT account_id FROM mailboxes WHERE account_id <> ?1 UNION SELECT id FROM accounts WHERE id <> ?1"
+statement = "/* sql:email.mbox.list_other_accounts */ SELECT account_id FROM emails WHERE account_id <> ?1 UNION SELECT account_id FROM threads WHERE account_id <> ?1 UNION SELECT account_id FROM mailboxes WHERE account_id <> ?1 UNION SELECT id FROM accounts WHERE id <> ?1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: once per run this reads every email, thread and mailbox to find other accounts' rows; a table of accounts would answer it."
 
 [[scan]]
-statement = "SELECT blake3, content_type, byte_len FROM cas_objects"
+statement = "/* sql:beeper_render.list_cas_objects */ SELECT blake3, content_type, byte_len FROM cas_objects"
 files = ["*/ingest/blobs.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT c.id AS id, c.addressbook_id AS addressbook_id, c.uid AS uid, c.href AS href, json_extract(c.payload, '$.vcard') AS vcard, COALESCE(a.display_name, a.href) AS addressbook_label FROM contacts c LEFT JOIN addressbooks a ON a.id = c.addressbook_id ORDER BY c.addressbook_id, c.id"
+statement = "/* sql:contacts.load_contacts_with_addressbook_label */ SELECT c.id AS id, c.addressbook_id AS addressbook_id, c.uid AS uid, c.href AS href, json_extract(c.payload, '$.vcard') AS vcard, COALESCE(a.display_name, a.href) AS addressbook_label FROM contacts c LEFT JOIN addressbooks a ON a.id = c.addressbook_id ORDER BY c.addressbook_id, c.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT c.id FROM channels c, json_each(c.payload, '$.properties.tabs') t WHERE json_extract(t.value, '$.type') IN ('bookmarks', 'folder') UNION SELECT channel_id FROM bookmarks"
+statement = "/* sql:slack.list_channels_with_bookmarks */ SELECT c.id FROM channels c, json_each(c.payload, '$.properties.tabs') t WHERE json_extract(t.value, '$.type') IN ('bookmarks', 'folder') UNION SELECT channel_id FROM bookmarks"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: every channel's tabs, to find the ones with bookmarks; channels are few."
 
 [[scan]]
-statement = "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc FROM conversations c LEFT JOIN conversations_bookkeeping b ON b.id = c.id WHERE c.payload IS NOT NULL ORDER BY c.id"
+statement = "/* sql:chatgpt_render.load_conversations */ SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc FROM conversations c LEFT JOIN conversations_bookkeeping b ON b.id = c.id WHERE c.payload IS NOT NULL ORDER BY c.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT d.blake3 AS blake3, d.title AS title, d.author AS author, d.page_count AS page_count, d.pdf_type AS pdf_type, d.doc_created_at AS doc_created_at, d.doc_modified_at AS doc_modified_at, MIN(p.id) AS rel_path, COUNT(p.id) AS copy_count, GROUP_CONCAT(p.id, char(30)) AS path_ids FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3 WHERE d.has_encoding_issues = 0 AND d.page_count > d.ocr_page_count GROUP BY d.blake3 ORDER BY d.blake3"
+statement = "/* sql:pdf.list_convertible_documents */ SELECT d.blake3 AS blake3, d.title AS title, d.author AS author, d.page_count AS page_count, d.pdf_type AS pdf_type, d.doc_created_at AS doc_created_at, d.doc_modified_at AS doc_modified_at, MIN(p.id) AS rel_path, COUNT(p.id) AS copy_count, GROUP_CONCAT(p.id, char(30)) AS path_ids FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3 WHERE d.has_encoding_issues = 0 AND d.page_count > d.ocr_page_count GROUP BY d.blake3 ORDER BY d.blake3"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every PDF to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT d.id, d.kind, d.start_ms, d.family_device_id, (SELECT MAX(r.ts_ms) FROM yolink_readings r WHERE r.device_name = d.id) AS last_ts_ms FROM yolink_devices d ORDER BY d.id"
+statement = "/* sql:yolink_render.list_devices_with_last_reading */ SELECT d.id, d.kind, d.start_ms, d.family_device_id, (SELECT MAX(r.ts_ms) FROM yolink_readings r WHERE r.device_name = d.id) AS last_ts_ms FROM yolink_devices d ORDER BY d.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per render pass: every device, a few rows; each one's last reading is a seek on `yolink_readings_by_device_ts`."
 
 [[scan]]
-statement = "SELECT d.page_count, d.ocr_page_count, d.has_encoding_issues, MIN(p.id) AS rel_path FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3 GROUP BY d.blake3 ORDER BY rel_path"
+statement = "/* sql:pdf.list_documents_without_text */ SELECT d.page_count, d.ocr_page_count, d.has_encoding_issues, MIN(p.id) AS rel_path FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3 GROUP BY d.blake3 ORDER BY rel_path"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT device_id, ts_ms, source_file, pm1_ugm3, pm25_ugm3, pm10_ugm3, aqi_us, aqi_cn, outdoor_aqi_us, outdoor_aqi_cn, co2_ppm, temperature_c, humidity_pct, voc_ppb FROM airvisual_samples ORDER BY device_id, ts_ms"
+statement = "/* sql:airvisual_render.list_samples_by_device */ SELECT device_id, ts_ms, source_file, pm1_ugm3, pm25_ugm3, pm10_ugm3, aqi_us, aqi_cn, outdoor_aqi_us, outdoor_aqi_cn, co2_ppm, temperature_c, humidity_pct, voc_ppb FROM airvisual_samples ORDER BY device_id, ts_ms"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT device_name, metric, ts_ms, value FROM yolink_readings ORDER BY device_name, metric, ts_ms"
+statement = "/* sql:yolink_render.list_readings_by_series */ SELECT device_name, metric, ts_ms, value FROM yolink_readings ORDER BY device_name, metric, ts_ms"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT fingerprint, snapshot_dir, ingested_at_utc FROM ingested_backups"
+statement = "/* sql:signal.list_ingested_backups */ SELECT fingerprint, snapshot_dir, ingested_at_utc FROM ingested_backups"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT h.handle, r.contact_json FROM contact_record_handles h JOIN contact_records r ON r.record_id = h.record_id"
+statement = "/* sql:etl.render.terms.list_contact_handles_with_json */ SELECT h.handle, r.contact_json FROM contact_record_handles h JOIN contact_records r ON r.record_id = h.record_id"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads every row by design: the statement has no WHERE. One row per handle of each distinct record, a few thousand in a large library."
 
 [[scan]]
-statement = "SELECT i.chat_id, COUNT(*) FROM chat_items i WHERE NOT EXISTS (SELECT 1 FROM chats c WHERE c.id = i.chat_id) GROUP BY i.chat_id ORDER BY i.chat_id"
+statement = "/* sql:signal_render.count_messages_of_missing_chats */ SELECT i.chat_id, COUNT(*) FROM chat_items i WHERE NOT EXISTS (SELECT 1 FROM chats c WHERE c.id = i.chat_id) GROUP BY i.chat_id ORDER BY i.chat_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: once per render pass this reads every chat item to find ones whose chat is gone, whatever changed."
 
 [[scan]]
-statement = "SELECT id FROM chat_items"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM chat_items"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM chats"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM chats"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM connections_friends_your_friends"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM connections_friends_your_friends"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM gemini_activity"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM gemini_activity"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM maps_reviews"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM maps_reviews"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM maps_saved_places"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM maps_saved_places"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM messenger_messages"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM messenger_messages"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM messenger_threads"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM messenger_threads"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM read_marks"
+statement = "/* sql:signal.list_read_marks */ SELECT id FROM read_marks"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM recipients"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM recipients"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM saved_items"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM saved_items"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM sms_calls"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM sms_calls"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM sms_messages"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM sms_messages"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM users WHERE payload IS NULL ORDER BY id"
+statement = "/* sql:slack.list_users_owed */ SELECT id FROM users WHERE payload IS NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every listed user to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT id FROM voice_bills"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM voice_bills"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM voice_messages WHERE folder = ?"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM voice_messages WHERE folder = ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per Voice folder (calls, spam) after a full read of them: the prune keeps or deletes each message of the folder, so it reads them all. folder has two values; an index would not narrow it."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_comments"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_comments_and_reactions_comments"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_likes_and_reactions"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_comments_and_reactions_likes_and_reactions"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_comments_and_reactions_your_comment_edits"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_comments_and_reactions_your_comment_edits"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_groups_group_posts_and_comments"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_groups_group_posts_and_comments"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_groups_your_group_membership_activity"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_groups_your_group_membership_activity"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_posts_edits_you_made_to_posts"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_posts_edits_you_made_to_posts"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_posts_your_posts_check_ins_photos_and_videos"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_posts_your_posts_check_ins_photos_and_videos"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM youtube_subscriptions"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM youtube_subscriptions"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM youtube_watch_history"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM youtube_watch_history"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, calendar_date, timestamp_gmt, weight_g, source_type, json(payload) AS payload FROM garmin_weigh_ins WHERE weight_g IS NOT NULL AND timestamp_gmt IS NOT NULL ORDER BY timestamp_gmt, id"
+statement = "/* sql:garmin_render.list_weigh_ins */ SELECT id, calendar_date, timestamp_gmt, weight_g, source_type, json(payload) AS payload FROM garmin_weigh_ins WHERE weight_g IS NOT NULL AND timestamp_gmt IS NOT NULL ORDER BY timestamp_gmt, id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Garmin renders as one unit, so any change re-reads every weigh-in; #1959 (case C) tracks a unit per document."
 
 [[scan]]
-statement = "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics FROM ics_objects ORDER BY id"
+statement = "/* sql:calendar.list_ics_objects */ SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics FROM ics_objects ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, capture_id, part, blake3 FROM capture_parts"
+statement = "/* sql:google_drive_render.list_capture_parts */ SELECT id, capture_id, part, blake3 FROM capture_parts"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, display_name, time_zone FROM calendars ORDER BY id"
+statement = "/* sql:calendar.list_calendars */ SELECT id, display_name, time_zone FROM calendars ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, file_id, json(payload) AS payload FROM comments"
+statement = "/* sql:google_drive_render.list_comments */ SELECT id, file_id, json(payload) AS payload FROM comments"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, file_id, version FROM captures"
+statement = "/* sql:google_drive_render.list_captures */ SELECT id, file_id, version FROM captures"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, identifier, display_name, json(payload) AS payload FROM recipients"
+statement = "/* sql:signal_render.list_recipients */ SELECT id, identifier, display_name, json(payload) AS payload FROM recipients"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, item_id FROM saved_items"
+statement = "/* sql:slack.list_saved_items */ SELECT id, item_id FROM saved_items"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM chat_groups WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM chat_groups WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM chat_messages WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM chat_messages WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM comments WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM comments WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM connections WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM connections WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM connections_friends_your_friends WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM connections_friends_your_friends WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM email_addresses WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM email_addresses WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per email address on the account, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM file_parents"
+statement = "/* sql:google_drive_render.list_folders_drives_and_parents */ SELECT id, json(payload) AS payload FROM file_parents"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM files"
+statement = "/* sql:google_drive_render.list_files */ SELECT id, json(payload) AS payload FROM files"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM folders"
+statement = "/* sql:google_drive_render.list_folders_drives_and_parents */ SELECT id, json(payload) AS payload FROM folders"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM mailboxes WHERE payload IS NOT NULL"
+statement = "/* sql:email_render.load_payloads */ SELECT id, json(payload) AS payload FROM mailboxes WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per mailbox, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM messages WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM messages WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM messenger_messages WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM messenger_messages WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM messenger_threads WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM messenger_threads WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM skills WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM skills WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM sms_calls WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM sms_calls WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM sms_messages WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM sms_messages WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM transcripts WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM transcripts WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per session transcript, without its records, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM voice_messages WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM voice_messages WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_comments WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_comments WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_likes_and_reactions WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_likes_and_reactions WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_your_comment_edits WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_comments_and_reactions_your_comment_edits WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_group_posts_and_comments WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_group_posts_and_comments WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_your_group_membership_activity WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_your_group_membership_activity WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_edits_you_made_to_posts WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_edits_you_made_to_posts WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_your_posts_check_ins_photos_and_videos WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_your_posts_check_ins_photos_and_videos WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) FROM users WHERE payload IS NOT NULL"
+statement = "/* sql:notion.load_user_payloads */ SELECT id, json(payload) FROM users WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per workspace member, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload), NULL FROM youtube_subscriptions ORDER BY id"
+statement = "/* sql:google_takeout_render.list_rows */ SELECT id, json(payload), NULL FROM youtube_subscriptions ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), NULL, file FROM maps_saved_lists ORDER BY id"
+statement = "/* sql:google_takeout_render.list_file_rows */ SELECT id, json(payload), NULL, file FROM maps_saved_lists ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), NULL, file FROM my_maps_placemarks ORDER BY id"
+statement = "/* sql:google_takeout_render.list_file_rows */ SELECT id, json(payload), NULL, file FROM my_maps_placemarks ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), when_ts FROM gemini_activity ORDER BY id"
+statement = "/* sql:google_takeout_render.list_rows */ SELECT id, json(payload), when_ts FROM gemini_activity ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), when_ts FROM maps_reviews ORDER BY id"
+statement = "/* sql:google_takeout_render.list_rows */ SELECT id, json(payload), when_ts FROM maps_reviews ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), when_ts FROM maps_saved_places ORDER BY id"
+statement = "/* sql:google_takeout_render.list_rows */ SELECT id, json(payload), when_ts FROM maps_saved_places ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), when_ts FROM youtube_watch_history ORDER BY id"
+statement = "/* sql:google_takeout_render.list_rows */ SELECT id, json(payload), when_ts FROM youtube_watch_history ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload), when_ts, file FROM play_books_annotations ORDER BY id"
+statement = "/* sql:google_takeout_render.list_file_rows */ SELECT id, json(payload), when_ts, file FROM play_books_annotations ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, kind, title, parent_type, parent_id, created_time FROM tree"
+statement = "/* sql:notion.load_tree */ SELECT id, kind, title, parent_type, parent_id, created_time FROM tree"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, kind, upstream_id, json(payload) AS payload FROM garmin_items ORDER BY kind, id"
+statement = "/* sql:garmin_render.list_items */ SELECT id, kind, upstream_id, json(payload) AS payload FROM garmin_items ORDER BY kind, id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, last_edited_time FROM pages WHERE payload IS NOT NULL ORDER BY coalesce(parent_type IN ('data_source_id', 'database_id'), 0), last_edited_time DESC, id"
+statement = "/* sql:notion.list_held_pages_by_edit_time */ SELECT id, last_edited_time FROM pages WHERE payload IS NOT NULL ORDER BY coalesce(parent_type IN ('data_source_id', 'database_id'), 0), last_edited_time DESC, id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every page to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT id, listing_hash FROM garmin_activities WHERE listing_hash IS NOT NULL ORDER BY start_time_gmt DESC, id"
+statement = "/* sql:garmin.list_listed_activities */ SELECT id, listing_hash FROM garmin_activities WHERE listing_hash IS NOT NULL ORDER BY start_time_gmt DESC, id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every listed activity to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT id, markdown FROM page_markdown WHERE markdown IS NOT NULL ORDER BY id"
+statement = "/* sql:notion.load_page_markdown */ SELECT id, markdown FROM page_markdown WHERE markdown IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, name FROM users WHERE name IS NOT NULL"
+statement = "/* sql:notion.load_user_names */ SELECT id, name FROM users WHERE name IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per workspace member, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, name, is_dm, dm_user_ids FROM channels"
+statement = "/* sql:slack_render.load_channels */ SELECT id, name, is_dm, dm_user_ids FROM channels"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, name, is_dm, dm_user_ids, is_archived FROM channels WHERE payload IS NOT NULL AND (is_dm = 1 OR is_member = 1) AND (is_archived IS NULL OR is_archived = 0) ORDER BY id"
+statement = "/* sql:slack.list_channels_to_fetch */ SELECT id, name, is_dm, dm_user_ids, is_archived FROM channels WHERE payload IS NOT NULL AND (is_dm = 1 OR is_member = 1) AND (is_archived IS NULL OR is_archived = 0) ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every channel to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT id, name, model, mac_address, app_version, system_version, timezone, last_ts_ms FROM airvisual_devices ORDER BY name, id"
+statement = "/* sql:airvisual_render.list_devices */ SELECT id, name, model, mac_address, app_version, system_version, timezone, last_ts_ms FROM airvisual_devices ORDER BY name, id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, name, real_name, display_name FROM users WHERE payload IS NOT NULL"
+statement = "/* sql:slack.load_user_directory */ SELECT id, name, real_name, display_name FROM users WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, and only when DMs are in play: the download names each DM's members from the stored users."
 
 [[scan]]
-statement = "SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:claude.load_conversations */ SELECT id, org_uuid, org_name, json(payload) AS payload FROM conversations WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:claude.load_projects */ SELECT id, org_uuid, org_name, json(payload) AS payload FROM projects WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload FROM discussions WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:gitlab.load_discussions */ SELECT id, project_full_path, mr_iid, discussion_id, json(payload) AS payload FROM discussions WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, project_full_path, mr_iid, json(payload) AS payload FROM merge_requests WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:gitlab.load_merge_requests */ SELECT id, project_full_path, mr_iid, json(payload) AS payload FROM merge_requests WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, read_through, read FROM read_marks"
+statement = "/* sql:etl.read_marks.list_marks */ SELECT id, read_through, read FROM read_marks"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, recipient_id FROM chats ORDER BY id"
+statement = "/* sql:signal_render.list_chats */ SELECT id, recipient_id FROM chats ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM issue_comments WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:github.load_pull_request_children */ SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM issue_comments WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pr_review_comments WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:github.load_pull_request_children */ SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pr_review_comments WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pr_reviews WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:github.load_pull_request_children */ SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pr_reviews WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pull_requests WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:github.load_pull_request_children */ SELECT id, repo_full_name, pr_number, json(payload) AS payload FROM pull_requests WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, room_id FROM participants"
+statement = "/* sql:beeper_render.list_participant_rooms */ SELECT id, room_id FROM participants"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
+statement = "/* sql:slack_render.load_users */ SELECT id, team_id, json(payload) AS payload FROM users WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per workspace member, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, title FROM tree WHERE kind = ?"
+statement = "/* sql:notion.list_database_titles */ SELECT id, title FROM tree WHERE kind = ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, before the page bodies are fetched: every database the workspace's tree places. The tree is one row per page or database."
 
 [[scan]]
-statement = "SELECT id, updated_at FROM listed_change_requests ORDER BY id"
+statement = "/* sql:etl.forge_ingest_common.list_listed_change_requests */ SELECT id, updated_at FROM listed_change_requests ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT jid, json_group_array(json(obj)) FROM (SELECT jid, json_object('_id', CASE WHEN typeof(\"_id\") = 'blob' THEN hex(\"_id\") ELSE \"_id\" END, 'jid', CASE WHEN typeof(\"jid\") = 'blob' THEN hex(\"jid\") ELSE \"jid\" END, 'is_whatsapp_user', CASE WHEN typeof(\"is_whatsapp_user\") = 'blob' THEN hex(\"is_whatsapp_user\") ELSE \"is_whatsapp_user\" END, 'status', CASE WHEN typeof(\"status\") = 'blob' THEN hex(\"status\") ELSE \"status\" END, 'status_timestamp', CASE WHEN typeof(\"status_timestamp\") = 'blob' THEN hex(\"status_timestamp\") ELSE \"status_timestamp\" END, 'number', CASE WHEN typeof(\"number\") = 'blob' THEN hex(\"number\") ELSE \"number\" END, 'raw_contact_id', CASE WHEN typeof(\"raw_contact_id\") = 'blob' THEN hex(\"raw_contact_id\") ELSE \"raw_contact_id\" END, 'display_name', CASE WHEN typeof(\"display_name\") = 'blob' THEN hex(\"display_name\") ELSE \"display_name\" END, 'phone_type', CASE WHEN typeof(\"phone_type\") = 'blob' THEN hex(\"phone_type\") ELSE \"phone_type\" END, 'phone_label', CASE WHEN typeof(\"phone_label\") = 'blob' THEN hex(\"phone_label\") ELSE \"phone_label\" END, 'photo_ts', CASE WHEN typeof(\"photo_ts\") = 'blob' THEN hex(\"photo_ts\") ELSE \"photo_ts\" END, 'thumb_ts', CASE WHEN typeof(\"thumb_ts\") = 'blob' THEN hex(\"thumb_ts\") ELSE \"thumb_ts\" END, 'photo_id_timestamp', CASE WHEN typeof(\"photo_id_timestamp\") = 'blob' THEN hex(\"photo_id_timestamp\") ELSE \"photo_id_timestamp\" END, 'given_name', CASE WHEN typeof(\"given_name\") = 'blob' THEN hex(\"given_name\") ELSE \"given_name\" END, 'family_name', CASE WHEN typeof(\"family_name\") = 'blob' THEN hex(\"family_name\") ELSE \"family_name\" END, 'wa_name', CASE WHEN typeof(\"wa_name\") = 'blob' THEN hex(\"wa_name\") ELSE \"wa_name\" END, 'sort_name', CASE WHEN typeof(\"sort_name\") = 'blob' THEN hex(\"sort_name\") ELSE \"sort_name\" END, 'nickname', CASE WHEN typeof(\"nickname\") = 'blob' THEN hex(\"nickname\") ELSE \"nickname\" END, 'company', CASE WHEN typeof(\"company\") = 'blob' THEN hex(\"company\") ELSE \"company\" END, 'title', CASE WHEN typeof(\"title\") = 'blob' THEN hex(\"title\") ELSE \"title\" END, 'status_autodownload_disabled', CASE WHEN typeof(\"status_autodownload_disabled\") = 'blob' THEN hex(\"status_autodownload_disabled\") ELSE \"status_autodownload_disabled\" END, 'keep_timestamp', CASE WHEN typeof(\"keep_timestamp\") = 'blob' THEN hex(\"keep_timestamp\") ELSE \"keep_timestamp\" END, 'is_spam_reported', CASE WHEN typeof(\"is_spam_reported\") = 'blob' THEN hex(\"is_spam_reported\") ELSE \"is_spam_reported\" END, 'is_sidelist_synced', CASE WHEN typeof(\"is_sidelist_synced\") = 'blob' THEN hex(\"is_sidelist_synced\") ELSE \"is_sidelist_synced\" END, 'is_business_synced', CASE WHEN typeof(\"is_business_synced\") = 'blob' THEN hex(\"is_business_synced\") ELSE \"is_business_synced\" END, 'disappearing_mode_duration', CASE WHEN typeof(\"disappearing_mode_duration\") = 'blob' THEN hex(\"disappearing_mode_duration\") ELSE \"disappearing_mode_duration\" END, 'disappearing_mode_timestamp', CASE WHEN typeof(\"disappearing_mode_timestamp\") = 'blob' THEN hex(\"disappearing_mode_timestamp\") ELSE \"disappearing_mode_timestamp\" END, 'disappearing_mode_support_disabled', CASE WHEN typeof(\"disappearing_mode_support_disabled\") = 'blob' THEN hex(\"disappearing_mode_support_disabled\") ELSE \"disappearing_mode_support_disabled\" END, 'history_sync_initial_phash', CASE WHEN typeof(\"history_sync_initial_phash\") = 'blob' THEN hex(\"history_sync_initial_phash\") ELSE \"history_sync_initial_phash\" END, 'is_starred', CASE WHEN typeof(\"is_starred\") = 'blob' THEN hex(\"is_starred\") ELSE \"is_starred\" END, 'is_wa_created_contact', CASE WHEN typeof(\"is_wa_created_contact\") = 'blob' THEN hex(\"is_wa_created_contact\") ELSE \"is_wa_created_contact\" END, 'sync_policy', CASE WHEN typeof(\"sync_policy\") = 'blob' THEN hex(\"sync_policy\") ELSE \"sync_policy\" END, 'status_emoji', CASE WHEN typeof(\"status_emoji\") = 'blob' THEN hex(\"status_emoji\") ELSE \"status_emoji\" END, 'is_contact_synced', CASE WHEN typeof(\"is_contact_synced\") = 'blob' THEN hex(\"is_contact_synced\") ELSE \"is_contact_synced\" END, 'is_reachable', CASE WHEN typeof(\"is_reachable\") = 'blob' THEN hex(\"is_reachable\") ELSE \"is_reachable\" END, 'external_user_state', CASE WHEN typeof(\"external_user_state\") = 'blob' THEN hex(\"external_user_state\") ELSE \"external_user_state\" END) AS obj FROM wa_contacts WHERE jid IS NOT NULL ORDER BY _id) GROUP BY jid ORDER BY jid"
+statement = "/* sql:whatsapp.read_contacts_grouped_by_jid */ SELECT jid, json_group_array(json(obj)) FROM (SELECT jid, json_object('_id', CASE WHEN typeof(\"_id\") = 'blob' THEN hex(\"_id\") ELSE \"_id\" END, 'jid', CASE WHEN typeof(\"jid\") = 'blob' THEN hex(\"jid\") ELSE \"jid\" END, 'is_whatsapp_user', CASE WHEN typeof(\"is_whatsapp_user\") = 'blob' THEN hex(\"is_whatsapp_user\") ELSE \"is_whatsapp_user\" END, 'status', CASE WHEN typeof(\"status\") = 'blob' THEN hex(\"status\") ELSE \"status\" END, 'status_timestamp', CASE WHEN typeof(\"status_timestamp\") = 'blob' THEN hex(\"status_timestamp\") ELSE \"status_timestamp\" END, 'number', CASE WHEN typeof(\"number\") = 'blob' THEN hex(\"number\") ELSE \"number\" END, 'raw_contact_id', CASE WHEN typeof(\"raw_contact_id\") = 'blob' THEN hex(\"raw_contact_id\") ELSE \"raw_contact_id\" END, 'display_name', CASE WHEN typeof(\"display_name\") = 'blob' THEN hex(\"display_name\") ELSE \"display_name\" END, 'phone_type', CASE WHEN typeof(\"phone_type\") = 'blob' THEN hex(\"phone_type\") ELSE \"phone_type\" END, 'phone_label', CASE WHEN typeof(\"phone_label\") = 'blob' THEN hex(\"phone_label\") ELSE \"phone_label\" END, 'photo_ts', CASE WHEN typeof(\"photo_ts\") = 'blob' THEN hex(\"photo_ts\") ELSE \"photo_ts\" END, 'thumb_ts', CASE WHEN typeof(\"thumb_ts\") = 'blob' THEN hex(\"thumb_ts\") ELSE \"thumb_ts\" END, 'photo_id_timestamp', CASE WHEN typeof(\"photo_id_timestamp\") = 'blob' THEN hex(\"photo_id_timestamp\") ELSE \"photo_id_timestamp\" END, 'given_name', CASE WHEN typeof(\"given_name\") = 'blob' THEN hex(\"given_name\") ELSE \"given_name\" END, 'family_name', CASE WHEN typeof(\"family_name\") = 'blob' THEN hex(\"family_name\") ELSE \"family_name\" END, 'wa_name', CASE WHEN typeof(\"wa_name\") = 'blob' THEN hex(\"wa_name\") ELSE \"wa_name\" END, 'sort_name', CASE WHEN typeof(\"sort_name\") = 'blob' THEN hex(\"sort_name\") ELSE \"sort_name\" END, 'nickname', CASE WHEN typeof(\"nickname\") = 'blob' THEN hex(\"nickname\") ELSE \"nickname\" END, 'company', CASE WHEN typeof(\"company\") = 'blob' THEN hex(\"company\") ELSE \"company\" END, 'title', CASE WHEN typeof(\"title\") = 'blob' THEN hex(\"title\") ELSE \"title\" END, 'status_autodownload_disabled', CASE WHEN typeof(\"status_autodownload_disabled\") = 'blob' THEN hex(\"status_autodownload_disabled\") ELSE \"status_autodownload_disabled\" END, 'keep_timestamp', CASE WHEN typeof(\"keep_timestamp\") = 'blob' THEN hex(\"keep_timestamp\") ELSE \"keep_timestamp\" END, 'is_spam_reported', CASE WHEN typeof(\"is_spam_reported\") = 'blob' THEN hex(\"is_spam_reported\") ELSE \"is_spam_reported\" END, 'is_sidelist_synced', CASE WHEN typeof(\"is_sidelist_synced\") = 'blob' THEN hex(\"is_sidelist_synced\") ELSE \"is_sidelist_synced\" END, 'is_business_synced', CASE WHEN typeof(\"is_business_synced\") = 'blob' THEN hex(\"is_business_synced\") ELSE \"is_business_synced\" END, 'disappearing_mode_duration', CASE WHEN typeof(\"disappearing_mode_duration\") = 'blob' THEN hex(\"disappearing_mode_duration\") ELSE \"disappearing_mode_duration\" END, 'disappearing_mode_timestamp', CASE WHEN typeof(\"disappearing_mode_timestamp\") = 'blob' THEN hex(\"disappearing_mode_timestamp\") ELSE \"disappearing_mode_timestamp\" END, 'disappearing_mode_support_disabled', CASE WHEN typeof(\"disappearing_mode_support_disabled\") = 'blob' THEN hex(\"disappearing_mode_support_disabled\") ELSE \"disappearing_mode_support_disabled\" END, 'history_sync_initial_phash', CASE WHEN typeof(\"history_sync_initial_phash\") = 'blob' THEN hex(\"history_sync_initial_phash\") ELSE \"history_sync_initial_phash\" END, 'is_starred', CASE WHEN typeof(\"is_starred\") = 'blob' THEN hex(\"is_starred\") ELSE \"is_starred\" END, 'is_wa_created_contact', CASE WHEN typeof(\"is_wa_created_contact\") = 'blob' THEN hex(\"is_wa_created_contact\") ELSE \"is_wa_created_contact\" END, 'sync_policy', CASE WHEN typeof(\"sync_policy\") = 'blob' THEN hex(\"sync_policy\") ELSE \"sync_policy\" END, 'status_emoji', CASE WHEN typeof(\"status_emoji\") = 'blob' THEN hex(\"status_emoji\") ELSE \"status_emoji\" END, 'is_contact_synced', CASE WHEN typeof(\"is_contact_synced\") = 'blob' THEN hex(\"is_contact_synced\") ELSE \"is_contact_synced\" END, 'is_reachable', CASE WHEN typeof(\"is_reachable\") = 'blob' THEN hex(\"is_reachable\") ELSE \"is_reachable\" END, 'external_user_state', CASE WHEN typeof(\"external_user_state\") = 'blob' THEN hex(\"external_user_state\") ELSE \"external_user_state\" END) AS obj FROM wa_contacts WHERE jid IS NOT NULL ORDER BY _id) GROUP BY jid ORDER BY jid"
 files = ["wa-db-YePfTe.db"]
 why = "Once per run, by design: the download reads the backup's contacts table whole, as WhatsApp keeps it."
 
 [[scan]]
-statement = "SELECT jid, rows FROM wa_db_contacts"
+statement = "/* sql:whatsapp_render.list_wa_db_contacts */ SELECT jid, rows FROM wa_db_contacts"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT json(payload) AS payload FROM pages WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads */ SELECT json(payload) AS payload FROM pages WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:notion.load_comments */ SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.name'), json(j.value) FROM pages p, json_tree(p.payload, '$.properties') j WHERE p.payload IS NOT NULL AND j.type = 'object' AND json_extract(j.value, '$.object') = 'user' AND json_extract(j.value, '$.id') IS NOT NULL AND json_extract(j.value, '$.name') IS NOT NULL ORDER BY 1, 3"
+statement = "/* sql:notion.list_users_in_page_properties */ SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.name'), json(j.value) FROM pages p, json_tree(p.payload, '$.properties') j WHERE p.payload IS NOT NULL AND j.type = 'object' AND json_extract(j.value, '$.object') = 'user' AND json_extract(j.value, '$.id') IS NOT NULL AND json_extract(j.value, '$.name') IS NOT NULL ORDER BY 1, 3"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: once per run the download walks every stored page's properties for the people they name (`users_named_in_store`), every page's payload whatever changed."
 
 [[scan]]
-statement = "SELECT json_extract(payload, '$.created_by.id'), json_extract(payload, '$.display_name.resolved_name') FROM comments WHERE payload IS NOT NULL AND json_extract(payload, '$.created_by.id') IS NOT NULL AND json_extract(payload, '$.display_name.resolved_name') <> '' ORDER BY 1, 2"
+statement = "/* sql:notion.list_users_in_comments */ SELECT json_extract(payload, '$.created_by.id'), json_extract(payload, '$.display_name.resolved_name') FROM comments WHERE payload IS NOT NULL AND json_extract(payload, '$.created_by.id') IS NOT NULL AND json_extract(payload, '$.display_name.resolved_name') <> '' ORDER BY 1, 2"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the users stored comments name (`users_named_in_store`); comments are few beside pages."
 
 [[scan]]
-statement = "SELECT key, value, written_at_utc FROM _datalib_meta"
+statement = "/* sql:store_meta.list_meta_rows */ SELECT key, value, written_at_utc FROM _datalib_meta"
 files = ["*/ingest/entities.doltlite_db", "*/render_markdown/indexed_markdown.doltlite_db", "*/runs/runs.sqlite", "*/supervisor.sqlite", "*/time_series_index/time_series.doltlite_db", "*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT lid_row_id, jid_row_id FROM jid_map"
+statement = "/* sql:whatsapp_render.list_lid_to_jid_map */ SELECT lid_row_id, jid_row_id FROM jid_map"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT m.message_row_id, m.file_path, m.mime_type, m.file_size, m.media_caption, m.media_name, f.blake3 FROM message_media m LEFT JOIN wa_media_files f ON f.relative_path = m.file_path"
+statement = "/* sql:whatsapp_render.list_message_media_with_blake3 */ SELECT m.message_row_id, m.file_path, m.mime_type, m.file_size, m.media_caption, m.media_name, f.blake3 FROM message_media m LEFT JOIN wa_media_files f ON f.relative_path = m.file_path"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT markdown_uuid FROM markdowns"
+statement = "/* sql:etl.render.store.list_document_uuids */ SELECT markdown_uuid FROM markdowns"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT markdown_uuid FROM search_documents WHERE source_id NOT IN (SELECT value FROM json_each(?))"
+statement = "/* sql:search_index.store.list_documents_of_dropped_sources */ SELECT markdown_uuid FROM search_documents WHERE source_id NOT IN (SELECT value FROM json_each(?))"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Suspect: once per index pass this reads every searched document to find those of sources no longer configured; a read by the sources that went would seek."
 
 [[scan]]
-statement = "SELECT metric, COUNT(*) AS days, SUM(CASE WHEN json(payload) <> 'null' THEN 1 ELSE 0 END) AS with_data FROM garmin_daily GROUP BY metric ORDER BY metric"
+statement = "/* sql:garmin_render.count_daily_by_metric */ SELECT metric, COUNT(*) AS days, SUM(CASE WHEN json(payload) <> 'null' THEN 1 ELSE 0 END) AS with_data FROM garmin_daily GROUP BY metric ORDER BY metric"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT parent_id, MAX(parent_type IN ('data_source_id', 'database_id')) FROM tree WHERE parent_type IN ('page_id', 'block_id', 'data_source_id', 'database_id') AND parent_id IS NOT NULL GROUP BY parent_id ORDER BY parent_id"
+statement = "/* sql:notion.list_ancestors_of_tree */ SELECT parent_id, MAX(parent_type IN ('data_source_id', 'database_id')) FROM tree WHERE parent_type IN ('page_id', 'block_id', 'data_source_id', 'database_id') AND parent_id IS NOT NULL GROUP BY parent_id ORDER BY parent_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of the tree's parents to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT parent_id, MIN(page_id) FROM comments WHERE parent_type = 'block_id' AND parent_id IS NOT NULL GROUP BY parent_id ORDER BY parent_id"
+statement = "/* sql:notion.list_commented_blocks */ SELECT parent_id, MIN(page_id) FROM comments WHERE parent_type = 'block_id' AND parent_id IS NOT NULL GROUP BY parent_id ORDER BY parent_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every comment's block to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT participant_id, identifier, identifier_type FROM participant_identifiers WHERE participant_id IN (SELECT id FROM participants WHERE room_id IN (SELECT value FROM json_each(?)))"
+statement = "/* sql:beeper_render.list_participant_identifiers */ SELECT participant_id, identifier, identifier_type FROM participant_identifiers WHERE participant_id IN (SELECT id FROM participants WHERE room_id IN (SELECT value FROM json_each(?)))"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: the mirrored table's key leads with `account_id`, so a lookup by `participant_id` reads every identifier, for each batch of rooms a pass draws. A lookup index on the mirror would answer it."
 
 [[scan]]
-statement = "SELECT path, version FROM sinks"
+statement = "/* sql:dag.supervisor.list_sink_versions */ SELECT path, version FROM sinks"
 files = ["*/supervisor.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT rel_path, blake3 FROM beeper_media_files"
+statement = "/* sql:beeper_render.list_media_files */ SELECT rel_path, blake3 FROM beeper_media_files"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT rel_path, size_bytes FROM ingested_files ORDER BY rel_path"
+statement = "/* sql:airvisual_render.list_ingested_files */ SELECT rel_path, size_bytes FROM ingested_files ORDER BY rel_path"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT scope, last_seen_at_utc FROM sync_scope_state"
+statement = "/* sql:etl.scope_state.list_last_seen */ SELECT scope, last_seen_at_utc FROM sync_scope_state"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT severity, COUNT(*) FROM problems GROUP BY severity"
+statement = "/* sql:etl.doltlite_raw.count_problems_by_severity_at_path */ SELECT severity, COUNT(*) FROM problems GROUP BY severity"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity"
+statement = "/* sql:etl.raw_store.count_problems_by_severity */ SELECT severity, COUNT(*) FROM problems GROUP BY severity"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "/* sql:etl.render.store.count_problems_by_severity */ SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass: the render store's own problems by severity, a few rows beside the documents."
 
 [[scan]]
-statement = "SELECT source_id, markdown_uuid FROM markdowns"
+statement = "/* sql:etl.render.grid.list_documents_by_source */ SELECT source_id, markdown_uuid FROM markdowns"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT source_id, store, commit_hash FROM time_series_sources ORDER BY source_id"
+statement = "/* sql:etl.time_series.list_sources */ SELECT source_id, store, commit_hash FROM time_series_sources ORDER BY source_id"
 files = ["*/time_series_index/time_series.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT source_id, store_commit, store_tree FROM source_cursors"
+statement = "/* sql:etl.render.grid.list_source_cursors */ SELECT source_id, store_commit, store_tree FROM source_cursors"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT source_id, ts_key, time_series_id, about_uuid, about_name, name, human_name, unit, value_type, time_kind, point_count, first_t, last_t FROM time_series ORDER BY source_id, ts_key"
+statement = "/* sql:etl.time_series.list_series */ SELECT source_id, ts_key, time_series_id, about_uuid, about_name, name, human_name, unit, value_type, time_kind, point_count, first_t, last_t FROM time_series ORDER BY source_id, ts_key"
 files = ["*/render_time_series/time_series.doltlite_db", "*/time_series_index/time_series.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT subject, items FROM source_measurements m WHERE measured_at_utc = (SELECT MAX(measured_at_utc) FROM source_measurements WHERE subject = m.subject)"
+statement = "/* sql:etl.render.store.read_latest_item_counts */ SELECT subject, items FROM source_measurements m WHERE measured_at_utc = (SELECT MAX(measured_at_utc) FROM source_measurements WHERE subject = m.subject)"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass: the latest measurement of each subject, one row per subject per pass."
 
@@ -938,347 +978,352 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "SQLite's own, as it loads what the planner is told of each of `grid_rows`' indexes: one row an index, written by `planner_ranks.rs`. When the step opens the index, and when it remakes the indexes."
 
 [[scan]]
-statement = "SELECT threadID, accountID, thread FROM threads"
+statement = "/* sql:beeper_render.list_threads */ SELECT threadID, accountID, thread FROM threads"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT transcript_id, count(*) FROM records GROUP BY transcript_id"
+statement = "/* sql:etl.agent_sessions_render.count_records_by_transcript */ SELECT transcript_id, count(*) FROM records GROUP BY transcript_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL"
+statement = "/* sql:slack.list_listed_users_with_error */ SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every user to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT what, version FROM store_changes"
+statement = "/* sql:runs.list_store_versions */ SELECT what, version FROM store_changes"
 files = ["*/runs/runs.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'"
+statement = "/* sql:etl.doltlite_raw.mark_running_runs_interrupted */ UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Suspect: every open of a raw store reads all of `sync_runs`, one row per run the store has had, and nothing prunes it."
 
 [[scan]]
-statement = "DELETE FROM problems WHERE source_id = ?"
+statement = "/* sql:etl.render.grid.delete_problems_of_source */ DELETE FROM problems WHERE source_id = ?"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "The table stays small: the grid index keeps only its own problems here, at most one per source (a render store it could not read). Copies an older build made are cleared by the first pass that reads each source. Once per source per pass."
 
 [[scan]]
-statement = "SELECT * FROM problems"
+statement = "/* sql:step_problems.list_problems_to_clear */ SELECT * FROM problems"
 files = ["*/render_time_series/time_series.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT * FROM problems WHERE source_id = ''"
+statement = "/* sql:etl.doltlite_raw.list_sourceless_problems */ SELECT * FROM problems WHERE source_id = ''"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: every problem the download recorded, which the render carries into its own store."
 
 [[scan]]
-statement = "SELECT * FROM render_cursor LIMIT 1"
+statement = "/* sql:etl.render.store.read_render_cursor */ SELECT * FROM render_cursor LIMIT 1"
 files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT 1 FROM users LIMIT 1"
+statement = "/* sql:claude.has_any_user */ SELECT 1 FROM users LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT COUNT(*) FROM cowork_sessions WHERE org_uuid = ?"
+statement = "/* sql:claude.count_org_cowork_sessions */ SELECT COUNT(*) FROM cowork_sessions WHERE org_uuid = ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per organization per run (`prune_org_cowork`): `cowork_sessions` holds one row per Cowork task, and an account has a few organizations."
 
 [[scan]]
-statement = "SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL"
+statement = "/* sql:email.list_blobs_with_bytes */ SELECT DISTINCT blob_id, blake3 FROM email_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
-statement = "SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
+statement = "/* sql:google_takeout.list_chat_attachments_unfetched */ SELECT a.message_id, a.export_name, m.group_id FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id WHERE a.blake3 IS NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every attachment to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT blake3 FROM cas_objects"
+statement = "/* sql:whatsapp.list_cas_blake3s */ SELECT blake3 FROM cas_objects"
 files = ["*/ingest/blobs.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT blake3 FROM pdf_documents"
+statement = "/* sql:pdf.list_document_hashes */ SELECT blake3 FROM pdf_documents"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT blake3, content_type, substr(bytes, 1, ?) FROM cas_objects"
+statement = "/* sql:etl.blob_cas.list_object_signatures */ SELECT blake3, content_type, substr(bytes, 1, ?) FROM cas_objects"
 files = ["*/ingest/blobs.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT coalesce(max(val_id), 0) FROM vals"
+statement = "/* sql:etl.render.terms.read_max_val_id */ SELECT coalesce(max(val_id), 0) FROM vals"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT e.id, e.calendar_id, json(e.payload) AS payload, json(b.volatile_payload) AS volatile FROM google_events e LEFT JOIN google_events_bookkeeping b ON b.id = e.id ORDER BY e.id"
+statement = "/* sql:calendar.list_google_events_with_volatile */ SELECT e.id, e.calendar_id, json(e.payload) AS payload, json(b.volatile_payload) AS volatile FROM google_events e LEFT JOIN google_events_bookkeeping b ON b.id = e.id ORDER BY e.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT e.id, e.calendar_id, json(e.payload) AS payload, json(i.payload) AS invitees FROM calendly_events e LEFT JOIN calendly_invitees i ON i.id = e.id ORDER BY e.id"
+statement = "/* sql:calendar.list_calendly_events_with_invitees */ SELECT e.id, e.calendar_id, json(e.payload) AS payload, json(i.payload) AS invitees FROM calendly_events e LEFT JOIN calendly_invitees i ON i.id = e.id ORDER BY e.id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT file_id AS ref_id, blake3 FROM slack_attachments WHERE blake3 IS NOT NULL"
+statement = "/* sql:etl.blob_cas.list_edge_hashes_by_ref */ SELECT file_id AS ref_id, blake3 FROM slack_attachments WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
-statement = "SELECT id FROM account"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM account"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM ads_information_story_views_in_past_7_days"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM ads_information_story_views_in_past_7_days"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM bots WHERE payload IS NULL ORDER BY id"
+statement = "/* sql:slack.list_bots_owed */ SELECT id FROM bots WHERE payload IS NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every listed bot to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT id FROM chat_item_attachments"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM chat_item_attachments"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM comments"
+statement = "/* sql:linkedin.list_ids */ SELECT id FROM comments"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM connections"
+statement = "/* sql:linkedin.list_ids */ SELECT id FROM connections"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM conversations"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM conversations"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM cowork_sessions WHERE org_uuid = ?"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM cowork_sessions WHERE org_uuid = ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per organization per run (`prune_org_cowork`): `cowork_sessions` holds one row per Cowork task, and an account has a few organizations."
 
 [[scan]]
-statement = "SELECT id FROM email_addresses"
+statement = "/* sql:linkedin.list_ids */ SELECT id FROM email_addresses"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM garmin_activity_files WHERE blake3 IN (SELECT blake3 FROM garmin_activity_files WHERE blake3 IS NOT NULL GROUP BY blake3 HAVING COUNT(DISTINCT activity_id) > 1) ORDER BY id"
+statement = "/* sql:garmin.find_file_edges_sharing_blake3 */ SELECT id FROM garmin_activity_files WHERE blake3 IN (SELECT blake3 FROM garmin_activity_files WHERE blake3 IS NOT NULL GROUP BY blake3 HAVING COUNT(DISTINCT activity_id) > 1) ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run: activity files that share a hash, a repair over a table of one row per activity file."
 
 [[scan]]
-statement = "SELECT id FROM garmin_devices WHERE 1 = 1"
+statement = "/* sql:garmin.list_ids_for_prune */ SELECT id FROM garmin_devices WHERE 1 = 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "The table stays small: one row per Garmin device."
 
 [[scan]]
-statement = "SELECT id FROM logged_information_search_your_search_history"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM logged_information_search_your_search_history"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM maps_photos"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM maps_photos"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM media_blobs"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM media_blobs"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM messages"
+statement = "/* sql:linkedin.list_ids */ SELECT id FROM messages"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM notion_attachments ORDER BY id"
+statement = "/* sql:notion.list_attachments */ SELECT id FROM notion_attachments ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM personal_information_profile_information_profile_information"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM personal_information_profile_information_profile_information"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM shares"
+statement = "/* sql:linkedin.list_ids */ SELECT id FROM shares"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM skills"
+statement = "/* sql:linkedin.list_ids */ SELECT id FROM skills"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM users ORDER BY id LIMIT 1"
+statement = "/* sql:claude.find_first_user_id */ SELECT id FROM users ORDER BY id LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM voice_greetings"
+statement = "/* sql:etl.prune.list_ids_in_scope */ SELECT id FROM voice_greetings"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_groups_your_comments_in_groups"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_groups_your_comments_in_groups"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_posts_album"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_posts_album"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_posts_posts_on_other_pages_and_profiles"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_posts_posts_on_other_pages_and_profiles"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id FROM your_facebook_activity_posts_your_videos"
+statement = "/* sql:facebook.list_table_ids */ SELECT id FROM your_facebook_activity_posts_your_videos"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1"
+statement = "/* sql:pdf.read_scan_root */ SELECT id, abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, blake3 FROM pdf_paths"
+statement = "/* sql:pdf.list_paths */ SELECT id, blake3 FROM pdf_paths"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM accounts WHERE payload IS NOT NULL"
+statement = "/* sql:email_render.load_accounts */ SELECT id, json(payload) AS payload FROM accounts WHERE payload IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per account, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM chat_users WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM chat_users WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per person in the export's chats, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM drives"
+statement = "/* sql:google_drive_render.list_folders_drives_and_parents */ SELECT id, json(payload) AS payload FROM drives"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1"
+statement = "/* sql:chatgpt.read_me */ SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM personal_information_profile_information_profile_information WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:chatgpt_render.read_me */ SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1"
+files = ["*/ingest/entities.doltlite_db"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM personal_information_profile_information_profile_information WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per profile, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM self_identity WHERE payload IS NOT NULL ORDER BY id LIMIT 1"
+statement = "/* sql:etl.forge_ingest_common.read_self_identity */ SELECT id, json(payload) AS payload FROM self_identity WHERE payload IS NOT NULL ORDER BY id LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads one row: the account's own identity, a table of one."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM shares WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM shares WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1"
+statement = "/* sql:slack_render.load_workspace */ SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_your_comments_in_groups WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_groups_your_comments_in_groups WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_album WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_album WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_posts_on_other_pages_and_profiles WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads_with_id */ SELECT id, json(payload) AS payload FROM your_facebook_activity_posts_posts_on_other_pages_and_profiles WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this table whole, payloads included, on every pass and then narrows to what changed; #1959 tracks reading only the changed units' rows."
 
 [[scan]]
-statement = "SELECT id, json(payload), when_ts FROM maps_photos ORDER BY id"
+statement = "/* sql:google_takeout_render.list_rows */ SELECT id, json(payload), when_ts FROM maps_photos ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, last_edited_time FROM pages WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id"
+statement = "/* sql:notion.list_pages_in_trash */ SELECT id, last_edited_time FROM pages WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download reads what it holds of every page in Notion's trash to work out what it owes (`datalib_etl_web::owed`)."
 
 [[scan]]
-statement = "SELECT id, method, server_url, principal_href, login FROM accounts ORDER BY id LIMIT 1"
+statement = "/* sql:calendar.read_account */ SELECT id, method, server_url, principal_href, login FROM accounts ORDER BY id LIMIT 1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''"
+statement = "/* sql:slack_render.load_bots */ SELECT id, name FROM bots WHERE name IS NOT NULL AND name != ''"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per bot, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, org_uuid, org_name, json(payload) AS payload FROM cowork_sessions WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:claude.load_cowork_sessions */ SELECT id, org_uuid, org_name, json(payload) AS payload FROM cowork_sessions WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads every Cowork session's small row each pass and lets the diff narrow; it reads the logs of only the sessions it draws (#1954)."
 
 [[scan]]
-statement = "SELECT id, owner_id FROM media_blobs"
+statement = "/* sql:facebook.list_media_edges */ SELECT id, owner_id FROM media_blobs"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, page_id, ref_id, blake3 FROM notion_attachments ORDER BY page_id, ref_id"
+statement = "/* sql:notion.load_attachments */ SELECT id, page_id, ref_id, blake3 FROM notion_attachments ORDER BY page_id, ref_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, plain_text FROM comment_anchors WHERE plain_text IS NOT NULL AND plain_text <> ''"
+statement = "/* sql:notion.load_comment_anchors */ SELECT id, plain_text FROM comment_anchors WHERE plain_text IS NOT NULL AND plain_text <> ''"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per comment anchor, few beside the documents."
 
 [[scan]]
-statement = "SELECT id, product_display_name, json(payload) AS payload FROM garmin_devices ORDER BY id"
+statement = "/* sql:garmin_render.list_devices */ SELECT id, product_display_name, json(payload) AS payload FROM garmin_devices ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL"
+statement = "/* sql:signal.list_stored_attachments */ SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
-statement = "SELECT json(payload) AS payload FROM users WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:etl.doltlite_raw.list_payloads */ SELECT json(payload) AS payload FROM users WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per workspace member, few beside the documents."
 
@@ -1298,101 +1343,106 @@ files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "FTS5's own read of its small configuration table."
 
 [[scan]]
-statement = "SELECT lid_row_id, display_name FROM lid_display_name"
+statement = "/* sql:whatsapp_render.list_lid_display_names */ SELECT lid_row_id, display_name FROM lid_display_name"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT measured_at_utc, tz_offset, available_bytes, total_bytes FROM disk_free ORDER BY measured_at_utc DESC LIMIT ?"
+statement = "/* sql:core.list_recent_disk_free */ SELECT measured_at_utc, tz_offset, available_bytes, total_bytes FROM disk_free ORDER BY measured_at_utc DESC LIMIT ?"
 files = ["*/disk_stats.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage INDEXED BY disk_usage_by_time ORDER BY measured_at_utc DESC LIMIT ?"
+statement = "/* sql:core.list_recent_disk_usage */ SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage INDEXED BY disk_usage_by_time ORDER BY measured_at_utc DESC LIMIT ?"
 files = ["*/disk_stats.sqlite"]
 why = "Walks the index from its newest end and stops at the LIMIT, once per start of the server; SQLite marks any walk that starts at one end of an index as a full scan."
 
 [[scan]]
-statement = "SELECT rel_path FROM beeper_media_files"
+statement = "/* sql:beeper.list_media_paths */ SELECT rel_path FROM beeper_media_files"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs ORDER BY rowid DESC LIMIT 1"
+statement = "/* sql:dag.supervisor.read_latest_run */ SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs ORDER BY rowid DESC LIMIT 1"
 files = ["*/supervisor.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'"
+statement = "/* sql:claude.list_project_docs_sweep_ages */ SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope LIKE ? || '%'"
 files = ["*/ingest/entities.doltlite_db"]
 why = "The table stays small: one row per sync scope, a handful per source."
 
 [[scan]]
-statement = "SELECT severity, COUNT(*) FROM problems WHERE scope_kind = ? AND scope_key = ? GROUP BY severity"
+statement = "/* sql:etl.render.grid.count_unreadable_store_problems */ SELECT severity, COUNT(*) FROM problems WHERE scope_kind = ? AND scope_key = ? GROUP BY severity"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "The table stays small: the grid index keeps only its own problems here, at most one per source (a render store it could not read). Copies an older build made are cleared by the first pass that reads each source. Once per source per pass."
 
 [[scan]]
-statement = "SELECT step, turned_off_by FROM turned_off"
+statement = "/* sql:dag.supervisor.list_turned_off */ SELECT step, turned_off_by FROM turned_off"
 files = ["*/supervisor.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "SELECT uri AS ref_id, blake3 FROM media_blobs WHERE blake3 IS NOT NULL"
+statement = "/* sql:dag.supervisor.mailbox_list_turned_off */ SELECT step, turned_off_by FROM turned_off"
+files = ["*/supervisor.sqlite"]
+why = "Reads every row by design: the statement has no WHERE."
+
+[[scan]]
+statement = "/* sql:etl.blob_cas.list_edge_hashes_by_ref */ SELECT uri AS ref_id, blake3 FROM media_blobs WHERE blake3 IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
-statement = "SELECT DISTINCT channel_id FROM messages WHERE channel_id IS NOT NULL ORDER BY channel_id LIMIT ?1"
+statement = "/* sql:etl.render.first_page_of_keys */ SELECT DISTINCT channel_id FROM messages WHERE channel_id IS NOT NULL ORDER BY channel_id LIMIT ?1"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A full render pages through every conversation, by design; a narrowed pass names its conversations."
 
 [[scan]]
-statement = "SELECT attachment_id, MAX(blake3) FROM discord_attachments WHERE blake3 IS NOT NULL GROUP BY attachment_id"
+statement = "/* sql:discord.list_held_files */ SELECT attachment_id, MAX(blake3) FROM discord_attachments WHERE blake3 IS NOT NULL GROUP BY attachment_id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run, by design: the download loads every hash it holds at its start, so asking whether it already has a file's bytes is a lookup in memory, not a statement per file."
 
 [[scan]]
-statement = "SELECT a.id, a.message_key, a.attachment_id, json(m.payload) AS payload, json(b.volatile_payload) AS volatile FROM discord_attachments a INDEXED BY discord_attachments_owed LEFT JOIN messages m ON m.id = a.message_key LEFT JOIN messages_bookkeeping b ON b.id = a.message_key WHERE a.blake3 IS NULL"
+statement = "/* sql:discord.list_owed_files */ SELECT a.id, a.message_key, a.attachment_id, json(m.payload) AS payload, json(b.volatile_payload) AS volatile FROM discord_attachments a INDEXED BY discord_attachments_owed LEFT JOIN messages m ON m.id = a.message_key LEFT JOIN messages_bookkeeping b ON b.id = a.message_key WHERE a.blake3 IS NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "Once per run: it walks a partial index holding the owed edges alone, and it wants every one of them."
 
 [[scan]]
-statement = "SELECT id, json(payload) FROM account WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:discord_render.list_payloads */ SELECT id, json(payload) FROM account WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "One row."
 
 [[scan]]
-statement = "SELECT id, json(payload) FROM channels WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:discord_render.list_payloads */ SELECT id, json(payload) FROM channels WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per channel, thread and direct message, few beside the messages."
 
 [[scan]]
-statement = "SELECT id, json(payload) FROM guilds WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:discord_render.list_payloads */ SELECT id, json(payload) FROM guilds WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per server copied, few beside the messages."
 
 [[scan]]
-statement = "SELECT id, json(payload) FROM roles WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:discord_render.list_payloads */ SELECT id, json(payload) FROM roles WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per role of a server copied, few beside the messages."
 
 [[scan]]
-statement = "SELECT id, json(payload) FROM users WHERE payload IS NOT NULL ORDER BY id"
+statement = "/* sql:discord_render.list_payloads */ SELECT id, json(payload) FROM users WHERE payload IS NOT NULL ORDER BY id"
 files = ["*/ingest/entities.doltlite_db"]
 why = "A render reads this lookup table whole on every pass to name what it draws: one row per person a message names, few beside the messages."
 
 [[scan]]
-statement = "DELETE FROM account WHERE id <> ?"
+statement = "/* sql:discord.ingest.db.forget_other_accounts.delete_account */ DELETE FROM account WHERE id <> ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "One row, or two as another account signs in."
 
 [[scan]]
-statement = "DELETE FROM account_bookkeeping WHERE id <> ?"
+statement = "/* sql:discord.ingest.db.forget_other_accounts.delete_account_bookkeeping */ DELETE FROM account_bookkeeping WHERE id <> ?"
 files = ["*/ingest/entities.doltlite_db"]
 why = "One row, or two as another account signs in."
 
 [[scan]]
-statement = "WITH RECURSIVE c(id) AS ( SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel UNION ALL SELECT (SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel WHERE channel_id > c.id) FROM c WHERE c.id IS NOT NULL) SELECT id FROM c WHERE id IS NOT NULL"
+statement = "/* sql:discord_render.list_conversations */ WITH RECURSIVE c(id) AS ( SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel UNION ALL SELECT (SELECT min(channel_id) FROM messages INDEXED BY messages_by_channel WHERE channel_id > c.id) FROM c WHERE c.id IS NOT NULL) SELECT id FROM c WHERE id IS NOT NULL"
 files = ["*/ingest/entities.doltlite_db"]
 why = "What is walked is the recursion's own rows, one per conversation; each is found by a seek past the one before it."

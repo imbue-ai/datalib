@@ -1,6 +1,8 @@
 """Every statement the TNG fixture sync runs that walks a whole table or
 index is allowed by `sql_scans_allowed.toml`, with a reason, and every entry there
-is still needed. A fixture's tables are a few rows each, so a scan costs
+is still needed. And every statement it runs carries its name
+(`datalib/backend/sql`), but the few SQLite and doltlite run on their own,
+which the same file lists by shape. A fixture's tables are a few rows each, so a scan costs
 nothing here: this checks the plan, which a real library pays for.
 
 Usage: sql_scans_test.py <ingested/sql_scans.jsonl> <sql_scans_allowed.toml>
@@ -30,6 +32,49 @@ def reads_only_the_catalog(statement: str) -> bool:
 def stanza(statement: str, files: list[str]) -> str:
     quoted = json.dumps(statement, ensure_ascii=False)
     return f'[[scan]]\nstatement = {quoted}\nfiles = {json.dumps(files)}\nwhy = ""\n'
+
+
+# How a statement Datalib wrote opens (`datalib_sql::tag`).
+NAMED = re.compile(r"^/\* sql:\S+ \*/ ")
+
+
+def unnamed_problems(
+    recorded: list[dict[str, object]], allowed: dict[str, object]
+) -> list[str]:
+    """A statement that ran with no name, unless the allowlist says SQLite
+    or doltlite runs it on its own; and an entry nothing matches any more."""
+    entries = allowed.get("unnamed", [])
+    assert isinstance(entries, list)
+    used = [False] * len(entries)
+    errors = []
+    for e in entries:
+        assert isinstance(e, dict)
+        if not str(e.get("why", "")).strip():
+            errors.append(f"an unnamed entry gives no reason: {e['like']}")
+    for row in recorded:
+        statement = str(row["statement"])
+        if NAMED.match(statement):
+            continue
+        hits = [
+            i for i, e in enumerate(entries) if re.fullmatch(str(e["like"]), statement)
+        ]
+        for i in hits:
+            used[i] = True
+        if not hits:
+            errors.append(
+                "a statement ran without a name. Name it where it is written, "
+                '`sql!("<package>.<what_it_does>", …)` (datalib/backend/sql); if SQLite '
+                "or doltlite runs it on its own, add its shape to "
+                "tests/fixtures/sql_scans_allowed.toml as an [[unnamed]] entry with a "
+                f"reason:\n{statement}"
+            )
+    for e, u in zip(entries, used, strict=True):
+        if not u:
+            errors.append(
+                "an [[unnamed]] entry matches nothing the sync runs any more. Take it "
+                f"out of tests/fixtures/sql_scans_allowed.toml:\n{e['like']}"
+            )
+    return errors
 
 
 def check(recorded: list[dict[str, object]], allowed: dict[str, object]) -> list[str]:
@@ -96,7 +141,8 @@ def main(recorded_path: Path, allowed_path: Path) -> int:
     if not recorded:
         print("the census recorded nothing: is DATALIB_SQL_CENSUS reaching the sync?")
         return 1
-    errors = check(recorded, tomllib.loads(allowed_path.read_text()))
+    allowed = tomllib.loads(allowed_path.read_text())
+    errors = check(recorded, allowed) + unnamed_problems(recorded, allowed)
     for error in errors:
         print(error, end="\n\n")
     scanning = sum(1 for row in recorded if row["scans"])

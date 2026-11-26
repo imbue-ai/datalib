@@ -8,6 +8,7 @@
 
 use anyhow::{Context, Result};
 use datalib_contact_schema::NormalizedContact;
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::SqliteConnection;
 
 /// `contact_json` is the record with no `seen`, which is the document's:
@@ -54,10 +55,12 @@ pub(super) async fn insert(
         .await
         .with_context(|| format!("record source contact {}", contact.key))?;
     let seen = contact.seen.as_ref();
-    sqlx::query(
+    sql!(
+        "etl.render.grid.upsert_document_contact",
         "INSERT OR REPLACE INTO document_contacts \
-         (markdown_uuid, record_id, seen_items, last_seen_at) VALUES (?, ?, ?, ?)",
+         (markdown_uuid, record_id, seen_items, last_seen_at) VALUES (?, ?, ?, ?)"
     )
+    .query()
     .bind(markdown_uuid)
     .bind(record_id)
     .bind(seen.map(|s| s.items as i64))
@@ -74,18 +77,23 @@ async fn record_id(conn: &mut SqliteConnection, contact: &NormalizedContact) -> 
         ..contact.clone()
     })
     .context("serialize a source contact")?;
-    let held: Option<i64> =
-        sqlx::query_scalar("SELECT record_id FROM contact_records WHERE contact_json = ?")
-            .bind(&json)
-            .fetch_optional(&mut *conn)
-            .await?;
+    let held: Option<i64> = sql!(
+        "etl.render.grid.find_contact_record_by_json",
+        "SELECT record_id FROM contact_records WHERE contact_json = ?"
+    )
+    .query_scalar()
+    .bind(&json)
+    .fetch_optional(&mut *conn)
+    .await?;
     if let Some(held) = held {
         return Ok(held);
     }
-    let record_id: i64 = sqlx::query_scalar(
+    let record_id: i64 = sql!(
+        "etl.render.grid.insert_contact_record",
         "INSERT INTO contact_records (source_id, contact_key, name, contact_json) \
-         VALUES (?, ?, ?, ?) RETURNING record_id",
+         VALUES (?, ?, ?, ?) RETURNING record_id"
     )
+    .query_scalar()
     .bind(&contact.source_id)
     .bind(&contact.key)
     .bind(contact.name())
@@ -93,9 +101,11 @@ async fn record_id(conn: &mut SqliteConnection, contact: &NormalizedContact) -> 
     .fetch_one(&mut *conn)
     .await?;
     for handle in contact.handles.iter().filter_map(|h| h.handle.as_ref()) {
-        sqlx::query(
-            "INSERT OR IGNORE INTO contact_record_handles (record_id, handle) VALUES (?, ?)",
+        sql!(
+            "etl.render.grid.insert_contact_record_handle",
+            "INSERT OR IGNORE INTO contact_record_handles (record_id, handle) VALUES (?, ?)"
         )
+        .query()
         .bind(record_id)
         .bind(handle.as_str())
         .execute(&mut *conn)
@@ -108,10 +118,14 @@ async fn record_id(conn: &mut SqliteConnection, contact: &NormalizedContact) -> 
 /// Drop the records no document carries any more.
 pub(crate) async fn sweep(conn: &mut SqliteConnection) -> Result<()> {
     for &sql in ORPHANED {
-        sqlx::query(sql)
-            .execute(&mut *conn)
-            .await
-            .context("drop the contact records no document carries")?;
+        Sql::dynamic(
+            sql_id!("etl.render.grid.delete_uncarried_contact_records"),
+            sql,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await
+        .context("drop the contact records no document carries")?;
     }
     Ok(())
 }
@@ -123,6 +137,7 @@ mod tests {
     use crate::grid_index::{apply_one, delete_markdowns, open_index, seal, WriteLock};
     use datalib_contact_schema::{ContactHandle, ContactKind, Seen};
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     fn riker(names: &[&str], seen: Option<(u64, &str)>) -> NormalizedContact {
         let mut c = NormalizedContact::new("src", "U_RIKER", ContactKind::Person);
         c.names = names.iter().map(|n| n.to_string()).collect();
@@ -139,7 +154,8 @@ mod tests {
 
     async fn count(pool: &sqlx::SqlitePool, table: &str) -> i64 {
         // Audited: `table` is a literal of this test.
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        Sql::dynamic(test_sql_id!(), format!("SELECT count(*) FROM {table}"))
+            .query_scalar()
             .fetch_one(pool)
             .await
             .unwrap()
@@ -191,7 +207,8 @@ mod tests {
             .unwrap();
         seal(&lock).await.unwrap();
         assert_eq!(held(&pool).await, (1, 2, 1), "a re-render replaces it");
-        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM contact_records")
+        let names: Vec<String> = test_sql!("SELECT name FROM contact_records")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();

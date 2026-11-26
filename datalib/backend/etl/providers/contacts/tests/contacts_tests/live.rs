@@ -20,6 +20,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_contacts::ingest::google;
 use datalib_etl_contacts::ingest::{db_path_for, FetchSummary, RawDb};
 use datalib_etl_web::http::LatchkeySettings;
+use datalib_sql::{test_sql, Sql};
 
 async fn run(store: &std::path::Path) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
@@ -42,9 +43,9 @@ async fn run(store: &std::path::Path) -> FetchSummary {
     r.expect("google contacts fetch")
 }
 
-async fn count(store: &std::path::Path, sql: &'static str) -> i64 {
+async fn count(store: &std::path::Path, sql: Sql) -> i64 {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let n = sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap();
+    let n = sql.query_scalar().fetch_one(db.pool()).await.unwrap();
     db.close().await;
     n
 }
@@ -63,14 +64,14 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
     let first = run(&store).await;
     eprintln!("[test] first run: {first:?}");
     assert_eq!(first.errors, 0, "{first:?}");
-    let people = count(&store, "SELECT count(*) FROM google_people").await;
+    let people = count(&store, test_sql!("SELECT count(*) FROM google_people")).await;
     assert_eq!(people as usize, first.contacts_new);
     let unnamed = count(
         &store,
-        "SELECT count(*) FROM google_people, json_each(json_extract(payload, '$.memberships')) m \
+        test_sql!("SELECT count(*) FROM google_people, json_each(json_extract(payload, '$.memberships')) m \
          WHERE json_extract(m.value, '$.contactGroupMembership') IS NOT NULL \
          AND json_extract(m.value, '$.contactGroupMembership.contactGroupResourceName') \
-         NOT IN (SELECT resource_name FROM google_contact_groups)",
+         NOT IN (SELECT resource_name FROM google_contact_groups)"),
     )
     .await;
     assert_eq!(
@@ -79,7 +80,7 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
     );
     let missing = count(
         &store,
-        "SELECT count(*) FROM google_photos WHERE blake3 IS NULL",
+        test_sql!("SELECT count(*) FROM google_photos WHERE blake3 IS NULL"),
     )
     .await;
     assert_eq!(missing, 0, "a listed photo that was not fetched");
@@ -101,7 +102,8 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
 
     let rendered = render_reads(&store).await;
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    sqlx::query("DELETE FROM sync_scope_state")
+    test_sql!("DELETE FROM sync_scope_state")
+        .query()
         .execute(db.pool())
         .await
         .unwrap();
@@ -122,11 +124,12 @@ async fn contacts_labels_and_photos_land_and_a_second_run_owes_nothing() {
 
 async fn render_reads(store: &std::path::Path) -> HashSet<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let rows: Vec<String> = sqlx::query_scalar(
+    let rows: Vec<String> = test_sql!(
         "SELECT id || json(payload) FROM google_people \
          UNION ALL SELECT id || json(payload) FROM google_contact_groups \
-         UNION ALL SELECT id || blake3 FROM google_photos",
+         UNION ALL SELECT id || blake3 FROM google_photos"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await
     .unwrap();

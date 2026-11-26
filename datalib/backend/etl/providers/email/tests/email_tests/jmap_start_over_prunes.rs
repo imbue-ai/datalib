@@ -8,6 +8,7 @@ use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
 use crate::jmap_tape::{email_get_args, Account, Tape, ACCOUNT, HOST};
 use crate::support::Mirror;
+use datalib_sql::test_sql;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_start_over_drops_what_upstream_destroyed() {
@@ -34,7 +35,8 @@ async fn a_start_over_drops_what_upstream_destroyed() {
                 .unwrap()
                 .into_keys()
                 .collect();
-            let emails: Vec<String> = sqlx::query_scalar("SELECT id FROM emails ORDER BY id")
+            let emails: Vec<String> = test_sql!("SELECT id FROM emails ORDER BY id")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .unwrap();

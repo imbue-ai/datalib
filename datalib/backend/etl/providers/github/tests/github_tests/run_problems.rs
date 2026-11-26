@@ -23,6 +23,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 /// A PR whose own record will not fetch is an error row on it, and the
 /// other PR is mirrored all the same. The next run asks for it again
@@ -217,7 +218,9 @@ async fn a_pr_that_is_gone_stops_being_retried() {
     assert_eq!(
         query(
             &out,
-            "SELECT id, last_error FROM pull_requests_bookkeeping WHERE last_error IS NOT NULL"
+            test_sql!(
+                "SELECT id, last_error FROM pull_requests_bookkeeping WHERE last_error IS NOT NULL"
+            )
         )
         .await,
         [],

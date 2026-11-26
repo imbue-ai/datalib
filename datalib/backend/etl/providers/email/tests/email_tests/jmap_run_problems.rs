@@ -9,6 +9,7 @@ use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
 use crate::jmap_tape::{mailbox_get_args, query_args, status, Account, Tape, HOST};
 use crate::support::Mirror;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// A re-list whose `Mailbox/get` fails keeps the mailboxes an earlier
 /// run stored and still mirrors the mail.
@@ -183,7 +184,8 @@ async fn bodies_are_written_and_sealed_as_they_land() {
 
     let held = m
         .read(|db: RawDb| async move {
-            let commits: Vec<String> = sqlx::query_scalar("SELECT commit_hash FROM dolt_log")
+            let commits: Vec<String> = test_sql!("SELECT commit_hash FROM dolt_log")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .unwrap();
@@ -192,10 +194,14 @@ async fn bodies_are_written_and_sealed_as_they_land() {
                 // Audited for `AssertSqlSafe`: `commit` is a hash doltlite
                 // just listed, and the table function takes a literal. The
                 // store's first commit predates the table.
-                let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                    "SELECT count(*) FROM dolt_at_email_blobs('{commit}') \
+                let n: i64 = Sql::dynamic(
+                    test_sql_id!(),
+                    format!(
+                        "SELECT count(*) FROM dolt_at_email_blobs('{commit}') \
                      WHERE blake3 IS NOT NULL"
-                )))
+                    ),
+                )
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap_or(0);
@@ -226,12 +232,11 @@ async fn an_oversize_eml_is_a_skip_not_a_failure() {
         .expect("run");
     let rows = m
         .read(|db: RawDb| async move {
-            sqlx::query_as::<_, (String, String, String)>(
-                "SELECT scope_key, severity, reason FROM problems",
-            )
-            .fetch_all(db.pool())
-            .await
-            .unwrap()
+            test_sql!("SELECT scope_key, severity, reason FROM problems")
+                .query_as::<(String, String, String)>()
+                .fetch_all(db.pool())
+                .await
+                .unwrap()
         })
         .await;
     assert_eq!(rows.len(), 1, "{rows:?}");
@@ -282,7 +287,8 @@ fn row(key: &str, severity: &str) -> (String, String) {
 
 async fn problems(m: &Mirror) -> Vec<(String, String)> {
     m.read(|db: RawDb| async move {
-        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -292,7 +298,8 @@ async fn problems(m: &Mirror) -> Vec<(String, String)> {
 
 async fn sample(m: &Mirror, key: &'static str) -> String {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT sample FROM problems WHERE scope_key = ?")
+        test_sql!("SELECT sample FROM problems WHERE scope_key = ?")
+            .query_scalar()
             .bind(key)
             .fetch_one(db.pool())
             .await
@@ -301,23 +308,24 @@ async fn sample(m: &Mirror, key: &'static str) -> String {
     .await
 }
 
-async fn ids(m: &Mirror, sql: &'static str) -> Vec<String> {
-    m.read(|db: RawDb| async move { sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap() })
+async fn ids(m: &Mirror, sql: Sql) -> Vec<String> {
+    m.read(|db: RawDb| async move { sql.query_scalar().fetch_all(db.pool()).await.unwrap() })
         .await
 }
 
 async fn mailboxes(m: &Mirror) -> Vec<String> {
-    ids(m, "SELECT id FROM mailboxes ORDER BY id").await
+    ids(m, test_sql!("SELECT id FROM mailboxes ORDER BY id")).await
 }
 
 async fn emails(m: &Mirror) -> Vec<String> {
-    ids(m, "SELECT id FROM emails ORDER BY id").await
+    ids(m, test_sql!("SELECT id FROM emails ORDER BY id")).await
 }
 
 /// Each `email_blobs` edge: its email, and whether its bytes landed.
 async fn blobs(m: &Mirror) -> Vec<(String, bool)> {
     m.read(|db: RawDb| async move {
-        sqlx::query_as("SELECT email_id, blake3 IS NOT NULL FROM email_blobs ORDER BY email_id")
+        test_sql!("SELECT email_id, blake3 IS NOT NULL FROM email_blobs ORDER BY email_id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap()

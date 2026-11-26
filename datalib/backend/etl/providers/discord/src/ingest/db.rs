@@ -15,6 +15,7 @@ use sqlx::{Sqlite, Transaction};
 
 use super::schema_raw::*;
 use super::snowflake;
+use datalib_sql::{sql, sql_id, Sql};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -122,11 +123,17 @@ pub async fn write_roles(
     let listed: Vec<&str> = rows.iter().map(|r| r.id_and_payload.id.as_str()).collect();
     let listed = serde_json::to_string(&listed)?;
     for sql in [
-        "DELETE FROM roles_bookkeeping WHERE id IN (SELECT id FROM roles \
-         WHERE guild_id = ?1 AND id NOT IN (SELECT value FROM json_each(?2)))",
-        "DELETE FROM roles WHERE guild_id = ?1 AND id NOT IN (SELECT value FROM json_each(?2))",
+        sql!(
+            "discord.write_roles.delete_roles_bookkeeping",
+            "DELETE FROM roles_bookkeeping WHERE id IN (SELECT id FROM roles \
+         WHERE guild_id = ?1 AND id NOT IN (SELECT value FROM json_each(?2)))"
+        ),
+        sql!(
+            "discord.write_roles.delete_roles",
+            "DELETE FROM roles WHERE guild_id = ?1 AND id NOT IN (SELECT value FROM json_each(?2))"
+        ),
     ] {
-        sqlx::query(sql)
+        sql.query()
             .bind(guild_id)
             .bind(&listed)
             .execute(&mut **tx)
@@ -196,10 +203,12 @@ pub async fn write_messages(
     }
     write(tx, &rows, &volatile, stamp, now).await?;
     for (id, message_key, attachment_id) in &edges {
-        sqlx::query(
+        sql!(
+            "discord.insert_attachment_edge",
             "INSERT INTO discord_attachments (id, message_key, attachment_id) VALUES (?, ?, ?) \
-             ON CONFLICT(id) DO NOTHING",
+             ON CONFLICT(id) DO NOTHING"
         )
+        .query()
         .bind(id)
         .bind(message_key)
         .bind(attachment_id)
@@ -238,10 +247,12 @@ pub async fn prune_messages(
         None => prefix_end(&format!("{channel_id}#")).context("a channel's key range")?,
     };
     let seen: Vec<String> = seen.iter().map(|id| message_key(channel_id, *id)).collect();
-    let gone: Vec<String> = sqlx::query_scalar(
+    let gone: Vec<String> = sql!(
+        "discord.list_messages_gone_upstream",
         "SELECT id FROM messages WHERE id >= ? AND id < ? \
-         AND id NOT IN (SELECT value FROM json_each(?))",
+         AND id NOT IN (SELECT value FROM json_each(?))"
     )
+    .query_scalar()
     .bind(&lo)
     .bind(&end)
     .bind(serde_json::to_string(&seen)?)
@@ -253,13 +264,25 @@ pub async fn prune_messages(
     }
     let keys = serde_json::to_string(&gone)?;
     for sql in [
-        "DELETE FROM discord_attachments_bookkeeping WHERE id IN (SELECT id FROM \
-         discord_attachments WHERE message_key IN (SELECT value FROM json_each(?)))",
-        "DELETE FROM discord_attachments WHERE message_key IN (SELECT value FROM json_each(?))",
-        "DELETE FROM messages_bookkeeping WHERE id IN (SELECT value FROM json_each(?))",
-        "DELETE FROM messages WHERE id IN (SELECT value FROM json_each(?))",
+        sql!(
+            "discord.prune_messages.delete_discord_attachments_bookkeeping",
+            "DELETE FROM discord_attachments_bookkeeping WHERE id IN (SELECT id FROM \
+         discord_attachments WHERE message_key IN (SELECT value FROM json_each(?)))"
+        ),
+        sql!(
+            "discord.prune_messages.delete_discord_attachments",
+            "DELETE FROM discord_attachments WHERE message_key IN (SELECT value FROM json_each(?))"
+        ),
+        sql!(
+            "discord.prune_messages.delete_messages_bookkeeping",
+            "DELETE FROM messages_bookkeeping WHERE id IN (SELECT value FROM json_each(?))"
+        ),
+        sql!(
+            "discord.prune_messages.delete_messages",
+            "DELETE FROM messages WHERE id IN (SELECT value FROM json_each(?))"
+        ),
     ] {
-        sqlx::query(sql)
+        sql.query()
             .bind(&keys)
             .execute(&mut **tx)
             .await
@@ -274,13 +297,16 @@ pub async fn prune_messages(
 /// Whether any message of `channel_id` made at `floor` or later is held.
 pub async fn holds_messages_since(tx: &mut Tx<'_>, channel_id: &str, floor: u64) -> Result<bool> {
     let end = prefix_end(&format!("{channel_id}#")).context("a channel's key range")?;
-    let n: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM messages WHERE id >= ? AND id < ? LIMIT 1")
-            .bind(message_key(channel_id, floor))
-            .bind(end)
-            .fetch_optional(&mut **tx)
-            .await
-            .context("look for messages in the refresh window")?;
+    let n: Option<i64> = sql!(
+        "discord.find_message_in_refresh_window",
+        "SELECT 1 FROM messages WHERE id >= ? AND id < ? LIMIT 1"
+    )
+    .query_scalar()
+    .bind(message_key(channel_id, floor))
+    .bind(end)
+    .fetch_optional(&mut **tx)
+    .await
+    .context("look for messages in the refresh window")?;
     Ok(n.is_some())
 }
 
@@ -290,12 +316,14 @@ pub async fn stored_threads(
     tx: &mut Tx<'_>,
     parents: &[&str],
 ) -> Result<Vec<(String, Option<u64>)>> {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(String, Option<String>)> = sql!(
+        "discord.list_threads_with_last_message",
         "SELECT c.id, json_extract(b.volatile_payload, '$.last_message_id') \
          FROM channels c LEFT JOIN channels_bookkeeping b ON b.id = c.id \
          WHERE c.parent_id IN (SELECT value FROM json_each(?)) AND c.kind IN (10, 11, 12) \
-         ORDER BY c.id",
+         ORDER BY c.id"
     )
+    .query_as()
     .bind(serde_json::to_string(parents)?)
     .fetch_all(&mut **tx)
     .await
@@ -313,8 +341,12 @@ pub async fn stored_payload(
     id: &str,
 ) -> Result<Option<Value>> {
     // Audited: `table` is one of this module's own names.
-    let sql = format!("SELECT json(payload) FROM {table} WHERE id = ?");
-    let payload: Option<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("discord.read_payload_by_id"),
+        format!("SELECT json(payload) FROM {table} WHERE id = ?"),
+    );
+    let payload: Option<Option<String>> = sql
+        .query_scalar()
         .bind(id)
         .fetch_optional(&mut **tx)
         .await
@@ -325,12 +357,15 @@ pub async fn stored_payload(
 }
 
 pub async fn stored_roles(tx: &mut Tx<'_>, guild_id: &str) -> Result<Vec<Value>> {
-    let payloads: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT json(payload) FROM roles WHERE guild_id = ? ORDER BY id")
-            .bind(guild_id)
-            .fetch_all(&mut **tx)
-            .await
-            .context("read a server's roles")?;
+    let payloads: Vec<Option<String>> = sql!(
+        "discord.list_roles_of_server",
+        "SELECT json(payload) FROM roles WHERE guild_id = ? ORDER BY id"
+    )
+    .query_scalar()
+    .bind(guild_id)
+    .fetch_all(&mut **tx)
+    .await
+    .context("read a server's roles")?;
     Ok(payloads
         .into_iter()
         .flatten()
@@ -360,10 +395,16 @@ struct OwedRow {
 /// Forgets who the store was signed in as before: the account is one row.
 pub async fn forget_other_accounts(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     for sql in [
-        "DELETE FROM account_bookkeeping WHERE id <> ?",
-        "DELETE FROM account WHERE id <> ?",
+        sql!(
+            "discord.forget_other_accounts.delete_account_bookkeeping",
+            "DELETE FROM account_bookkeeping WHERE id <> ?"
+        ),
+        sql!(
+            "discord.forget_other_accounts.delete_account",
+            "DELETE FROM account WHERE id <> ?"
+        ),
     ] {
-        sqlx::query(sql)
+        sql.query()
             .bind(id)
             .execute(&mut **tx)
             .await
@@ -385,10 +426,18 @@ pub async fn owed_files(
          WHERE a.blake3 IS NULL";
     // Audited: `OWED` is the constant above, and what it is asked for is bound.
     let rows: Vec<OwedRow> = match message_keys {
-        None => sqlx::query_as(OWED).fetch_all(&mut **tx).await,
+        None => {
+            Sql::dynamic(sql_id!("discord.list_owed_files"), OWED)
+                .query_as()
+                .fetch_all(&mut **tx)
+                .await
+        }
         Some(keys) => {
-            let sql = format!("{OWED} AND a.message_key IN (SELECT value FROM json_each(?1))");
-            sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            let sql = Sql::dynamic(
+                sql_id!("discord.list_owed_files_of_messages"),
+                format!("{OWED} AND a.message_key IN (SELECT value FROM json_each(?1))"),
+            );
+            sql.query_as()
                 .bind(serde_json::to_string(keys)?)
                 .fetch_all(&mut **tx)
                 .await
@@ -425,10 +474,12 @@ pub async fn owed_files(
 
 /// `attachment id → blake3` of every file held, under any message.
 pub async fn held_files(tx: &mut Tx<'_>) -> Result<HashMap<String, String>> {
-    let rows: Vec<(String, String)> = sqlx::query_as(
+    let rows: Vec<(String, String)> = sql!(
+        "discord.list_held_files",
         "SELECT attachment_id, MAX(blake3) FROM discord_attachments \
-         WHERE blake3 IS NOT NULL GROUP BY attachment_id",
+         WHERE blake3 IS NOT NULL GROUP BY attachment_id"
     )
+    .query_as()
     .fetch_all(&mut **tx)
     .await
     .context("list the files held")?;

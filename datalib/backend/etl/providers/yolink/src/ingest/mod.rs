@@ -26,6 +26,7 @@ use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::http::{latchkey_curl, HttpRequest, HttpService};
 use datalib_etl_yolink_config::{YolinkDevice, YolinkSync};
 
+use datalib_sql::sql;
 use schema_raw::{device_scope, full_ddl, span_end, YolinkDeviceRow, YolinkReadingRow};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -385,12 +386,15 @@ async fn walk_devices<S: WindowSource>(
     }
     let mut silent = Vec::new();
     for dev in &opts.sync.devices {
-        let last: Option<i64> =
-            sqlx::query_scalar("SELECT MAX(ts_ms) FROM yolink_readings WHERE device_name = ?")
-                .bind(&dev.name)
-                .fetch_one(db.pool())
-                .await
-                .with_context(|| format!("last reading of {}", dev.name))?;
+        let last: Option<i64> = sql!(
+            "yolink.find_newest_reading_of_device",
+            "SELECT MAX(ts_ms) FROM yolink_readings WHERE device_name = ?"
+        )
+        .query_scalar()
+        .bind(&dev.name)
+        .fetch_one(db.pool())
+        .await
+        .with_context(|| format!("last reading of {}", dev.name))?;
         if let Some(detail) = silence(last, now_ms) {
             silent.push(SilentEntry {
                 name: dev.name.clone(),
@@ -549,11 +553,14 @@ impl<S: WindowSource> Walk<'_, S> {
             end: WalkEnd::Done,
             failed: Vec::new(),
         };
-        let mut first_reading: Option<i64> =
-            sqlx::query_scalar("SELECT MIN(ts_ms) FROM yolink_readings WHERE device_name = ?")
-                .bind(&dev.name)
-                .fetch_one(self.db.pool())
-                .await?;
+        let mut first_reading: Option<i64> = sql!(
+            "yolink.find_oldest_reading_of_device",
+            "SELECT MIN(ts_ms) FROM yolink_readings WHERE device_name = ?"
+        )
+        .query_scalar()
+        .bind(&dev.name)
+        .fetch_one(self.db.pool())
+        .await?;
         let mut consecutive_failures: u32 = 0;
         let mut refusals = Refusals {
             asked: 0,
@@ -753,6 +760,7 @@ impl std::error::Error for HttpStatus {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     const TH: &str = "Device Id,Time,Temperature(℃),Humidity(%RH)\n\
         d88b,2026/04/05 17:02:04-0700,-18.4℃,70.0\n\
         d88b,2026/04/05 17:05:34-0700,-18.0℃,\n";
@@ -840,7 +848,8 @@ mod tests {
             1
         );
         assert_eq!(store_window(pool, "v", (300, 400), &[]).await.unwrap(), 0);
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yolink_readings")
+        let n: i64 = test_sql!("SELECT COUNT(*) FROM yolink_readings")
+            .query_scalar()
             .fetch_one(pool)
             .await
             .unwrap();
@@ -907,6 +916,7 @@ mod walk_tests {
     use std::collections::HashMap;
     use std::sync::Mutex;
 
+    use datalib_sql::{test_sql, Sql};
     const DAY: i64 = 86_400_000;
     const DEVICE: &str = "warp-core-coolant";
 
@@ -1036,17 +1046,15 @@ mod walk_tests {
         }
 
         async fn problems(&self) -> Vec<(String, String)> {
-            sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+                .query_as()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()
         }
 
-        async fn count(&self, sql: &'static str) -> i64 {
-            sqlx::query_scalar(sql)
-                .fetch_one(self.db.pool())
-                .await
-                .unwrap()
+        async fn count(&self, sql: Sql) -> i64 {
+            sql.query_scalar().fetch_one(self.db.pool()).await.unwrap()
         }
 
         async fn held(&self, device: &str) -> Vec<(i64, i64)> {
@@ -1081,8 +1089,10 @@ mod walk_tests {
         assert_eq!(keys(&rows), [format!("listing:{DEVICE}").as_str()]);
         assert!(rows[0].1.contains("1 of 4 windows"), "{rows:?}");
         assert_eq!(
-            st.count("SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings")
-                .await,
+            st.count(test_sql!(
+                "SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings"
+            ))
+            .await,
             21,
             "the failed week is missing"
         );
@@ -1103,8 +1113,10 @@ mod walk_tests {
         );
         assert!(st.problems().await.is_empty(), "{:?}", st.problems().await);
         assert_eq!(
-            st.count("SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings")
-                .await,
+            st.count(test_sql!(
+                "SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings"
+            ))
+            .await,
             29
         );
         assert_eq!(st.held(DEVICE).await, [(day(0), day(29))]);
@@ -1228,8 +1240,10 @@ mod walk_tests {
         let s = st.run(&Fake::new(), &cfg, day(28)).await;
         assert_eq!(s.errors, 1, "{s:?}");
         assert_eq!(
-            st.count("SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings")
-                .await,
+            st.count(test_sql!(
+                "SELECT COUNT(DISTINCT ts_ms) FROM yolink_readings"
+            ))
+            .await,
             28
         );
         let rows = st.problems().await;

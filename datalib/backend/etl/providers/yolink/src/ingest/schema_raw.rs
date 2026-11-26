@@ -7,6 +7,7 @@ use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::WirePayloadRow;
 use datalib_etl_web::coverage;
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::query::Query;
 use sqlx::sqlite::SqliteArguments;
 use sqlx::{Sqlite, SqliteConnection};
@@ -147,17 +148,27 @@ pub const LADDER: &[Migration] = &[Migration {
 /// a later one, which means the row's start was widened by a run that
 /// did not finish the backfill.
 async fn coverage_from_the_cursor(conn: &mut SqliteConnection) -> Result<()> {
-    sqlx::query(coverage::DDL).execute(&mut *conn).await?;
+    Sql::dynamic(sql_id!("yolink.migrate.create_coverage"), coverage::DDL)
+        .query()
+        .execute(&mut *conn)
+        .await?;
     if has_column(conn, "yolink_devices", "last_ts_ms").await? {
         let prior_starts = prior_starts(conn).await?;
-        let devices: Vec<(String, i64, Option<i64>)> =
-            sqlx::query_as("SELECT id, start_ms, last_ts_ms FROM yolink_devices")
-                .fetch_all(&mut *conn)
-                .await?;
+        let devices: Vec<(String, i64, Option<i64>)> = sql!(
+            "yolink.migrate.list_device_cursors",
+            "SELECT id, start_ms, last_ts_ms FROM yolink_devices"
+        )
+        .query_as()
+        .fetch_all(&mut *conn)
+        .await?;
         let failed: Vec<(String, i64, i64)> = if has_column(conn, "yolink_windows", "id").await? {
-            sqlx::query_as("SELECT device_name, start_ms, end_ms FROM yolink_windows")
-                .fetch_all(&mut *conn)
-                .await?
+            sql!(
+                "yolink.migrate.list_failed_windows",
+                "SELECT device_name, start_ms, end_ms FROM yolink_windows"
+            )
+            .query_as()
+            .fetch_all(&mut *conn)
+            .await?
         } else {
             Vec::new()
         };
@@ -174,33 +185,55 @@ async fn coverage_from_the_cursor(conn: &mut SqliteConnection) -> Result<()> {
                 .map(|(_, s, e)| (*s, *e))
                 .collect();
             for (span_lo, span_hi) in walked(lo, cursor, &holes) {
-                sqlx::query("INSERT INTO coverage (scope, lo, hi) VALUES (?, ?, ?)")
-                    .bind(device_scope(&name))
-                    .bind(span_end(span_lo))
-                    .bind(span_end(span_hi))
-                    .execute(&mut *conn)
-                    .await?;
+                sql!(
+                    "yolink.migrate.insert_walked_coverage",
+                    "INSERT INTO coverage (scope, lo, hi) VALUES (?, ?, ?)"
+                )
+                .query()
+                .bind(device_scope(&name))
+                .bind(span_end(span_lo))
+                .bind(span_end(span_hi))
+                .execute(&mut *conn)
+                .await?;
             }
         }
-        sqlx::query("ALTER TABLE yolink_devices DROP COLUMN last_ts_ms")
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "yolink.migrate.drop_device_cursor_column",
+            "ALTER TABLE yolink_devices DROP COLUMN last_ts_ms"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     for sql in [
-        "DROP TABLE IF EXISTS yolink_windows",
-        "DROP TABLE IF EXISTS yolink_windows_bookkeeping",
+        sql!(
+            "yolink.coverage_from_the_cursor.drop_yolink_windows",
+            "DROP TABLE IF EXISTS yolink_windows"
+        ),
+        sql!(
+            "yolink.coverage_from_the_cursor.drop_yolink_windows_bookkeeping",
+            "DROP TABLE IF EXISTS yolink_windows_bookkeeping"
+        ),
     ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        sql.query().execute(&mut *conn).await?;
     }
     if has_column(conn, "problems", "scope_key").await? {
-        sqlx::query("DELETE FROM problems WHERE scope_key LIKE 'yolink_windows:%'")
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "yolink.migrate.delete_window_problems",
+            "DELETE FROM problems WHERE scope_key LIKE 'yolink_windows:%'"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     if has_column(conn, "sync_scope_config", "scope").await? {
-        sqlx::query("DELETE FROM sync_scope_config WHERE scope = 'yolink:download'")
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "yolink.migrate.delete_download_scope_config",
+            "DELETE FROM sync_scope_config WHERE scope = 'yolink:download'"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -237,10 +270,13 @@ async fn prior_starts(conn: &mut SqliteConnection) -> Result<BTreeMap<String, i6
     if !has_column(conn, "sync_scope_config", "scope").await? {
         return Ok(out);
     }
-    let blob: Option<String> =
-        sqlx::query_scalar("SELECT config FROM sync_scope_config WHERE scope = 'yolink:download'")
-            .fetch_optional(&mut *conn)
-            .await?;
+    let blob: Option<String> = sql!(
+        "yolink.migrate.read_download_scope_config",
+        "SELECT config FROM sync_scope_config WHERE scope = 'yolink:download'"
+    )
+    .query_scalar()
+    .fetch_optional(&mut *conn)
+    .await?;
     let Some(blob) = blob else {
         return Ok(out);
     };
@@ -259,11 +295,15 @@ async fn prior_starts(conn: &mut SqliteConnection) -> Result<BTreeMap<String, i6
 }
 
 async fn has_column(conn: &mut SqliteConnection, table: &str, column: &str) -> Result<bool> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
-        .bind(table)
-        .bind(column)
-        .fetch_one(&mut *conn)
-        .await?;
+    let n: i64 = sql!(
+        "yolink.migrate.has_column",
+        "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?"
+    )
+    .query_scalar()
+    .bind(table)
+    .bind(column)
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(n > 0)
 }
 

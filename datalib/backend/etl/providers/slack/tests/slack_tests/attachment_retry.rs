@@ -13,6 +13,7 @@ use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, record_general, Tree};
+use datalib_sql::test_sql;
 
 const TS: &str = "1735689600.000100";
 const FILE_ID: &str = "F_DELTA_SHIELD";
@@ -115,16 +116,16 @@ struct Attachment {
 
 async fn attachment(out: &Path) -> Attachment {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let (blake3, severity, reason): (Option<String>, Option<String>, Option<String>) =
-        sqlx::query_as(
-            "SELECT a.blake3, p.severity, p.reason FROM slack_attachments a \
+    let (blake3, severity, reason): (Option<String>, Option<String>, Option<String>) = test_sql!(
+        "SELECT a.blake3, p.severity, p.reason FROM slack_attachments a \
              LEFT JOIN problems p ON p.scope_key = 'slack_attachments:' || a.id \
-             WHERE a.file_id = ?",
-        )
-        .bind(FILE_ID)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+             WHERE a.file_id = ?"
+    )
+    .query_as()
+    .bind(FILE_ID)
+    .fetch_one(db.pool())
+    .await
+    .unwrap();
     let bytes = match &blake3 {
         Some(h) => db.cas().get(h).await.unwrap().map(|o| o.bytes),
         None => None,
@@ -228,7 +229,8 @@ async fn a_file_stamped_fetched_without_bytes_is_still_owed() {
     let t = first_world(500);
     run(&t.playback, &t.out, None).await;
     let db = RawDb::open(&db_path_for(&t.out)).await.unwrap();
-    sqlx::query("UPDATE slack_attachments_bookkeeping SET fetched_at_utc = last_attempt_at_utc")
+    test_sql!("UPDATE slack_attachments_bookkeeping SET fetched_at_utc = last_attempt_at_utc")
+        .query()
         .execute(db.pool())
         .await
         .unwrap();
@@ -265,12 +267,11 @@ async fn a_channel_that_fails_partway_still_records_its_attachments() {
 
 async fn history_problems(out: &Path) -> i64 {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let n = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:%history%'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let n = test_sql!("SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:%history%'")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     db.close().await;
     n
 }
@@ -312,12 +313,12 @@ fn later_message_with_the_same_file() -> Value {
 /// Every edge to the file, with its hash.
 async fn edges(out: &Path) -> Vec<(String, Option<String>)> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows =
-        sqlx::query_as("SELECT id, blake3 FROM slack_attachments WHERE file_id = ? ORDER BY id")
-            .bind(FILE_ID)
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
+    let rows = test_sql!("SELECT id, blake3 FROM slack_attachments WHERE file_id = ? ORDER BY id")
+        .query_as()
+        .bind(FILE_ID)
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
     db.close().await;
     rows
 }

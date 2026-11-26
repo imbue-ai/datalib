@@ -1660,6 +1660,7 @@ fn updated_at_in_scope(updated_at: Option<&str>, since: Option<&DateTime<Utc>>) 
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// A 403 from claude.ai reads as "expired key" but is equally the
     /// signature of a *malformed stored* key — observed 2026-08-31, where
     /// `auth set` had been run with `'$(pbpaste)'` in single quotes and
@@ -2006,7 +2007,8 @@ mod tests {
             ("user.name", "null-test"),
             ("user.email", "null-test@datalib.local"),
         ] {
-            sqlx::query("SELECT dolt_config(?, ?)")
+            test_sql!("SELECT dolt_config(?, ?)")
+                .query()
                 .bind(k)
                 .bind(v)
                 .execute(db.pool())
@@ -2025,7 +2027,8 @@ mod tests {
         let head = commit_run(db.pool(), "first fetch").await.unwrap();
         store(conversation_without_nulls()).await;
 
-        let stored: Vec<String> = sqlx::query_scalar("SELECT json(payload) FROM conversations")
+        let stored: Vec<String> = test_sql!("SELECT json(payload) FROM conversations")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -2036,10 +2039,11 @@ mod tests {
         );
 
         let head = head.expect("doltlite is linked into this test binary");
-        let modified: i64 = sqlx::query_scalar(
+        let modified: i64 = test_sql!(
             "SELECT COUNT(*) FROM dolt_diff_conversations \
-              WHERE from_ref = ? AND to_ref = 'WORKING'",
+              WHERE from_ref = ? AND to_ref = 'WORKING'"
         )
+        .query_scalar()
         .bind(head)
         .fetch_one(db.pool())
         .await

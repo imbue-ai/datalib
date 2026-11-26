@@ -19,6 +19,7 @@ use datalib_contact_schema::{ContactHandle, Medium, NormalizedContact};
 use datalib_etl::bulk::bulk_upsert_entity_in_tx;
 use datalib_etl::{doltlite_raw, draft};
 use datalib_handle::{Handle, HandleKind};
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_store_meta::{Migration, StoreKind};
 use datalib_time::IsoOffsetTimestamp;
 use serde::{Deserialize, Serialize};
@@ -177,28 +178,39 @@ fn plan_rebuild(links: &[(String, String)]) -> Vec<Rebuilt> {
 /// no longer read, or whose new spelling someone else holds, is kept as
 /// written and logged; [`Store::contact`] shows it without a handle.
 async fn rebuild_handles(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    let links: Vec<(String, String)> =
-        sqlx::query_as("SELECT handle, contact_id FROM handles ORDER BY handle")
-            .fetch_all(&mut *conn)
-            .await
-            .context("read the linked handles")?;
+    let links: Vec<(String, String)> = sql!(
+        "contacts_app.list_handles_for_rebuild",
+        "SELECT handle, contact_id FROM handles ORDER BY handle"
+    )
+    .query_as()
+    .fetch_all(&mut *conn)
+    .await
+    .context("read the linked handles")?;
     for step in plan_rebuild(&links) {
         match step {
             Rebuilt::Respell { from, to } => {
-                sqlx::query("UPDATE handles SET handle = ? WHERE handle = ?")
-                    .bind(&to)
-                    .bind(&from)
-                    .execute(&mut *conn)
-                    .await
-                    .with_context(|| format!("respell {from} as {to}"))?;
+                sql!(
+                    "contacts_app.respell_handle",
+                    "UPDATE handles SET handle = ? WHERE handle = ?"
+                )
+                .query()
+                .bind(&to)
+                .bind(&from)
+                .execute(&mut *conn)
+                .await
+                .with_context(|| format!("respell {from} as {to}"))?;
                 tracing::info!(%from, %to, "contacts: a linked handle respelled");
             }
             Rebuilt::Duplicate { from } => {
-                sqlx::query("DELETE FROM handles WHERE handle = ?")
-                    .bind(&from)
-                    .execute(&mut *conn)
-                    .await
-                    .with_context(|| format!("drop the copy {from}"))?;
+                sql!(
+                    "contacts_app.delete_duplicate_handle",
+                    "DELETE FROM handles WHERE handle = ?"
+                )
+                .query()
+                .bind(&from)
+                .execute(&mut *conn)
+                .await
+                .with_context(|| format!("drop the copy {from}"))?;
                 tracing::info!(%from, "contacts: a linked handle's contact already holds its new spelling");
             }
             Rebuilt::HeldElsewhere { from, to, holder } => tracing::warn!(
@@ -417,11 +429,13 @@ pub(crate) async fn search_in(
             .replace('%', "\\%")
             .replace('_', "\\_")
     );
-    let rows = sqlx::query(
+    let rows = sql!(
+        "contacts_app.search_contacts_by_name",
         "SELECT contact_id, name, kind FROM contacts \
           WHERE merged_into IS NULL AND name LIKE ? ESCAPE '\\' \
-          ORDER BY name COLLATE NOCASE LIMIT ?",
+          ORDER BY name COLLATE NOCASE LIMIT ?"
     )
+    .query()
     .bind(pattern)
     .bind(limit)
     .fetch_all(pool)
@@ -499,12 +513,15 @@ impl Store {
     pub async fn resolve(&self, handles: &[Handle]) -> Result<HashMap<String, NormalizedContact>> {
         let mut out = HashMap::new();
         for h in handles {
-            let holder: Option<String> =
-                sqlx::query_scalar("SELECT contact_id FROM handles WHERE handle = ?")
-                    .bind(h.as_str())
-                    .fetch_optional(&self.pool)
-                    .await
-                    .context("resolve a handle")?;
+            let holder: Option<String> = sql!(
+                "contacts_app.find_contact_by_handle",
+                "SELECT contact_id FROM handles WHERE handle = ?"
+            )
+            .query_scalar()
+            .bind(h.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .context("resolve a handle")?;
             if let Some(contact) = match holder {
                 Some(id) => self.contact(&id).await?,
                 None => None,
@@ -523,9 +540,11 @@ impl Store {
 
     /// A merged-away contact answers as the one it was merged into.
     pub async fn contact(&self, contact_id: &str) -> Result<Option<NormalizedContact>> {
-        let Some(contact_id) = sqlx::query_scalar::<_, String>(
-            "SELECT COALESCE(merged_into, contact_id) FROM contacts WHERE contact_id = ?",
+        let Some(contact_id) = sql!(
+            "contacts_app.find_merge_survivor_id",
+            "SELECT COALESCE(merged_into, contact_id) FROM contacts WHERE contact_id = ?"
         )
+        .query_scalar::<String>()
         .bind(contact_id)
         .fetch_optional(&self.pool)
         .await
@@ -534,10 +553,12 @@ impl Store {
             return Ok(None);
         };
         let contact_id = contact_id.as_str();
-        let Some(r) = sqlx::query(
+        let Some(r) = sql!(
+            "contacts_app.read_contact",
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
-               FROM contacts WHERE contact_id = ?",
+               FROM contacts WHERE contact_id = ?"
         )
+        .query()
         .bind(contact_id)
         .fetch_optional(&self.pool)
         .await
@@ -545,16 +566,21 @@ impl Store {
         else {
             return Ok(None);
         };
-        let photo_set_at: Option<String> =
-            sqlx::query_scalar("SELECT set_at_utc FROM photos WHERE contact_id = ?")
-                .bind(contact_id)
-                .fetch_optional(&self.pool)
-                .await
-                .context("read whether a contact has a photo")?;
-        let links = sqlx::query(
-            "SELECT handle, stopped_working_by FROM handles WHERE contact_id = ? \
-              ORDER BY stopped_working_by IS NOT NULL, handle",
+        let photo_set_at: Option<String> = sql!(
+            "contacts_app.read_photo_set_at",
+            "SELECT set_at_utc FROM photos WHERE contact_id = ?"
         )
+        .query_scalar()
+        .bind(contact_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("read whether a contact has a photo")?;
+        let links = sql!(
+            "contacts_app.list_handles_of_contact",
+            "SELECT handle, stopped_working_by FROM handles WHERE contact_id = ? \
+              ORDER BY stopped_working_by IS NOT NULL, handle"
+        )
+        .query()
         .bind(contact_id)
         .fetch_all(&self.pool)
         .await
@@ -562,11 +588,15 @@ impl Store {
         .iter()
         .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by")))
         .collect();
-        let me: Option<i64> = sqlx::query_scalar("SELECT 1 FROM me WHERE contact_id = ?")
-            .bind(contact_id)
-            .fetch_optional(&self.pool)
-            .await
-            .context("read whether a contact is me")?;
+        let me: Option<i64> = sql!(
+            "contacts_app.is_contact_me",
+            "SELECT 1 FROM me WHERE contact_id = ?"
+        )
+        .query_scalar()
+        .bind(contact_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("read whether a contact is me")?;
         Ok(Some(assemble(
             &r,
             links,
@@ -579,18 +609,22 @@ impl Store {
     /// contacts app's own table lists. Merged-away contacts are left out.
     /// Four reads, whatever the count.
     pub async fn list(&self) -> Result<Vec<NormalizedContact>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "contacts_app.list_unmerged_contacts",
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
-               FROM contacts WHERE merged_into IS NULL ORDER BY name COLLATE NOCASE, contact_id",
+               FROM contacts WHERE merged_into IS NULL ORDER BY name COLLATE NOCASE, contact_id"
         )
+        .query()
         .fetch_all(&self.pool)
         .await
         .context("list contacts")?;
         let mut links: HashMap<String, Vec<ContactHandle>> = HashMap::new();
-        for h in sqlx::query(
+        for h in sql!(
+            "contacts_app.list_all_handles",
             "SELECT contact_id, handle, stopped_working_by FROM handles \
-              ORDER BY contact_id, stopped_working_by IS NOT NULL, handle",
+              ORDER BY contact_id, stopped_working_by IS NOT NULL, handle"
         )
+        .query()
         .fetch_all(&self.pool)
         .await
         .context("list the linked handles")?
@@ -600,19 +634,24 @@ impl Store {
                 .or_default()
                 .push(stored_link(h.get("handle"), h.get("stopped_working_by")));
         }
-        let photo_set_at: HashMap<String, String> =
-            sqlx::query_as("SELECT contact_id, set_at_utc FROM photos")
+        let photo_set_at: HashMap<String, String> = sql!(
+            "contacts_app.list_photo_set_at",
+            "SELECT contact_id, set_at_utc FROM photos"
+        )
+        .query_as()
+        .fetch_all(&self.pool)
+        .await
+        .context("list the contacts with a photo")?
+        .into_iter()
+        .collect();
+        let me: std::collections::HashSet<String> =
+            sql!("contacts_app.list_me_contacts", "SELECT contact_id FROM me")
+                .query_scalar()
                 .fetch_all(&self.pool)
                 .await
-                .context("list the contacts with a photo")?
+                .context("list the contacts that are me")?
                 .into_iter()
                 .collect();
-        let me: std::collections::HashSet<String> = sqlx::query_scalar("SELECT contact_id FROM me")
-            .fetch_all(&self.pool)
-            .await
-            .context("list the contacts that are me")?
-            .into_iter()
-            .collect();
         Ok(rows
             .iter()
             .map(|r| {
@@ -663,11 +702,14 @@ impl Store {
     pub async fn link(&self, handle: &Handle, contact_id: &str) -> Result<()> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        let name: Option<String> =
-            sqlx::query_scalar("SELECT name FROM contacts WHERE contact_id = ?")
-                .bind(contact_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let name: Option<String> = sql!(
+            "contacts_app.read_name_to_link",
+            "SELECT name FROM contacts WHERE contact_id = ?"
+        )
+        .query_scalar()
+        .bind(contact_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         let Some(name) = name else {
             bail!("no contact {contact_id}");
         };
@@ -681,12 +723,16 @@ impl Store {
             }
             LinkPlan::Insert => {
                 insert_handle(&mut tx, handle, contact_id, Maker::Person, &now, &tz).await?;
-                sqlx::query("DELETE FROM not_linked WHERE handle = ? AND contact_id = ?")
-                    .bind(handle.as_str())
-                    .bind(contact_id)
-                    .execute(&mut *tx)
-                    .await
-                    .context("forget a turned-down link")?;
+                sql!(
+                    "contacts_app.delete_not_linked_on_link",
+                    "DELETE FROM not_linked WHERE handle = ? AND contact_id = ?"
+                )
+                .query()
+                .bind(handle.as_str())
+                .bind(contact_id)
+                .execute(&mut *tx)
+                .await
+                .context("forget a turned-down link")?;
             }
         }
         tx.commit().await?;
@@ -699,21 +745,26 @@ impl Store {
     pub async fn add_member(&self, group_id: &str, member_id: &str) -> Result<()> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        let kind: Option<String> =
-            sqlx::query_scalar("SELECT kind FROM contacts WHERE contact_id = ?")
-                .bind(group_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        let kind: Option<String> = sql!(
+            "contacts_app.read_group_kind",
+            "SELECT kind FROM contacts WHERE contact_id = ?"
+        )
+        .query_scalar()
+        .bind(group_id)
+        .fetch_optional(&mut *tx)
+        .await?;
         match kind.as_deref().and_then(ContactKind::parse) {
             Some(ContactKind::Group) => {}
             Some(_) => bail!("{group_id} is not a group"),
             None => bail!("no contact {group_id}"),
         }
         let name = name_of_existing(&mut tx, member_id).await?;
-        sqlx::query(
+        sql!(
+            "contacts_app.insert_group_member",
             "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?)"
         )
+        .query()
         .bind(group_id)
         .bind(member_id)
         .bind(&now)
@@ -747,12 +798,16 @@ impl Store {
                 bail!("{by:?} is not a date: write 2019, 2019-06 or 2019-06-14");
             }
         }
-        let done = sqlx::query("UPDATE handles SET stopped_working_by = ? WHERE handle = ?")
-            .bind(by)
-            .bind(handle.as_str())
-            .execute(&self.pool)
-            .await
-            .context("mark a handle")?;
+        let done = sql!(
+            "contacts_app.mark_handle_stopped_working",
+            "UPDATE handles SET stopped_working_by = ? WHERE handle = ?"
+        )
+        .query()
+        .bind(by)
+        .bind(handle.as_str())
+        .execute(&self.pool)
+        .await
+        .context("mark a handle")?;
         if done.rows_affected() == 0 {
             return Ok(false);
         }
@@ -769,9 +824,11 @@ impl Store {
             bail!("a contact needs a name");
         }
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let done = sqlx::query(
-            "UPDATE contacts SET name = ?, updated_at_utc = ?, tz_offset = ? WHERE contact_id = ?",
+        let done = sql!(
+            "contacts_app.rename_contact",
+            "UPDATE contacts SET name = ?, updated_at_utc = ?, tz_offset = ? WHERE contact_id = ?"
         )
+        .query()
         .bind(name)
         .bind(&now)
         .bind(&tz)
@@ -790,11 +847,15 @@ impl Store {
     /// The photo on a contact, as `(content_type, bytes)`; `None` where
     /// there is none.
     pub async fn photo(&self, contact_id: &str) -> Result<Option<(String, Vec<u8>)>> {
-        let row = sqlx::query("SELECT content_type, bytes FROM photos WHERE contact_id = ?")
-            .bind(contact_id)
-            .fetch_optional(&self.pool)
-            .await
-            .context("read a contact's photo")?;
+        let row = sql!(
+            "contacts_app.read_photo",
+            "SELECT content_type, bytes FROM photos WHERE contact_id = ?"
+        )
+        .query()
+        .bind(contact_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("read a contact's photo")?;
         Ok(row.map(|r| (r.get("content_type"), r.get("bytes"))))
     }
 
@@ -836,11 +897,15 @@ impl Store {
     /// Returns whether the contact had a photo to take off.
     pub async fn clear_photo(&self, contact_id: &str) -> Result<bool> {
         let name = name_of_existing(&mut *self.pool.acquire().await?, contact_id).await?;
-        let done = sqlx::query("DELETE FROM photos WHERE contact_id = ?")
-            .bind(contact_id)
-            .execute(&self.pool)
-            .await
-            .context("take a contact's photo off")?;
+        let done = sql!(
+            "contacts_app.delete_photo",
+            "DELETE FROM photos WHERE contact_id = ?"
+        )
+        .query()
+        .bind(contact_id)
+        .execute(&self.pool)
+        .await
+        .context("take a contact's photo off")?;
         if done.rows_affected() == 0 {
             return Ok(false);
         }
@@ -856,11 +921,13 @@ impl Store {
     pub async fn set_me(&self, contact_id: &str, me: bool) -> Result<bool> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(
+        let row = sql!(
+            "contacts_app.read_survivor_for_me",
             "SELECT c.contact_id, c.name, c.kind FROM contacts c \
                JOIN contacts asked ON c.contact_id = COALESCE(asked.merged_into, asked.contact_id) \
-              WHERE asked.contact_id = ?",
+              WHERE asked.contact_id = ?"
         )
+        .query()
         .bind(contact_id)
         .fetch_optional(&mut *tx)
         .await
@@ -877,10 +944,14 @@ impl Store {
                 marked_at_utc: now,
                 tz_offset: tz,
             };
-            let before: Option<i64> = sqlx::query_scalar("SELECT 1 FROM me WHERE contact_id = ?")
-                .bind(&id)
-                .fetch_optional(&mut *tx)
-                .await?;
+            let before: Option<i64> = sql!(
+                "contacts_app.is_survivor_me",
+                "SELECT 1 FROM me WHERE contact_id = ?"
+            )
+            .query_scalar()
+            .bind(&id)
+            .fetch_optional(&mut *tx)
+            .await?;
             if before.is_none() {
                 bulk_upsert_entity_in_tx(&mut tx, &[row])
                     .await
@@ -888,12 +959,16 @@ impl Store {
             }
             before.is_none()
         } else {
-            sqlx::query("DELETE FROM me WHERE contact_id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("unmark a contact as me")?
-                .rows_affected()
+            sql!(
+                "contacts_app.unmark_me",
+                "DELETE FROM me WHERE contact_id = ?"
+            )
+            .query()
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .context("unmark a contact as me")?
+            .rows_affected()
                 > 0
         };
         tx.commit().await?;
@@ -913,24 +988,48 @@ impl Store {
         let _held = self.drafts.lock().await;
         let mut tx = self.pool.begin().await?;
         let name = name_of_existing(&mut tx, contact_id).await?;
-        let mut gone: Vec<String> =
-            sqlx::query_scalar("SELECT contact_id FROM contacts WHERE merged_into = ?")
-                .bind(contact_id)
-                .fetch_all(&mut *tx)
-                .await
-                .context("read the contacts merged into one")?;
+        let mut gone: Vec<String> = sql!(
+            "contacts_app.list_merged_into",
+            "SELECT contact_id FROM contacts WHERE merged_into = ?"
+        )
+        .query_scalar()
+        .bind(contact_id)
+        .fetch_all(&mut *tx)
+        .await
+        .context("read the contacts merged into one")?;
         gone.push(contact_id.to_string());
         for id in &gone {
             for sql in [
-                "DELETE FROM handles WHERE contact_id = ?1",
-                "DELETE FROM fields WHERE contact_id = ?1",
-                "DELETE FROM photos WHERE contact_id = ?1",
-                "DELETE FROM me WHERE contact_id = ?1",
-                "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1",
-                "DELETE FROM labels WHERE subject = 'contact:' || ?1",
-                "DELETE FROM contacts WHERE contact_id = ?1",
+                sql!(
+                    "contacts_app.delete.delete_handles",
+                    "DELETE FROM handles WHERE contact_id = ?1"
+                ),
+                sql!(
+                    "contacts_app.delete.delete_fields",
+                    "DELETE FROM fields WHERE contact_id = ?1"
+                ),
+                sql!(
+                    "contacts_app.delete.delete_photos",
+                    "DELETE FROM photos WHERE contact_id = ?1"
+                ),
+                sql!(
+                    "contacts_app.delete.delete_me",
+                    "DELETE FROM me WHERE contact_id = ?1"
+                ),
+                sql!(
+                    "contacts_app.delete.delete_members",
+                    "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1"
+                ),
+                sql!(
+                    "contacts_app.delete.delete_labels",
+                    "DELETE FROM labels WHERE subject = 'contact:' || ?1"
+                ),
+                sql!(
+                    "contacts_app.delete.delete_contacts",
+                    "DELETE FROM contacts WHERE contact_id = ?1"
+                ),
             ] {
-                sqlx::query(sql)
+                sql.query()
                     .bind(id)
                     .execute(&mut *tx)
                     .await
@@ -967,9 +1066,11 @@ impl Store {
                 into_kind.as_str()
             );
         }
-        let after: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(position), -1) + 1 FROM fields WHERE contact_id = ?",
+        let after: i64 = sql!(
+            "contacts_app.read_next_field_position",
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM fields WHERE contact_id = ?"
         )
+        .query_scalar()
         .bind(into)
         .fetch_one(&mut *tx)
         .await
@@ -1033,25 +1134,29 @@ impl Store {
                 "point the merged-away contacts at the survivor",
             ),
         ] {
-            sqlx::query(sql)
+            Sql::dynamic(sql_id!("contacts_app.merge_move_rows"), sql).query()
                 .bind(from)
                 .bind(into)
                 .execute(&mut *tx)
                 .await
                 .context(what)?;
         }
-        sqlx::query(
-            "UPDATE fields SET contact_id = ?, position = position + ? WHERE contact_id = ?",
+        sql!(
+            "contacts_app.merge_move_fields",
+            "UPDATE fields SET contact_id = ?, position = position + ? WHERE contact_id = ?"
         )
+        .query()
         .bind(into)
         .bind(after)
         .bind(from)
         .execute(&mut *tx)
         .await
         .context("move the fields")?;
-        sqlx::query(
-            "UPDATE contacts SET note = ?, updated_at_utc = ?, tz_offset = ? WHERE contact_id = ?",
+        sql!(
+            "contacts_app.merge_update_survivor_note",
+            "UPDATE contacts SET note = ?, updated_at_utc = ?, tz_offset = ? WHERE contact_id = ?"
         )
+        .query()
         .bind(merged_note(into_note, from_note))
         .bind(&now)
         .bind(&tz)
@@ -1072,21 +1177,29 @@ impl Store {
 }
 
 async fn holder(tx: &mut sqlx::SqliteConnection, h: &Handle) -> Result<Option<String>> {
-    sqlx::query_scalar("SELECT contact_id FROM handles WHERE handle = ?")
-        .bind(h.as_str())
-        .fetch_optional(&mut *tx)
-        .await
-        .context("read who holds a handle")
+    sql!(
+        "contacts_app.find_handle_holder",
+        "SELECT contact_id FROM handles WHERE handle = ?"
+    )
+    .query_scalar()
+    .bind(h.as_str())
+    .fetch_optional(&mut *tx)
+    .await
+    .context("read who holds a handle")
 }
 
 /// A contact's name, or a refusal naming the id when there is no such
 /// contact.
 async fn name_of_existing(conn: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM contacts WHERE contact_id = ?")
-        .bind(contact_id)
-        .fetch_optional(&mut *conn)
-        .await
-        .context("read a contact's name")?;
+    let name: Option<String> = sql!(
+        "contacts_app.read_name_or_refuse",
+        "SELECT name FROM contacts WHERE contact_id = ?"
+    )
+    .query_scalar()
+    .bind(contact_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read a contact's name")?;
     name.ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))
 }
 
@@ -1096,13 +1209,16 @@ async fn merge_side(
     conn: &mut sqlx::SqliteConnection,
     contact_id: &str,
 ) -> Result<(String, ContactKind, Option<String>)> {
-    let row =
-        sqlx::query("SELECT name, kind, note, merged_into FROM contacts WHERE contact_id = ?")
-            .bind(contact_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .context("read a contact to merge")?
-            .ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))?;
+    let row = sql!(
+        "contacts_app.read_merge_side",
+        "SELECT name, kind, note, merged_into FROM contacts WHERE contact_id = ?"
+    )
+    .query()
+    .bind(contact_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read a contact to merge")?
+    .ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))?;
     let name: String = row.get("name");
     if row.get::<Option<String>, _>("merged_into").is_some() {
         bail!("{name:?} was already merged into another contact");
@@ -1126,11 +1242,15 @@ fn merged_note(into: Option<String>, from: Option<String>) -> Option<String> {
 }
 
 async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
-    let name: Option<String> = sqlx::query_scalar("SELECT name FROM contacts WHERE contact_id = ?")
-        .bind(contact_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .context("read a contact's name")?;
+    let name: Option<String> = sql!(
+        "contacts_app.read_name_for_message",
+        "SELECT name FROM contacts WHERE contact_id = ?"
+    )
+    .query_scalar()
+    .bind(contact_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("read a contact's name")?;
     Ok(name.unwrap_or_else(|| format!("contact {contact_id}")))
 }
 
@@ -1191,6 +1311,7 @@ async fn insert_handle(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn email(s: &str) -> Handle {
         Handle::email(s).unwrap()
     }
@@ -1351,7 +1472,8 @@ mod tests {
 
         store.set_me(&picard, true).await.unwrap();
         store.delete(&picard).await.unwrap();
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM me")
+        let left: i64 = test_sql!("SELECT COUNT(*) FROM me")
+            .query_scalar()
             .fetch_one(&store.pool)
             .await
             .unwrap();
@@ -1372,17 +1494,19 @@ mod tests {
             .await
             .unwrap();
         for old in ["email:mailto:picard@enterprise.org", "tel:+1123456"] {
-            sqlx::query(
+            test_sql!(
                 "INSERT INTO handles (handle, contact_id, linked_how, linked_at_utc, tz_offset) \
-                 VALUES (?, ?, 'manual', '2364-03-01T09:00:00.000000Z', '+00:00')",
+                 VALUES (?, ?, 'manual', '2364-03-01T09:00:00.000000Z', '+00:00')"
             )
+            .query()
             .bind(old)
             .bind(&picard)
             .execute(&store.pool)
             .await
             .unwrap();
         }
-        sqlx::query("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
+        test_sql!("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
+            .query()
             .execute(&store.pool)
             .await
             .unwrap();
@@ -1433,16 +1557,18 @@ mod tests {
             .await
             .unwrap();
         let hidden = "email:riker\u{202E}@enterprise.org";
-        sqlx::query(
+        test_sql!(
             "INSERT INTO handles (handle, contact_id, linked_how, linked_at_utc, tz_offset) \
-             VALUES (?, ?, 'manual', '2364-03-01T09:00:00.000000Z', '+00:00')",
+             VALUES (?, ?, 'manual', '2364-03-01T09:00:00.000000Z', '+00:00')"
         )
+        .query()
         .bind(hidden)
         .bind(&troi)
         .execute(&store.pool)
         .await
         .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
+        test_sql!("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
+            .query()
             .execute(&store.pool)
             .await
             .unwrap();
@@ -1527,17 +1653,27 @@ mod tests {
         // A row in every table: an empty table is rebuilt whatever its
         // shape, which would hide a break.
         for sql in [
-            "INSERT INTO contacts VALUES ('riker', 'person', 'William Riker', 'x', NULL, \
-             '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')",
-            "INSERT INTO contacts VALUES ('away', 'group', 'Away team', NULL, NULL, \
-             '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')",
-            "INSERT INTO handles VALUES ('email:riker@enterprise.org', 'riker', 'manual', \
-             '2364-03-01T09:00:00Z', '+00:00', NULL)",
-            "INSERT INTO members VALUES ('away', 'riker', '2364-03-01T09:00:00Z', '+00:00')",
-            "INSERT INTO photos VALUES ('riker', 'image/png', x'89504e47', \
-             '2364-03-01T09:00:00Z', '+00:00')",
+            test_sql!(
+                "INSERT INTO contacts VALUES ('riker', 'person', 'William Riker', 'x', NULL, \
+             '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')"
+            ),
+            test_sql!(
+                "INSERT INTO contacts VALUES ('away', 'group', 'Away team', NULL, NULL, \
+             '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')"
+            ),
+            test_sql!(
+                "INSERT INTO handles VALUES ('email:riker@enterprise.org', 'riker', 'manual', \
+             '2364-03-01T09:00:00Z', '+00:00', NULL)"
+            ),
+            test_sql!(
+                "INSERT INTO members VALUES ('away', 'riker', '2364-03-01T09:00:00Z', '+00:00')"
+            ),
+            test_sql!(
+                "INSERT INTO photos VALUES ('riker', 'image/png', x'89504e47', \
+             '2364-03-01T09:00:00Z', '+00:00')"
+            ),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         doltlite_raw::commit_run(&pool, "a store from the hand-written tables")
             .await
@@ -1773,7 +1909,8 @@ mod tests {
         assert!(store.clear_photo(&id).await.unwrap());
         assert!(!store.clear_photo(&id).await.unwrap());
         assert_eq!(store.contact(&id).await.unwrap().unwrap().photo_url, None);
-        let log: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 4")
+        let log: Vec<String> = test_sql!("SELECT message FROM dolt_log() LIMIT 4")
+            .query_scalar()
             .fetch_all(&store.pool)
             .await
             .unwrap();
@@ -1829,7 +1966,8 @@ mod tests {
             .await
             .unwrap();
         store.add_member(&crew, &dup).await.unwrap();
-        sqlx::query("UPDATE contacts SET note = 'trombone' WHERE contact_id = ?")
+        test_sql!("UPDATE contacts SET note = 'trombone' WHERE contact_id = ?")
+            .query()
             .bind(&dup)
             .execute(&store.pool)
             .await
@@ -1862,15 +2000,16 @@ mod tests {
             .map(|c| c.key)
             .collect();
         assert_eq!(listed, [crew.clone(), keep.clone()]);
-        let members: Vec<String> =
-            sqlx::query_scalar("SELECT member_id FROM members WHERE group_id = ?")
-                .bind(&crew)
-                .fetch_all(&store.pool)
-                .await
-                .unwrap();
+        let members: Vec<String> = test_sql!("SELECT member_id FROM members WHERE group_id = ?")
+            .query_scalar()
+            .bind(&crew)
+            .fetch_all(&store.pool)
+            .await
+            .unwrap();
         assert_eq!(members, [keep.as_str()]);
         let chain: Vec<String> =
-            sqlx::query_scalar("SELECT merged_into FROM contacts WHERE merged_into IS NOT NULL")
+            test_sql!("SELECT merged_into FROM contacts WHERE merged_into IS NOT NULL")
+                .query_scalar()
                 .fetch_all(&store.pool)
                 .await
                 .unwrap();
@@ -1977,7 +2116,8 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM handles")
+        let n: i64 = test_sql!("SELECT count(*) FROM handles")
+            .query_scalar()
             .fetch_one(reader.pool())
             .await
             .unwrap();

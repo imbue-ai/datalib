@@ -9,6 +9,7 @@ use datalib_etl_linear::probe::probe;
 use datalib_etl_linear_config::{LinearConfig, LinearSync};
 use datalib_fake_services::{with_real_rate_limits, Fakes, Launch, LINEAR};
 use datalib_probe::{ProbeAsk, ProbeList};
+use datalib_sql::{test_sql_id, Sql};
 use serde_json::{json, Value};
 
 const TOKEN: &str = "lin_api_fakestarfleettoken";
@@ -56,19 +57,19 @@ async fn run(db: &RawDb, sync: LinearSync) -> anyhow::Result<FetchSummary> {
 }
 
 async fn ids(db: &RawDb, table: &str) -> Vec<String> {
-    let sql = format!("SELECT id FROM {table} WHERE payload IS NOT NULL ORDER BY id");
-    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .fetch_all(db.pool())
-        .await
-        .unwrap()
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT id FROM {table} WHERE payload IS NOT NULL ORDER BY id"),
+    );
+    sql.query_scalar().fetch_all(db.pool()).await.unwrap()
 }
 
 async fn payloads(db: &RawDb, table: &str) -> Vec<Value> {
-    let sql = format!("SELECT json(payload) FROM {table} WHERE payload IS NOT NULL ORDER BY id");
-    let texts: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .fetch_all(db.pool())
-        .await
-        .unwrap();
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(payload) FROM {table} WHERE payload IS NOT NULL ORDER BY id"),
+    );
+    let texts: Vec<String> = sql.query_scalar().fetch_all(db.pool()).await.unwrap();
     texts
         .iter()
         .map(|t| serde_json::from_str(t).unwrap())

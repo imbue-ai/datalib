@@ -18,6 +18,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_sqlite_open",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

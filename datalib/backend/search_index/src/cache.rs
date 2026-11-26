@@ -11,6 +11,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_store_meta::StoreKind;
 use sqlx::sqlite::{SqliteConnection, SqlitePool};
 
@@ -32,8 +33,11 @@ const DDL: [&str; 1] = ["CREATE TABLE IF NOT EXISTS vectors (
 const KEYS: &str = "CREATE INDEX IF NOT EXISTS vectors_keys ON vectors (model, hash)";
 
 /// Of a model's vectors, the hashes held among a bound JSON array of them.
-const HELD_SQL: &str = "SELECT hash FROM vectors INDEXED BY vectors_keys WHERE model = ? \
-                          AND hash IN (SELECT value FROM json_each(?))";
+const HELD_SQL: Sql = sql!(
+    "search_index.cache.list_held_hashes",
+    "SELECT hash FROM vectors INDEXED BY vectors_keys WHERE model = ? \
+                          AND hash IN (SELECT value FROM json_each(?))"
+);
 
 /// How many hashes go into one statement's bound JSON array.
 const BATCH: usize = 10_000;
@@ -115,7 +119,8 @@ async fn rewrite_pages_within(path: &Path, wait: Duration) -> Result<()> {
 }
 
 async fn page_size(conn: &mut SqliteConnection) -> Result<i64> {
-    sqlx::query_scalar("PRAGMA page_size")
+    sql!("search_index.cache.read_page_size", "PRAGMA page_size")
+        .query_scalar()
         .fetch_one(conn)
         .await
         .context("read the page size")
@@ -134,18 +139,34 @@ async fn to_page_size(pool: &SqlitePool, wait: Duration) -> Result<()> {
     // to disk: this connection keeps its temporaries in memory otherwise.
     let rewrite = async {
         // Audited: `PAGE_SIZE` is a number.
-        let page_size = format!("PRAGMA page_size = {PAGE_SIZE}");
-        sqlx::query(sqlx::AssertSqlSafe(page_size))
-            .execute(&mut *conn)
-            .await?;
-        for sql in ["PRAGMA temp_store = FILE", "VACUUM"] {
-            sqlx::query(sql).execute(&mut *conn).await?;
+        let page_size = Sql::dynamic(
+            sql_id!("search_index.cache.set_page_size"),
+            format!("PRAGMA page_size = {PAGE_SIZE}"),
+        );
+        page_size.query().execute(&mut *conn).await?;
+        for sql in [
+            sql!(
+                "search_index.cache.vacuum_temp_on_disk",
+                "PRAGMA temp_store = FILE"
+            ),
+            sql!("search_index.cache.vacuum_to_page_size", "VACUUM"),
+        ] {
+            sql.query().execute(&mut *conn).await?;
         }
         anyhow::Ok(())
     }
     .await;
-    for sql in ["PRAGMA temp_store = MEMORY", "PRAGMA journal_mode = WAL"] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+    for sql in [
+        sql!(
+            "search_index.cache.vacuum_temp_back_in_memory",
+            "PRAGMA temp_store = MEMORY"
+        ),
+        sql!(
+            "search_index.cache.set_journal_mode_after_vacuum",
+            "PRAGMA journal_mode = WAL"
+        ),
+    ] {
+        sql.query().execute(&mut *conn).await?;
     }
     rewrite?;
     let now = page_size(&mut conn).await?;
@@ -168,9 +189,13 @@ async fn leave_wal(conn: &mut SqliteConnection, wait: Duration) -> Result<()> {
     const RETRY: Duration = Duration::from_millis(100);
     let deadline = Instant::now() + wait;
     loop {
-        match sqlx::query_scalar::<_, String>("PRAGMA journal_mode = DELETE")
-            .fetch_one(&mut *conn)
-            .await
+        match sql!(
+            "search_index.cache.leave_wal_mode",
+            "PRAGMA journal_mode = DELETE"
+        )
+        .query_scalar::<String>()
+        .fetch_one(&mut *conn)
+        .await
         {
             Ok(mode) if mode.eq_ignore_ascii_case("delete") => return Ok(()),
             Ok(mode) => bail!("SQLite kept the inference cache in {mode} mode"),
@@ -231,7 +256,8 @@ impl InferenceCache {
     pub async fn missing(&self, model: &str, hashes: &[String]) -> Result<Vec<String>> {
         let mut held = HashSet::new();
         for batch in hashes.chunks(BATCH) {
-            let found: Vec<String> = sqlx::query_scalar(HELD_SQL)
+            let found: Vec<String> = HELD_SQL
+                .query_scalar()
                 .bind(model)
                 .bind(serde_json::to_string(batch)?)
                 .fetch_all(&self.pool)
@@ -250,12 +276,16 @@ impl InferenceCache {
     pub async fn put(&self, model: &str, vectors: &[(String, Vec<f32>)]) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         for (hash, vector) in vectors {
-            sqlx::query("INSERT OR REPLACE INTO vectors (model, hash, vector) VALUES (?, ?, ?)")
-                .bind(model)
-                .bind(hash)
-                .bind(to_blob(vector))
-                .execute(&mut *tx)
-                .await?;
+            sql!(
+                "search_index.cache.upsert_vector",
+                "INSERT OR REPLACE INTO vectors (model, hash, vector) VALUES (?, ?, ?)"
+            )
+            .query()
+            .bind(model)
+            .bind(hash)
+            .bind(to_blob(vector))
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await.context("commit the vectors")
     }
@@ -263,10 +293,12 @@ impl InferenceCache {
     pub async fn get(&self, model: &str, hashes: &[String]) -> Result<HashMap<String, Vec<f32>>> {
         let mut out = HashMap::new();
         for batch in hashes.chunks(BATCH) {
-            let rows: Vec<(String, Vec<u8>)> = sqlx::query_as(
+            let rows: Vec<(String, Vec<u8>)> = sql!(
+                "search_index.cache.read_vectors_by_hash",
                 "SELECT hash, vector FROM vectors WHERE model = ? \
-                   AND hash IN (SELECT value FROM json_each(?))",
+                   AND hash IN (SELECT value FROM json_each(?))"
             )
+            .query_as()
             .bind(model)
             .bind(serde_json::to_string(batch)?)
             .fetch_all(&self.pool)
@@ -296,6 +328,7 @@ fn from_blob(blob: &[u8]) -> Result<Vec<f32>> {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     async fn open() -> (tempfile::TempDir, InferenceCache) {
         let dir = tempfile::tempdir().unwrap();
         let cache = InferenceCache::open(&dir.path().join("cache.sqlite"))
@@ -340,8 +373,8 @@ mod tests {
 
     async fn plan(cache: &InferenceCache, sql: &str, binds: &[&str]) -> Vec<String> {
         // `sql` is one of this crate's own constant statements.
-        let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}"));
-        let mut query = sqlx::query_as::<_, (i64, i64, i64, String)>(explain);
+        let explain = Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"));
+        let mut query = explain.query_as::<(i64, i64, i64, String)>();
         for bind in binds {
             query = query.bind(*bind);
         }
@@ -364,7 +397,7 @@ mod tests {
             (HELD_SQL, ["gemma", "[]"]),
             (crate::chunked::OWED_SQL, ["mail", "gemma"]),
         ] {
-            let plan = plan(&cache, sql, &binds).await;
+            let plan = plan(&cache, sql.as_str(), &binds).await;
             assert!(
                 plan.iter()
                     .any(|d| d.contains("USING COVERING INDEX vectors_keys")),
@@ -379,7 +412,7 @@ mod tests {
     #[tokio::test]
     async fn the_sweep_reads_the_keys_not_the_vectors() {
         let (_dir, cache) = open().await;
-        let plan = plan(&cache, crate::chunked::SWEEP_SQL, &["gemma"]).await;
+        let plan = plan(&cache, crate::chunked::SWEEP_SQL.as_str(), &["gemma"]).await;
         assert!(
             plan.iter()
                 .any(|d| d == "SCAN vectors USING COVERING INDEX vectors_keys"),
@@ -394,11 +427,11 @@ mod tests {
 
     async fn pragma(cache: &InferenceCache, name: &str) -> String {
         // `name` is one of the pragmas below.
-        let sql = sqlx::AssertSqlSafe(format!("SELECT CAST({name} AS TEXT) FROM pragma_{name}"));
-        sqlx::query_scalar(sql)
-            .fetch_one(&cache.pool)
-            .await
-            .unwrap()
+        let sql = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT CAST({name} AS TEXT) FROM pragma_{name}"),
+        );
+        sql.query_scalar().fetch_one(&cache.pool).await.unwrap()
     }
 
     /// A cache at `path` holding one vector, under "a", in SQLite's
@@ -411,12 +444,12 @@ mod tests {
             .await
             .unwrap();
         for sql in [
-            "PRAGMA journal_mode = DELETE",
-            "PRAGMA page_size = 4096",
-            "VACUUM",
-            "PRAGMA journal_mode = WAL",
+            test_sql!("PRAGMA journal_mode = DELETE"),
+            test_sql!("PRAGMA page_size = 4096"),
+            test_sql!("VACUUM"),
+            test_sql!("PRAGMA journal_mode = WAL"),
         ] {
-            sqlx::query(sql).execute(&cache.pool).await.unwrap();
+            sql.query().execute(&cache.pool).await.unwrap();
         }
         assert_eq!(pragma(&cache, "page_size").await, "4096", "set up");
         cache.close().await;
@@ -483,7 +516,8 @@ mod tests {
         let path = dir.path().join("cache.sqlite");
         let vector = in_small_pages(&path).await;
         let reader = crate::read::connect(&path).await.unwrap();
-        let held: i64 = sqlx::query_scalar("SELECT count(*) FROM vectors")
+        let held: i64 = test_sql!("SELECT count(*) FROM vectors")
+            .query_scalar()
             .fetch_one(&reader)
             .await
             .unwrap();
@@ -507,7 +541,8 @@ mod tests {
         let path = dir.path().join("cache.sqlite");
         let cache = InferenceCache::open(&path).await.unwrap();
         cache.put("gemma", &[(h("a"), vec![0.5])]).await.unwrap();
-        sqlx::query("DROP INDEX vectors_keys")
+        test_sql!("DROP INDEX vectors_keys")
+            .query()
             .execute(&cache.pool)
             .await
             .unwrap();
@@ -515,7 +550,8 @@ mod tests {
         let cache = InferenceCache::open(&path).await.unwrap();
         assert!(cache.missing("gemma", &[h("a")]).await.unwrap().is_empty());
         let indexed: Option<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE name = 'vectors_keys'")
+            test_sql!("SELECT name FROM sqlite_master WHERE name = 'vectors_keys'")
+                .query_scalar()
                 .fetch_optional(&cache.pool)
                 .await
                 .unwrap();

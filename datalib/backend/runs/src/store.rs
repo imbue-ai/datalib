@@ -20,6 +20,7 @@ use app_schema::runs::{
     LogRow, MetricRow, MetricSampleRow, Process, ProcessRow, RunRow, RunStart, StepRunRow,
     StorePart,
 };
+use datalib_sql::{sql, sql_id, Sql};
 
 /// How often the writer thread flushes. 200ms is under the threshold
 /// where a progress display reads as laggy, and far above the cost of
@@ -278,7 +279,8 @@ async fn vacuum_into(from: &Path, to: &Path) -> Result<(), sqlx::Error> {
         .filename(datalib_runtime::plain_sqlite::uri(from))
         .busy_timeout(BUSY_TIMEOUT);
     let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
-    let copied = sqlx::query("VACUUM INTO ?")
+    let copied = sql!("runs.vacuum_into_copy", "VACUUM INTO ?")
+        .query()
         .bind(datalib_runtime::plain_sqlite::uri(to))
         .execute(&mut conn)
         .await;
@@ -320,7 +322,10 @@ async fn reset(path: &Path) -> Result<(), sqlx::Error> {
         .busy_timeout(BUSY_TIMEOUT);
     let mut conn = sqlx::sqlite::SqliteConnection::connect_with(&bare).await?;
     set_reset_database(&mut conn, true).await?;
-    let vacuumed = sqlx::raw_sql("VACUUM").execute(&mut conn).await;
+    let vacuumed = sql!("runs.vacuum_reset", "VACUUM")
+        .raw()
+        .execute(&mut conn)
+        .await;
     conn.close().await?;
     vacuumed.map(|_| ())
 }
@@ -413,7 +418,8 @@ const UPGRADES: &[(i32, &[&str])] = &[
 /// with none. A brand-new file (version 0, no tables) gets the schema
 /// installed and reads as a match.
 async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let mut version: i32 = sqlx::query_scalar("PRAGMA user_version")
+    let mut version: i32 = sql!("runs.read_user_version", "PRAGMA user_version")
+        .query_scalar()
         .fetch_one(pool)
         .await?;
     while let Some((_, statements)) = UPGRADES.iter().find(|(from, _)| *from == version) {
@@ -423,9 +429,13 @@ async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
     if version == SCHEMA_VERSION {
         return Ok(true);
     }
-    let tables: i32 = sqlx::query_scalar("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'")
-        .fetch_one(pool)
-        .await?;
+    let tables: i32 = sql!(
+        "runs.count_tables",
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await?;
     if version == 0 && tables == 0 {
         install_schema(pool).await?;
         return Ok(true);
@@ -437,14 +447,19 @@ async fn climb(pool: &SqlitePool, statements: &[&str], to: i32) -> Result<(), sq
     let mut tx = pool.begin().await?;
     for statement in statements {
         // Safe: every statement is a compile-time literal in `UPGRADES`.
-        sqlx::query(sqlx::AssertSqlSafe(*statement))
+        Sql::dynamic(sql_id!("runs.migrate_run_upgrade"), *statement)
+            .query()
             .execute(&mut *tx)
             .await?;
     }
     // Safe: a compile-time integer, not input.
-    sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA user_version = {to}")))
-        .execute(&mut *tx)
-        .await?;
+    Sql::dynamic(
+        sql_id!("runs.migrate_set_user_version"),
+        format!("PRAGMA user_version = {to}"),
+    )
+    .query()
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await
 }
 
@@ -460,12 +475,17 @@ async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
         .into_iter()
         .chain(INDEXES.iter().copied())
     {
-        sqlx::query(ddl).execute(&mut *tx).await?;
+        Sql::dynamic(sql_id!("runs.create_schema"), ddl)
+            .query()
+            .execute(&mut *tx)
+            .await?;
     }
     // Safe: a compile-time integer, not input.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA user_version = {SCHEMA_VERSION}"
-    )))
+    Sql::dynamic(
+        sql_id!("runs.install_set_user_version"),
+        format!("PRAGMA user_version = {SCHEMA_VERSION}"),
+    )
+    .query()
     .execute(&mut *tx)
     .await?;
     tx.commit().await
@@ -529,9 +549,13 @@ pub async fn versions(data_root: &Path) -> anyhow::Result<BTreeMap<StorePart, i6
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(BTreeMap::new());
     };
-    let rows = sqlx::query("SELECT what, version FROM store_changes")
-        .fetch_all(&pool)
-        .await;
+    let rows = sql!(
+        "runs.list_store_versions",
+        "SELECT what, version FROM store_changes"
+    )
+    .query()
+    .fetch_all(&pool)
+    .await;
     pool.close().await;
     Ok(rows?
         .iter()
@@ -555,12 +579,14 @@ pub async fn processes(
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "runs.list_processes",
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
          FROM processes WHERE (? IS NULL OR run_id = ?) AND (? IS NULL OR process = ?) \
-         ORDER BY started_at_utc DESC LIMIT ?",
+         ORDER BY started_at_utc DESC LIMIT ?"
     )
+    .query()
     .bind(run)
     .bind(run)
     .bind(kind)
@@ -579,13 +605,15 @@ pub async fn runs(data_root: &Path, step: Option<&str>, limit: i64) -> anyhow::R
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "runs.list_runs",
         "SELECT r.run_id, r.started_at_utc, r.finished_at_utc, r.tz_offset, r.kind, r.reason \
          FROM runs r \
          WHERE ? IS NULL OR EXISTS \
            (SELECT 1 FROM step_runs s WHERE s.run_id = r.run_id AND s.step = ?) \
-         ORDER BY r.started_at_utc DESC LIMIT ?",
+         ORDER BY r.started_at_utc DESC LIMIT ?"
     )
+    .query()
     .bind(step)
     .bind(step)
     .bind(limit)
@@ -621,12 +649,14 @@ pub async fn metric_by_run(data_root: &Path, name: &str) -> anyhow::Result<Vec<M
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "runs.list_metric_by_run",
         "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
          FROM metrics m INDEXED BY metrics_by_name JOIN runs r ON r.run_id = m.run_id \
          WHERE m.name = ?1 \
-         ORDER BY m.step, m.labels, r.started_at_utc, r.rowid",
+         ORDER BY m.step, m.labels, r.started_at_utc, r.rowid"
     )
+    .query()
     .bind(name)
     .fetch_all(&pool)
     .await;
@@ -662,18 +692,22 @@ async fn newest_per_series(data_root: &Path, name: Option<&str>) -> anyhow::Resu
     // clock at second resolution — fall back to the order the store
     // recorded them in.
     let rows = match name {
-        Some(name) => sqlx::query(
+        Some(name) => sql!(
+            "runs.newest_metric_per_series_by_name",
             "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
              FROM metrics m INDEXED BY metrics_by_name JOIN runs r ON r.run_id = m.run_id \
              WHERE m.name = ?1 \
-             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
+             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC"
         )
+        .query()
         .bind(name),
-        None => sqlx::query(
+        None => sql!(
+            "runs.newest_metric_per_series",
             "SELECT m.run_id, m.step, m.name, m.labels, m.value, m.updated_at_utc, m.tz_offset \
              FROM metrics m JOIN runs r ON r.run_id = m.run_id \
-             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC",
-        ),
+             ORDER BY m.step, m.name, m.labels, r.started_at_utc DESC, r.rowid DESC"
+        )
+        .query(),
     }
     .fetch_all(&pool)
     .await;
@@ -716,7 +750,8 @@ pub async fn metric_history(
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "runs.metric_history_since",
         "SELECT run_id, step, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, labels ORDER BY ts_utc DESC) AS rn \
            FROM metric_samples INDEXED BY metric_samples_by_name \
@@ -726,8 +761,9 @@ pub async fn metric_history(
          SELECT run_id, step, labels, ts_utc, tz_offset, value \
            FROM metric_samples INDEXED BY metric_samples_by_name \
            WHERE name = ?1 AND ts_utc > ?2 \
-         ORDER BY step, labels, ts_utc",
+         ORDER BY step, labels, ts_utc"
     )
+    .query()
     .bind(name)
     .bind(since_utc)
     .fetch_all(&pool)
@@ -751,20 +787,24 @@ pub async fn metric_history(
 async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapshot, sqlx::Error> {
     let run = match run_id {
         Some(run_id) => {
-            sqlx::query(
+            sql!(
+                "runs.read_run",
                 "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason \
-                 FROM runs WHERE run_id = ?",
+                 FROM runs WHERE run_id = ?"
             )
+            .query()
             .bind(run_id)
             .fetch_optional(pool)
             .await?
         }
         None => {
-            sqlx::query(
+            sql!(
+                "runs.read_latest_run",
                 "SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason \
                  FROM runs INDEXED BY runs_by_start \
-                 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1",
+                 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1"
             )
+            .query()
             .fetch_optional(pool)
             .await?
         }
@@ -773,10 +813,8 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         return Ok(Snapshot::default());
     };
     let run_id: String = run.get("run_id");
-    let steps = sqlx::query(
-        "SELECT step, state, attempt, started_at_utc, finished_at_utc, error, msg, updated_at_utc, tz_offset \
-         FROM step_runs WHERE run_id = ? ORDER BY step",
-    )
+    let steps = sql!("runs.list_step_runs_of_run", "SELECT step, state, attempt, started_at_utc, finished_at_utc, error, msg, updated_at_utc, tz_offset \
+         FROM step_runs WHERE run_id = ? ORDER BY step").query()
     .bind(&run_id)
     .fetch_all(pool)
     .await?
@@ -794,10 +832,12 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         tz_offset: r.get("tz_offset"),
     })
     .collect();
-    let metrics = sqlx::query(
+    let metrics = sql!(
+        "runs.list_metrics_of_run",
         "SELECT step, name, labels, value, updated_at_utc, tz_offset FROM metrics \
-         WHERE run_id = ? ORDER BY step, name, labels",
+         WHERE run_id = ? ORDER BY step, name, labels"
     )
+    .query()
     .bind(&run_id)
     .fetch_all(pool)
     .await?
@@ -812,19 +852,19 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
         tz_offset: r.get("tz_offset"),
     })
     .collect();
-    let errors = sqlx::query(
+    let errors = sql!(
+        "runs.count_problem_lines_per_step",
         "SELECT step, COUNT(*) AS n FROM log \
-         WHERE run_id = ? AND step IS NOT NULL AND level IN ('warn', 'error') GROUP BY step",
+         WHERE run_id = ? AND step IS NOT NULL AND level IN ('warn', 'error') GROUP BY step"
     )
+    .query()
     .bind(&run_id)
     .fetch_all(pool)
     .await?
     .iter()
     .map(|r| (r.get::<String, _>("step"), r.get::<i64, _>("n")))
     .collect();
-    let last_log_at = sqlx::query(
-        "SELECT step, MAX(ts_utc) AS ts_utc FROM log WHERE run_id = ? AND step IS NOT NULL GROUP BY step",
-    )
+    let last_log_at = sql!("runs.latest_log_per_step", "SELECT step, MAX(ts_utc) AS ts_utc FROM log WHERE run_id = ? AND step IS NOT NULL GROUP BY step").query()
     .bind(&run_id)
     .fetch_all(pool)
     .await?
@@ -838,8 +878,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
     // runner writes and the ETA reads: a series this query missed would
     // not fail, it would make the estimate count a whole run as taken
     // off inside the window.
-    let queue_history = sqlx::query(
-        "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
+    let queue_history = sql!("runs.latest_progress_samples", "SELECT step, name, labels, ts_utc, tz_offset, value FROM ( \
            SELECT *, ROW_NUMBER() OVER (PARTITION BY step, name, labels ORDER BY ts_utc DESC) AS rn \
            FROM metric_samples INDEXED BY metric_samples_by_name \
            WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc <= ?2) \
@@ -848,8 +887,7 @@ async fn read_snapshot(pool: &SqlitePool, run_id: Option<&str>) -> Result<Snapsh
          SELECT step, name, labels, ts_utc, tz_offset, value \
            FROM metric_samples INDEXED BY metric_samples_by_name \
            WHERE run_id = ?1 AND name IN (?3, ?4, ?5) AND ts_utc > ?2 \
-         ORDER BY step, name, labels, ts_utc",
-    )
+         ORDER BY step, name, labels, ts_utc").query()
     .bind(&run_id)
     .bind(&queue_cutoff)
     .bind(datalib_metrics::QUEUED)
@@ -913,10 +951,12 @@ pub async fn step_samples(
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "runs.list_step_samples",
         "SELECT name, labels, ts_utc, tz_offset, value FROM metric_samples \
-         WHERE run_id = ? AND step = ? ORDER BY name, labels, ts_utc",
+         WHERE run_id = ? AND step = ? ORDER BY name, labels, ts_utc"
     )
+    .query()
     .bind(run_id)
     .bind(step)
     .fetch_all(&pool)
@@ -947,10 +987,12 @@ pub async fn step_problem_lines(
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "runs.list_step_problem_lines",
         "SELECT level, ts_utc FROM log \
-         WHERE run_id = ? AND step = ? AND level IN ('warn', 'error') ORDER BY ts_utc",
+         WHERE run_id = ? AND step = ? AND level IN ('warn', 'error') ORDER BY ts_utc"
     )
+    .query()
     .bind(run_id)
     .bind(step)
     .fetch_all(&pool)
@@ -969,10 +1011,14 @@ pub async fn log_line(data_root: &Path, seq: i64) -> anyhow::Result<Option<LogLi
         return Ok(None);
     };
     // Audited: the column list is this module's own constant.
-    let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+    let row = Sql::dynamic(
+        sql_id!("runs.read_log_line"),
+        format!(
+            "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
          WHERE l.seq = ?"
-    )))
+        ),
+    )
+    .query()
     .bind(seq)
     .fetch_optional(&pool)
     .await;
@@ -986,11 +1032,13 @@ pub async fn process(data_root: &Path, process_id: &str) -> anyhow::Result<Optio
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(None);
     };
-    let row = sqlx::query(
+    let row = sql!(
+        "runs.read_process",
         "SELECT process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
            exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes \
-         FROM processes WHERE process_id = ?",
+         FROM processes WHERE process_id = ?"
     )
+    .query()
     .bind(process_id)
     .fetch_optional(&pool)
     .await;
@@ -1041,11 +1089,15 @@ async fn log_where(
         return Ok(Vec::new());
     };
     // Audited: the column list is this module's own constant.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+    let rows = Sql::dynamic(
+        sql_id!("runs.tail_log_lines"),
+        format!(
+            "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
          WHERE (? IS NULL OR l.run_id = ?) AND l.seq > ? AND (? IS NULL OR l.step = ?) \
          ORDER BY l.seq LIMIT ?"
-    )))
+        ),
+    )
+    .query()
     .bind(run_id)
     .bind(run_id)
     .bind(after_seq)
@@ -1603,12 +1655,14 @@ async fn insert_process(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     p: &ProcessRow,
 ) -> Result<bool, sqlx::Error> {
-    let inserted = sqlx::query(
+    let inserted = sql!(
+        "runs.insert_process",
         "INSERT OR IGNORE INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
             exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes) \
-         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)"
     )
+    .query()
     .bind(&p.process_id)
     .bind(&p.process)
     .bind(&p.run_id)
@@ -1634,7 +1688,8 @@ async fn upsert_process(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     p: &ProcessRow,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sql!(
+        "runs.upsert_process",
         "INSERT INTO processes \
            (process_id, process, run_id, step, attempt, started_at_utc, finished_at_utc, \
             exit_code, signal, tz_offset, git_hash, applet, peak_rss_bytes) \
@@ -1642,8 +1697,9 @@ async fn upsert_process(
          ON CONFLICT(process_id) DO UPDATE SET finished_at_utc = excluded.finished_at_utc, \
            exit_code = excluded.exit_code, signal = excluded.signal, \
            git_hash = COALESCE(excluded.git_hash, processes.git_hash), \
-           peak_rss_bytes = COALESCE(excluded.peak_rss_bytes, processes.peak_rss_bytes)",
+           peak_rss_bytes = COALESCE(excluded.peak_rss_bytes, processes.peak_rss_bytes)"
     )
+    .query()
     .bind(&p.process_id)
     .bind(&p.process)
     .bind(&p.run_id)
@@ -1667,13 +1723,15 @@ async fn begin_run(
     run: &RunInfo,
     retention: Retention,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
+    sql!(
+        "runs.upsert_run_begun",
         "INSERT INTO runs (run_id, started_at_utc, tz_offset, kind, reason) \
          VALUES (?, ?, ?, ?, ?) \
          ON CONFLICT(run_id) DO UPDATE SET started_at_utc = excluded.started_at_utc, \
            tz_offset = excluded.tz_offset, finished_at_utc = NULL, \
-           kind = excluded.kind, reason = excluded.reason",
+           kind = excluded.kind, reason = excluded.reason"
     )
+    .query()
     .bind(&run.run_id)
     .bind(&run.started_at_utc)
     .bind(&run.tz_offset)
@@ -1682,10 +1740,12 @@ async fn begin_run(
     .execute(&mut **tx)
     .await?;
     let cutoff = age_cutoff(retention, &run.started_at_utc);
-    let mut gone: Vec<String> = sqlx::query_scalar(
+    let mut gone: Vec<String> = sql!(
+        "runs.delete_runs_past_retention",
         "DELETE FROM runs INDEXED BY runs_by_start \
-         WHERE started_at_utc < ? AND run_id != ? RETURNING run_id",
+         WHERE started_at_utc < ? AND run_id != ? RETURNING run_id"
     )
+    .query_scalar()
     .bind(&cutoff)
     .bind(&run.run_id)
     .fetch_all(&mut **tx)
@@ -1694,19 +1754,25 @@ async fn begin_run(
     // counted apart because a pinned clock can stamp it like older runs.
     let others = i64::from(retention.max_runs.max(1)) - 1;
     let over_count = if others == 0 {
-        sqlx::query_scalar("DELETE FROM runs WHERE run_id != ? RETURNING run_id")
-            .bind(&run.run_id)
-            .fetch_all(&mut **tx)
-            .await?
+        sql!(
+            "runs.delete_all_other_runs",
+            "DELETE FROM runs WHERE run_id != ? RETURNING run_id"
+        )
+        .query_scalar()
+        .bind(&run.run_id)
+        .fetch_all(&mut **tx)
+        .await?
     } else {
-        sqlx::query_scalar(
+        sql!(
+            "runs.delete_runs_past_max",
             "DELETE FROM runs INDEXED BY runs_by_start \
              WHERE run_id != ?1 AND (started_at_utc, run_id) < \
                (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start \
                 WHERE run_id != ?1 \
                 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) \
-             RETURNING run_id",
+             RETURNING run_id"
         )
+        .query_scalar()
         .bind(&run.run_id)
         .bind(others - 1)
         .fetch_all(&mut **tx)
@@ -1739,7 +1805,11 @@ async fn delete_rows_of_runs(
     ];
     let runs = serde_json::to_string(runs).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
     for sql in BY_RUN {
-        sqlx::query(*sql).bind(&runs).execute(&mut **tx).await?;
+        Sql::dynamic(sql_id!("runs.delete_rows_of_runs"), *sql)
+            .query()
+            .bind(&runs)
+            .execute(&mut **tx)
+            .await?;
     }
     Ok(())
 }
@@ -1805,14 +1875,15 @@ async fn close_abandoned_run_in(
     let (at, tz_offset) = now_split();
     let mut tx = pool.begin().await?;
 
-    let run_was_open = sqlx::query(
-        // `max`: a run begun under a pinned `--now` may have begun after
+    let run_was_open = sql!(
+        "runs.close_abandoned_run", // `max`: a run begun under a pinned `--now` may have begun after
         // the wall clock's now, and it cannot end before it began
         // (`datalib_time::closed_now` is the same rule for one run).
         "UPDATE runs SET finished_at_utc = max(?, started_at_utc), \
            tz_offset = coalesce(tz_offset, ?) \
-         WHERE run_id = ? AND finished_at_utc IS NULL",
+         WHERE run_id = ? AND finished_at_utc IS NULL"
     )
+    .query()
     .bind(&at)
     .bind(&tz_offset)
     .bind(run_id)
@@ -1827,11 +1898,13 @@ async fn close_abandoned_run_in(
         .iter()
         .map(|s| s.as_str())
         .collect();
-    let q = sqlx::query(
+    let q = sql!(
+        "runs.close_abandoned_step_runs",
         "UPDATE step_runs SET state = ?, finished_at_utc = coalesce(finished_at_utc, ?), \
            error = coalesce(error, ?), updated_at_utc = ?, tz_offset = coalesce(tz_offset, ?) \
-         WHERE run_id = ? AND state IN (SELECT value FROM json_each(?))",
+         WHERE run_id = ? AND state IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(step_state)
     .bind(&at)
     .bind(why)
@@ -1863,11 +1936,13 @@ async fn bump(
     what: StorePart,
 ) -> Result<(), sqlx::Error> {
     let (changed_at_utc, tz_offset) = now_split();
-    sqlx::query(
+    sql!(
+        "runs.bump_store_change",
         "INSERT INTO store_changes (what, version, changed_at_utc, tz_offset) VALUES (?, 1, ?, ?) \
          ON CONFLICT(what) DO UPDATE SET version = store_changes.version + 1, \
-           changed_at_utc = excluded.changed_at_utc, tz_offset = excluded.tz_offset",
+           changed_at_utc = excluded.changed_at_utc, tz_offset = excluded.tz_offset"
     )
+    .query()
     .bind(what.as_str())
     .bind(changed_at_utc)
     .bind(tz_offset)
@@ -1884,21 +1959,29 @@ async fn prune_unowned(pool: &SqlitePool, retention: Retention) -> Result<(), sq
     let cutoff = cutoff_days_ago(retention.process_log_days);
     // Marked: each counts every line it keeps, once per open
     // (`datalib_sql_work::judge::BY_DESIGN`).
-    sqlx::query("DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND ts_utc < ?")
-        .bind(&cutoff)
-        .execute(pool)
-        .await?;
-    sqlx::query(
-        "DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND seq < \
-         (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)",
+    sql!(
+        "runs.delete_old_unowned_log",
+        "DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND ts_utc < ?"
     )
+    .query()
+    .bind(&cutoff)
+    .execute(pool)
+    .await?;
+    sql!(
+        "runs.delete_excess_unowned_log",
+        "DELETE FROM log /* walks by design */ WHERE run_id IS NULL AND seq < \
+         (SELECT seq FROM log WHERE run_id IS NULL ORDER BY seq DESC LIMIT 1 OFFSET ?)"
+    )
+    .query()
     .bind(retention.process_log_lines.max(1) as i64 - 1)
     .execute(pool)
     .await?;
-    sqlx::query(
+    sql!(
+        "runs.delete_old_unowned_processes",
         "DELETE FROM processes WHERE run_id IS NULL AND started_at_utc < ? \
-         AND process_id NOT IN (SELECT process_id FROM log)",
+         AND process_id NOT IN (SELECT process_id FROM log)"
     )
+    .query()
     .bind(&cutoff)
     .execute(pool)
     .await?;
@@ -1939,25 +2022,37 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = scope.clock.now().to_utc_and_offset();
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE processes SET finished_at_utc = ? WHERE process_id = ?")
-        .bind(&finished_at_utc)
-        .bind(&scope.process.process_id)
-        .execute(&mut *tx)
-        .await?;
+    sql!(
+        "runs.mark_process_finished",
+        "UPDATE processes SET finished_at_utc = ? WHERE process_id = ?"
+    )
+    .query()
+    .bind(&finished_at_utc)
+    .bind(&scope.process.process_id)
+    .execute(&mut *tx)
+    .await?;
     if let Some(run) = &scope.run {
         bump(&mut tx, StorePart::Processes).await?;
-        sqlx::query("UPDATE runs SET finished_at_utc = ? WHERE run_id = ?")
-            .bind(&finished_at_utc)
-            .bind(&run.run_id)
-            .execute(&mut *tx)
-            .await?;
+        sql!(
+            "runs.mark_run_finished",
+            "UPDATE runs SET finished_at_utc = ? WHERE run_id = ?"
+        )
+        .query()
+        .bind(&finished_at_utc)
+        .bind(&run.run_id)
+        .execute(&mut *tx)
+        .await?;
         bump(&mut tx, StorePart::Runs).await?;
-        let never_started = sqlx::query("DELETE FROM step_runs WHERE run_id = ? AND state = ?")
-            .bind(&run.run_id)
-            .bind(LiveState::Pending.as_str())
-            .execute(&mut *tx)
-            .await?
-            .rows_affected();
+        let never_started = sql!(
+            "runs.delete_never_started_step_runs",
+            "DELETE FROM step_runs WHERE run_id = ? AND state = ?"
+        )
+        .query()
+        .bind(&run.run_id)
+        .bind(LiveState::Pending.as_str())
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
         if never_started > 0 {
             bump(&mut tx, StorePart::StepRuns).await?;
         }
@@ -2036,8 +2131,7 @@ async fn flush(
         bump(&mut tx, StorePart::Processes).await?;
     }
     for s in batch.steps.values() {
-        sqlx::query(
-            "INSERT INTO step_runs \
+        sql!("runs.upsert_step_run", "INSERT INTO step_runs \
                (run_id, step, state, attempt, started_at_utc, finished_at_utc, error, msg, updated_at_utc, \
                 tz_offset) \
              VALUES (?,?,?,?,?,?,?,?,?,?) \
@@ -2045,8 +2139,7 @@ async fn flush(
                state=excluded.state, attempt=excluded.attempt, \
                started_at_utc=COALESCE(excluded.started_at_utc, step_runs.started_at_utc), \
                finished_at_utc=excluded.finished_at_utc, error=excluded.error, \
-               msg=excluded.msg, updated_at_utc=excluded.updated_at_utc, tz_offset=excluded.tz_offset",
-        )
+               msg=excluded.msg, updated_at_utc=excluded.updated_at_utc, tz_offset=excluded.tz_offset").query()
         .bind(run_id)
         .bind(&s.step)
         .bind(&s.state)
@@ -2066,11 +2159,13 @@ async fn flush(
         } else {
             l.process_id.as_str()
         };
-        sqlx::query(
+        sql!(
+            "runs.insert_log_line",
             "INSERT INTO log (run_id, process_id, step, group_id, attempt, ts_utc, tz_offset, \
                               stream, level, target, thread, msg, fields) \
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
         )
+        .query()
         .bind(run_id)
         .bind(process_id)
         .bind(&l.step)
@@ -2088,12 +2183,10 @@ async fn flush(
         .await?;
     }
     for m in batch.metrics.values() {
-        sqlx::query(
-            "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
+        sql!("runs.upsert_metric", "INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) \
              VALUES (?,?,?,?,?,?,?) \
              ON CONFLICT(run_id, step, name, labels) DO UPDATE SET \
-               value=excluded.value, updated_at_utc=excluded.updated_at_utc, tz_offset=excluded.tz_offset",
-        )
+               value=excluded.value, updated_at_utc=excluded.updated_at_utc, tz_offset=excluded.tz_offset").query()
         .bind(run_id)
         .bind(&m.step)
         .bind(&m.name)
@@ -2193,10 +2286,8 @@ async fn insert_sample(
     run_id: Option<&str>,
     m: &MetricRow,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT OR REPLACE INTO metric_samples (run_id, step, name, labels, ts_utc, tz_offset, value) \
-         VALUES (?,?,?,?,?,?,?)",
-    )
+    sql!("runs.upsert_metric_sample", "INSERT OR REPLACE INTO metric_samples (run_id, step, name, labels, ts_utc, tz_offset, value) \
+         VALUES (?,?,?,?,?,?,?)").query()
     .bind(run_id)
     .bind(&m.step)
     .bind(&m.name)
@@ -2213,6 +2304,7 @@ async fn insert_sample(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// The run store's `-wal` stays within its size limit with no
     /// checkpoint of ours: the engine checkpoints as it goes. Under
     /// doltlite 0.51.3, which never did, a live root's `-wal` reached 4 GB
@@ -2222,16 +2314,18 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("runs.sqlite");
         let pool = open_or_create(&path).await.unwrap();
-        sqlx::query("CREATE TABLE filler (b BLOB)")
+        test_sql!("CREATE TABLE filler (b BLOB)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         // About 80 MB in 20 commits, past the 64 MB limit.
         for _ in 0..20 {
-            sqlx::query(
+            test_sql!(
                 "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) \
-                 INSERT INTO filler SELECT randomblob(4000) FROM n",
+                 INSERT INTO filler SELECT randomblob(4000) FROM n"
             )
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -2310,15 +2404,17 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("runs.sqlite");
         let planted = open_or_create(&path).await.unwrap();
-        sqlx::raw_sql("CREATE TABLE ancient (x TEXT); PRAGMA user_version = 1")
+        test_sql!("CREATE TABLE ancient (x TEXT); PRAGMA user_version = 1")
+            .raw()
             .execute(&planted)
             .await
             .unwrap();
         planted.close().await;
 
         let reader = open_existing(&path).await.unwrap();
-        let tables = "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'";
-        sqlx::query_scalar::<_, i64>(tables)
+        let tables = test_sql!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'");
+        tables
+            .query_scalar::<i64>()
             .fetch_one(&reader)
             .await
             .unwrap();
@@ -2347,14 +2443,16 @@ mod tests {
 
         let reader = open_existing(&path).await.unwrap();
         let mut tx = writer.begin().await.unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO log (process_id, attempt, ts_utc, level, msg) \
-             VALUES ('p', 0, 't', 'info', 'kept')",
+             VALUES ('p', 0, 't', 'info', 'kept')"
         )
+        .query()
         .execute(&mut *tx)
         .await
         .unwrap();
-        sqlx::query_scalar::<_, i64>(tables)
+        tables
+            .query_scalar::<i64>()
             .fetch_one(&reader)
             .await
             .unwrap();
@@ -2362,7 +2460,8 @@ mod tests {
             .await
             .expect("the writer's commit, after a reader read mid-transaction");
 
-        let kept: Vec<String> = sqlx::query_scalar("SELECT msg FROM log")
+        let kept: Vec<String> = test_sql!("SELECT msg FROM log")
+            .query_scalar()
             .fetch_all(&reader)
             .await
             .unwrap();

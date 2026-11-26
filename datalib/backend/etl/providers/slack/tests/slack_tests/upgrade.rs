@@ -12,6 +12,7 @@ use datalib_etl_slack::ingest::schema_raw::{
 };
 use datalib_etl_slack::ingest::{db_path_for, RawDb};
 use datalib_etl_web::owed;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const STAMPS_DDL: &str = "CREATE TABLE IF NOT EXISTS replies_pages (
     id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, thread_ts TEXT NOT NULL, latest_reply TEXT NULL
@@ -25,10 +26,11 @@ async fn thread_root(pool: &sqlx::SqlitePool, ts: &str, latest_reply: &str) {
     let payload = format!(
         r#"{{"ts":"{ts}","thread_ts":"{ts}","reply_count":2,"latest_reply":"{latest_reply}"}}"#
     );
-    sqlx::query(
+    test_sql!(
         "INSERT INTO messages (id, payload, team_id, channel_id, ts, thread_ts, \
-         thread_root_uuid, is_thread_root) VALUES (?, jsonb(?), 'T1', 'C1', ?, ?, ?, 1)",
+         thread_root_uuid, is_thread_root) VALUES (?, jsonb(?), 'T1', 'C1', ?, ?, ?, 1)"
     )
+    .query()
     .bind(slack_message_key("T1", "C1", ts))
     .bind(payload)
     .bind(ts)
@@ -37,7 +39,8 @@ async fn thread_root(pool: &sqlx::SqlitePool, ts: &str, latest_reply: &str) {
     .execute(pool)
     .await
     .unwrap();
-    sqlx::query("INSERT INTO messages_bookkeeping (id, attempt_count) VALUES (?, 1)")
+    test_sql!("INSERT INTO messages_bookkeeping (id, attempt_count) VALUES (?, 1)")
+        .query()
         .bind(slack_message_key("T1", "C1", ts))
         .execute(pool)
         .await
@@ -61,7 +64,8 @@ async fn a_store_with_thread_stamps_opens_holding_each_thread_at_its_stamp() {
     thread_root(&pool, TRIED, "7.0").await;
     // The stamp a whole read wrote, with the sidecar the upsert gave it.
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query("INSERT INTO replies_pages VALUES (?, 'C1', ?, '3.0')")
+    test_sql!("INSERT INTO replies_pages VALUES (?, 'C1', ?, '3.0')")
+        .query()
         .bind(slack_message_key("T1", "C1", READ))
         .bind(READ)
         .execute(&mut *tx)
@@ -76,7 +80,8 @@ async fn a_store_with_thread_stamps_opens_holding_each_thread_at_its_stamp() {
     .await
     .unwrap();
     // The stub a failed read left, with its problem row.
-    sqlx::query("INSERT INTO replies_pages VALUES (?, 'C1', ?, NULL)")
+    test_sql!("INSERT INTO replies_pages VALUES (?, 'C1', ?, NULL)")
+        .query()
         .bind(slack_message_key("T1", "C1", TRIED))
         .bind(TRIED)
         .execute(&mut *tx)
@@ -95,10 +100,11 @@ async fn a_store_with_thread_stamps_opens_holding_each_thread_at_its_stamp() {
     pool.close().await;
 
     let db = RawDb::open(&path).await.unwrap();
-    let held: Vec<(String, bool, Option<String>, Option<String>)> = sqlx::query_as(
+    let held: Vec<(String, bool, Option<String>, Option<String>)> = test_sql!(
         "SELECT t.id, b.fetched_at_utc IS NOT NULL, b.held_version, b.last_error \
-         FROM threads t JOIN threads_bookkeeping b ON b.id = t.id ORDER BY t.id",
+         FROM threads t JOIN threads_bookkeeping b ON b.id = t.id ORDER BY t.id"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -130,23 +136,25 @@ async fn a_store_with_thread_stamps_opens_holding_each_thread_at_its_stamp() {
         [slack_message_key("T1", "C1", TRIED)],
         "the thread read whole is not fetched again; the one only tried is"
     );
-    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+    let problems: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
     assert_eq!(problems, [format!("threads:T1#C1#{TRIED}")]);
-    let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'replies_pages%'",
+    let tables: Vec<String> = test_sql!(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'replies_pages%'"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await
     .unwrap();
     assert!(tables.is_empty(), "{tables:?}");
-    let version: String =
-        sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let version: String = test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     assert_eq!(version, LADDER.len().to_string());
     db.close().await;
 }
@@ -183,9 +191,11 @@ async fn a_store_with_read_marks_in_its_sidecars_opens_with_them_in_read_marks()
         ),
     ];
     for (table, id, volatile) in sidecars {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "UPDATE {table} SET volatile_payload = jsonb(?) WHERE id = ?"
-        )))
+        Sql::dynamic(
+            test_sql_id!(),
+            format!("UPDATE {table} SET volatile_payload = jsonb(?) WHERE id = ?"),
+        )
+        .query()
         .bind(volatile)
         .bind(id)
         .execute(&pool)
@@ -199,16 +209,18 @@ async fn a_store_with_read_marks_in_its_sidecars_opens_with_them_in_read_marks()
         ),
         ("C2", r#"{"latest":"9.0"}"#),
     ] {
-        sqlx::query("INSERT INTO channel_read_states (id, payload) VALUES (?, jsonb(?))")
+        test_sql!("INSERT INTO channel_read_states (id, payload) VALUES (?, jsonb(?))")
+            .query()
             .bind(channel)
             .bind(format!(r#"{{"id":"{channel}"}}"#))
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO channel_read_states_bookkeeping (id, attempt_count, volatile_payload) \
-             VALUES (?, 0, jsonb(?))",
+             VALUES (?, 0, jsonb(?))"
         )
+        .query()
         .bind(channel)
         .bind(volatile)
         .execute(&pool)
@@ -230,10 +242,11 @@ async fn a_store_with_read_marks_in_its_sidecars_opens_with_them_in_read_marks()
             ),
         ]
     );
-    let left: Vec<(String, Option<String>)> = sqlx::query_as(
+    let left: Vec<(String, Option<String>)> = test_sql!(
         "SELECT id, json(volatile_payload) FROM channel_read_states_bookkeeping \
-         UNION ALL SELECT id, json(volatile_payload) FROM messages_bookkeeping ORDER BY id",
+         UNION ALL SELECT id, json(volatile_payload) FROM messages_bookkeeping ORDER BY id"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -282,10 +295,11 @@ async fn a_store_from_before_bots_opens_owing_each_bot_its_messages_name() {
         ("3.0", r#"{"ts":"3.0","bot_id":"B_ROSTER","user":"U2"}"#),
         ("4.0", r#"{"ts":"4.0","user":"U1"}"#),
     ] {
-        sqlx::query(
+        test_sql!(
             "INSERT INTO messages (id, payload, team_id, channel_id, ts, \
-             thread_root_uuid, is_thread_root) VALUES (?, jsonb(?), 'T1', 'C1', ?, ?, 1)",
+             thread_root_uuid, is_thread_root) VALUES (?, jsonb(?), 'T1', 'C1', ?, ?, 1)"
         )
+        .query()
         .bind(slack_message_key("T1", "C1", ts))
         .bind(payload)
         .bind(ts)
@@ -308,11 +322,11 @@ async fn a_store_from_before_bots_opens_owing_each_bot_its_messages_name() {
         .collect();
     drop(conn);
     assert_eq!(owed, ["B_ROSTER", "B_SENSORS"]);
-    let version: String =
-        sqlx::query_scalar("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let version: String = test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     assert_eq!(version, LADDER.len().to_string());
     db.close().await;
 }

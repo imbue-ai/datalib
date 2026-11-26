@@ -9,6 +9,7 @@ use serde::Deserialize;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_whatsapp_backup::encrypt_to_crypt15;
 
 #[derive(Debug, Deserialize)]
@@ -263,7 +264,9 @@ async fn build_wa_db(contacts: &[WaContactSpec]) -> Result<Vec<u8>> {
     {
         let pool = open_writable_sqlite(&path).await?;
         for stmt in [
-            "CREATE TABLE wa_contacts(_id INTEGER PRIMARY KEY AUTOINCREMENT,jid TEXT NOT NULL,\
+            sql!(
+                "whatsapp.build_wa_db.create_wa_contacts",
+                "CREATE TABLE wa_contacts(_id INTEGER PRIMARY KEY AUTOINCREMENT,jid TEXT NOT NULL,\
              is_whatsapp_user BOOLEAN NOT NULL,status TEXT,status_timestamp INTEGER,number TEXT,\
              raw_contact_id INTEGER,display_name TEXT,phone_type INTEGER,phone_label TEXT,\
              photo_ts INTEGER,thumb_ts INTEGER,photo_id_timestamp INTEGER,given_name TEXT,\
@@ -274,21 +277,27 @@ async fn build_wa_db(contacts: &[WaContactSpec]) -> Result<Vec<u8>> {
              disappearing_mode_support_disabled INTEGER,history_sync_initial_phash TEXT,\
              is_starred BOOLEAN,is_wa_created_contact BOOLEAN,sync_policy INTEGER,\
              status_emoji TEXT,is_contact_synced INTEGER,is_reachable INTEGER,\
-             external_user_state INTEGER)",
-            "CREATE INDEX jid_index ON wa_contacts (jid)",
+             external_user_state INTEGER)"
+            ),
+            sql!(
+                "whatsapp.build_wa_db.create_jid_index",
+                "CREATE INDEX jid_index ON wa_contacts (jid)"
+            ),
         ] {
-            sqlx::query(stmt)
+            stmt.query()
                 .execute(&pool)
                 .await
                 .context("create wa_contacts")?;
         }
         for c in contacts {
             let number = c.jid.split_once('@').map(|(user, _)| user.to_string());
-            sqlx::query(
+            sql!(
+                "whatsapp.fixture.insert_wa_contact",
                 "INSERT INTO wa_contacts (jid, is_whatsapp_user, number, display_name, \
                     given_name, family_name, wa_name, sort_name, company, title) \
-                 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)"
             )
+            .query()
             .bind(&c.jid)
             .bind(number)
             .bind(&c.display_name)
@@ -518,7 +527,8 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
     ];
     for s in stmts {
         // Fixture builder; `stmts` is a local const slice of CREATE TABLE literals.
-        sqlx::query(sqlx::AssertSqlSafe(*s))
+        Sql::dynamic(sql_id!("whatsapp.fixture.create_msgstore_table"), *s)
+            .query()
             .execute(pool)
             .await
             .context("create table")?;
@@ -528,14 +538,18 @@ async fn create_msgstore_schema(pool: &SqlitePool) -> Result<()> {
 
 async fn insert_jids(pool: &SqlitePool, jids: &[JidSpec]) -> Result<()> {
     for j in jids {
-        sqlx::query("INSERT INTO jid (_id, user, server, raw_string) VALUES (?, ?, ?, ?)")
-            .bind(j.id)
-            .bind(&j.user)
-            .bind(&j.server)
-            .bind(&j.raw_string)
-            .execute(pool)
-            .await
-            .context("insert jid")?;
+        sql!(
+            "whatsapp.fixture.insert_jid",
+            "INSERT INTO jid (_id, user, server, raw_string) VALUES (?, ?, ?, ?)"
+        )
+        .query()
+        .bind(j.id)
+        .bind(&j.user)
+        .bind(&j.server)
+        .bind(&j.raw_string)
+        .execute(pool)
+        .await
+        .context("insert jid")?;
     }
     Ok(())
 }
@@ -546,18 +560,24 @@ async fn insert_jid_map(
     names: &[LidDisplayNameSpec],
 ) -> Result<()> {
     for (i, m) in jid_map.iter().enumerate() {
-        sqlx::query("INSERT INTO jid_map (lid_row_id, jid_row_id, sort_id) VALUES (?, ?, ?)")
-            .bind(m.lid_row_id)
-            .bind(m.jid_row_id)
-            .bind(i as i64)
-            .execute(pool)
-            .await
-            .context("insert jid_map")?;
+        sql!(
+            "whatsapp.fixture.insert_jid_map",
+            "INSERT INTO jid_map (lid_row_id, jid_row_id, sort_id) VALUES (?, ?, ?)"
+        )
+        .query()
+        .bind(m.lid_row_id)
+        .bind(m.jid_row_id)
+        .bind(i as i64)
+        .execute(pool)
+        .await
+        .context("insert jid_map")?;
     }
     for n in names {
-        sqlx::query(
-            "INSERT INTO lid_display_name (lid_row_id, display_name, username) VALUES (?, ?, ?)",
+        sql!(
+            "whatsapp.fixture.insert_lid_display_name",
+            "INSERT INTO lid_display_name (lid_row_id, display_name, username) VALUES (?, ?, ?)"
         )
+        .query()
         .bind(n.lid_row_id)
         .bind(&n.display_name)
         .bind(&n.username)
@@ -570,14 +590,18 @@ async fn insert_jid_map(
 
 async fn insert_chats(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
     for c in chats {
-        sqlx::query("INSERT INTO chat (_id, jid_row_id, subject, group_type) VALUES (?, ?, ?, ?)")
-            .bind(c.id)
-            .bind(c.jid_row_id)
-            .bind(&c.subject)
-            .bind(c.group_type)
-            .execute(pool)
-            .await
-            .context("insert chat")?;
+        sql!(
+            "whatsapp.fixture.insert_chat",
+            "INSERT INTO chat (_id, jid_row_id, subject, group_type) VALUES (?, ?, ?, ?)"
+        )
+        .query()
+        .bind(c.id)
+        .bind(c.jid_row_id)
+        .bind(&c.subject)
+        .bind(c.group_type)
+        .execute(pool)
+        .await
+        .context("insert chat")?;
     }
     Ok(())
 }
@@ -590,15 +614,19 @@ async fn insert_chats(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
 /// with no message keeps them all NULL.
 async fn set_chat_pointers(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> {
     for c in chats {
-        let newest: Option<i64> =
-            sqlx::query_scalar("SELECT MAX(_id) FROM message WHERE chat_row_id = ?")
-                .bind(c.id)
-                .fetch_one(pool)
-                .await
-                .context("newest message")?;
+        let newest: Option<i64> = sql!(
+            "whatsapp.fixture.find_newest_message_of_chat",
+            "SELECT MAX(_id) FROM message WHERE chat_row_id = ?"
+        )
+        .query_scalar()
+        .bind(c.id)
+        .fetch_one(pool)
+        .await
+        .context("newest message")?;
         let Some(newest) = newest else { continue };
         let read = c.last_read_message_id.unwrap_or(newest);
-        sqlx::query(
+        sql!(
+            "whatsapp.fixture.update_chat_message_pointers",
             "UPDATE chat SET \
                 display_message_row_id = ?1, display_message_sort_id = ?1, \
                 last_message_row_id = ?1, last_message_sort_id = ?1, \
@@ -609,8 +637,9 @@ async fn set_chat_pointers(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> 
                 unseen_earliest_message_received_time = u.earliest \
              FROM (SELECT COUNT(*) AS n, MIN(timestamp) AS earliest FROM message \
                     WHERE chat_row_id = ?3 AND from_me = 0 AND _id > ?2) AS u \
-             WHERE chat._id = ?3",
+             WHERE chat._id = ?3"
         )
+        .query()
         .bind(newest)
         .bind(read)
         .bind(c.id)
@@ -624,11 +653,13 @@ async fn set_chat_pointers(pool: &SqlitePool, chats: &[ChatSpec]) -> Result<()> 
 async fn insert_messages(pool: &SqlitePool, messages: &[MessageSpec]) -> Result<HashMap<i64, i64>> {
     let mut map = HashMap::with_capacity(messages.len());
     for m in messages {
-        let row = sqlx::query(
+        let row = sql!(
+            "whatsapp.fixture.insert_message",
             "INSERT INTO message (_id, chat_row_id, from_me, key_id, sender_jid_row_id, \
                 timestamp, message_type, text_data, sort_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING _id",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING _id"
         )
+        .query()
         .bind(m.id)
         .bind(m.chat_row_id)
         .bind(m.from_me)
@@ -645,11 +676,13 @@ async fn insert_messages(pool: &SqlitePool, messages: &[MessageSpec]) -> Result<
         map.insert(m.id, id);
 
         if let Some(media) = &m.media {
-            sqlx::query(
+            sql!(
+                "whatsapp.fixture.insert_message_media",
                 "INSERT INTO message_media (message_row_id, chat_row_id, mime_type, file_path, \
                     file_size, media_caption, width, height) \
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
             )
+            .query()
             .bind(id)
             .bind(m.chat_row_id)
             .bind(&media.mime_type)
@@ -682,18 +715,23 @@ async fn insert_reactions(
             .ok_or_else(|| anyhow!("reaction parent message {} not found", r.parent_message_id))?;
         // Look up parent's chat_row_id to satisfy the add_on row's own
         // chat_row_id column.
-        let parent_chat_row_id: i64 =
-            sqlx::query_scalar("SELECT chat_row_id FROM message WHERE _id = ?")
-                .bind(parent_pk)
-                .fetch_one(pool)
-                .await
-                .context("lookup parent chat_row_id")?;
+        let parent_chat_row_id: i64 = sql!(
+            "whatsapp.fixture.find_chat_of_message",
+            "SELECT chat_row_id FROM message WHERE _id = ?"
+        )
+        .query_scalar()
+        .bind(parent_pk)
+        .fetch_one(pool)
+        .await
+        .context("lookup parent chat_row_id")?;
         let addon_id = 1000 + idx as i64;
-        sqlx::query(
+        sql!(
+            "whatsapp.fixture.insert_reaction_add_on",
             "INSERT INTO message_add_on (_id, chat_row_id, from_me, key_id, sender_jid_row_id, \
                 parent_message_row_id, timestamp, message_add_on_type) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, 2)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, 2)"
         )
+        .query()
         .bind(addon_id)
         .bind(parent_chat_row_id)
         .bind(r.from_me)
@@ -704,10 +742,8 @@ async fn insert_reactions(
         .execute(pool)
         .await
         .context("insert message_add_on")?;
-        sqlx::query(
-            "INSERT INTO message_add_on_reaction (message_add_on_row_id, reaction, sender_timestamp) \
-             VALUES (?, ?, ?)",
-        )
+        sql!("whatsapp.fixture.insert_reaction", "INSERT INTO message_add_on_reaction (message_add_on_row_id, reaction, sender_timestamp) \
+             VALUES (?, ?, ?)").query()
         .bind(addon_id)
         .bind(&r.reaction)
         .bind(r.timestamp)

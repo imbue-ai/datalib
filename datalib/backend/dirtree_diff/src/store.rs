@@ -10,6 +10,7 @@ use sqlx::Row;
 
 use crate::analyze::Explained;
 use crate::model::Entry;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// A scan somebody else wrote: read-only, never created, one connection.
 /// The only way this tool touches a store it did not make.
@@ -65,7 +66,8 @@ impl std::fmt::Display for Commit {
 /// Done against the scan's own file, before any unification, because
 /// that is the only database where a ref *name* means anything.
 pub async fn resolve_ref(pool: &SqlitePool, reference: &str) -> Result<Commit> {
-    let raw: String = sqlx::query_scalar("SELECT dolt_hashof(?)")
+    let raw: String = sql!("dirtree_diff.resolve_ref", "SELECT dolt_hashof(?)")
+        .query_scalar()
         .bind(reference)
         .fetch_one(pool)
         .await
@@ -78,13 +80,15 @@ pub async fn unify(scratch: &Path, left: &Path, right: &Path) -> Result<SqlitePo
     let left = std::fs::canonicalize(left).with_context(|| format!("{}", left.display()))?;
     let right = std::fs::canonicalize(right).with_context(|| format!("{}", right.display()))?;
     for (name, path) in [("dtd_left", &left), ("dtd_right", &right)] {
-        sqlx::query("SELECT dolt_remote('add', ?, ?)")
+        sql!("dirtree_diff.add_remote", "SELECT dolt_remote('add', ?, ?)")
+            .query()
             .bind(name)
             .bind(format!("file://{}", path.display()))
             .execute(&pool)
             .await
             .with_context(|| format!("add remote {name} -> {}", path.display()))?;
-        sqlx::query("SELECT dolt_fetch(?)")
+        sql!("dirtree_diff.fetch_remote", "SELECT dolt_fetch(?)")
+            .query()
             .bind(name)
             .execute(&pool)
             .await
@@ -245,14 +249,17 @@ pub async fn fetch_diff(
     // them as literals rather than bindable parameters; the table name
     // and column list are `Table`'s own constants; every skipped prefix
     // is bound.
-    let sql = format!(
-        "SELECT diff_type, {}, {} FROM dolt_diff_{}('{from}','{to}'){}",
-        table.columns("from_"),
-        table.columns("to_"),
-        table.name(),
-        skip.clause(),
+    let sql = Sql::dynamic(
+        sql_id!("dirtree_diff.diff_entries"),
+        format!(
+            "SELECT diff_type, {}, {} FROM dolt_diff_{}('{from}','{to}'){}",
+            table.columns("from_"),
+            table.columns("to_"),
+            table.name(),
+            skip.clause(),
+        ),
     );
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    let mut query = sql.query();
     for bound in skip.bounds() {
         query = query.bind(bound);
     }
@@ -282,12 +289,16 @@ pub async fn load_side(pool: &SqlitePool, commit: &Commit) -> Result<Vec<Entry>>
     for table in [Table::Dirs, Table::Files] {
         // Audited for `AssertSqlSafe`: `commit` is hex by construction
         // and the rest is `Table`'s own constants.
-        let sql = format!(
-            "SELECT {} FROM dolt_at_{}('{commit}')",
-            table.columns(""),
-            table.name()
+        let sql = Sql::dynamic(
+            sql_id!("dirtree_diff.list_entries_at_commit"),
+            format!(
+                "SELECT {} FROM dolt_at_{}('{commit}')",
+                table.columns(""),
+                table.name()
+            ),
         );
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let rows = sql
+            .query()
             .fetch_all(pool)
             .await
             .context("load full tree")?;
@@ -317,12 +328,16 @@ pub async fn duplicate_candidates(
         // Audited for `AssertSqlSafe`: `commit` is hex by construction,
         // `threshold` is an i64 rendered by Rust, not caller text, and
         // the rest is `Table`'s own constants.
-        let sql = format!(
-            "SELECT {} FROM dolt_at_{}('{commit}') WHERE size >= {threshold}",
-            table.columns(""),
-            table.name()
+        let sql = Sql::dynamic(
+            sql_id!("dirtree_diff.list_large_entries_at_commit"),
+            format!(
+                "SELECT {} FROM dolt_at_{}('{commit}') WHERE size >= {threshold}",
+                table.columns(""),
+                table.name()
+            ),
         );
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let rows = sql
+            .query()
             .fetch_all(pool)
             .await
             .context("duplicate candidates")?;
@@ -360,12 +375,16 @@ pub async fn lookup_digests(
         // Audited for `AssertSqlSafe`: `commit` is hex by construction,
         // the table name is `Table`'s own constant, and the digests are
         // one bound JSON array.
-        let sql = format!(
-            "SELECT id, hex(blake3) AS h FROM dolt_at_{}('{commit}') \
+        let sql = Sql::dynamic(
+            sql_id!("dirtree_diff.find_entries_by_digest"),
+            format!(
+                "SELECT id, hex(blake3) AS h FROM dolt_at_{}('{commit}') \
              WHERE hex(blake3) IN (SELECT value FROM json_each(?))",
-            table.name()
+                table.name()
+            ),
         );
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let rows = sql
+            .query()
             .bind(serde_json::to_string(&digests)?)
             .fetch_all(pool)
             .await
