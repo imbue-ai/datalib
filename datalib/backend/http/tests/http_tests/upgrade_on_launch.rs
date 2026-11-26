@@ -356,3 +356,27 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
     mailbox.close().await;
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
+
+/// A root with no config yet has no step to ask, so its pass is over at
+/// once. The first-run screen waits for `settled`; when the pass moved
+/// into the loop, a loop that could not start for want of a config never
+/// said it, and the screen waited for good.
+#[tokio::test]
+async fn a_root_with_no_config_settles_its_pass_at_once() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = bin_dir_with_fake_step(td.path());
+    let state = boot(&root, &bin).await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while config(&state).await["upgrade"]["settled"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "the pass never settled: {}",
+            config(&state).await["upgrade"]
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(config(&state).await["upgrade"]["migrating"], false);
+    state.sync.shutdown(Duration::from_secs(10)).await;
+}

@@ -99,7 +99,13 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
     while !*stop.borrow() {
         let failed = match load_config(root) {
             Ok(checked) => run_the_loop(opts, &checked, &store, &periods, &stop).await,
-            Err(why) => Err(why),
+            Err(why) => {
+                // With no config there is no step to ask: the pass is over,
+                // and a root waiting for its first config is not waiting
+                // on it.
+                periods.prepare_done();
+                Err(why)
+            }
         };
         let Err(why) = failed else { break };
         // Its requests would otherwise be taken on at once, and fail the
