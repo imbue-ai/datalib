@@ -71,7 +71,7 @@ pub struct WriteLock {
     /// The documents this lock's run has written so far. A lock lives for
     /// one run of one writer, so this is what separates "two documents of
     /// this run minted one row uuid" from "a row moved here from a
-    /// document an earlier run wrote" — see `put_grid_row`.
+    /// document an earlier run wrote" — see `page::write_grid_rows`.
     written: std::sync::Mutex<std::collections::HashSet<String>>,
     /// What this run changed that the grid index derives from; `None` in a
     /// render store, which derives nothing.
@@ -2370,7 +2370,7 @@ async fn write_source_cursor(
 }
 
 /// Remove documents and everything hanging off them: the deletes
-/// `apply_markdown` runs before re-inserting, without the insert. Only
+/// `apply_page` runs before re-inserting, without the insert. Only
 /// reachable because the index diffs rather than re-reads — a deleted
 /// conversation used to stay in the grid forever.
 pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
@@ -2790,7 +2790,7 @@ mod insert_round_trip_tests {
             dropped.is_empty(),
             "every column of a fully-populated GridRow should come back \
              non-NULL, but these read back NULL: {dropped:?}. Each is \
-             declared on GridRow (or derived in put_grid_row) but \
+             declared on GridRow (or derived in write_grid_rows) but \
              missing from the INSERT's column list or its bindings."
         );
 
