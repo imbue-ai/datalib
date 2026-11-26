@@ -15,6 +15,7 @@ use super::super::db::RawDb;
 use super::super::schema_raw::{GoogleContactGroupRow, GooglePersonRow, GooglePhotoRow};
 use super::super::FetchSummary;
 use super::{photos, Page};
+use datalib_sql::{sql, sql_id, Sql};
 
 const PEOPLE: &str = "google_people";
 const GROUPS: &str = "google_contact_groups";
@@ -150,14 +151,16 @@ impl RawDb {
 
     /// Every photo `book` lists: its key, and the link to it.
     pub async fn google_photos_listed(&self, book: &str) -> Result<Vec<(String, String)>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "contacts.google.list_photos_with_person",
             "SELECT ph.id, json(p.payload) AS payload,
                     json(b.volatile_payload) AS volatile
                FROM google_photos ph
                JOIN google_people p ON p.id = ph.person_id
                LEFT JOIN google_people_bookkeeping b ON b.id = p.id
-              WHERE p.addressbook_id = ? ORDER BY ph.id",
+              WHERE p.addressbook_id = ? ORDER BY ph.id"
         )
+        .query()
         .bind(book)
         .fetch_all(self.pool())
         .await
@@ -177,12 +180,16 @@ impl RawDb {
         key: &str,
         blake3: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE google_photos SET blake3 = ? WHERE id = ?")
-            .bind(blake3)
-            .bind(key)
-            .execute(&mut **tx)
-            .await
-            .context("name a photo's bytes")?;
+        sql!(
+            "contacts.google.update_photo_blake3",
+            "UPDATE google_photos SET blake3 = ? WHERE id = ?"
+        )
+        .query()
+        .bind(blake3)
+        .bind(key)
+        .execute(&mut **tx)
+        .await
+        .context("name a photo's bytes")?;
         Ok(())
     }
 
@@ -195,9 +202,11 @@ impl RawDb {
         book: &str,
         labels: Option<&str>,
     ) -> Result<Option<String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope IN (?, ?)",
+        let rows: Vec<(String, String)> = sql!(
+            "contacts.google.read_sync_token_and_labels",
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state WHERE scope IN (?, ?)"
         )
+        .query_as()
         .bind(token_scope(book))
         .bind(labels_scope(book))
         .fetch_all(self.pool())
@@ -228,37 +237,45 @@ impl RawDb {
         tx: &mut Transaction<'_, Sqlite>,
         book: &str,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM sync_scope_state WHERE scope IN (?, ?)")
-            .bind(token_scope(book))
-            .bind(labels_scope(book))
-            .execute(&mut **tx)
-            .await
-            .context("forget the sync token")?;
+        sql!(
+            "contacts.google.delete_sync_token",
+            "DELETE FROM sync_scope_state WHERE scope IN (?, ?)"
+        )
+        .query()
+        .bind(token_scope(book))
+        .bind(labels_scope(book))
+        .execute(&mut **tx)
+        .await
+        .context("forget the sync token")?;
         Ok(())
     }
 
     /// The signed-in account's address.
     pub async fn google_login(&self) -> Result<Option<String>> {
-        Ok(
-            sqlx::query_scalar::<_, Option<String>>("SELECT login FROM accounts WHERE id = ?")
-                .bind(super::ACCOUNT_ID)
-                .fetch_optional(self.pool())
-                .await
-                .context("select the account")?
-                .flatten(),
+        Ok(sql!(
+            "contacts.google.read_account_login",
+            "SELECT login FROM accounts WHERE id = ?"
         )
+        .query_scalar::<Option<String>>()
+        .bind(super::ACCOUNT_ID)
+        .fetch_optional(self.pool())
+        .await
+        .context("select the account")?
+        .flatten())
     }
 
     pub async fn load_google_people(&self) -> Result<Vec<LoadedGooglePerson>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "contacts.google.load_people_with_photos",
             "SELECT p.id, p.addressbook_id, p.resource_name, json(p.payload) AS payload,
                     json(b.volatile_payload) AS volatile,
                     ph.id AS photo_id, ph.blake3 AS photo_blake3
                FROM google_people p
                LEFT JOIN google_people_bookkeeping b ON b.id = p.id
                LEFT JOIN google_photos ph ON ph.person_id = p.id
-              ORDER BY p.id",
+              ORDER BY p.id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select google people")?;
@@ -280,13 +297,15 @@ impl RawDb {
     }
 
     pub async fn load_google_groups(&self) -> Result<Vec<LoadedGoogleGroup>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "contacts.google.load_contact_groups",
             "SELECT g.id, g.addressbook_id, g.resource_name, json(g.payload) AS payload,
                     json(b.volatile_payload) AS volatile
                FROM google_contact_groups g
                LEFT JOIN google_contact_groups_bookkeeping b ON b.id = g.id
-              ORDER BY g.id",
+              ORDER BY g.id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select google contact groups")?;
@@ -310,10 +329,12 @@ async fn list_photos(
     listed: &[GooglePhotoRow],
 ) -> Result<()> {
     let keep: HashSet<&str> = listed.iter().map(|p| p.id.as_str()).collect();
-    let stored: Vec<String> = sqlx::query_scalar(
+    let stored: Vec<String> = sql!(
+        "contacts.google.list_photo_ids_of_people",
         "SELECT id FROM google_photos INDEXED BY google_photos_by_person_id \
-         WHERE person_id IN (SELECT value FROM json_each(?))",
+         WHERE person_id IN (SELECT value FROM json_each(?))"
     )
+    .query_scalar()
     .bind(serde_json::to_string(people)?)
     .fetch_all(&mut **tx)
     .await
@@ -341,9 +362,13 @@ async fn payloads(
 ) -> Result<HashMap<String, Value>> {
     let ids: Vec<&String> = ids.iter().collect();
     // Audited: `table` is a `&'static str` of this module; the ids are bound.
-    let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT id, json(payload) FROM {table} WHERE id IN (SELECT value FROM json_each(?))"
-    )))
+    let rows: Vec<(String, String)> = Sql::dynamic(
+        sql_id!("contacts.google.read_payloads_by_id"),
+        format!(
+            "SELECT id, json(payload) FROM {table} WHERE id IN (SELECT value FROM json_each(?))"
+        ),
+    )
+    .query_as()
     .bind(serde_json::to_string(&ids)?)
     .fetch_all(&mut **tx)
     .await

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use datalib_etl::doltlite_raw::{commit_run, content_version_at_path, open};
+use datalib_sql::test_sql;
 
 fn bin(var: &str) -> PathBuf {
     Path::new(&std::env::var(var).unwrap_or_else(|_| panic!("{var} is set")))
@@ -24,10 +25,11 @@ async fn store_with_history(path: &Path, commits: usize) {
     .await
     .unwrap();
     for stardate in 0..commits {
-        sqlx::query(
+        test_sql!(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 300) \
-             INSERT OR REPLACE INTO log SELECT i, ? || hex(randomblob(100)) FROM n",
+             INSERT OR REPLACE INTO log SELECT i, ? || hex(randomblob(100)) FROM n"
         )
+        .query()
         .bind(format!("captain's log, stardate {stardate}: "))
         .execute(&pool)
         .await
@@ -49,7 +51,8 @@ async fn leave_garbage(path: &Path) {
     .await
     .unwrap();
     for _ in 0..20 {
-        sqlx::query("UPDATE log SET body = hex(randomblob(100))")
+        test_sql!("UPDATE log SET body = hex(randomblob(100))")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -72,7 +75,7 @@ async fn enterprise(root: &Path) -> (PathBuf, PathBuf) {
     std::fs::write(
         root.join("config.toml"),
         "[[programs]]\ncommand = \"datalib-step\"\n\
-         verbs = [\"reset\", \"prepare\", \"compact\", \"collect\"]\n\n\
+         verbs = [\"reset\", \"prepare\", \"compact\", \"collect\", \"check\"]\n\n\
          [[groups]]\nid = \"enterprise\"\ntype = \"slack\"\n\n\
          [[steps]]\nid = \"enterprise/ingest\"\ncommand = \"datalib-step run ingest slack\"\n\n\
          [[steps]]\nid = \"enterprise/render_markdown\"\n\
@@ -116,7 +119,8 @@ async fn commits(path: &Path) -> Vec<String> {
         .connect(&format!("sqlite://{}?mode=ro", path.display()))
         .await
         .unwrap();
-    let log = sqlx::query_scalar("SELECT commit_hash FROM dolt_log()")
+    let log = test_sql!("SELECT commit_hash FROM dolt_log()")
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();

@@ -47,7 +47,6 @@ pub mod loop_guard;
 pub mod manage;
 pub mod oauth_client;
 pub mod packages;
-pub mod params_check;
 pub mod plugins;
 pub mod probe;
 pub mod prometheus;
@@ -212,8 +211,8 @@ fn routes(state: AppState) -> Router {
         .route("/api/config/scaffold", get(config_scaffold))
         .route("/api/config/init", post(init_config))
         // Credentials and connection testing for the Add-a-source
-        // wizard. See `connect.rs` — each shells out to latchkey or
-        // datalib-step, deliberately.
+        // wizard: `connect.rs` runs latchkey, `probe.rs` the step
+        // program's probe.
         .route("/api/latchkey/{service}", get(connect::get_service))
         .route(
             "/api/latchkey/{service}/connect",
@@ -509,8 +508,10 @@ fn proxied_response(r: applets::ProxyResponse) -> Response<Body> {
     let mut resp = Response::new(Body::from(r.body));
     *resp.status_mut() = StatusCode::from_u16(r.status).unwrap_or(StatusCode::BAD_GATEWAY);
     embed::set_data_headers(resp.headers_mut(), &r.content_type);
-    resp.extensions_mut()
-        .insert(request_log::AppletRowsRead(r.rows_read));
+    resp.extensions_mut().insert(request_log::AppletWork {
+        rows_read: r.rows_read,
+        sql_work: r.sql_work,
+    });
     resp
 }
 
@@ -1033,23 +1034,29 @@ pub struct ConfigCheckResponse {
     pub source_count: usize,
 }
 
-async fn check_config(Json(req): Json<PutConfigRequest>) -> Json<ConfigCheckResponse> {
-    Json(full_verdict(&req.text).await)
+async fn check_config(
+    State(s): State<AppState>,
+    Json(req): Json<PutConfigRequest>,
+) -> Json<ConfigCheckResponse> {
+    Json(full_verdict(&s.root, &req.text).await)
 }
 
-/// [`config_verdict`], with each built-in step's params held to what a
-/// sync would accept: a step a sync would refuse is reported against its
-/// line like any other problem, and the text is not written.
-async fn full_verdict(text: &str) -> ConfigCheckResponse {
+/// [`config_verdict`], with each step whose program takes `--check` asked
+/// about its params (`datalib_dag::check`): a step that would refuse them
+/// is reported against its line like any other problem, and the text is
+/// not written; a warning it answers with is reported and writes.
+async fn full_verdict(root: &std::path::Path, text: &str) -> ConfigCheckResponse {
     let mut verdict = config_verdict(text);
-    let refused = params_check::refused(text).await;
-    if !refused.is_empty() {
+    let checked = datalib_dag::config::check_text(text);
+    let binary_dir = crate::binaries::resolve_binary_dir();
+    let asked = datalib_dag::check::check_params(&checked, root, binary_dir.as_deref()).await;
+    if let Some(refusal) = asked.iter().find(|d| d.severity.drops_the_entry()) {
         verdict.ok = false;
         if verdict.error.is_none() {
-            verdict.error = refused.first().map(|d| d.describe());
+            verdict.error = Some(refusal.describe());
         }
-        verdict.diagnostics.extend(refused);
     }
+    verdict.diagnostics.extend(asked);
     verdict
 }
 
@@ -1073,7 +1080,7 @@ fn config_verdict(text: &str) -> ConfigCheckResponse {
 /// returned and the file is written anyway: it changes nothing about what
 /// runs, and refusing it would make the editor unable to save a config the
 /// app is happily running on. A built-in step whose params a sync would
-/// refuse is refused here too (`params_check`), for the same reason.
+/// refuse is refused here too (`datalib_dag::check`), for the same reason.
 ///
 /// Every diagnostic comes back, not just the first, so a caller fixing a
 /// config needs one round-trip rather than one per mistake. Writes via a
@@ -1089,10 +1096,10 @@ async fn put_config(
     // a rejected config never gets written even transiently. Text in a
     // shape the save will upgrade is judged as it will be written: the
     // loader refuses an old shape the upgrade turns into a good one.
-    let mut verdict = full_verdict(&req.text).await;
+    let mut verdict = full_verdict(&s.root, &req.text).await;
     if !verdict.ok {
         if let Some(upgraded) = config_upgrade::upgraded(&req.text) {
-            let after = full_verdict(&upgraded).await;
+            let after = full_verdict(&s.root, &upgraded).await;
             if after.ok {
                 verdict = after;
             }
@@ -1183,8 +1190,7 @@ async fn config_scaffold(State(s): State<AppState>) -> Json<ConfigResponse> {
 #[derive(Debug, Serialize)]
 pub struct DagStepInfo {
     pub id: String,
-    /// The command that runs: the step's `command` as written, or
-    /// `datalib-step` for a built-in step that wrote none.
+    /// The step's `command` as written.
     pub command: String,
     /// Declared input artifact patterns (may contain wildcards).
     pub inputs: Vec<String>,
@@ -2283,6 +2289,7 @@ mod tests {
             status: 200,
             content_type: content_type.into(),
             rows_read: None,
+            sql_work: None,
             body: b"<script>1</script>".to_vec(),
         })
     }

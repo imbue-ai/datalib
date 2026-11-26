@@ -4,28 +4,33 @@
 
 use std::path::Path;
 
+use datalib_sql::test_sql;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
 
 async fn write_then_read_back(db: &Path) {
     let writer = pool(datalib_sqlite_open::file(db).create_if_missing(true)).await;
-    sqlx::query("CREATE TABLE t (v TEXT)")
+    test_sql!("CREATE TABLE t (v TEXT)")
+        .query()
         .execute(&writer)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO t VALUES ('row')")
+    test_sql!("INSERT INTO t VALUES ('row')")
+        .query()
         .execute(&writer)
         .await
         .unwrap();
     writer.close().await;
 
     let reader = pool(datalib_sqlite_open::file(db).read_only(true)).await;
-    let row = sqlx::query("SELECT v FROM t")
+    let row = test_sql!("SELECT v FROM t")
+        .query()
         .fetch_one(&reader)
         .await
         .unwrap();
     assert_eq!(row.get::<String, _>(0), "row");
-    let refused = sqlx::query("INSERT INTO t VALUES ('another')")
+    let refused = test_sql!("INSERT INTO t VALUES ('another')")
+        .query()
         .execute(&reader)
         .await;
     assert!(refused.is_err(), "{} opened writable", db.display());

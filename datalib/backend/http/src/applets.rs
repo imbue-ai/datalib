@@ -2,7 +2,7 @@
 //! that write their frontend components into the store.
 //!
 //! An applet is run **once**, as
-//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params-file …]`,
+//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id>`, its params in `DATALIB_DAG_PARAMS`,
 //! and owes three things in that order: write its components, bind a port,
 //! then print `DATALIB_APPLET_PORT=<port>` to stdout. The gateway waits for
 //! that line and only then scans the store, so **the line is the signal that
@@ -518,6 +518,9 @@ impl AppletRegistry {
             APPLET_READ_TIMEOUT,
             (!is_write(method)).then_some(hangup),
         );
+        if let Ok(r) = &answer {
+            self.supervisor.note_sql_work(id, r.sql_work.as_deref());
+        }
         if answer.is_ok() && is_write(method) {
             if let Some(nudge) = self.after_writes.get() {
                 nudge.an_applet_wrote();
@@ -668,9 +671,6 @@ fn load_entries(
 struct Running {
     port: u16,
     child: Child,
-    /// The applet's params, in a file only this user can read. Kept
-    /// for as long as the child runs; dropping it deletes the file.
-    _params_file: Option<tempfile::NamedTempFile>,
 }
 
 /// The applet servers, all of them, started at boot and kept running.
@@ -679,6 +679,10 @@ pub struct Supervisor {
     /// [`START_TIMEOUT`], except where a caller narrowed it.
     start_timeout: Duration,
     memory: crate::applet_memory::AppletMemory,
+    /// What each applet's statements did, by applet and name, summed from
+    /// the [`datalib_sql_work::SQL_WORK_HEADER`] of every answer since the
+    /// server started.
+    sql_work: Mutex<BTreeMap<String, datalib_sql_work::ByTag>>,
 }
 
 impl Default for Supervisor {
@@ -693,7 +697,16 @@ impl Supervisor {
             running: Mutex::new(BTreeMap::new()),
             start_timeout,
             memory: Default::default(),
+            sql_work: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn note_sql_work(&self, id: &str, header: Option<&str>) {
+        let Some(worked) = header.and_then(|h| serde_json::from_str(h).ok()) else {
+            return;
+        };
+        let mut all = self.sql_work.lock().unwrap_or_else(|e| e.into_inner());
+        datalib_sql_work::merge_into(all.entry(id.to_string()).or_default(), &worked);
     }
 
     fn start(
@@ -711,27 +724,21 @@ impl Supervisor {
             .arg("0")
             .arg("--frontend-dir")
             .arg(frontend_dir);
-        // Params go in an owner-only file, the same way the runner hands
-        // a step its params: they can hold tokens, and argv is public.
-        let params_file = match entry
+        // In the environment, as the runner hands a step its params:
+        // they can hold tokens, and argv is readable by every user.
+        match entry
             .params_json()
             .map_err(|e| format!("applet {:?}: params: {e:#}", entry.id))?
         {
             Some(params) => {
                 let json = serde_json::to_string(&params)
                     .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?;
-                let file = datalib_dag::subprocess::write_params_file(
-                    data_root,
-                    &format!("applet_{}", entry.id),
-                    &json,
-                )
-                .map_err(|e| format!("applet {:?}: params file: {e:#}", entry.id))?;
-                cmd.arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
-                    .arg(file.path());
-                Some(file)
+                cmd.env(datalib_env::DATALIB_DAG_PARAMS, json);
             }
-            None => None,
-        };
+            None => {
+                cmd.env_remove(datalib_env::DATALIB_DAG_PARAMS);
+            }
+        }
         // stdin is not an input channel — nothing is ever written to it. It is
         // a liveness pipe: whatever ends us, including a SIGKILL that runs no
         // code at all, the kernel closes the write end and the applet's read
@@ -855,14 +862,7 @@ impl Supervisor {
 
         self.memory.track(&entry.id, child.id());
         if let Ok(mut map) = self.running.lock() {
-            map.insert(
-                entry.id.clone(),
-                Running {
-                    port,
-                    child,
-                    _params_file: params_file,
-                },
-            );
+            map.insert(entry.id.clone(), Running { port, child });
         }
         Ok(port)
     }
@@ -933,6 +933,15 @@ impl AppletRegistry {
     pub fn memory(&self) -> BTreeMap<String, crate::applet_memory::Reading> {
         self.supervisor.memory.readings()
     }
+
+    /// What each applet's statements have done since the server started.
+    pub fn sql_work(&self) -> BTreeMap<String, datalib_sql_work::ByTag> {
+        self.supervisor
+            .sql_work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 impl Drop for Supervisor {
@@ -953,6 +962,9 @@ pub struct ProxyResponse {
     /// What the applet says it read to answer, in
     /// [`datalib_sql_work::ROWS_READ_HEADER`].
     pub rows_read: Option<u64>,
+    /// What its statements did to answer, as JSON by name, in
+    /// [`datalib_sql_work::SQL_WORK_HEADER`].
+    pub sql_work: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -1180,6 +1192,7 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         .ok_or_else(|| format!("applet response has no status: {status_line:?}"))?;
     let mut content_type = "application/octet-stream".to_string();
     let mut rows_read = None;
+    let mut sql_work = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim();
@@ -1187,6 +1200,8 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
                 content_type = v.trim().to_string();
             } else if k.eq_ignore_ascii_case(datalib_sql_work::ROWS_READ_HEADER) {
                 rows_read = v.trim().parse().ok();
+            } else if k.eq_ignore_ascii_case(datalib_sql_work::SQL_WORK_HEADER) {
+                sql_work = Some(v.trim().to_string());
             }
         }
     }
@@ -1194,6 +1209,7 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         status,
         content_type,
         rows_read,
+        sql_work,
         body,
     })
 }
@@ -1508,5 +1524,41 @@ mod tests {
         supervisor.stop_all();
 
         assert_eq!(rss(), None, "a stopped applet keeps no reading");
+    }
+
+    /// An applet's `params` reach it as JSON in `DATALIB_DAG_PARAMS`, as
+    /// a step's do, and nothing names them on its command line.
+    #[cfg(unix)]
+    #[test]
+    fn an_applets_params_arrive_in_the_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let seen = root.path().join("seen.txt");
+        let script = format!(
+            "printf '%s|%s' \"$*\" \"${{DATALIB_DAG_PARAMS-unset}}\" > '{}'; \
+             echo {APPLET_PORT_LINE}1; sleep 30",
+            seen.display(),
+        );
+        let entry = AppletEntry {
+            id: "p".into(),
+            group: None,
+            command: format!("/bin/sh -c {} sh", shlex::try_quote(&script).unwrap()),
+            params: Some(
+                serde_json::from_value(serde_json::json!({"workspace": "enterprise"})).unwrap(),
+            ),
+            env: BTreeMap::new(),
+        };
+        let supervisor = Supervisor::default();
+        supervisor
+            .start(&entry, root.path(), None, root.path())
+            .expect("the applet announced its port");
+        supervisor.stop_all();
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let (args, params) = seen.split_once('|').unwrap();
+        assert!(!args.contains("enterprise"), "params on argv: {args}");
+        assert!(!args.contains("--params-file"), "{args}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(params).unwrap(),
+            serde_json::json!({"workspace": "enterprise"})
+        );
     }
 }

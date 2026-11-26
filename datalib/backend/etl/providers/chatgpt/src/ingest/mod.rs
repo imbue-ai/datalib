@@ -38,6 +38,7 @@ use tokio::time::sleep;
 use tracing::{info, info_span, instrument, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
+use datalib_sql::sql;
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
 use export::ExportFiles;
 use fetchers::{Attachments, Conversations};
@@ -642,11 +643,13 @@ async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {
         .map(serde_json::to_string)
         .transpose()
         .context("serialize /me's volatile fields")?;
-    sqlx::query(
+    sql!(
+        "chatgpt.upsert_me_volatile_fields",
         "INSERT INTO me_bookkeeping (id, attempt_count, volatile_payload) \
          VALUES (?, 0, jsonb(?)) \
-         ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload",
+         ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload"
     )
+    .query()
     .bind(id)
     .bind(volatile)
     .execute(&mut *tx)

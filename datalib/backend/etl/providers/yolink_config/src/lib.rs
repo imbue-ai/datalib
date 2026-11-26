@@ -70,8 +70,7 @@ pub struct YolinkDevice {
 }
 
 impl YolinkConfig {
-    /// Replicates the `SourceConfig::Yolink` rules from
-    /// `datalib_core::config::Config::validate()`: ≥1 device, unique
+    /// The rules a `yolink` config is held to: ≥1 device, unique
     /// device names, `kind ∈ {temperature_humidity, watermeter}`, `start`
     /// is `YYYY-MM-DD`, and `family_device_id`/`device_udid` are 32
     /// lowercase-hex.

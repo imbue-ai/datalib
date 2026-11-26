@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw;
 
 use crate::{search_in, store_path, ContactSummary};
+use datalib_sql::sql;
 
 pub struct ContactsReader {
     reader: doltlite_raw::Reader,
@@ -54,12 +55,15 @@ impl ContactsReader {
     /// `None` for a contact the store does not have.
     pub async fn handles(&self, contact_id: &str) -> Result<Option<BTreeSet<String>>> {
         let pool = self.reader.pool();
-        let known: Option<String> =
-            sqlx::query_scalar("SELECT contact_id FROM contacts WHERE contact_id = ?")
-                .bind(contact_id)
-                .fetch_optional(pool)
-                .await
-                .context("read a contact")?;
+        let known: Option<String> = sql!(
+            "contacts_app.read.contact_exists",
+            "SELECT contact_id FROM contacts WHERE contact_id = ?"
+        )
+        .query_scalar()
+        .bind(contact_id)
+        .fetch_optional(pool)
+        .await
+        .context("read a contact")?;
         if known.is_none() {
             return Ok(None);
         }
@@ -70,18 +74,19 @@ impl ContactsReader {
             if !seen.insert(id.clone()) {
                 continue;
             }
-            let own: Vec<String> =
-                sqlx::query_scalar("SELECT handle FROM handles WHERE contact_id = ?")
-                    .bind(&id)
-                    .fetch_all(pool)
-                    .await
-                    .context("read a contact's handles")?;
-            handles.extend(own);
-            let next: Vec<String> = sqlx::query_scalar(
-                "SELECT merged_into FROM contacts WHERE contact_id = ?1 AND merged_into IS NOT NULL \
-                 UNION SELECT contact_id FROM contacts WHERE merged_into = ?1 \
-                 UNION SELECT member_id FROM members WHERE group_id = ?1",
+            let own: Vec<String> = sql!(
+                "contacts_app.read.list_handles_of_contact",
+                "SELECT handle FROM handles WHERE contact_id = ?"
             )
+            .query_scalar()
+            .bind(&id)
+            .fetch_all(pool)
+            .await
+            .context("read a contact's handles")?;
+            handles.extend(own);
+            let next: Vec<String> = sql!("contacts_app.read.list_related_contacts", "SELECT merged_into FROM contacts WHERE contact_id = ?1 AND merged_into IS NOT NULL \
+                 UNION SELECT contact_id FROM contacts WHERE merged_into = ?1 \
+                 UNION SELECT member_id FROM members WHERE group_id = ?1").query_scalar()
             .bind(&id)
             .fetch_all(pool)
             .await
@@ -95,10 +100,12 @@ impl ContactsReader {
     /// reads each.
     pub async fn me_handles(&self) -> Result<BTreeSet<String>> {
         let pool = self.reader.pool();
-        let marked: Vec<String> = sqlx::query_scalar("SELECT contact_id FROM me")
-            .fetch_all(pool)
-            .await
-            .context("read the contacts that are me")?;
+        let marked: Vec<String> =
+            sql!("contacts_app.read.list_me_ids", "SELECT contact_id FROM me")
+                .query_scalar()
+                .fetch_all(pool)
+                .await
+                .context("read the contacts that are me")?;
         let mut out = BTreeSet::new();
         for id in marked {
             out.extend(self.handles(&id).await?.unwrap_or_default());
@@ -124,6 +131,7 @@ mod tests {
     use crate::{ContactKind, Store};
     use datalib_handle::Handle;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     fn email(s: &str) -> Handle {
         Handle::email(s).unwrap()
     }
@@ -194,7 +202,8 @@ mod tests {
                 &crew,
             ),
         ] {
-            sqlx::query(sql)
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .bind(a)
                 .bind(b)
                 .execute(&store.pool)
@@ -271,7 +280,8 @@ mod tests {
         // A store an older build wrote is refused until the applet opens
         // it, not read as marking no one.
         let store = Store::open(&store_path(tmp.path())).await.unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .query()
             .execute(&store.pool)
             .await
             .unwrap();

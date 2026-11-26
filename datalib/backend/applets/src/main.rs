@@ -19,7 +19,7 @@ use datalib_cli_help::Example;
 const EXAMPLES: &[Example] = &[
     Example {
         what: "serve the search applet on a port the OS picks, as the gateway does",
-        command: "datalib-applet unified_grid_and_search_index --port 0 --params-file params.json",
+        command: "DATALIB_DAG_PARAMS=\"$(cat params.json)\" datalib-applet unified_grid_and_search_index --port 0",
     },
     Example {
         what: "search a data root as the app's search box does, and print the answer as JSON",
@@ -62,11 +62,6 @@ struct Cli {
     /// which one it picked.
     #[arg(short = 'p', long, global = true)]
     port: Option<u16>,
-    /// A JSON file holding the config entry's `params`. A file rather
-    /// than an argument because params can carry tokens, and argv is
-    /// readable by every user on the machine.
-    #[arg(long = "params-file", global = true)]
-    params_file: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -167,14 +162,12 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<()> {
-    let params: serde_json::Value = match &cli.params_file {
-        Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .with_context(|| format!("read the params file {}", path.display()))?;
-            serde_json::from_str(&text)
-                .with_context(|| format!("{} is not valid JSON", path.display()))?
-        }
-        None => serde_json::Value::Null,
+    // The config entry's `params`, in the environment rather than on
+    // argv: they can carry tokens, and argv is readable by every user.
+    let params: serde_json::Value = match std::env::var(datalib_env::DATALIB_DAG_PARAMS) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
+            .with_context(|| format!("{} is not valid JSON", datalib_env::DATALIB_DAG_PARAMS))?,
+        _ => serde_json::Value::Null,
     };
     // Write, then serve. The order is the contract: the gateway waits
     // for `announce_port` and then scans the store, so announcing

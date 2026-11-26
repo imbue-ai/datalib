@@ -13,6 +13,7 @@ use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb, Window};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, LatchkeySettings};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
+use datalib_sql::test_sql;
 use serde_json::{json, Value};
 
 pub(crate) const PRIMARY: &str = "picard@enterprise.test";
@@ -116,7 +117,8 @@ async fn ids(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store))
         .await
         .expect("reopen store");
-    let v: Vec<String> = sqlx::query_scalar("SELECT id FROM google_events ORDER BY id")
+    let v: Vec<String> = test_sql!("SELECT id FROM google_events ORDER BY id")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .expect("query");
@@ -300,7 +302,8 @@ async fn a_window_is_listed_whole_every_run_and_keeps_no_token() {
     assert_eq!(ids(&store).await, vec![format!("{PRIMARY}#staff01")]);
 
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let tokens: Vec<Option<String>> = sqlx::query_scalar("SELECT sync_token FROM calendars")
+    let tokens: Vec<Option<String>> = test_sql!("SELECT sync_token FROM calendars")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -351,7 +354,8 @@ async fn a_touch_that_bumps_only_etag_and_updated_leaves_the_payload_alone() {
 
     let payload = |store: std::path::PathBuf| async move {
         let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-        let p: String = sqlx::query_scalar("SELECT json(payload) FROM google_events")
+        let p: String = test_sql!("SELECT json(payload) FROM google_events")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -413,7 +417,8 @@ async fn a_stopped_run_leaves_the_last_listing_rows() {
 
 async fn problem_keys(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let keys = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+    let keys = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -423,7 +428,8 @@ async fn problem_keys(store: &Path) -> Vec<String> {
 
 async fn severities(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let severities = sqlx::query_scalar("SELECT severity FROM problems ORDER BY scope_key")
+    let severities = test_sql!("SELECT severity FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -599,7 +605,8 @@ async fn a_calendar_the_list_no_longer_names_goes_with_its_events() {
 
 async fn calendar_count(store: &Path) -> i64 {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let n = sqlx::query_scalar("SELECT count(*) FROM calendars")
+    let n = test_sql!("SELECT count(*) FROM calendars")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();

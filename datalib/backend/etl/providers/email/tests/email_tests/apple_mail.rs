@@ -8,6 +8,7 @@ use datalib_etl::store_handle::RawStoreHandle as _;
 use datalib_etl_email::ingest::apple_mail::{self, AppleMailAccountConfig, FetchSummary};
 use datalib_etl_email::ingest::db::RawDb;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 const ACCOUNT: &str = "1F0B8A52-0000-4000-8000-00000000E1D0";
@@ -169,7 +170,8 @@ impl MailFolder {
             .await
             .unwrap();
         for s in sql {
-            sqlx::query(sqlx::AssertSqlSafe(s.to_string()))
+            Sql::dynamic(test_sql_id!(), s)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap_or_else(|e| panic!("{s}: {e}"));
@@ -238,12 +240,12 @@ async fn sync_with(
     summary
 }
 
-async fn rows<T>(work: &Path, sql: &'static str) -> Vec<T>
+async fn rows<T>(work: &Path, sql: Sql) -> Vec<T>
 where
     T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
 {
     let db = RawDb::open(&work.join("e.doltlite_db")).await.unwrap();
-    let out = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+    let out = sql.query_as().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     out
 }
@@ -265,7 +267,7 @@ impl datalib_etl::progress::ProgressSink for Bar {
 }
 
 async fn commits(work: &Path) -> i64 {
-    let n: Vec<(i64,)> = rows(work, "SELECT count(*) FROM dolt_log").await;
+    let n: Vec<(i64,)> = rows(work, test_sql!("SELECT count(*) FROM dolt_log")).await;
     n[0].0
 }
 
@@ -273,7 +275,7 @@ async fn commits(work: &Path) -> i64 {
 async fn problems(work: &Path) -> Vec<String> {
     let rows: Vec<(String, String)> = rows(
         work,
-        "SELECT scope_key, severity FROM problems ORDER BY scope_key",
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key"),
     )
     .await;
     rows.into_iter().map(|(k, s)| format!("{k} {s}")).collect()
@@ -303,7 +305,7 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
 
     let emails: Vec<(String, String, String)> = rows(
         work.path(),
-        "SELECT id, thread_id, account_id FROM emails ORDER BY id",
+        test_sql!("SELECT id, thread_id, account_id FROM emails ORDER BY id"),
     )
     .await;
     assert_eq!(
@@ -329,8 +331,8 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     );
     let filed: Vec<(String, String)> = rows(
         work.path(),
-        "SELECT j.email_id, m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
-         ORDER BY j.email_id, m.name",
+        test_sql!("SELECT j.email_id, m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
+         ORDER BY j.email_id, m.name"),
     )
     .await;
     let filed: Vec<(&str, &str)> = filed
@@ -348,8 +350,11 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
             ("enterprise:report@enterprise.example", "[Gmail]/All Mail"),
         ]
     );
-    let read: Vec<(String, i64)> =
-        rows(work.path(), "SELECT id, read FROM read_marks ORDER BY id").await;
+    let read: Vec<(String, i64)> = rows(
+        work.path(),
+        test_sql!("SELECT id, read FROM read_marks ORDER BY id"),
+    )
+    .await;
     assert_eq!(
         read.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
         [1, 0, 1],
@@ -357,7 +362,7 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     );
     let answered: Vec<(String,)> = rows(
         work.path(),
-        "SELECT email_id FROM email_keywords WHERE keyword = '$answered'",
+        test_sql!("SELECT email_id FROM email_keywords WHERE keyword = '$answered'"),
     )
     .await;
     assert_eq!(
@@ -374,7 +379,7 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
     // Mail kept beside the partial file.
     let blobs: Vec<(String,)> = rows(
         work.path(),
-        "SELECT blob_id FROM emails WHERE id = 'enterprise:report@enterprise.example'",
+        test_sql!("SELECT blob_id FROM emails WHERE id = 'enterprise:report@enterprise.example'"),
     )
     .await;
     let db = RawDb::open(&work.path().join("e.doltlite_db"))
@@ -420,8 +425,11 @@ async fn a_mail_folder_mirrors_and_follows_mails_index() {
         problems(work.path()).await,
         ["phase:apple_mail_files warning"]
     );
-    let read: Vec<(String, i64)> =
-        rows(work.path(), "SELECT id, read FROM read_marks ORDER BY id").await;
+    let read: Vec<(String, i64)> = rows(
+        work.path(),
+        test_sql!("SELECT id, read FROM read_marks ORDER BY id"),
+    )
+    .await;
     assert_eq!(
         read,
         [
@@ -620,8 +628,11 @@ async fn every_account_is_copied_under_its_own_id() {
 
     let gmail = "apple_mail_1f0b8a52";
     let fm = "apple_mail_5d3c9e70";
-    let emails: Vec<(String, String)> =
-        rows(work.path(), "SELECT id, account_id FROM emails ORDER BY id").await;
+    let emails: Vec<(String, String)> = rows(
+        work.path(),
+        test_sql!("SELECT id, account_id FROM emails ORDER BY id"),
+    )
+    .await;
     let expected = |ids: &[(&str, &str)]| -> Vec<(String, String)> {
         ids.iter()
             .map(|(id, a)| (format!("{a}:{id}"), a.to_string()))
@@ -639,15 +650,21 @@ async fn every_account_is_copied_under_its_own_id() {
     );
     let risa: Vec<(String,)> = rows(
         work.path(),
-        "SELECT m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
-         WHERE j.email_id = 'apple_mail_5d3c9e70:risa@enterprise.example' ORDER BY m.name",
+        test_sql!(
+            "SELECT m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
+         WHERE j.email_id = 'apple_mail_5d3c9e70:risa@enterprise.example' ORDER BY m.name"
+        ),
     )
     .await;
     assert_eq!(
         risa,
         [("travel".to_string(),), ("travel/portugal".to_string(),)]
     );
-    let accounts: Vec<(String,)> = rows(work.path(), "SELECT id FROM accounts ORDER BY id").await;
+    let accounts: Vec<(String,)> = rows(
+        work.path(),
+        test_sql!("SELECT id FROM accounts ORDER BY id"),
+    )
+    .await;
     assert_eq!(accounts, [(gmail.to_string(),), (fm.to_string(),)]);
 
     // Deleted in the Fastmail account only.
@@ -664,7 +681,7 @@ async fn every_account_is_copied_under_its_own_id() {
     assert_eq!(after.emails_removed, 1, "{after:?}");
     let briefings: Vec<(String,)> = rows(
         work.path(),
-        "SELECT id FROM emails WHERE message_id = 'briefing@enterprise.example'",
+        test_sql!("SELECT id FROM emails WHERE message_id = 'briefing@enterprise.example'"),
     )
     .await;
     assert_eq!(

@@ -486,7 +486,11 @@ Three pieces make that possible, and each is small:
   a test can take the network away mid-run
   (`datalib_step`'s `step_tests/offline.rs`). A Rust test sets the same
   four on its scope (`Playback::delay`, `hold`, `hold_sealed`,
-  `offline`).
+  `offline`). None of them reaches a step through the runner unless
+  `DATALIB_CHILD_ENV` names it: the runner hands a step only the
+  variables it lists, and it lists no switch only a test sets
+  (`datalib/backend/env/src/lib.rs`). `playwright.config.ts` and
+  `run_sync_pipeline.py` name theirs.
 * The tapes come from `datalib-step synthesize`, run by `run_e2e.sh` at
   startup over the checked-in `chatgpt_api` / `claude_export` fixtures —
   the same call `tests/fixtures/run_sync_pipeline.py` makes.
@@ -498,7 +502,8 @@ Three pieces make that possible, and each is small:
   index group and the applet, no data.
 
 To watch the same thing by hand, against any root, run the runner
-directly with the two variables set and a short cadence in the config:
+directly with the two variables set and named in `DATALIB_CHILD_ENV`,
+and a short cadence in the config:
 
 ```bash
 bazelisk build //datalib/backend:bin //datalib/backend/datalib_step:datalib_step
@@ -506,6 +511,7 @@ step=bazel-bin/datalib/backend/datalib_step/datalib_step
 echo '{"fixture_path": "'$PWD'/datalib/backend/etl/providers/chatgpt/tests/fixtures/chatgpt_api"}' > /tmp/synth.json
 $step synthesize chatgpt --name chatgpt --params-file /tmp/synth.json --out /tmp/tapes
 DATALIB_HTTP_PLAYBACK=/tmp/tapes DATALIB_HTTP_PLAYBACK_DELAY_MS=1500 \
+DATALIB_CHILD_ENV=DATALIB_HTTP_PLAYBACK,DATALIB_HTTP_PLAYBACK_DELAY_MS \
   bazel-bin/datalib/backend/bin/datalib-pipeline sync <root>
 ```
 
@@ -794,6 +800,13 @@ in, such an entry would wave through the scan if the statement grew
 it back. The one exception is a `judged_by: ran` statement that walked
 no rows this run, which is a note. Two entries for one statement fail
 too: only one reason can be the one that holds.
+
+The same test refuses a statement the sync ran without a name
+(`datalib/backend/sql`): the compiler refuses one in our code, so one
+here is SQLite or doltlite running a statement of its own inside ours,
+and the allowlist's `[[unnamed]]` entries name each such shape, with
+a reason. An entry nothing matches any more fails like a `[[scan]]`
+entry does.
 
 A fixture's tables hold a few rows, so the scan costs nothing here; on a
 library it costs the whole table on every call. When the test fails on

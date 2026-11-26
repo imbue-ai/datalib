@@ -123,9 +123,10 @@ pub fn render_all(
     }
 
     // What to render: the contacts the driver found stale, plus every
-    // card of a row the diff named — one `contacts` row can hold several
-    // cards, which is why the row alone could never name a document and
-    // the mapping goes through the parse.
+    // card that read a row the diff named. A card reads more than its own
+    // row (the group cards naming it, the member cards it names), so the
+    // row alone could never name its documents and the mapping goes
+    // through each card's inputs.
     let forward = parsed.changed.as_ref().map(|changed| {
         keys_reading(
             changed,

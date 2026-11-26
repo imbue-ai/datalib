@@ -13,6 +13,7 @@ use datalib_etl_garmin::synthesize::GarminSynth;
 use datalib_etl_garmin_config::{GarminApi, DAILY_METRICS};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::{test_sql, Sql};
 use sqlx::Row;
 
 fn spec_path() -> PathBuf {
@@ -60,9 +61,9 @@ impl ProgressSink for Lengths {
 
 /// The test's own store, read back bare after its own run: unpinned is
 /// fine here, and what the literal table names in the SQL expect.
-async fn count(raw: &Path, sql: &'static str) -> i64 {
+async fn count(raw: &Path, sql: Sql) -> i64 {
     let pool = datalib_pin::open_reader(&db_path_for(raw)).await.unwrap();
-    let n: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+    let n: i64 = sql.query_scalar().fetch_one(&pool).await.unwrap();
     pool.close().await;
     n
 }
@@ -99,29 +100,32 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(s.items, 4);
     assert_eq!(s.wellness_files, 0, "off by default");
 
-    assert_eq!(count(&raw, "SELECT COUNT(*) FROM garmin_account").await, 2);
     assert_eq!(
-        count(&raw, "SELECT COUNT(*) FROM garmin_daily").await,
+        count(&raw, test_sql!("SELECT COUNT(*) FROM garmin_account")).await,
+        2
+    );
+    assert_eq!(
+        count(&raw, test_sql!("SELECT COUNT(*) FROM garmin_daily")).await,
         (DAILY_METRICS.len() * 15) as i64,
         "every (metric, day) pair is a row, empty days included"
     );
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_daily WHERE json(payload) <> 'null'"
+            test_sql!("SELECT COUNT(*) FROM garmin_daily WHERE json(payload) <> 'null'")
         )
         .await,
         5,
         "only the spec's days carry a payload"
     );
     assert_eq!(
-        count(&raw, "SELECT COUNT(*) FROM garmin_weigh_ins").await,
+        count(&raw, test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins")).await,
         4
     );
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_weigh_ins WHERE weight_g = 77600.0 AND calendar_date = '2369-04-14'"
+            test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins WHERE weight_g = 77600.0 AND calendar_date = '2369-04-14'")
         )
         .await,
         1
@@ -129,19 +133,23 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_activities WHERE activity_type = 'running'"
+            test_sql!("SELECT COUNT(*) FROM garmin_activities WHERE activity_type = 'running'")
         )
         .await,
         1
     );
     assert_eq!(
-        count(&raw, "SELECT COUNT(*) FROM garmin_activity_details").await,
+        count(
+            &raw,
+            test_sql!("SELECT COUNT(*) FROM garmin_activity_details")
+        )
+        .await,
         2
     );
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL"
+            test_sql!("SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL")
         )
         .await,
         2
@@ -149,7 +157,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'gear'"
+            test_sql!("SELECT COUNT(*) FROM garmin_items WHERE kind = 'gear'")
         )
         .await,
         1
@@ -157,7 +165,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM sync_scope_state WHERE scope LIKE 'garmin:%'"
+            test_sql!("SELECT COUNT(*) FROM sync_scope_state WHERE scope LIKE 'garmin:%'")
         )
         .await,
         1,
@@ -166,8 +174,10 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM coverage \
+            test_sql!(
+                "SELECT COUNT(*) FROM coverage \
              WHERE scope = 'activities' AND lo = '2369-04-01' AND hi = '2369-04-15'"
+            )
         )
         .await,
         1,
@@ -176,7 +186,9 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version IS NOT NULL"
+            test_sql!(
+                "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version IS NOT NULL"
+            )
         )
         .await,
         (DAILY_METRICS.len() * 15) as i64,
@@ -185,7 +197,9 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     assert_eq!(
         count(
             &raw,
-            "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version = '2369-04-15'"
+            test_sql!(
+                "SELECT COUNT(*) FROM garmin_daily_bookkeeping WHERE held_version = '2369-04-15'"
+            )
         )
         .await,
         (DAILY_METRICS.len() * 8) as i64,
@@ -200,12 +214,12 @@ async fn garmin_synth_playback_ingest_roundtrip() {
         .await
         .unwrap();
         let pool = datalib_pin::open_reader(&db_path_for(&raw)).await.unwrap();
-        let row = sqlx::query(
-            "SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let row =
+            test_sql!("SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002'")
+                .query()
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let hash: String = row.get("blake3");
         pool.close().await;
         let obj = cas.get(&hash).await.unwrap().expect("blob present");
@@ -234,7 +248,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
         "the daily bar counts the days this run walks, not every day since `since`"
     );
     assert_eq!(
-        count(&raw, "SELECT COUNT(*) FROM garmin_weigh_ins").await,
+        count(&raw, test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins")).await,
         4
     );
 
@@ -248,7 +262,7 @@ async fn garmin_synth_playback_ingest_roundtrip() {
     let s3 = run(&playback, &raw, &api).await;
     assert_eq!(s3.weigh_ins_pruned, 1, "{}", s3.line());
     assert_eq!(
-        count(&raw, "SELECT COUNT(*) FROM garmin_weigh_ins").await,
+        count(&raw, test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins")).await,
         3
     );
 }

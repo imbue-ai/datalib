@@ -252,6 +252,7 @@ impl datalib_core::repo::AppRepo for NewerRootRepo {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// Regression guard for the web/Tauri drift this module exists to
     /// prevent: the state must open its stores at the layout helpers'
     /// paths, not some packaging-local filename at the root.
@@ -302,7 +303,8 @@ mod tests {
         let remote_media = datalib_core::layout::remote_media_db(root.path());
         {
             let pool = datalib_core::store::open_pool(&remote_media).await.unwrap();
-            sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+            test_sql!("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();

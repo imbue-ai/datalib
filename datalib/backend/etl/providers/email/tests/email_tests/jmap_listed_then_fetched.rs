@@ -11,6 +11,7 @@ use datalib_etl_email::ingest::{FetchOptions, FetchSummary, RawDb};
 
 use crate::jmap_tape::{changes_args, email_get_args, query_args, Account, Tape, HOST};
 use crate::support::Mirror;
+use datalib_sql::{test_sql, Sql};
 
 /// Any failure of the delta once sent the run down a full `Email/query`
 /// enumeration and an `Email/get` of the whole account. Only a server
@@ -62,7 +63,7 @@ async fn marking_an_email_unread_upstream_moves_only_its_read_mark() {
     tape.serve(&a);
     run(&m, &[]).await.expect("first run");
     assert_eq!(marks(&m).await, [("M1", true), ("M2", true)]);
-    assert!(strings(&m, "SELECT keyword FROM email_keywords")
+    assert!(strings(&m, test_sql!("SELECT keyword FROM email_keywords"))
         .await
         .is_empty());
     let rows = email_rows(&m).await;
@@ -102,7 +103,7 @@ async fn muting_upstream_moves_only_the_read_mark() {
 
     assert_eq!(muted(&m).await, [1, 0]);
     assert_eq!(email_rows(&m).await, rows);
-    assert!(strings(&m, "SELECT keyword FROM email_keywords")
+    assert!(strings(&m, test_sql!("SELECT keyword FROM email_keywords"))
         .await
         .is_empty());
 }
@@ -119,18 +120,19 @@ async fn the_servers_preview_is_kept_and_an_old_row_gets_one_from_its_bytes() {
     tape.serve(&a);
     run(&m, &[]).await.expect("first run");
     assert_eq!(
-        strings(&m, "SELECT preview FROM emails ORDER BY id").await,
+        strings(&m, test_sql!("SELECT preview FROM emails ORDER BY id")).await,
         ["Preview of log M1", ""]
     );
     assert!(strings(
         &m,
-        "SELECT id FROM emails WHERE payload -> '$.preview' NOT NULL"
+        test_sql!("SELECT id FROM emails WHERE payload -> '$.preview' NOT NULL")
     )
     .await
     .is_empty());
 
     m.read(|db: RawDb| async move {
-        sqlx::query("UPDATE emails SET preview = NULL WHERE id = 'M1'")
+        test_sql!("UPDATE emails SET preview = NULL WHERE id = 'M1'")
+            .query()
             .execute(db.pool())
             .await
             .unwrap();
@@ -140,7 +142,7 @@ async fn the_servers_preview_is_kept_and_an_old_row_gets_one_from_its_bytes() {
     let second = run(&m, &[]).await.expect("second run");
     assert_eq!(second.emails_upserted, 0, "{second:?}");
     assert_eq!(
-        strings(&m, "SELECT preview FROM emails ORDER BY id").await,
+        strings(&m, test_sql!("SELECT preview FROM emails ORDER BY id")).await,
         ["body of M1", ""]
     );
 }
@@ -313,13 +315,17 @@ async fn run(m: &Mirror, labels: &[&str]) -> anyhow::Result<FetchSummary> {
     .await
 }
 
-async fn strings(m: &Mirror, sql: &'static str) -> Vec<String> {
-    m.read(|db: RawDb| async move { sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap() })
+async fn strings(m: &Mirror, sql: Sql) -> Vec<String> {
+    m.read(|db: RawDb| async move { sql.query_scalar().fetch_all(db.pool()).await.unwrap() })
         .await
 }
 
 async fn problems(m: &Mirror) -> Vec<String> {
-    strings(m, "SELECT scope_key FROM problems ORDER BY scope_key").await
+    strings(
+        m,
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key"),
+    )
+    .await
 }
 
 /// Each email's read mark, by id.
@@ -343,7 +349,7 @@ async fn marks(m: &Mirror) -> Vec<(&'static str, bool)> {
 async fn email_rows(m: &Mirror) -> Vec<String> {
     strings(
         m,
-        "SELECT id || ' ' || json(payload) || ' ' || coalesce(label_ids, '-') FROM emails ORDER BY id",
+        test_sql!("SELECT id || ' ' || json(payload) || ' ' || coalesce(label_ids, '-') FROM emails ORDER BY id"),
     )
     .await
 }
@@ -354,11 +360,15 @@ async fn content_commit(m: &Mirror) -> Option<String> {
 }
 
 async fn emails(m: &Mirror) -> Vec<String> {
-    strings(m, "SELECT id FROM emails ORDER BY id").await
+    strings(m, test_sql!("SELECT id FROM emails ORDER BY id")).await
 }
 
 async fn listed_whole(m: &Mirror) -> Vec<String> {
-    strings(m, "SELECT scope FROM listed_whole ORDER BY scope").await
+    strings(
+        m,
+        test_sql!("SELECT scope FROM listed_whole ORDER BY scope"),
+    )
+    .await
 }
 
 async fn email_state(m: &Mirror) -> String {
@@ -368,7 +378,8 @@ async fn email_state(m: &Mirror) -> String {
 
 async fn keywords(m: &Mirror, email_id: &'static str) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT keyword FROM email_keywords WHERE email_id = ? ORDER BY keyword")
+        test_sql!("SELECT keyword FROM email_keywords WHERE email_id = ? ORDER BY keyword")
+            .query_scalar()
             .bind(email_id)
             .fetch_all(db.pool())
             .await
@@ -380,7 +391,8 @@ async fn keywords(m: &Mirror, email_id: &'static str) -> Vec<String> {
 /// Each thread row and how many emails it lists.
 async fn threads(m: &Mirror) -> Vec<(String, i64)> {
     m.read(|db: RawDb| async move {
-        sqlx::query_as("SELECT id, email_count FROM threads ORDER BY id")
+        test_sql!("SELECT id, email_count FROM threads ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -390,7 +402,8 @@ async fn threads(m: &Mirror) -> Vec<(String, i64)> {
 
 async fn muted(m: &Mirror) -> Vec<i64> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT muted FROM read_marks ORDER BY id")
+        test_sql!("SELECT muted FROM read_marks ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()

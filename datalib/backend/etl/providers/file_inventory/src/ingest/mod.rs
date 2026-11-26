@@ -320,8 +320,9 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         found.records_tried_all(table);
     }
 
-    // The commit and gc happen in the standalone binary, not here:
-    // `fetch` stays commit-free per the framework's commit-lifecycle rule.
+    // The commit happens in the caller, not here: the step's `run_store`,
+    // or the standalone binary, which also runs gc. `fetch` stays
+    // commit-free per the framework's commit-lifecycle rule.
 
     let total_elapsed = total_start.elapsed();
 

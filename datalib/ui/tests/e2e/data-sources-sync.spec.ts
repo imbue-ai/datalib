@@ -185,7 +185,7 @@ test.describe("a real sync, driven from the grid", () => {
 
 [[programs]]
 command = "${STEP_BIN}"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 
 [[groups]]
 id = "pdfs"

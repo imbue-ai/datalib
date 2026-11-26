@@ -20,6 +20,7 @@ use serde_json::Value;
 use sqlx::Row as _;
 
 use crate::tree::{parents, Folder, Places};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const DOC_MIME: &str = "application/vnd.google-apps.document";
 
@@ -111,10 +112,14 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
         render: range.narrow(forward.as_ref()),
         ..Listing::default()
     };
-    for row in sqlx::query("SELECT id, json(payload) AS payload FROM files")
-        .fetch_all(db.pool())
-        .await
-        .context("read files")?
+    for row in sql!(
+        "google_drive_render.list_files",
+        "SELECT id, json(payload) AS payload FROM files"
+    )
+    .query()
+    .fetch_all(db.pool())
+    .await
+    .context("read files")?
     {
         let id: String = row.try_get("id")?;
         out.listed.insert(id.clone());
@@ -145,10 +150,14 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
     }
 
     let mut newest: HashMap<String, (i64, String)> = HashMap::new();
-    for row in sqlx::query("SELECT id, file_id, version FROM captures")
-        .fetch_all(db.pool())
-        .await
-        .context("read captures")?
+    for row in sql!(
+        "google_drive_render.list_captures",
+        "SELECT id, file_id, version FROM captures"
+    )
+    .query()
+    .fetch_all(db.pool())
+    .await
+    .context("read captures")?
     {
         let file: String = row.try_get("file_id")?;
         if !out.docs.contains_key(&file) {
@@ -164,10 +173,14 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
     }
     let wanted: HashSet<String> = newest.values().map(|(_, id)| id.clone()).collect();
     let mut parts: HashMap<String, Vec<(String, String, Option<String>)>> = HashMap::new();
-    for row in sqlx::query("SELECT id, capture_id, part, blake3 FROM capture_parts")
-        .fetch_all(db.pool())
-        .await
-        .context("read capture_parts")?
+    for row in sql!(
+        "google_drive_render.list_capture_parts",
+        "SELECT id, capture_id, part, blake3 FROM capture_parts"
+    )
+    .query()
+    .fetch_all(db.pool())
+    .await
+    .context("read capture_parts")?
     {
         let capture: String = row.try_get("capture_id")?;
         if !wanted.contains(&capture) {
@@ -184,10 +197,14 @@ pub async fn load(db: &RawDb, range: RawRange<'_>) -> Result<Listing> {
         out.captures.insert(file, Capture { id, parts });
     }
 
-    for row in sqlx::query("SELECT id, file_id, json(payload) AS payload FROM comments")
-        .fetch_all(db.pool())
-        .await
-        .context("read comments")?
+    for row in sql!(
+        "google_drive_render.list_comments",
+        "SELECT id, file_id, json(payload) AS payload FROM comments"
+    )
+    .query()
+    .fetch_all(db.pool())
+    .await
+    .context("read comments")?
     {
         let file: String = row.try_get("file_id")?;
         if !out.docs.contains_key(&file) {
@@ -216,10 +233,14 @@ async fn places(db: &RawDb) -> Result<Places> {
             "SELECT id, json(payload) AS payload FROM file_parents",
         ),
     ] {
-        for row in sqlx::query(sql)
-            .fetch_all(db.pool())
-            .await
-            .with_context(|| format!("read {table}"))?
+        for row in Sql::dynamic(
+            sql_id!("google_drive_render.list_folders_drives_and_parents"),
+            sql,
+        )
+        .query()
+        .fetch_all(db.pool())
+        .await
+        .with_context(|| format!("read {table}"))?
         {
             let id: String = row.try_get("id")?;
             let payload: Option<String> = row.try_get("payload")?;

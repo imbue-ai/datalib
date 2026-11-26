@@ -421,7 +421,7 @@ it came from, so it gets its own section.
 ### What guards it
 
 - **Off by default, per source, in the config the person writes.** Nothing
-  in the wizard or the app turns it on; `check-params` refuses a value
+  in the wizard or the app turns it on; `datalib-pipeline check` refuses a value
   that is not a whole number, so a typo fails the check rather than
   sending everything (a misspelled name is refused too).
 - **The driver is handed a named environment**
@@ -474,7 +474,7 @@ code before repeating it as current.
 | A website drives the local server | a website | A per-process API token; a cross-site request is refused unless it is a navigation, and named routes refuse those too | `fetch_policy` and `only_from_this_site` in `http/src/auth.rs` |
 | A link in a message tells its sender where you read it | a stranger | Every response the server sends carries `Referrer-Policy: no-referrer`, and a link the UI opens in a new window asks for `noreferrer` | `send_no_referrer` in `http/src/lib.rs`, `http_tests::referrer_policy` |
 | A message's remote image tells its sender you read it | a stranger | Remote media is fetched only for an allowed sender or document, through the server | `http/src/remote_media.rs` |
-| A crafted file or export breaks a sync or reaches SQL | a stranger | Values are bound and names quoted; where a parser's work is wrapped in `catching_panics`, a panic costs that one record, not the step | AGENTS.md §"Dynamic SQL needs `AssertSqlSafe` and a reason", `etl/src/run_problems.rs` |
+| A crafted file or export breaks a sync or reaches SQL | a stranger | Values are bound and names quoted; where a parser's work is wrapped in `catching_panics`, a panic costs that one record, not the step | AGENTS.md §"Dynamic SQL needs a reason", `etl/src/run_problems.rs` |
 | A crafted mail or PDF takes over the parser that reads it, in the docker image | a stranger | Nothing in the image runs as root: everything runs as uid 1000, which owns only the data root, the credential store and the demo, and cannot write the binaries. Reasoned, not measured: no exploit was tried | [`docker.md`](docker.md) § "Permissions and signals" |
 | A secret reaches a log, an error or a child process | any of the above, or an accident | A child process gets a named environment, and an error carries only a safe form of a URL. The one exception is the server's runner, `datalib-pipeline serve`, which gets the server's environment but its token, its address and the protected-library flag, as it would from a terminal: it is the runner that hands each step only its named environment and the variables the step's params name, and a source added later may name any variable | `datalib/backend/env/src/lib.rs` (`inherit_for_runner`) |
 | A link makes a card run code | a website, or a stranger who sent the link | A card's source is data, opening a card never writes, and nothing a query says runs as code: the DACTAL frame has no `eval` and no `'unsafe-eval'` | [`cards.md`](cards.md) § "Card source", [`dactal.md`](dactal.md) caveat 5 |

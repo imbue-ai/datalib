@@ -260,6 +260,7 @@ fn relative(root: &Path, file: &Path) -> String {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn ics(uid: &str) -> String {
         format!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
@@ -310,21 +311,24 @@ mod tests {
         }
 
         async fn calendars(&self) -> Vec<String> {
-            sqlx::query_scalar("SELECT id FROM calendars ORDER BY id")
+            test_sql!("SELECT id FROM calendars ORDER BY id")
+                .query_scalar()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()
         }
 
         async fn problems(&self) -> Vec<(String, String)> {
-            sqlx::query_as("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+            test_sql!("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+                .query_as()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()
         }
 
         async fn uids(&self) -> Vec<String> {
-            sqlx::query_scalar("SELECT uid FROM ics_objects ORDER BY uid")
+            test_sql!("SELECT uid FROM ics_objects ORDER BY uid")
+                .query_scalar()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()

@@ -6,6 +6,7 @@ use datalib_etl_email::ingest::{fetch, FetchOptions, RawDb};
 
 use crate::jmap_tape::{Account, Tape, HOST};
 use crate::support::Mirror;
+use datalib_sql::test_sql;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_personal_account_row_carries_the_sign_ins_address() {
@@ -22,7 +23,8 @@ async fn a_personal_account_row_carries_the_sign_ins_address() {
 
     let address: Option<String> = m
         .read(|db: RawDb| async move {
-            sqlx::query_scalar("SELECT email_address FROM accounts")
+            test_sql!("SELECT email_address FROM accounts")
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap()

@@ -225,6 +225,43 @@ value can be anything, a secret included, so the line names its shape;
 `DATALIB_SQL_VALUES=1` writes the values in place, for a session on
 one's own library.
 
+**What every statement did is counted under its name.** Every statement
+Datalib runs carries a name (`sql!("runs.count_tables", …)`,
+`datalib/backend/sql`; AGENTS.md §"Every statement is a named `Sql`"),
+and `datalib_sql_work` adds up each run of it, by that name: how often
+it ran (`runs`), the rows it returned or changed (`rows`), the rows its
+loops visited to find them (`rows_scanned`), its time (`micros`, and the
+slowest run's), and per loop, as SQLite explains it, the rows that loop
+visited: `SEARCH grid_rows USING INDEX grid_rows_by_markdown
+(markdown_uuid=?)`, which names the index it read, or `SCAN t`, which
+read the whole table. A statement SQLite or doltlite runs on its own
+inside one of ours (FTS5 keeping its tables, doltlite reading its
+catalog) carries no name, and is counted as `untagged:` and its first
+word; so are sqlx's own `BEGIN`s and `PRAGMA`s. A statement run while
+the log writes a line is the log's own, and counted nowhere. Where it
+goes:
+
+| who | where |
+|---|---|
+| a step | its metrics, as it ends: `sql_runs_total`, `sql_rows_total`, `sql_rows_scanned_total` and `sql_microseconds_total`, each labelled `sql=<name>`, and `sql_loop_rows_scanned_total{sql, loop}` (`datalib_metrics`) |
+| the server, per request | the request line's `sql` field: the request's own statements, or what its applet sent in `X-Datalib-Sql-Work`, as JSON by name; the loops are left off a large one |
+| the server and its applets | `GET /metrics`, as `datalib_sql_*{process, sql}` since the process started (below) |
+| the runner | one `debug` line under `datalib::sql_work` as each sync ends, its statements during that sync in `statements` |
+
+The rows a loop visited are SQLite's scan statistics
+(`SQLITE_ENABLE_STMT_SCANSTATUS`, in `third-party/doltlite/BUILD.bazel`),
+which time each opcode too: a scan bound by SQLite's own loop ran some 5%
+slower for them on an M-series mac, and a store's pages cost far more
+than the loop on any real statement. What a statement's work was most
+of, once a sync is over:
+
+```sh
+sqlite3 -readonly <root>/system/runs/runs.sqlite \
+  "SELECT step, json_extract(labels, '$.sql') AS statement, value AS microseconds
+     FROM metrics WHERE name = 'sql_microseconds_total'
+    ORDER BY value DESC LIMIT 20"
+```
+
 **A migration says so from its start.** A step asked to migrate first
 says `migrate: updating the raw store for this build; nothing is
 downloaded`, as a line and as its status. Each rung then says, before
@@ -345,7 +382,10 @@ scrape_configs:
     authorization: { credentials_file: <root>/system/api-token }
 ```
 
-What it serves:
+What it serves, each name in Prometheus's `<namespace>_<subsystem>_<name>`
+form: `datalib`, then what the series is about (`step`, `tree`, `disk`,
+`applet`), then the measure. `step` names the subject, a step of the
+config; it says nothing about which program the step runs.
 
 - **`datalib_step_<name>`**: every series a step the config declares
   has reported, its newest value from the last run it reported in,
@@ -366,6 +406,13 @@ What it serves:
   `[disk_space]` floor
   ([`dag/README.md`](../../datalib/backend/dag/README.md#when-the-disk-runs-low));
   `datalib_disk_low` is 1 while the steps are held.
+- **`datalib_sql_runs_total`**, **`datalib_sql_rows_total`**,
+  **`datalib_sql_rows_scanned_total`**, **`datalib_sql_microseconds_total`**
+  and **`datalib_sql_loop_rows_scanned_total`**, labelled `process`
+  (`datalib-http`, or `applet:<id>`) and `sql`, the statement's name
+  (and `loop`): what the server's own statements and each applet's have
+  done since the server started, summed from each answer's
+  `X-Datalib-Sql-Work` header. A step's are its `sql_*` series above.
 - **`datalib_applet_rss_bytes{applet=…}`** and
   **`datalib_applet_rss_peak_bytes{applet=…}`**: the resident memory of
   each running applet and every process below it, read every five
@@ -375,7 +422,7 @@ What it serves:
 Its history starts when something begins scraping; the app's own views
 read the run store, which has every run it keeps. Labels are step and
 group ids and what a step labels its series with (a table name, a
-producer), never a record's contents. Log lines do not go out this way.
+producer, a statement's name and plan), never a record's contents. Log lines do not go out this way.
 
 ## Rules
 

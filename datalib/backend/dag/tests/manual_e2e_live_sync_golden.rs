@@ -16,6 +16,7 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use datalib_dag::RunState;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use datalib_store_dump::{cell_value, open_readonly, store_as_jsonl, Keep};
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
@@ -912,7 +913,8 @@ impl StoreAtCommit {
             use sqlx::Row;
 
             let pool = open_readonly(path).await;
-            let commit: String = sqlx::query("SELECT commit_hash FROM dolt_log() LIMIT 1")
+            let commit: String = test_sql!("SELECT commit_hash FROM dolt_log() LIMIT 1")
+                .query()
                 .fetch_one(&pool)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: dolt_log: {e}"))
@@ -940,21 +942,22 @@ impl StoreAtCommit {
             use sqlx::Row;
 
             let pool = open_readonly(&self.path).await;
-            let has_problems: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='problems'",
-            )
-            .fetch_optional(&pool)
-            .await
-            .expect("read sqlite_master");
+            let has_problems: Option<i64> =
+                test_sql!("SELECT 1 FROM sqlite_master WHERE type='table' AND name='problems'")
+                    .query_scalar()
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read sqlite_master");
             if has_problems.is_none() {
                 pool.close().await;
                 return None;
             }
-            let rows = sqlx::query(
+            let rows = test_sql!(
                 "SELECT diff_type, COALESCE(to_scope_key, from_scope_key) AS scope_key \
                    FROM dolt_diff_problems WHERE from_ref = ? AND to_ref = 'HEAD' \
-                  ORDER BY scope_key",
+                  ORDER BY scope_key"
             )
+            .query()
             .bind(&self.commit)
             .fetch_all(&pool)
             .await
@@ -996,9 +999,10 @@ impl StoreAtCommit {
                 findings.push(format!("{}#{t}: new after the re-download", self.name));
                 continue;
             }
-            let stat = sqlx::query(
-                "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?, 'HEAD', ?)",
+            let stat = test_sql!(
+                "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?, 'HEAD', ?)"
             )
+            .query()
             .bind(&self.commit)
             .bind(t)
             .fetch_optional(&pool)
@@ -1019,7 +1023,8 @@ impl StoreAtCommit {
             // table name was read out of this store's own `sqlite_master`,
             // and the refs are bound.
             // `payload` is JSONB, so it is read back through `json()`.
-            let info = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info(\"{t}\")")))
+            let info = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_info(\"{t}\")"))
+                .query()
                 .fetch_all(&pool)
                 .await
                 .expect("table_info");
@@ -1038,9 +1043,13 @@ impl StoreAtCommit {
                 .chain(["diff_type".to_string()])
                 .collect::<Vec<_>>()
                 .join(", ");
-            let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            let rows = Sql::dynamic(
+                test_sql_id!(),
+                format!(
                 "SELECT {select_list} FROM \"dolt_diff_{t}\" WHERE from_ref = ? AND to_ref = 'HEAD'"
-            )))
+            ),
+            )
+            .query()
             .bind(&self.commit)
             .fetch_all(&pool)
             .await
@@ -1177,11 +1186,12 @@ fn short_cell(v: &Value) -> String {
 async fn content_table_names(pool: &sqlx::SqlitePool) -> Vec<String> {
     use sqlx::Row;
 
-    sqlx::query(
+    test_sql!(
         "SELECT name FROM sqlite_master \
          WHERE type='table' AND name NOT LIKE 'sqlite_%' \
-         ORDER BY name",
+         ORDER BY name"
     )
+    .query()
     .fetch_all(pool)
     .await
     .expect("list tables")
@@ -1233,6 +1243,7 @@ fn run_pipeline(
         // The run's own fingerprint cache, so run 1 is cold on every host
         // and the host cache never sees this test.
         .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
+        .env("DATALIB_CHILD_ENV", "DATALIB_CACHE_DIR")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-pipeline");
@@ -1455,7 +1466,8 @@ async fn latest_sync_run(path: &Path) -> Value {
         .await
         .unwrap_or_else(|e| panic!("open {} for sync_runs: {e}", path.display()));
 
-    let row = sqlx::query("SELECT status, summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+    let row = test_sql!("SELECT status, summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query()
         .fetch_optional(&pool)
         .await
         .unwrap_or_else(|e| panic!("select sync_runs from {}: {e}", path.display()));
@@ -1486,10 +1498,11 @@ fn search_terms(data_root: &Path) -> String {
         .expect("build tokio runtime for the terms read");
     let coded: Vec<(i64, String, String)> = rt.block_on(async {
         let pool = open_readonly(&path).await;
-        let rows = sqlx::query_as(
+        let rows = test_sql!(
             "SELECT t.kind, v.value, r.uuid FROM terms t \
-             JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id",
+             JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id"
         )
+        .query_as()
         .fetch_all(&pool)
         .await
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));

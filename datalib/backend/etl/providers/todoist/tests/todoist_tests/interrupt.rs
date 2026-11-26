@@ -16,6 +16,7 @@ use datalib_etl_web::playback;
 
 use crate::playback::{options, TABLES};
 use crate::tape::{self, Edition};
+use datalib_sql::test_sql;
 
 struct Todoist {
     playback: PathBuf,
@@ -71,7 +72,8 @@ impl Rig for Todoist {
         let db = self.open(dir).await?;
         let mut out = dump_tables(db.pool(), TABLES).await?;
         let held: Vec<(String, Option<String>)> =
-            sqlx::query_as("SELECT id, held_version FROM completed_items_bookkeeping ORDER BY id")
+            test_sql!("SELECT id, held_version FROM completed_items_bookkeeping ORDER BY id")
+                .query_as()
                 .fetch_all(db.pool())
                 .await?;
         for (id, version) in held {

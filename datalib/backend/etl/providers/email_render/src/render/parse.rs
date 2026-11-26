@@ -18,6 +18,7 @@ use sqlx::Row;
 
 use datalib_etl_email::ingest::db::{db_path_for, EmailJoins, LoadedEmail};
 use datalib_etl_email::ingest::schema_raw::EmlBlobRow;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// SQL projection from the `email_blobs` edge's `blake3` to `.eml`
 /// bytes. Consumed by [`BlobBundle::load_many`]. We only load `.eml`s:
@@ -52,30 +53,42 @@ const MAILBOX_TREE_MOVED: &str = "
 
 /// The threads with an email filed under one of the mailboxes in `?1`:
 /// the ones a label filter keeps, whole.
-const KEPT_THREADS: &str = "
+const KEPT_THREADS: Sql = sql!(
+    "email_render.list_kept_threads",
+    "
     SELECT DISTINCT e.account_id, e.thread_id
       FROM email_mailboxes m JOIN emails e ON e.id = m.email_id
      WHERE m.mailbox_id IN (SELECT value FROM json_each(?1))
-       AND e.account_id != '' AND e.thread_id != ''";
+       AND e.account_id != '' AND e.thread_id != ''"
+);
 
 /// [`KEPT_THREADS`] among the thread ids in `?2`.
-const KEPT_THREADS_AMONG: &str = "
+const KEPT_THREADS_AMONG: Sql = sql!(
+    "email_render.list_kept_threads_among",
+    "
     SELECT DISTINCT e.account_id, e.thread_id
       FROM email_mailboxes m JOIN emails e ON e.id = m.email_id
      WHERE m.mailbox_id IN (SELECT value FROM json_each(?1))
        AND e.thread_id IN (SELECT value FROM json_each(?2))
-       AND e.account_id != '' AND e.thread_id != ''";
+       AND e.account_id != '' AND e.thread_id != ''"
+);
 
 /// Every thread with an email.
-const ALL_THREADS: &str = "
+const ALL_THREADS: Sql = sql!(
+    "email_render.list_all_threads",
+    "
     SELECT DISTINCT account_id, thread_id FROM emails
-     WHERE account_id != '' AND thread_id != ''";
+     WHERE account_id != '' AND thread_id != ''"
+);
 
 /// The threads with an email among the thread ids in `?1`.
-const THREADS_AMONG: &str = "
+const THREADS_AMONG: Sql = sql!(
+    "email_render.list_threads_among",
+    "
     SELECT DISTINCT account_id, thread_id FROM emails
      WHERE thread_id IN (SELECT value FROM json_each(?1))
-       AND account_id != '' AND thread_id != ''";
+       AND account_id != '' AND thread_id != ''"
+);
 
 type Pair = (String, String);
 
@@ -478,14 +491,16 @@ async fn select(
     let allowed = serde_json::to_string(allowed)?;
     match &scan.render {
         None => {
-            let kept: HashSet<Pair> = sqlx::query_as(KEPT_THREADS)
+            let kept: HashSet<Pair> = KEPT_THREADS
+                .query_as()
                 .bind(&allowed)
                 .fetch_all(pool)
                 .await
                 .context("the threads the label filter keeps")?
                 .into_iter()
                 .collect();
-            let every: Vec<Pair> = sqlx::query_as(ALL_THREADS)
+            let every: Vec<Pair> = ALL_THREADS
+                .query_as()
                 .fetch_all(pool)
                 .await
                 .context("every thread")?;
@@ -504,7 +519,8 @@ async fn select(
                 .into_iter()
                 .collect();
             let ids = serde_json::to_string(&ids)?;
-            let kept: HashSet<Pair> = sqlx::query_as(KEPT_THREADS_AMONG)
+            let kept: HashSet<Pair> = KEPT_THREADS_AMONG
+                .query_as()
                 .bind(&allowed)
                 .bind(&ids)
                 .fetch_all(pool)
@@ -512,7 +528,8 @@ async fn select(
                 .context("the stale threads the label filter keeps")?
                 .into_iter()
                 .collect();
-            let left_out = sqlx::query_as::<_, Pair>(THREADS_AMONG)
+            let left_out = THREADS_AMONG
+                .query_as::<Pair>()
                 .bind(&ids)
                 .fetch_all(pool)
                 .await
@@ -622,10 +639,12 @@ async fn threads_of_moved_marks(pool: &SqlitePool, from: &str, to: &str) -> Resu
     if moved.is_empty() {
         return Ok(Vec::new());
     }
-    let rows: Vec<(String, String)> = sqlx::query_as(
+    let rows: Vec<(String, String)> = sql!(
+        "email_render.list_threads_of_moved_marks",
         "SELECT DISTINCT account_id, thread_id FROM emails
-          WHERE id IN (SELECT value FROM json_each(?))",
+          WHERE id IN (SELECT value FROM json_each(?))"
     )
+    .query_as()
     .bind(serde_json::to_string(&moved)?)
     .fetch_all(pool)
     .await
@@ -639,11 +658,14 @@ async fn pairs_named(
     source_id: &str,
     uuids: &HashSet<String>,
 ) -> Result<HashMap<String, String>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT DISTINCT account_id, thread_id FROM emails")
-            .fetch_all(pool)
-            .await
-            .context("load all (account_id, thread_id) pairs")?;
+    let rows: Vec<(String, String)> = sql!(
+        "email_render.list_account_thread_pairs",
+        "SELECT DISTINCT account_id, thread_id FROM emails"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("load all (account_id, thread_id) pairs")?;
     Ok(rows
         .into_iter()
         .filter(|(a, t)| !a.is_empty() && !t.is_empty())
@@ -655,10 +677,12 @@ async fn pairs_named(
 }
 
 async fn thread_count(pool: &SqlitePool) -> Result<usize> {
-    let n: i64 = sqlx::query_scalar(
+    let n: i64 = sql!(
+        "email_render.count_threads",
         "SELECT COUNT(*) FROM (SELECT DISTINCT account_id, thread_id FROM emails
-                                WHERE account_id != '' AND thread_id != '')",
+                                WHERE account_id != '' AND thread_id != '')"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .context("count threads")?;
@@ -670,12 +694,12 @@ async fn load_accounts(
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<(String, Value)>> {
     let table = "accounts";
-    let sql = format!("SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL");
+    let sql = Sql::dynamic(
+        sql_id!("email_render.load_accounts"),
+        format!("SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL"),
+    );
     // Audited: `table` is a literal.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .fetch_all(pool)
-        .await
-        .context("load accounts")?;
+    let rows = sql.query().fetch_all(pool).await.context("load accounts")?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();
@@ -694,10 +718,13 @@ async fn load_payloads(
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<Value>> {
     let pinned = table;
-    let sql =
-        format!("SELECT id, json(payload) AS payload FROM {pinned} WHERE payload IS NOT NULL");
+    let sql = Sql::dynamic(
+        sql_id!("email_render.load_payloads"),
+        format!("SELECT id, json(payload) AS payload FROM {pinned} WHERE payload IS NOT NULL"),
+    );
     // Audited: `table` is a literal at every callsite.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .with_context(|| format!("load_payloads {table}"))?;
@@ -735,13 +762,15 @@ async fn load_render_units(
         return Ok(by_key.into_values().collect());
     }
 
-    let erows = sqlx::query(
+    let erows = sql!(
+        "email_render.load_emails_of_threads",
         "SELECT id, account_id, thread_id, blob_id, message_id, in_reply_to, references_header,
                 received_at, sent_at, size, subject, from_json, to_json, cc_json, has_attachment
            FROM emails
           WHERE thread_id IN (SELECT value FROM json_each(?))
-          ORDER BY thread_id, received_at, id",
+          ORDER BY thread_id, received_at, id"
     )
+    .query()
     .bind(serde_json::to_string(thread_ids)?)
     .fetch_all(pool)
     .await
@@ -808,10 +837,12 @@ async fn load_render_units(
     }
     let email_ids = serde_json::to_string(&email_to_render_unit.keys().collect::<Vec<_>>())?;
 
-    let mailbox_rows = sqlx::query(
+    let mailbox_rows = sql!(
+        "email_render.load_mailboxes_of_emails",
         "SELECT id, email_id, mailbox_id FROM email_mailboxes
-          WHERE email_id IN (SELECT value FROM json_each(?))",
+          WHERE email_id IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(&email_ids)
     .fetch_all(pool)
     .await
@@ -829,10 +860,12 @@ async fn load_render_units(
         render_unit.joins.mailboxes.entry(e).or_default().push(m);
     }
 
-    let keyword_rows = sqlx::query(
+    let keyword_rows = sql!(
+        "email_render.load_keywords_of_emails",
         "SELECT id, email_id, keyword FROM email_keywords
-          WHERE email_id IN (SELECT value FROM json_each(?))",
+          WHERE email_id IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(&email_ids)
     .fetch_all(pool)
     .await
@@ -866,6 +899,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// A full render of a mailbox with more threads than SQLite binds in
     /// one statement (#1156): each thread, its email and the email's
     /// mailbox and keyword all come back.
@@ -904,7 +938,8 @@ mod tests {
             EmailKeywordRow::all_ddl(),
         ];
         for sql in ddl.concat() {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -913,14 +948,21 @@ mod tests {
         // `?1` rows numbered from 1, for each table.
         let numbered = "WITH RECURSIVE s(value) AS (SELECT 1 UNION ALL SELECT value + 1 FROM s WHERE value < ?1)";
         for insert in [
-            "INSERT INTO emails (id, account_id, thread_id, blob_id, references_header)
-             SELECT 'e' || value, 'acct', 't' || value, 'b' || value, '<r' || value || '>' FROM s",
-            "INSERT INTO email_mailboxes (id, email_id, mailbox_id)
-             SELECT 'e' || value || '#inbox', 'e' || value, 'inbox' FROM s",
-            "INSERT INTO email_keywords (id, email_id, keyword)
-             SELECT 'e' || value || '#$flagged', 'e' || value, '$flagged' FROM s",
+            test_sql!(
+                "INSERT INTO emails (id, account_id, thread_id, blob_id, references_header)
+             SELECT 'e' || value, 'acct', 't' || value, 'b' || value, '<r' || value || '>' FROM s"
+            ),
+            test_sql!(
+                "INSERT INTO email_mailboxes (id, email_id, mailbox_id)
+             SELECT 'e' || value || '#inbox', 'e' || value, 'inbox' FROM s"
+            ),
+            test_sql!(
+                "INSERT INTO email_keywords (id, email_id, keyword)
+             SELECT 'e' || value || '#$flagged', 'e' || value, '$flagged' FROM s"
+            ),
         ] {
-            sqlx::query(sqlx::AssertSqlSafe(format!("{numbered} {insert}")))
+            Sql::dynamic(test_sql_id!(), format!("{numbered} {insert}"))
+                .query()
                 .bind(n as i64)
                 .execute(&pool)
                 .await
@@ -1174,15 +1216,17 @@ mod tests {
         ]
         .concat()
         {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
         }
-        sqlx::query(
+        test_sql!(
             "INSERT INTO emails (id, account_id, thread_id, blob_id)
-             VALUES ('e1', 'a1', 't1', 'b1'), ('e2', 'a2', 't1', 'b2')",
+             VALUES ('e1', 'a1', 't1', 'b1'), ('e2', 'a2', 't1', 'b2')"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();

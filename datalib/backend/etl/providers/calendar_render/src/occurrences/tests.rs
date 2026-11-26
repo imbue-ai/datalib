@@ -3,6 +3,7 @@ use datalib_etl_calendar::ingest::db::{LoadedCalendar, LoadedCalendlyEvent};
 use serde_json::json;
 
 use super::*;
+use datalib_sql::test_sql;
 
 const PICARD: &str = "picard@enterprise.test";
 const LA: &str = "America/Los_Angeles";
@@ -433,7 +434,8 @@ async fn a_reopened_store_does_not_migrate_again() {
     }
     let pool = store::open(&db).await.unwrap();
     let migrations: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log() WHERE message LIKE 'migrate shared%'")
+        test_sql!("SELECT COUNT(*) FROM dolt_log() WHERE message LIKE 'migrate shared%'")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -459,11 +461,13 @@ async fn the_store_holds_the_last_pass_and_its_window() {
         let pool = store::open(&db).await.unwrap();
         store::replace(&pool, &list(&parsed, &w), &w).await.unwrap();
         doltlite_raw_commit(&pool).await;
-        let n: i64 = sqlx::query_scalar("SELECT count(*) FROM occurrences")
+        let n: i64 = test_sql!("SELECT count(*) FROM occurrences")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
-        let from_utc: String = sqlx::query_scalar("SELECT from_utc FROM occurrences_window")
+        let from_utc: String = test_sql!("SELECT from_utc FROM occurrences_window")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();

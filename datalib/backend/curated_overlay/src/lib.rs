@@ -342,10 +342,11 @@ fn record_sources(data_root: &Path, handle: &str) -> Vec<String> {
         data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
     runtime().block_on(async {
         let pool = datalib_store_dump::open_readonly(&db).await;
-        let found = sqlx::query_scalar(
+        let found = datalib_sql::test_sql!(
             "SELECT DISTINCT r.source_id FROM contact_record_handles h \
-             JOIN contact_records r USING (record_id) WHERE h.handle = ? ORDER BY 1",
+             JOIN contact_records r USING (record_id) WHERE h.handle = ? ORDER BY 1"
         )
+        .query_scalar()
         .bind(handle)
         .fetch_all(&pool)
         .await

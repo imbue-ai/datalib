@@ -20,6 +20,7 @@ use datalib_etl_email::ingest::{db_path_for, RawDb};
 use serde_json::{json, Value};
 
 use crate::support::{last_run, run_ingest_step};
+use datalib_sql::test_sql;
 
 /// The group each test's source is, and so its store's directory under
 /// the test's data root.
@@ -88,12 +89,12 @@ async fn mirrored_gmail_ids(root: &Path) -> BTreeSet<String> {
     let db = RawDb::open(&db_path_for(&store(root)))
         .await
         .expect("open raw db");
-    let ids: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
-    )
-    .fetch_all(db.pool())
-    .await
-    .expect("read what is held");
+    let ids: Vec<String> =
+        test_sql!("SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL")
+            .query_scalar()
+            .fetch_all(db.pool())
+            .await
+            .expect("read what is held");
     db.close().await;
     ids.into_iter().collect()
 }
@@ -132,7 +133,8 @@ async fn gmail_live_one_label_roundtrip() {
         .expect("open raw db");
 
     // ── the label filter actually filtered ──────────────────────────
-    let email_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM emails")
+    let email_count: i64 = test_sql!("SELECT COUNT(*) FROM emails")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .expect("count emails");
@@ -144,11 +146,12 @@ async fn gmail_live_one_label_roundtrip() {
     // Whole threads: a message is kept for carrying the label, or for
     // sharing a thread with one that does.
     let mailbox_id = mailbox_id_for(&db, &label).await;
-    let unkept: i64 = sqlx::query_scalar(
+    let unkept: i64 = test_sql!(
         "SELECT COUNT(*) FROM emails e WHERE NOT EXISTS (
             SELECT 1 FROM emails k JOIN email_mailboxes m ON m.email_id = k.id
-            WHERE k.thread_id = e.thread_id AND m.mailbox_id = ?)",
+            WHERE k.thread_id = e.thread_id AND m.mailbox_id = ?)"
     )
+    .query_scalar()
     .bind(&mailbox_id)
     .fetch_one(db.pool())
     .await
@@ -160,7 +163,8 @@ async fn gmail_live_one_label_roundtrip() {
 
     // ── every message has its bytes, and they are the bytes claimed ──
     let blob_rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT email_id, blake3 FROM email_blobs")
+        test_sql!("SELECT email_id, blake3 FROM email_blobs")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .expect("load blob edges");
@@ -204,7 +208,8 @@ async fn gmail_live_one_label_roundtrip() {
     }
 
     // ── threads list the messages they contain ──────────────────────
-    let emails: Vec<(String, String)> = sqlx::query_as("SELECT id, thread_id FROM emails")
+    let emails: Vec<(String, String)> = test_sql!("SELECT id, thread_id FROM emails")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .expect("load emails");
@@ -212,7 +217,8 @@ async fn gmail_live_one_label_roundtrip() {
         // `json(payload)`: the column stores a JSONB blob, so reading it
         // straight would come back as BLOB. Same wrapper
         // `doltlite_raw::load_payloads` uses.
-        let payload: String = sqlx::query_scalar("SELECT json(payload) FROM threads WHERE id = ?")
+        let payload: String = test_sql!("SELECT json(payload) FROM threads WHERE id = ?")
+            .query_scalar()
             .bind(thread_id)
             .fetch_one(db.pool())
             .await
@@ -235,9 +241,10 @@ async fn gmail_live_one_label_roundtrip() {
     }
 
     // ── every row is held for a listed message ───────────────────────
-    let held: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
+    let held: i64 = test_sql!(
+        "SELECT COUNT(*) FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL"
     )
+    .query_scalar()
     .fetch_one(db.pool())
     .await
     .expect("count what is held");
@@ -277,7 +284,8 @@ async fn gmail_live_one_label_roundtrip() {
     let db = RawDb::open(&db_path_for(&store(&tmp)))
         .await
         .expect("reopen raw db");
-    let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM emails")
+    let after: i64 = test_sql!("SELECT COUNT(*) FROM emails")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .expect("recount emails");
@@ -287,7 +295,8 @@ async fn gmail_live_one_label_roundtrip() {
 }
 
 async fn mailbox_id_for(db: &RawDb, label: &str) -> String {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as("SELECT id, name FROM mailboxes")
+    let rows: Vec<(String, Option<String>)> = test_sql!("SELECT id, name FROM mailboxes")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .expect("load mailboxes");

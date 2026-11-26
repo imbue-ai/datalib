@@ -48,6 +48,10 @@ instead from `bazel run //:precommit` and as a plain step in
  23. The runner's code outside its tests never names `datalib-step`:
      it gives datalib's own step program nothing another program could
      not ask for with the same config keys.
+ 24. The server's code outside its tests names `datalib-step` only in
+     the files `_SERVER_STEP_PROGRAM_FILES` lists, each for an open item
+     of `docs/dev/plans/decoupling_followups.md`; a listed file that no
+     longer names it must leave the list.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -361,6 +365,8 @@ def main() -> int:
     rc |= _check_card_children_carry_styles(root)
     rc |= _check_stores_open_by_literal_path(root)
     rc |= _check_runner_names_no_step_program(root)
+    rc |= _check_sql_names_are_unique(root)
+    rc |= _check_server_names_step_program_where_listed(root)
     return rc
 
 
@@ -1770,6 +1776,117 @@ def _check_runner_names_no_step_program(root: Path) -> int:
         + "\n\n  The runner treats every step program alike. Give the behaviour a\n"
         "  config key, a verb, an event or an environment variable any program\n"
         "  may use, and leave the program's name out. See lint_repo.py check 23.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 24: the server names datalib's own step program where listed --
+#
+# `datalib-http` should give `datalib-step` nothing a package's program
+# could not get the same way (docs/dev/plans/decoupling_followups.md).
+# It still does in a few places, each an open item of that plan; this is
+# the list of them, and it only shrinks: a file that no longer names the
+# program has to leave it, and a file not on it may not start.
+_SERVER_SRC = "datalib/backend/http/src/"
+_SERVER_STEP_PROGRAM_FILES = {
+    # Item 2: "Check connection" runs `datalib-step probe`, found by name.
+    "datalib/backend/http/src/binaries.rs": "item 2",
+    "datalib/backend/http/src/probe.rs": "item 2",
+    # Item 3: the app writes datalib-step's steps; the starter config is
+    # one of them.
+    "datalib/backend/http/src/starter.rs": "item 3",
+    "datalib/backend/http/src/step_program.rs": "items 2 and 3",
+}
+
+
+def server_step_program_problems(mentions: dict[str, list[int]]) -> list[str]:
+    """What check 24 refuses, given the lines each server file names
+    `datalib-step` on: a file off the list that names it, and a listed
+    file that no longer does."""
+    problems = [
+        f"  {rel}:{line}: names {_STEP_PROGRAM}, and is not in _SERVER_STEP_PROGRAM_FILES"
+        for rel, lines in sorted(mentions.items())
+        if rel not in _SERVER_STEP_PROGRAM_FILES
+        for line in lines
+    ]
+    problems += [
+        f"  {rel}: no longer names {_STEP_PROGRAM} ({why} is done there); take it off "
+        "_SERVER_STEP_PROGRAM_FILES"
+        for rel, why in sorted(_SERVER_STEP_PROGRAM_FILES.items())
+        if not mentions.get(rel)
+    ]
+    return problems
+
+
+def _check_server_names_step_program_where_listed(root: Path) -> int:
+    mentions: dict[str, list[int]] = {}
+    for rel in _git_ls_files(root, f"{_SERVER_SRC}*.rs"):
+        path = root / rel
+        if path.is_file():
+            mentions[rel] = step_program_mentions(path.read_text(encoding="utf-8"))
+    problems = server_step_program_problems(mentions)
+    if not problems:
+        print(f"OK: {_SERVER_SRC} names {_STEP_PROGRAM} only where check 24 lists.")
+        return 0
+    print(
+        f"ERROR: the server's code names {_STEP_PROGRAM} where check 24 does not list:\n\n"
+        + "\n".join(problems)
+        + "\n\n  The server should give datalib-step nothing a package's program could\n"
+        "  not get the same way. See lint_repo.py check 24.",
+        file=sys.stderr,
+    )
+    return 1
+
+
+# --- Check 25: every statement's name is written once -------------------
+#
+# A statement is named where it is written, `sql!("runs.count_tables",
+# "…")` or `Sql::dynamic(sql_id!("…"), …)` (datalib/backend/sql), and its
+# work is counted under that name. Clippy refuses a statement without one;
+# this refuses two places that share one, which would add two statements'
+# work together under a name that is true of neither. A test's statements
+# are named for their place (`test_sql!`) and need no check.
+_SQL_NAME = re.compile(r'(?<![\w:])(?:sql|sql_id)!\(\s*"([^"]*)"')
+
+
+def sql_names(text: str) -> list[tuple[int, str]]:
+    """Each statement name `text` writes, with its 1-based line. A line
+    comment's examples are not names."""
+    kept = "\n".join(
+        "" if line.lstrip().startswith("//") else line for line in text.splitlines()
+    )
+    return [
+        (kept.count("\n", 0, m.start(1)) + 1, m.group(1))
+        for m in _SQL_NAME.finditer(kept)
+    ]
+
+
+def duplicate_sql_names(files: dict[str, str]) -> dict[str, list[str]]:
+    """Every name written in more than one place, with each place."""
+    places: dict[str, list[str]] = {}
+    for rel, text in files.items():
+        for line, name in sql_names(text):
+            places.setdefault(name, []).append(f"{rel}:{line}")
+    return {n: p for n, p in sorted(places.items()) if len(p) > 1}
+
+
+def _check_sql_names_are_unique(root: Path) -> int:
+    files = {}
+    for rel in _git_ls_files(root, "datalib/*.rs"):
+        path = root / rel
+        if path.is_file():
+            files[rel] = path.read_text(encoding="utf-8")
+    dups = duplicate_sql_names(files)
+    if not dups:
+        print("OK: every SQL statement's name is written once.")
+        return 0
+    lines = [f"  {name}: {', '.join(places)}" for name, places in dups.items()]
+    print(
+        "ERROR: two statements share a name:\n\n"
+        + "\n".join(lines)
+        + "\n\n  A statement's name says what that one statement does, and its work\n"
+        "  is counted under it. Give each its own. See lint_repo.py check 25.",
         file=sys.stderr,
     )
     return 1

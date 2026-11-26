@@ -12,6 +12,7 @@ use datalib_etl_markdown::ingest::{self, RawDb};
 use datalib_etl_markdown_render::render::{self, note};
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
+use datalib_sql::{test_sql, Sql};
 
 const SOURCE: &str = "notes";
 const NOW: &str = "2364-04-13T08:45:00-07:00";
@@ -94,11 +95,11 @@ impl Harness {
         head
     }
 
-    async fn query(&self, sql: &'static str) -> Vec<String> {
+    async fn query(&self, sql: Sql) -> Vec<String> {
         let db = RawDb::open(&ingest::db_path_for(&self.raw_dir))
             .await
             .unwrap();
-        let out = sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap();
+        let out = sql.query_scalar().fetch_all(db.pool()).await.unwrap();
         db.close().await;
         out
     }
@@ -136,7 +137,7 @@ async fn a_scan_stores_each_note_under_its_path() {
     );
     let medical = &loaded.notes[3];
     assert!(medical.text.contains("38\u{FFFD}C"), "{}", medical.text);
-    let problems = h.query("SELECT scope_key FROM problems").await;
+    let problems = h.query(test_sql!("SELECT scope_key FROM problems")).await;
     assert_eq!(problems, ["file:markdown/files:Sickbay/Medical log.md"]);
 
     let (_, root) = loaded.scan.clone().unwrap();

@@ -15,6 +15,7 @@ use datalib_etl_web::download_params::DownloadParams;
 use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::test_sql;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -100,7 +101,8 @@ pub fn record_general(api: &Path) {
 pub async fn checked_at(out: &Path) -> BTreeMap<String, chrono::DateTime<chrono::Utc>> {
     let reader = datalib_pin::open_reader(&db_path_for(out)).await.unwrap();
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT scope, checked_at_utc FROM coverage_checked")
+        test_sql!("SELECT scope, checked_at_utc FROM coverage_checked")
+            .query_as()
             .fetch_all(&reader)
             .await
             .unwrap();

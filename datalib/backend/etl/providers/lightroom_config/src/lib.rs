@@ -57,9 +57,10 @@ pub struct LightroomConfig {
     /// title, and most with no known time zone.
     pub skip_xmp: bool,
 
-    /// Column names that, when present as a single-column UNIQUE index on
-    /// a source table, are preferred over that table's declared primary
-    /// key as the mirror's primary key. First match in this list wins.
+    /// Column names preferred over a source table's declared primary key
+    /// as the mirror's primary key: when the table has a single-column
+    /// UNIQUE index on one, or this run finds it distinct and non-NULL in
+    /// every row. First match in this list wins.
     pub stable_key_columns: Vec<String>,
 
     /// Per-table primary-key override, `table -> [columns]`. Beats both

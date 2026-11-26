@@ -9,6 +9,7 @@ use sqlx::SqlitePool;
 
 use crate::doltlite_raw::{finish_run, has_dolt_extensions, start_run};
 use crate::scope_state;
+use datalib_sql::{sql, sql_id, Sql};
 
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct RowDelta {
@@ -146,17 +147,20 @@ async fn compute_deltas(
         tracing::warn!("no HEAD at run start; per-table deltas unavailable for this run");
         return None;
     };
-    let tables: Vec<String> =
-        match sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
-            .fetch_all(pool)
-            .await
-        {
-            Ok(rows) => rows,
-            Err(e) => {
-                tracing::warn!(error = %format!("{e:#}"), "table list read failed");
-                return None;
-            }
-        };
+    let tables: Vec<String> = match sql!(
+        "etl.download_run.list_tables_for_deltas",
+        "SELECT name FROM sqlite_master WHERE type = 'table'"
+    )
+    .query_scalar()
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!(error = %format!("{e:#}"), "table list read failed");
+            return None;
+        }
+    };
     let mut out: BTreeMap<String, RowDelta> = BTreeMap::new();
     for table in tables {
         // Guard against any table name that wouldn't be a safe
@@ -170,18 +174,17 @@ async fn compute_deltas(
             tracing::warn!(table = %table, "skipping delta for unsafe-identifier table name");
             continue;
         }
-        let sql = format!(
-            "SELECT diff_type, COUNT(*) FROM dolt_diff_{table} \
+        let sql = Sql::dynamic(
+            sql_id!("etl.download_run.count_table_diff_by_type"),
+            format!(
+                "SELECT diff_type, COUNT(*) FROM dolt_diff_{table} \
              WHERE from_ref = ?1 AND to_ref = 'WORKING' GROUP BY diff_type"
+            ),
         );
         // Audited: `table` is interpolated into the `dolt_diff_<table>` vtab name,
         // and the `is_safe_identifier` guard above rejects anything that is not a
         // plain identifier before we get here. `from_ref` is bound.
-        let rows: Vec<(String, i64)> = match sqlx::query_as(sqlx::AssertSqlSafe(sql))
-            .bind(from_ref)
-            .fetch_all(pool)
-            .await
-        {
+        let rows: Vec<(String, i64)> = match sql.query_as().bind(from_ref).fetch_all(pool).await {
             Ok(r) => r,
             Err(e) => {
                 tracing::warn!(table = %table, error = %format!("{e:#}"),
@@ -220,6 +223,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     // Through the canonical `open()` on a tempdir-backed file, so the test
     // takes the same path a download does.
     async fn fresh_pool() -> (SqlitePool, tempfile::TempDir) {
@@ -230,7 +234,8 @@ mod tests {
     }
 
     async fn summary_deltas(pool: &SqlitePool, run_id: i64) -> serde_json::Map<String, Value> {
-        let row: (String,) = sqlx::query_as("SELECT summary FROM sync_runs WHERE run_id = ?")
+        let row: (String,) = test_sql!("SELECT summary FROM sync_runs WHERE run_id = ?")
+            .query_as()
             .bind(run_id)
             .fetch_one(pool)
             .await
@@ -273,7 +278,8 @@ mod tests {
                 })
                 .await
                 .unwrap();
-                sqlx::query_scalar::<_, String>("SELECT status FROM sync_runs WHERE run_id = ?")
+                test_sql!("SELECT status FROM sync_runs WHERE run_id = ?")
+                    .query_scalar::<String>()
                     .bind(run_id)
                     .fetch_one(&pool)
                     .await
@@ -304,7 +310,8 @@ mod tests {
         run.finish(false, &work_result, &summary).await;
 
         let row: (String, String) =
-            sqlx::query_as("SELECT status, summary FROM sync_runs WHERE run_id = ?")
+            test_sql!("SELECT status, summary FROM sync_runs WHERE run_id = ?")
+                .query_as()
                 .bind(run_id)
                 .fetch_one(&pool)
                 .await
@@ -330,7 +337,8 @@ mod tests {
         if !crate::doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-        sqlx::query(crate::doltlite_raw::SYNC_SCOPE_STATE_DDL)
+        Sql::ddl(test_sql_id!(), crate::doltlite_raw::SYNC_SCOPE_STATE_DDL)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -344,7 +352,8 @@ mod tests {
 
         let run = DownloadRun::start(&pool, &json!({"k": "v"})).await.unwrap();
         let run_id = run.run_id();
-        sqlx::query("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, ?)")
+        test_sql!("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, ?)")
+            .query()
             .bind("test_scope")
             .bind("2026-01-01T00:00:00Z")
             .execute(&pool)
@@ -389,7 +398,8 @@ mod tests {
             .unwrap()
             .run_id();
         let status = |id: i64| {
-            sqlx::query_scalar::<_, String>("SELECT status FROM sync_runs WHERE run_id = ?")
+            test_sql!("SELECT status FROM sync_runs WHERE run_id = ?")
+                .query_scalar::<String>()
                 .bind(id)
                 .fetch_one(&pool)
         };
@@ -410,7 +420,8 @@ mod tests {
         run.finish(false, &work_result, &summary).await;
 
         let row: (String, String) =
-            sqlx::query_as("SELECT status, summary FROM sync_runs WHERE run_id = ?")
+            test_sql!("SELECT status, summary FROM sync_runs WHERE run_id = ?")
+                .query_as()
                 .bind(run_id)
                 .fetch_one(&pool)
                 .await
@@ -440,7 +451,8 @@ mod tests {
         // Simulate a first-run download: insert rows into the just-created
         // table WITHOUT an intervening commit.
         for i in 0..3 {
-            sqlx::query("INSERT INTO discussions (id, payload) VALUES (?, ?)")
+            test_sql!("INSERT INTO discussions (id, payload) VALUES (?, ?)")
+                .query()
                 .bind(format!("d{i}"))
                 .bind("{}")
                 .execute(&pool)
@@ -478,7 +490,8 @@ mod tests {
         let run = DownloadRun::start(&pool, &json!({})).await.unwrap();
         let run_id = run.run_id();
         for i in 0..4 {
-            sqlx::query("INSERT INTO notes (id, body) VALUES (?, ?)")
+            test_sql!("INSERT INTO notes (id, body) VALUES (?, ?)")
+                .query()
                 .bind(format!("first-{i}"))
                 .bind("{}")
                 .execute(&pool)
@@ -490,7 +503,8 @@ mod tests {
             .await
             .unwrap();
         for i in 0..3 {
-            sqlx::query("INSERT INTO notes (id, body) VALUES (?, ?)")
+            test_sql!("INSERT INTO notes (id, body) VALUES (?, ?)")
+                .query()
                 .bind(format!("second-{i}"))
                 .bind("{}")
                 .execute(&pool)

@@ -7,10 +7,11 @@ use std::time::Duration;
 use axum::http::StatusCode;
 use serde_json::{json, Value};
 use sqlx::sqlite::SqliteConnection;
-use sqlx::{Connection, Executor};
+use sqlx::Connection;
 use tokio::sync::Semaphore;
 
 use super::*;
+use datalib_sql::test_sql;
 
 const PLAIN: &str = "g/s/plain.sqlite";
 const DOLT: &str = "g/s/entities.doltlite_db";
@@ -22,14 +23,16 @@ async fn plain_store(root: &Path) {
         .filename(datalib_runtime::plain_sqlite::uri(&path))
         .create_if_missing(true);
     let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
-    conn.execute(
+    test_sql!(
         "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT, score REAL, data BLOB, big INTEGER);
          INSERT INTO t VALUES (1, 'riker', 1.5, x'0001ff', 9007199254740993),
                               (2, 'troi', NULL, NULL, NULL),
                               (3, 'data', 3.0, NULL, NULL),
                               (4, 'worf', 4.0, NULL, NULL),
-                              (5, 'crusher', 5.0, NULL, NULL);",
+                              (5, 'crusher', 5.0, NULL, NULL);"
     )
+    .raw()
+    .execute(&mut conn)
     .await
     .unwrap();
     conn.close().await.unwrap();
@@ -42,21 +45,26 @@ async fn dolt_commit_rows(root: &Path, names: &[&str]) -> String {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let opts = datalib_sqlite_open::file(&path).create_if_missing(true);
     let mut conn = SqliteConnection::connect_with(&opts).await.unwrap();
-    conn.execute("CREATE TABLE IF NOT EXISTS crew (name TEXT PRIMARY KEY)")
+    test_sql!("CREATE TABLE IF NOT EXISTS crew (name TEXT PRIMARY KEY)")
+        .query()
+        .execute(&mut conn)
         .await
         .unwrap();
     for name in names {
-        sqlx::query("INSERT INTO crew VALUES (?)")
+        test_sql!("INSERT INTO crew VALUES (?)")
+            .query()
             .bind(*name)
             .execute(&mut conn)
             .await
             .unwrap();
     }
-    sqlx::query("SELECT dolt_commit('-Am', 'crew')")
+    test_sql!("SELECT dolt_commit('-Am', 'crew')")
+        .query()
         .execute(&mut conn)
         .await
         .unwrap();
-    let head: String = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+    let head: String = test_sql!("SELECT dolt_hashof('HEAD')")
+        .query_scalar()
         .fetch_one(&mut conn)
         .await
         .unwrap();

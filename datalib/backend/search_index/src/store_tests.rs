@@ -1,6 +1,6 @@
 use super::*;
 use crate::{IndexDoc, IndexSection};
-use sqlx::AssertSqlSafe;
+use datalib_sql::{sql, sql_id, Sql};
 
 const SENTENCE: &str = "the quarterly budget review moved to thursday afternoon";
 
@@ -45,12 +45,14 @@ async fn open() -> (tempfile::TempDir, Index) {
 
 /// Each matching section as (document, message), in document order.
 async fn hits(index: &Index, query: &str) -> Vec<(String, Option<String>)> {
-    sqlx::query_as(
+    sql!(
+        "search_index.test.list_fts_hits",
         "SELECT d.markdown_uuid, s.uuid FROM search_fts f \
            JOIN search_sections s ON s.section_id = f.rowid \
            JOIN search_documents d ON d.doc_id = s.doc_id \
-          WHERE search_fts MATCH ? ORDER BY d.markdown_uuid, s.seq",
+          WHERE search_fts MATCH ? ORDER BY d.markdown_uuid, s.seq"
     )
+    .query_as()
     .bind(query)
     .fetch_all(index.pool())
     .await
@@ -61,18 +63,26 @@ async fn hits(index: &Index, query: &str) -> Vec<(String, Option<String>)> {
 /// still names them: a posting left behind would be found again by a
 /// section that reuses its rowid.
 async fn postings(index: &Index, query: &str) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM search_fts WHERE search_fts MATCH ?")
-        .bind(query)
-        .fetch_one(index.pool())
-        .await
-        .unwrap()
+    sql!(
+        "search_index.test.count_fts_postings",
+        "SELECT count(*) FROM search_fts WHERE search_fts MATCH ?"
+    )
+    .query_scalar()
+    .bind(query)
+    .fetch_one(index.pool())
+    .await
+    .unwrap()
 }
 
 async fn count(index: &Index, table: &str) -> i64 {
-    sqlx::query_scalar(AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
-        .fetch_one(index.pool())
-        .await
-        .unwrap()
+    Sql::dynamic(
+        sql_id!("search_index.test.count_table_rows"),
+        format!("SELECT count(*) FROM {table}"),
+    )
+    .query_scalar()
+    .fetch_one(index.pool())
+    .await
+    .unwrap()
 }
 
 fn hit(d: &str, m: Option<&str>) -> (String, Option<String>) {
@@ -96,11 +106,14 @@ async fn a_word_lands_on_the_message_that_says_it() {
 async fn sections_are_byte_spans_of_the_document() {
     let (_dir, index) = open().await;
     index.put(&[thread("h1")]).await.unwrap();
-    let sections: Vec<(Option<String>, i64, i64)> =
-        sqlx::query_as("SELECT uuid, start_byte, end_byte FROM search_sections ORDER BY seq")
-            .fetch_all(index.pool())
-            .await
-            .unwrap();
+    let sections: Vec<(Option<String>, i64, i64)> = sql!(
+        "search_index.test.list_section_spans",
+        "SELECT uuid, start_byte, end_byte FROM search_sections ORDER BY seq"
+    )
+    .query_as()
+    .fetch_all(index.pool())
+    .await
+    .unwrap();
     let m2_end = 11 + 16 + SENTENCE.len() as i64 + 1;
     assert_eq!(
         sections,
@@ -191,10 +204,14 @@ async fn the_files_hold_no_copy_of_the_text() {
 async fn only_a_change_raises_the_generation() {
     let (_dir, index) = open().await;
     let generation = || async {
-        sqlx::query_scalar::<_, i64>("SELECT generation FROM search_state")
-            .fetch_one(index.pool())
-            .await
-            .unwrap()
+        sql!(
+            "search_index.test.read_generation",
+            "SELECT generation FROM search_state"
+        )
+        .query_scalar::<i64>()
+        .fetch_one(index.pool())
+        .await
+        .unwrap()
     };
     let start = generation().await;
     index.put(&[thread("h1")]).await.unwrap();
@@ -225,10 +242,14 @@ async fn a_source_no_longer_configured_leaves() {
 async fn a_large_put_commits_in_parts() {
     let (_dir, index) = open().await;
     let generation = || async {
-        sqlx::query_scalar::<_, i64>("SELECT generation FROM search_state WHERE id = 1")
-            .fetch_one(&index.pool)
-            .await
-            .unwrap()
+        sql!(
+            "search_index.test.read_generation_by_id",
+            "SELECT generation FROM search_state WHERE id = 1"
+        )
+        .query_scalar::<i64>()
+        .fetch_one(&index.pool)
+        .await
+        .unwrap()
     };
     let before = generation().await;
     let big = "warp ".repeat(PUT_BYTES / 5 * 3 / 5);
@@ -245,10 +266,14 @@ async fn a_large_put_commits_in_parts() {
 #[tokio::test]
 async fn the_search_index_cuts_the_files_wal_back() {
     let (_dir, index) = open().await;
-    let limit: i64 = sqlx::query_scalar("PRAGMA journal_size_limit")
-        .fetch_one(index.pool())
-        .await
-        .unwrap();
+    let limit: i64 = sql!(
+        "search_index.test.read_journal_size_limit",
+        "PRAGMA journal_size_limit"
+    )
+    .query_scalar()
+    .fetch_one(index.pool())
+    .await
+    .unwrap();
     assert_eq!(
         limit.to_string(),
         datalib_runtime::plain_sqlite::WAL_SIZE_LIMIT_BYTES
@@ -263,11 +288,15 @@ async fn the_search_index_cuts_the_files_wal_back() {
 async fn a_sources_documents_are_read_by_its_index() {
     let (_dir, index) = open().await;
     // Audited: a constant statement of this crate.
-    let explain = format!(
-        "EXPLAIN QUERY PLAN {}",
-        crate::read::held_documents_sql(Some("mail"))
+    let explain = Sql::dynamic(
+        sql_id!("search_index.test.explain_held_documents"),
+        format!(
+            "EXPLAIN QUERY PLAN {}",
+            crate::read::held_documents_sql(Some("mail"))
+        ),
     );
-    let plan: Vec<String> = sqlx::query_as::<_, (i64, i64, i64, String)>(AssertSqlSafe(explain))
+    let plan: Vec<String> = explain
+        .query_as::<(i64, i64, i64, String)>()
         .bind("mail")
         .fetch_all(index.pool())
         .await

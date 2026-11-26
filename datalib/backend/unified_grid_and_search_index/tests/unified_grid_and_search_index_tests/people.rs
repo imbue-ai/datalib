@@ -16,6 +16,7 @@ use datalib_unified_grid_and_search_index::people::People;
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
 use crate::dolt_backend_integration::{unique_db_path, writer};
+use datalib_sql::{test_sql_id, Sql};
 
 const RIKER: &str = "email:riker@enterprise.org";
 const TROI: &str = "email:troi@enterprise.org";
@@ -234,7 +235,7 @@ async fn cost_of_a_person_in(n: usize) -> (Vec<(String, u64)>, u64) {
     let mut ran = recording.take();
     ran.retain(|r| r.sql.contains("contact"));
     assert!(
-        ran.iter().any(|r| r.sql == PEOPLE_SQL),
+        ran.iter().any(|r| r.sql == PEOPLE_SQL.as_str()),
         "the read was not recorded; this checks nothing: {ran:#?}"
     );
     (
@@ -261,13 +262,13 @@ async fn a_person_in_many_documents_is_not_read_once_per_document() {
 async fn who_a_handle_is_is_read_by_its_handle() {
     let (_repo, w) = index_of(&[]).await;
     // Audited: a constant statement of ours.
-    let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "EXPLAIN QUERY PLAN {PEOPLE_SQL}"
-    )))
-    .bind(r#"["email:riker@enterprise.org"]"#)
-    .fetch_all(&w)
-    .await
-    .expect("explain");
+    let rows: Vec<(i64, i64, i64, String)> =
+        Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {PEOPLE_SQL}"))
+            .query_as()
+            .bind(r#"["email:riker@enterprise.org"]"#)
+            .fetch_all(&w)
+            .await
+            .expect("explain");
     let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
     for wanted in [
         "SEARCH document_contacts USING COVERING INDEX document_contacts_by_record (record_id=?)",
@@ -376,7 +377,8 @@ async fn numbers_and_pages_are_read_by_index() {
     ] {
         // Audited: a constant statement of ours.
         let rows: Vec<(i64, i64, i64, String)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+            Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"))
+                .query_as()
                 .bind(bound)
                 .fetch_all(&w)
                 .await

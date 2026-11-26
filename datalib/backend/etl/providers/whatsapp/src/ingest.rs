@@ -29,6 +29,7 @@ use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
 use crate::schema_raw::{ALL_DDL, WA_DB_CONTACTS, WA_MEDIA_FILES};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// The plaintext attachment tree inside a WhatsApp backup, and the prefix
 /// msgstore puts on every `message_media.file_path`.
@@ -266,17 +267,22 @@ async fn read_wa_db_contacts(
 /// Drop-and-refill `wa_db_contacts`. Returns the rows copied.
 async fn store_contacts(dst: &SqlitePool, rows: &[(String, String)]) -> Result<u64> {
     let mut tx = dst.begin().await.context("begin wa_db_contacts tx")?;
-    sqlx::query("DELETE FROM wa_db_contacts")
+    sql!("whatsapp.clear_contacts", "DELETE FROM wa_db_contacts")
+        .query()
         .execute(&mut *tx)
         .await
         .context("clear wa_db_contacts")?;
     for (jid, contact_rows) in rows {
-        sqlx::query("INSERT INTO wa_db_contacts (jid, rows) VALUES (?, ?)")
-            .bind(jid)
-            .bind(contact_rows)
-            .execute(&mut *tx)
-            .await
-            .context("insert wa_db_contacts")?;
+        sql!(
+            "whatsapp.insert_contact_rows",
+            "INSERT INTO wa_db_contacts (jid, rows) VALUES (?, ?)"
+        )
+        .query()
+        .bind(jid)
+        .bind(contact_rows)
+        .execute(&mut *tx)
+        .await
+        .context("insert wa_db_contacts")?;
     }
     tx.commit().await.context("commit wa_db_contacts tx")?;
     Ok(rows.len() as u64)
@@ -285,11 +291,14 @@ async fn store_contacts(dst: &SqlitePool, rows: &[(String, String)]) -> Result<u
 /// `(jid, [every column of each of its rows as a JSON object])`, one per
 /// jid. A BLOB column goes in as hex: JSON cannot hold one.
 async fn read_contacts(src: &mut SqliteConnection) -> Result<Vec<(String, String)>> {
-    let columns: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM pragma_table_info('wa_contacts')")
-            .fetch_all(&mut *src)
-            .await
-            .context("wa_contacts columns")?;
+    let columns: Vec<String> = sql!(
+        "whatsapp.list_wa_contacts_columns",
+        "SELECT name FROM pragma_table_info('wa_contacts')"
+    )
+    .query_scalar()
+    .fetch_all(&mut *src)
+    .await
+    .context("wa_contacts columns")?;
     if columns.is_empty() {
         anyhow::bail!("wa.db has no wa_contacts table");
     }
@@ -303,16 +312,20 @@ async fn read_contacts(src: &mut SqliteConnection) -> Result<Vec<(String, String
             )
         })
         .collect();
-    let sql = format!(
-        "SELECT jid, json_group_array(json(obj)) FROM \
+    let sql = Sql::dynamic(
+        sql_id!("whatsapp.read_contacts_grouped_by_jid"),
+        format!(
+            "SELECT jid, json_group_array(json(obj)) FROM \
            (SELECT jid, json_object({}) AS obj FROM wa_contacts \
              WHERE jid IS NOT NULL ORDER BY _id) \
          GROUP BY jid ORDER BY jid",
-        pairs.join(", ")
+            pairs.join(", ")
+        ),
     );
     // Audited: the column names come from the file's own
     // `pragma_table_info`, quoted as identifiers and as string literals.
-    let rows = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query_as::<(String, String)>()
         .fetch_all(&mut *src)
         .await
         .context("read wa_contacts")?;
@@ -366,12 +379,16 @@ async fn mirror_media_files(
     // registry below can name each file by the key its bytes went in
     // under. Through the caller's handle: opening one here would be a
     // second opener for a store the handle already owns.
-    let known: HashSet<String> = sqlx::query_scalar("SELECT blake3 FROM cas_objects")
-        .fetch_all(cas.pool())
-        .await
-        .context("read cas_objects blake3s")?
-        .into_iter()
-        .collect();
+    let known: HashSet<String> = sql!(
+        "whatsapp.list_cas_blake3s",
+        "SELECT blake3 FROM cas_objects"
+    )
+    .query_scalar()
+    .fetch_all(cas.pool())
+    .await
+    .context("read cas_objects blake3s")?
+    .into_iter()
+    .collect();
 
     // `rel → hash` of every file this run knows the bytes of. A file not here
     // would not open, and keeps the row it had.
@@ -439,10 +456,12 @@ async fn mirror_media_files(
         .filter(|rel| !hashes.contains_key(rel.as_str()));
     for rel in scan.present_unread.iter().chain(unopened) {
         kept.extend(
-            sqlx::query_as(
+            sql!(
+                "whatsapp.find_media_file_by_path",
                 "SELECT blake3, relative_path, size_bytes, mime_type \
-                 FROM wa_media_files WHERE relative_path = ?",
+                 FROM wa_media_files WHERE relative_path = ?"
             )
+            .query_as()
             .bind(format!("{MEDIA_DIR}/{rel}"))
             .fetch_optional(&mut *tx)
             .await
@@ -450,16 +469,19 @@ async fn mirror_media_files(
         );
     }
     if scan.errors.is_empty() {
-        sqlx::query("DELETE FROM wa_media_files")
+        sql!("whatsapp.clear_media_files", "DELETE FROM wa_media_files")
+            .query()
             .execute(&mut *tx)
             .await
             .context("clear wa_media_files")?;
     }
     for (blake3, relative_path, size, mime_type) in &kept {
-        sqlx::query(
+        sql!(
+            "whatsapp.keep_unread_media_file",
             "INSERT OR IGNORE INTO wa_media_files \
-                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
+                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)"
         )
+        .query()
         .bind(blake3)
         .bind(relative_path)
         .bind(size)
@@ -477,10 +499,12 @@ async fn mirror_media_files(
             Some((key, size)) => (key.clone(), *size),
             None => (hex.clone(), f.size),
         };
-        sqlx::query(
+        sql!(
+            "whatsapp.insert_scanned_media_file",
             "INSERT OR IGNORE INTO wa_media_files \
-                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)",
+                (blake3, relative_path, size_bytes, mime_type) VALUES (?, ?, ?, ?)"
         )
+        .query()
         .bind(blake3)
         .bind(format!("{MEDIA_DIR}/{}", f.rel))
         .bind(size)
@@ -555,6 +579,7 @@ fn mime_from_ext(path: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// The media registry and msgstore have to spell an attachment's path
     /// the same way, because render's only link between a message and its
     /// bytes is `message_media.file_path = wa_media_files.relative_path`.
@@ -594,7 +619,8 @@ mod tests {
         .expect("mirror media");
 
         let paths: Vec<String> =
-            sqlx::query_scalar("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+            test_sql!("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .expect("read wa_media_files");
@@ -630,14 +656,16 @@ mod tests {
     }
 
     async fn problems(db: &RawDb) -> Vec<(String, String)> {
-        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .expect("read problems")
     }
 
     async fn registry(db: &RawDb) -> Vec<String> {
-        sqlx::query_scalar("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+        test_sql!("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .expect("read wa_media_files")
@@ -751,12 +779,12 @@ mod tests {
             )
             .await
             .expect("ingest beside msgstore");
-            let paths: Vec<String> = sqlx::query_scalar(
-                "SELECT relative_path FROM wa_media_files ORDER BY relative_path",
-            )
-            .fetch_all(db.pool())
-            .await
-            .expect("read registry");
+            let paths: Vec<String> =
+                test_sql!("SELECT relative_path FROM wa_media_files ORDER BY relative_path")
+                    .query_scalar()
+                    .fetch_all(db.pool())
+                    .await
+                    .expect("read registry");
             assert_eq!(paths, ["Media/WhatsApp Images/IMG-0010.jpg"]);
             assert_eq!(
                 problems(&db).await,
@@ -892,14 +920,15 @@ mod tests {
         )
         .await
         .expect("ingest beside msgstore");
-        let stored: Vec<(String, Vec<u8>)> =
-            sqlx::query_as("SELECT blake3, bytes FROM cas_objects")
-                .fetch_all(db.cas().pool())
-                .await
-                .expect("read cas");
+        let stored: Vec<(String, Vec<u8>)> = test_sql!("SELECT blake3, bytes FROM cas_objects")
+            .query_as()
+            .fetch_all(db.cas().pool())
+            .await
+            .expect("read cas");
         let bbbb = datalib_etl::blob_cas::blake3_hex(b"BBBB");
         assert_eq!(stored, [(bbbb.clone(), b"BBBB".to_vec())]);
-        let registered: String = sqlx::query_scalar("SELECT blake3 FROM wa_media_files")
+        let registered: String = test_sql!("SELECT blake3 FROM wa_media_files")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .expect("read registry");
@@ -952,7 +981,8 @@ mod tests {
             .await
             .expect("ingest beside msgstore");
             assert!(problems(&db).await.is_empty());
-            let stored: i64 = sqlx::query_scalar("SELECT count(*) FROM cas_objects")
+            let stored: i64 = test_sql!("SELECT count(*) FROM cas_objects")
+                .query_scalar()
                 .fetch_one(db.cas().pool())
                 .await
                 .expect("count cas");
@@ -992,7 +1022,8 @@ mod tests {
             .await
             .expect("a wa.db that will not read does not fail the run");
         assert_eq!(summary.contacts, None);
-        let kept: Vec<String> = sqlx::query_scalar("SELECT jid FROM wa_db_contacts")
+        let kept: Vec<String> = test_sql!("SELECT jid FROM wa_db_contacts")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .expect("read contacts");

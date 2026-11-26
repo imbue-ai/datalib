@@ -22,6 +22,7 @@ use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use datalib_obs::diagnostics::Diagnostics;
+use datalib_sql::test_sql;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -134,12 +135,11 @@ impl Mirror {
     /// The Gmail ids held: every listed message with a held version.
     pub async fn gmail_ids(&self) -> BTreeSet<String> {
         self.read(|db| async move {
-            sqlx::query_scalar::<_, String>(
-                "SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL",
-            )
-            .fetch_all(db.pool())
-            .await
-            .expect("read what is held")
+            test_sql!("SELECT id FROM listed_messages_bookkeeping WHERE held_version IS NOT NULL")
+                .query_scalar::<String>()
+                .fetch_all(db.pool())
+                .await
+                .expect("read what is held")
         })
         .await
         .into_iter()
@@ -183,11 +183,11 @@ pub async fn last_run(raw_dir: &Path) -> Value {
     let db = RawDb::open(&db_path_for(raw_dir))
         .await
         .expect("open raw db");
-    let summary: String =
-        sqlx::query_scalar("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
-            .fetch_one(db.pool())
-            .await
-            .expect("read the last run");
+    let summary: String = test_sql!("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .expect("read the last run");
     db.close().await;
     serde_json::from_str(&summary).expect("a run's summary is JSON")
 }

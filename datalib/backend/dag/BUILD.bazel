@@ -34,6 +34,7 @@ rust_library(
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/step_problems:datalib_step_problems",
@@ -42,6 +43,7 @@ rust_library(
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:clap",
+        "@datalib_crates//:futures",
         "@datalib_crates//:libc",
         "@datalib_crates//:process-wrap",
         "@datalib_crates//:serde",
@@ -50,7 +52,6 @@ rust_library(
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:sysinfo",
-        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
@@ -64,6 +65,7 @@ rust_test(
     crate = ":datalib_dag",
     edition = "2021",
     deps = [
+        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:walkdir",
     ],
@@ -80,7 +82,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.56.0",
+    version = "0.57.0",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-pipeline --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -126,6 +128,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -145,6 +148,7 @@ rust_binary(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
@@ -161,6 +165,7 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -220,6 +225,7 @@ rust_test(
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",

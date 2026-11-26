@@ -1,4 +1,5 @@
-//! Port of `src/ingest/providers/claude/parse.py`.
+//! Reads a `claude` raw store into typed rows for render: conversations,
+//! Cowork tasks put into the export shape, projects and their documents.
 
 use std::collections::HashSet;
 use std::path::Path;

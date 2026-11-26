@@ -149,13 +149,14 @@ datalib-pipeline check <data_root>                 # validate, run nothing
 Every verb takes the data root or its `config.toml`. `check` prints *every* problem with the config rather than the first,
 as `file:line:col: severity: message` with the offending line and a
 `help:` line under each — so fixing a config takes one round-trip, not
-one per typo. It checks what the runner reads, not a step's params:
-the app's config editor (`PUT /api/config`, `POST /api/config/check`)
-has `datalib-step check-params` plan every `datalib-step` step's
-params, so there a misspelled or misplaced option is reported at its
-line before a sync rather than when the step runs. Exit 0 when every
-entry loads, 1 if the file is not a config at all, 2 if some entries
-were dropped. A root a newer Datalib wrote is not refused here: each
+one per typo. It also asks each step whose program takes `--check`
+about its params, `datalib-step`'s included, as the app's config editor
+does on a save (`PUT /api/config`, `POST /api/config/check`), so a
+misspelled or misplaced option is reported at its line before a sync
+rather than when the step runs, and an option that no longer does
+anything is a warning there. Exit 0 when every entry loads, 1 if the
+file is not a config at all, 2 if some entries were dropped or a step
+would refuse its params. A root a newer Datalib wrote is not refused here: each
 step refuses it when the runner starts, and is turned off until a build
 that can read it runs.
 
@@ -377,6 +378,53 @@ sqlite3 <data_root>/system/runs/runs.sqlite \
 `select run_id, step, state, attempt, error from step_runs where error
 is not null` lists the steps that failed. Every table and column is in
 [`docs/dev/logging.md`](dev/logging.md).
+
+## Before you answer from the copy
+
+The copy is only as good as what was synced into it, and an agent that
+answers from it without checking can be confidently wrong. Each time:
+
+1. **Search what is already there before syncing anything.** The person
+   may have mirrored the source already. An empty answer means nothing
+   matching is in the copy; it does not mean the service has no such
+   data. Check whether the source is configured at all (a `[[groups]]`
+   entry with its `type` in `<data_root>/config.toml`), and offer to
+   sync it.
+2. **A sync is over when its request ends, and not before.**
+   `datalib-pipeline sync` returns when its request closes, with its
+   outcome as the exit code; over HTTP, a request's `state` leaves
+   `open` (§ "Running a sync"). When the loop starts, it first runs a
+   pass of its own (a run of kind `migrate`) that asks each step to bring
+   what it stored up to date and downloads nothing; its steps end
+   `succeeded` within seconds, and that is not your sync finishing.
+3. **Check that the copy is complete.** A request that ended `failed`
+   left part of the copy unfinished, and one that ended `done` can still
+   hold records whose parts could not be read. Three checks, each of
+   which should come back empty before you build an answer on the copy:
+   - `datalib-pipeline status <config>`: a line `owed <step>  <n>` is work
+     a run saw waiting and did not get to.
+   - the source's `problems` table, which names each record a download
+     could not fetch or read whole ([reading the raw
+     stores](user/raw_stores.md) § "`problems`"):
+
+     ```sh
+     datalib-doltlite -readonly <data_root>/<source id>/ingest/entities.doltlite_db \
+       "SELECT severity, reason, scope_key, sample FROM problems WHERE severity IN ('error', 'warning')"
+     ```
+
+   - the source's own check for records it still owes, where it keeps
+     one, printed by `datalib-step help <type>` under "Is the copy
+     complete?".
+
+   When any is not empty, sync again first, and if the person has
+   already seen an answer, tell them what has changed.
+4. **Say what the copy covers.** Each source mirrors less than the whole
+   service by default (Slack: the channels the account is in, no DMs),
+   and some things it can never see. `datalib-step help <type>` lists
+   both under "Limitations". Say what the copy covers in your first
+   answer from it, or ask before the first sync when it would change the
+   answer. To ask a narrower question, query the copy; don't narrow the
+   copy with `since`, because anything older than `since` is never read.
 
 ## Reading the mirrored data
 

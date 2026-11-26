@@ -15,6 +15,7 @@ use datalib_etl::bulk::{
 use datalib_etl::doltlite_raw as dr;
 
 use super::schema_raw::{full_ddl, DirRow, FileRow, ScanMetaRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
@@ -59,10 +60,16 @@ impl RawDb {
             .await
             .context("begin scan_meta clear tx")?;
         for sql in [
-            "DELETE FROM scan_meta WHERE id != ?",
-            "DELETE FROM scan_meta_bookkeeping WHERE id != ?",
+            sql!(
+                "file_inventory.clear_other_scan_meta.delete_scan_meta",
+                "DELETE FROM scan_meta WHERE id != ?"
+            ),
+            sql!(
+                "file_inventory.clear_other_scan_meta.delete_scan_meta_bookkeeping",
+                "DELETE FROM scan_meta_bookkeeping WHERE id != ?"
+            ),
         ] {
-            sqlx::query(sql)
+            sql.query()
                 .bind(source_id)
                 .execute(&mut *tx)
                 .await
@@ -90,11 +97,14 @@ impl RawDb {
         for table in ["files", "dirs"] {
             // Audited: `table` iterates two of our own table names; ids are
             // bound below.
-            let ids: Vec<String> =
-                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
-                    .fetch_all(&mut *tx)
-                    .await
-                    .with_context(|| format!("list {table} ids"))?;
+            let ids: Vec<String> = Sql::dynamic(
+                sql_id!("file_inventory.list_entry_ids_for_prune"),
+                format!("SELECT id FROM {table}"),
+            )
+            .query_scalar()
+            .fetch_all(&mut *tx)
+            .await
+            .with_context(|| format!("list {table} ids"))?;
             let gone: Vec<String> = ids.into_iter().filter(|id| !kept(id)).collect();
             for chunk in gone.chunks(SQL_CHUNK) {
                 let mut sql = format!("DELETE FROM {table} WHERE id IN (");
@@ -102,7 +112,8 @@ impl RawDb {
                 sql.push(')');
                 // Audited: `table` is one of two names above; the IN-list is
                 // a `?,?,?` run sized from the chunk and every id is bound.
-                let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                let mut q =
+                    Sql::dynamic(sql_id!("file_inventory.delete_unseen_entries"), sql).query();
                 for id in chunk {
                     q = q.bind(id);
                 }
@@ -123,28 +134,40 @@ impl RawDb {
         // `dolt_connect_branch` errors when the branch is absent, so the
         // error is the signal to create it. Connect, not checkout: a
         // checkout writes a working set on every scan, a connect nothing.
-        let existing = sqlx::query("SELECT dolt_connect_branch(?)")
+        let existing = sql!(
+            "file_inventory.connect_branch",
+            "SELECT dolt_connect_branch(?)"
+        )
+        .query()
+        .bind(branch)
+        .execute(&self.pool)
+        .await;
+        if let Err(no_such_branch) = existing {
+            sql!(
+                "file_inventory.create_branch",
+                "SELECT dolt_checkout('-b', ?)"
+            )
+            .query()
             .bind(branch)
             .execute(&self.pool)
-            .await;
-        if let Err(no_such_branch) = existing {
-            sqlx::query("SELECT dolt_checkout('-b', ?)")
-                .bind(branch)
-                .execute(&self.pool)
-                .await
-                .with_context(|| {
-                    format!(
-                        "dolt checkout -b {branch} (after connecting to it reported: {no_such_branch})"
-                    )
-                })?;
+            .await
+            .with_context(|| {
+                format!(
+                    "dolt checkout -b {branch} (after connecting to it reported: {no_such_branch})"
+                )
+            })?;
         }
 
-        let active: String = sqlx::query("SELECT active_branch() AS b")
-            .fetch_one(&self.pool)
-            .await
-            .with_context(|| format!("read back active branch after switching to {branch}"))?
-            .try_get("b")
-            .with_context(|| format!("decode active branch after switching to {branch}"))?;
+        let active: String = sql!(
+            "file_inventory.read_active_branch",
+            "SELECT active_branch() AS b"
+        )
+        .query()
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("read back active branch after switching to {branch}"))?
+        .try_get("b")
+        .with_context(|| format!("decode active branch after switching to {branch}"))?;
         anyhow::ensure!(
             active == branch,
             "switching to branch {branch:?} reported success but the connection is on {active:?}"
@@ -181,7 +204,8 @@ impl RawDb {
     /// Returns the wall time.
     pub async fn gc(&self) -> Result<std::time::Duration> {
         let started = std::time::Instant::now();
-        sqlx::query("SELECT dolt_gc()")
+        sql!("file_inventory.run_gc", "SELECT dolt_gc()")
+            .query()
             .execute(&self.pool)
             .await
             .context("dolt_gc")?;
@@ -201,18 +225,26 @@ impl RawDb {
     /// breadcrumb — bounded by the directory count, which is tiny next
     /// to the file count.
     pub async fn dir_ids(&self) -> Result<Vec<String>> {
-        let ids = sqlx::query_scalar::<_, String>("SELECT id FROM dirs ORDER BY id")
-            .fetch_all(&self.pool)
-            .await
-            .context("select dir ids")?;
+        let ids = sql!(
+            "file_inventory.list_dir_ids",
+            "SELECT id FROM dirs ORDER BY id"
+        )
+        .query_scalar::<String>()
+        .fetch_all(&self.pool)
+        .await
+        .context("select dir ids")?;
         Ok(ids)
     }
 
     pub async fn all_entry_ids(&self) -> Result<std::collections::BTreeSet<String>> {
         use futures::TryStreamExt;
         let mut out = std::collections::BTreeSet::new();
-        let mut rows =
-            sqlx::query("SELECT id FROM files UNION ALL SELECT id FROM dirs").fetch(&self.pool);
+        let mut rows = sql!(
+            "file_inventory.list_file_and_dir_ids",
+            "SELECT id FROM files UNION ALL SELECT id FROM dirs"
+        )
+        .query()
+        .fetch(&self.pool);
         while let Some(r) = rows.try_next().await.context("stream entry ids")? {
             out.insert(sqlx::Row::try_get::<String, _>(&r, 0).context("read id")?);
         }
@@ -224,12 +256,16 @@ impl RawDb {
     /// explicit enrichment UPDATE the stamping pass issues after the
     /// breadcrumb file lands (see [`super`] stamping notes).
     pub async fn set_identity_uuid(&self, id: &str, uuid: &str) -> Result<()> {
-        sqlx::query("UPDATE dirs SET identity_uuid = ? WHERE id = ?")
-            .bind(uuid)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .context("update dirs.identity_uuid")?;
+        sql!(
+            "file_inventory.update_dir_identity_uuid",
+            "UPDATE dirs SET identity_uuid = ? WHERE id = ?"
+        )
+        .query()
+        .bind(uuid)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .context("update dirs.identity_uuid")?;
         Ok(())
     }
 
@@ -239,15 +275,17 @@ impl RawDb {
     /// identically is no change, so only genuinely changed
     /// entries surface as added/modified/removed.
     pub async fn diff_counts_since_parent(&self) -> Option<DiffCounts> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "file_inventory.count_last_commit_changes",
             "SELECT diff_type, COUNT(*) AS n FROM ( \
                 SELECT diff_type FROM dolt_diff_files \
                  WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD' \
                 UNION ALL \
                 SELECT diff_type FROM dolt_diff_dirs \
                  WHERE from_ref = 'HEAD^' AND to_ref = 'HEAD') \
-              WHERE diff_type != 'unchanged' GROUP BY diff_type",
+              WHERE diff_type != 'unchanged' GROUP BY diff_type"
         )
+        .query()
         .fetch_all(&self.pool)
         .await
         .ok()?;

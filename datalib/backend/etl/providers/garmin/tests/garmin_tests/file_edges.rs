@@ -13,6 +13,7 @@ use datalib_etl::stop::StopFlag;
 
 use crate::prune_gate::{bytes, status, Account, TODAY};
 use crate::retry_and_stop::StopAt;
+use datalib_sql::{test_sql, Sql};
 
 const FIT_13: &str = "/download-service/files/activity/17010413001";
 
@@ -32,15 +33,17 @@ fn fit_edges() -> Vec<(String, Option<String>)> {
     ]
 }
 
-const FIT_EDGES_SQL: &str =
-    "SELECT activity_id, blake3 FROM garmin_activity_files ORDER BY activity_id";
+const FIT_EDGES_SQL: Sql =
+    test_sql!("SELECT activity_id, blake3 FROM garmin_activity_files ORDER BY activity_id");
 
-const SHARE_THE_RIDES_FIT: &str = "UPDATE garmin_activity_files SET blake3 = \
-     (SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002')";
+const SHARE_THE_RIDES_FIT: Sql = test_sql!(
+    "UPDATE garmin_activity_files SET blake3 = \
+     (SELECT blake3 FROM garmin_activity_files WHERE activity_id = '17010414002')"
+);
 
 /// What a store written before the repair looks like: no record of it.
-const NOT_YET_REPAIRED: &str =
-    "DELETE FROM sync_scope_state WHERE scope LIKE 'garmin:shared_hash_repair:%'";
+const NOT_YET_REPAIRED: Sql =
+    test_sql!("DELETE FROM sync_scope_state WHERE scope LIKE 'garmin:shared_hash_repair:%'");
 
 /// The CAS bundle is keyed by ref, and every FIT went in under the one
 /// ref `fit`: each activity's edge got the hash of the last file of
@@ -152,12 +155,14 @@ fn wellness(day: &str) -> String {
     format!("/download-service/files/wellness/{day}")
 }
 
-const WELLNESS_EDGES_SQL: &str =
-    "SELECT calendar_date, blake3 FROM garmin_wellness_files ORDER BY calendar_date";
+const WELLNESS_EDGES_SQL: Sql =
+    test_sql!("SELECT calendar_date, blake3 FROM garmin_wellness_files ORDER BY calendar_date");
 
-const WELLNESS_DAYS_HELD_SQL: &str = "SELECT COUNT(*) FROM garmin_wellness_files f \
+const WELLNESS_DAYS_HELD_SQL: Sql = test_sql!(
+    "SELECT COUNT(*) FROM garmin_wellness_files f \
      JOIN garmin_wellness_files_bookkeeping b ON b.id = f.id \
-     WHERE f.blake3 IS NULL AND b.held_version IS NOT NULL";
+     WHERE f.blake3 IS NULL AND b.held_version IS NOT NULL"
+);
 
 /// A day whose bundle failed before the refresh window is fetched
 /// again, and a day Garmin had no bundle for is a row saying so, which
@@ -304,10 +309,10 @@ async fn an_unreadable_fit_is_fetched_again_only_when_its_activity_changes() {
     let key = "garmin_activity_files:17010413001#fit";
     assert_eq!(a.problems().await.keys().collect::<Vec<_>>(), [key]);
     assert_eq!(
-        a.count(
+        a.count(test_sql!(
             "SELECT COUNT(*) FROM problems \
              WHERE scope_key = 'garmin_activity_files:17010413001#fit' AND severity = 'warning'"
-        )
+        ))
         .await,
         1,
         "held with something lost is a warning"

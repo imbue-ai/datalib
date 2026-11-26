@@ -11,6 +11,7 @@ use sqlx::sqlite::SqlitePool;
 use datalib_etl_files::file_changes_scan::{self, ScannedFile};
 
 use super::unpack::{is_catalog, is_zip};
+use datalib_sql::sql;
 
 /// The store's record of the backups it holds, one row per backup,
 /// written in the commit that mirrored it.
@@ -171,11 +172,14 @@ pub fn commit_date(taken_at: NaiveDateTime) -> Option<String> {
 }
 
 pub async fn read_ledger(pool: &SqlitePool) -> Result<Vec<Held>> {
-    let rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT snapshot, taken_at, blake3 FROM lightroom_snapshots")
-            .fetch_all(pool)
-            .await
-            .context("read the snapshots ledger")?;
+    let rows: Vec<(String, String, String)> = sql!(
+        "lightroom.list_snapshots",
+        "SELECT snapshot, taken_at, blake3 FROM lightroom_snapshots"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("read the snapshots ledger")?;
     rows.into_iter()
         .map(|(snapshot, t, blake3)| {
             let taken_at = NaiveDateTime::parse_from_str(&t, LEDGER_DATE_FORMAT)
@@ -196,10 +200,12 @@ pub async fn record(
     file: &str,
     blake3: &str,
 ) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "lightroom.upsert_snapshot",
         "INSERT OR REPLACE INTO lightroom_snapshots (snapshot, taken_at, file, blake3) \
-         VALUES (?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?)"
     )
+    .query()
     .bind(snapshot)
     .bind(taken_at.format(LEDGER_DATE_FORMAT).to_string())
     .bind(file)

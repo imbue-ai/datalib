@@ -13,6 +13,7 @@ use datalib_etl_calendar::ingest::{db_path_for, FetchSummary, RawDb};
 use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::write_fixture;
+use datalib_sql::{test_sql, Sql};
 
 pub(crate) const HOST: &str = "https://caldav.enterprise.test";
 pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
@@ -175,11 +176,12 @@ async fn try_run_with(
     summary
 }
 
-async fn scalar(store: &Path, sql: &'static str) -> Option<String> {
+async fn scalar(store: &Path, sql: Sql) -> Option<String> {
     let db = RawDb::open(&db_path_for(store))
         .await
         .expect("reopen store");
-    let v: Option<String> = sqlx::query_scalar(sql)
+    let v: Option<String> = sql
+        .query_scalar()
         .fetch_optional(db.pool())
         .await
         .expect("query")
@@ -248,25 +250,25 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         "{first:?}"
     );
     assert_eq!(
-        scalar(&store, "SELECT display_name FROM calendars")
+        scalar(&store, test_sql!("SELECT display_name FROM calendars"))
             .await
             .as_deref(),
         Some("Bridge Duty")
     );
     assert_eq!(
-        scalar(&store, "SELECT time_zone FROM calendars")
+        scalar(&store, test_sql!("SELECT time_zone FROM calendars"))
             .await
             .as_deref(),
         Some("America/Los_Angeles")
     );
     assert_eq!(
-        scalar(&store, "SELECT login FROM accounts")
+        scalar(&store, test_sql!("SELECT login FROM accounts"))
             .await
             .as_deref(),
         Some("picard@enterprise.test")
     );
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM calendars")
+        scalar(&store, test_sql!("SELECT sync_token FROM calendars"))
             .await
             .as_deref(),
         Some("data:,100")
@@ -274,7 +276,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
     assert_eq!(
         scalar(
             &store,
-            "SELECT id FROM ics_objects WHERE uid = 'tng-reception@enterprise.test'"
+            test_sql!("SELECT id FROM ics_objects WHERE uid = 'tng-reception@enterprise.test'")
         )
         .await
         .as_deref(),
@@ -288,20 +290,23 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         "{second:?}"
     );
     assert_eq!(
-        scalar(&store, "SELECT CAST(count(*) AS TEXT) FROM ics_objects")
-            .await
-            .as_deref(),
+        scalar(
+            &store,
+            test_sql!("SELECT CAST(count(*) AS TEXT) FROM ics_objects")
+        )
+        .await
+        .as_deref(),
         Some("1")
     );
     assert!(scalar(
         &store,
-        "SELECT json_extract(payload, '$.ics') FROM ics_objects"
+        test_sql!("SELECT json_extract(payload, '$.ics') FROM ics_objects")
     )
     .await
     .unwrap()
     .contains("(Deck 8)"));
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM calendars")
+        scalar(&store, test_sql!("SELECT sync_token FROM calendars"))
             .await
             .as_deref(),
         Some("data:,101")
@@ -351,11 +356,11 @@ async fn a_window_queries_the_time_range_and_keeps_no_token() {
     let first = run_in(&one, &store, Some(window)).await;
     assert_eq!((first.events_new, first.errors), (1, 0), "{first:?}");
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM calendars").await,
+        scalar(&store, test_sql!("SELECT sync_token FROM calendars")).await,
         None
     );
     assert_eq!(
-        scalar(&store, "SELECT uid FROM ics_objects")
+        scalar(&store, test_sql!("SELECT uid FROM ics_objects"))
             .await
             .as_deref(),
         Some("tng-reception@enterprise.test")
@@ -375,7 +380,8 @@ async fn problem_keys(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store))
         .await
         .expect("reopen store");
-    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+    let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .expect("query problems");
@@ -386,7 +392,7 @@ async fn problem_keys(store: &Path) -> Vec<String> {
 async fn stored_uids(store: &Path) -> Option<String> {
     scalar(
         store,
-        "SELECT group_concat(uid, ',') FROM (SELECT uid FROM ics_objects ORDER BY uid)",
+        test_sql!("SELECT group_concat(uid, ',') FROM (SELECT uid FROM ics_objects ORDER BY uid)"),
     )
     .await
 }
@@ -604,7 +610,7 @@ async fn a_server_without_sync_collection_fails_the_calendar() {
         problem_keys(&store).await,
         vec!["listing:calendar Bridge Duty".to_string()]
     );
-    let detail = scalar(&store, "SELECT sample FROM problems")
+    let detail = scalar(&store, test_sql!("SELECT sample FROM problems"))
         .await
         .unwrap_or_default();
     assert!(
@@ -732,11 +738,15 @@ async fn a_calendar_the_server_no_longer_lists_goes_with_its_events() {
     );
     assert_eq!(stored_uids(&store).await, None);
     for sql in [
-        "SELECT CAST(count(*) AS TEXT) FROM calendars",
-        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
-        "SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping",
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM calendars"),
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM dav_resources"),
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping"),
     ] {
-        assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
+        assert_eq!(
+            scalar(&store, sql.clone()).await.as_deref(),
+            Some("0"),
+            "{sql}"
+        );
     }
 }
 
@@ -770,15 +780,21 @@ async fn a_home_listing_that_names_nothing_deletes_no_calendar() {
     let second = try_run_with(&two, &store, None, Default::default()).await;
     assert!(second.is_err(), "{second:?}");
     assert_eq!(
-        scalar(&store, "SELECT CAST(count(*) AS TEXT) FROM calendars")
-            .await
-            .as_deref(),
+        scalar(
+            &store,
+            test_sql!("SELECT CAST(count(*) AS TEXT) FROM calendars")
+        )
+        .await
+        .as_deref(),
         Some("1")
     );
     assert_eq!(
-        scalar(&store, "SELECT CAST(count(*) AS TEXT) FROM dav_resources")
-            .await
-            .as_deref(),
+        scalar(
+            &store,
+            test_sql!("SELECT CAST(count(*) AS TEXT) FROM dav_resources")
+        )
+        .await
+        .as_deref(),
         Some("2")
     );
 }
