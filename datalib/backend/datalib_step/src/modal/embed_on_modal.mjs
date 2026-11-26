@@ -72,6 +72,7 @@ const TAGS = { datalib_embed_run: randomUUID().replaceAll("-", "") };
 const live = new Set();
 process.on("SIGTERM", async () => {
   const ending = new Map([...live].map((sb) => [sb.sandboxId, sb]));
+  const placed = ending.size;
   try {
     for await (const sb of client.sandboxes.list({ appId: app.appId, tags: TAGS })) {
       if (!ending.has(sb.sandboxId)) ending.set(sb.sandboxId, sb);
@@ -79,7 +80,7 @@ process.on("SIGTERM", async () => {
   } catch (e) {
     say(`stopping: could not list the Sandboxes still waiting for a GPU: ${messageOf(e)}`);
   }
-  say(`stopping: ending ${ending.size} Sandbox(es), ${live.size} of them placed`);
+  say(`stopping: ending ${placed} Sandbox(es) placed and ${ending.size - placed} not yet`);
   await Promise.all([...ending.values()].map((sb) => sb.terminate().catch(() => {})));
   process.exit(143);
 });
