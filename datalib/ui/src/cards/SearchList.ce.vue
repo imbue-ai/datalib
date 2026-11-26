@@ -17,8 +17,9 @@ import { photoCardSource, thumbnailUrl } from "./photos";
 import { parsePhoto } from "@/uri";
 import { freeText, markWords, titleWithin } from "./search";
 import { datesInText } from "./dates";
+import { contactPageCell, contactPages } from "./contactPages";
 import { people, peopleTitle } from "./contacts";
-import { handleFromUri } from "./chipLinks";
+import { contactPageFromUri, handleFromUri } from "./chipLinks";
 import { endWait, startWait, type Wait } from "@/telemetry";
 import { formatBytes } from "@/config/bytes";
 import {
@@ -360,6 +361,7 @@ function titled(row: SearchRow) {
 // contacts give them. `people` answering redraws it.
 const peopleAnswered = ref(0);
 const stopPeople = people.subscribe(() => peopleAnswered.value++);
+const stopPages = contactPages.subscribe(() => peopleAnswered.value++);
 
 /// Who a row is titled by: a contact's own row by the contact, a
 /// conversation named after its people by them; empty for a row titled
@@ -374,10 +376,21 @@ function titlePeople(row: SearchRow): { handle: string; shownAs: string }[] {
   });
 }
 
+/// The page a contact's own row is titled by, where its card has no handle.
+function titlePage(row: SearchRow): string | null {
+  return row.contact_ref && !titled(row).repeats ? contactPageFromUri(row.contact_ref.id) : null;
+}
+
+const titledByChip = (row: SearchRow) => titlePeople(row).length > 0 || titlePage(row) !== null;
+
 function drawTitle(el: unknown, row: SearchRow) {
+  if (!(el instanceof HTMLElement)) return;
+  const page = titlePage(row);
   const named = titlePeople(row);
-  if (!(el instanceof HTMLElement) || named.length === 0) return;
-  const title = peopleTitle(named);
+  if (!page && named.length === 0) return;
+  const title = page
+    ? contactPageCell(page, row.contact_ref!.label, contactPages.lookup(page))
+    : peopleTitle(named);
   // The row is picked by a click anywhere on it, the chips included; a
   // chip's href is for a copy, never to be followed from here.
   title.addEventListener("click", (e) => e.preventDefault());
@@ -440,6 +453,7 @@ onBeforeUnmount(() => {
   endObserver?.disconnect();
   stop?.();
   stopPeople();
+  stopPages();
   inflight?.abort();
   teardown?.();
 });
@@ -481,7 +495,7 @@ onBeforeUnmount(() => {
             <span class="sc-text">
               <span class="sc-line">
                 <strong
-                  v-if="titlePeople(r).length"
+                  v-if="titledByChip(r)"
                   :ref="(el) => drawTitle(el, r)"
                   class="sc-title"
                   :data-answered="peopleAnswered"

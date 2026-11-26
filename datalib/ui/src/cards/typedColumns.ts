@@ -7,7 +7,8 @@
 // hosts; a card with a grid of its own (`GridCard`) calls this and
 // keeps driving its grid itself.
 import type { Column, Formatter, GroupingFormatterItem } from "@slickgrid-universal/common";
-import { contactFromUri, entityFromUri, handleFromUri } from "./chipLinks";
+import { contactFromUri, contactPageFromUri, entityFromUri, handleFromUri } from "./chipLinks";
+import { contactPageCell, type PageAnswer } from "./contactPages";
 import { documentCell } from "./documentChip";
 import { entityCell, type EntityView } from "./entities";
 import { chipCell, contactCell, type NormalizedContact, type Who } from "./contacts";
@@ -75,6 +76,9 @@ export type SlickColumnOptions<T> = {
     quiet?: boolean;
     /// One of your contacts, whose id is a `datalib:contact/` URI.
     contact?: (contactId: string) => NormalizedContact | undefined;
+    /// Whoever a contact's page is about, whose id is a
+    /// `datalib:contact_page/` URI.
+    page?: (page: string) => PageAnswer | undefined;
   };
 };
 
@@ -345,6 +349,8 @@ function identityChip<T>(
   if (contactId && chips?.contact) {
     return contactCell(contactId, v.label, chips.contact(contactId));
   }
+  const page = chips?.page ? contactPageFromUri(v.id) : null;
+  if (page && chips?.page) return contactPageCell(page, v.label, chips.page(page));
   const handle = chips ? handleFromUri(v.id) : null;
   return handle && chips ? chipCell(handle, v.label, chips.who(handle)) : null;
 }

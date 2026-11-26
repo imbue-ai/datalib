@@ -45,7 +45,9 @@ use datalib_schema::providers::Provider;
 /// 18: a category is keyed by its address book's id, which a rename of
 /// the book keeps, not by the book's label.
 /// 19: a card whose only name is a `tel:` number is titled by the number.
-pub const RENDER_VERSION: u32 = 19;
+/// 20: a person with no handle is headed by a chip naming their page, and
+/// a number with no country code is a term by its digits.
+pub const RENDER_VERSION: u32 = 20;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
 type Cards<'a> = HashMap<(&'a str, &'a str), &'a ParsedContact>;
