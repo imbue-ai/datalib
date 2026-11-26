@@ -504,9 +504,14 @@ async fn record_unreadable_store(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::IntoStaticStr, strum::VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum Part {
-    /// Every table but the keyword index's: the rows, documents, edges,
-    /// nodes, filings, photos, contacts, problems, cursors and terms.
+    /// The rows, documents, edges, nodes, filings, photos, problems,
+    /// cursors and terms. Emptying it empties [`Part::Contacts`] too: the
+    /// people ride on the grid's documents, and a document the refill no
+    /// longer finds would leave its people behind.
     Grid,
+    /// The people the documents carry (`contact_records`), with a cursor
+    /// per source of their own, so the step fills them alone.
+    Contacts,
     /// The keyword index's `search_*` tables, which the step's keyword
     /// pass fills and keyword search reads (`datalib_search_index`).
     Keywords,
@@ -523,14 +528,22 @@ impl Part {
             Part::Grid => {
                 datalib_store_meta::schema_hash(grid_ddl().chain([TERMS_SHAPE, nodes::NODES_SHAPE]))
             }
+            Part::Contacts => datalib_store_meta::schema_hash(contact_records::DDL.iter().copied()),
             Part::Keywords => datalib_store_meta::schema_hash(datalib_search_index::KEYWORD_DDL),
         }
     }
 
-    /// Whether `table` is this part's, by its name: the keyword index's
-    /// tables, an older build's included, all start with its prefix.
+    /// Whether `table` is this part's, by its name, an older build's
+    /// included.
     fn holds(self, table: &str) -> bool {
-        table.starts_with(datalib_search_index::TABLE_PREFIX) == (self == Part::Keywords)
+        let part = if table.starts_with(datalib_search_index::TABLE_PREFIX) {
+            Part::Keywords
+        } else if contact_records::holds(table) {
+            Part::Contacts
+        } else {
+            Part::Grid
+        };
+        part == self
     }
 
     /// The shape a reader of only this part requires: its tables, kept in
@@ -567,11 +580,15 @@ fn refill(meta: Option<&datalib_store_meta::Meta>) -> Refill {
         return Refill::Nothing;
     }
     let all = <Part as strum::VariantArray>::VARIANTS;
-    let moved: Vec<Part> = all
+    let mut moved: Vec<Part> = all
         .iter()
         .copied()
         .filter(|p| meta.parts.get(p.as_str()) != Some(&p.tables()))
         .collect();
+    if moved.contains(&Part::Grid) && !moved.contains(&Part::Contacts) {
+        moved.push(Part::Contacts);
+        moved.sort_by_key(|p| all.iter().position(|q| q == p));
+    }
     // No part moved and yet the whole did: the parts it records do not
     // explain it, so nothing in it is kept.
     if moved.is_empty() || moved.len() == all.len() {
@@ -670,9 +687,11 @@ pub(crate) const SEARCHABLE_DOCUMENTS_INDEXES: &[&str] = &[
 ];
 
 /// The grid index's tables, and the terms' with their indexes, then the
-/// keyword index's.
+/// contacts' and the keyword index's.
 fn index_ddl() -> impl Iterator<Item = &'static str> {
-    grid_ddl().chain(datalib_search_index::KEYWORD_DDL)
+    grid_ddl()
+        .chain(contact_records::DDL.iter().copied())
+        .chain(datalib_search_index::KEYWORD_DDL)
 }
 
 /// [`Part::Grid`]'s tables.
@@ -685,7 +704,6 @@ fn grid_ddl() -> impl Iterator<Item = &'static str> {
         .chain(DATA_NODES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(NODES_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(FILINGS_DDL.iter().map(|(_table, ddl)| *ddl))
-        .chain(contact_records::DDL.iter().copied())
         .chain(SOURCE_PHOTOS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(PROBLEMS_DDL.iter().map(|(_table, ddl)| *ddl))
         .chain(SOURCE_CURSORS_DDL.iter().map(|(_table, ddl)| *ddl))
@@ -1435,6 +1453,7 @@ pub async fn build_grid_index_for(
     // Before any transaction opens, because the index pool is one
     // connection wide.
     let cursors = load_source_cursors(pool).await?;
+    let contact_cursors = contact_records::cursors(pool).await?;
     let indexed = load_markdown_uuids_by_source(pool).await?;
     let now = run_stamp(now_override);
     // A pass stopped before the end leaves them to the next open, whose
@@ -1510,10 +1529,16 @@ pub async fn build_grid_index_for(
             Ok(false)
         } else {
             let read_ms = millis(reading.elapsed());
+            // The contacts were made new while the grid kept this source:
+            // the load fills them alone before it applies what changed.
+            let contacts_owed = cursors
+                .get(&stanza)
+                .is_some_and(|c| contact_cursors.get(&stanza) != Some(&c.commit));
             apply_source(
                 &write_lock,
                 &stanza,
                 read,
+                contacts_owed,
                 read_ms,
                 (!building).then_some(held),
                 &now,
@@ -1542,6 +1567,7 @@ pub async fn build_grid_index_for(
                     &write_lock,
                     &stanza,
                     SourceRead::Failed(why),
+                    false,
                     0,
                     (!building).then_some(held),
                     &now,
@@ -1648,6 +1674,7 @@ async fn retire_source(
         .execute(&mut **conn)
         .await
         .with_context(|| format!("clear {source}'s cursor"))?;
+        contact_records::set_cursor(conn, source, None).await?;
         Ok((bump_generation(conn).await?, remade))
     }
     .await;
@@ -1747,6 +1774,8 @@ enum SourceRead {
         /// answer, and an unwritten cursor cold-starts the next pass — the
         /// safe direction.
         head: Option<(String, String)>,
+        /// `to_read` is every document the store holds.
+        whole: bool,
     },
 }
 
@@ -1783,11 +1812,12 @@ fn read_source(
     };
     let store = std::sync::Arc::new(store);
     match read_open_store(&store, stanza, cursor, indexed, pass) {
-        Ok((to_read, removed, head)) => Ok(Some(SourceRead::Read {
+        Ok((to_read, removed, head, whole)) => Ok(Some(SourceRead::Read {
             store,
             to_read,
             removed,
             head,
+            whole,
         })),
         Err(e) => {
             close_store(store);
@@ -1804,8 +1834,9 @@ fn close_store(store: std::sync::Arc<crate::indexed_markdown::IndexedMarkdownSto
 }
 
 /// What a pass reads of `store`: the documents to load, in order, those
-/// the store no longer holds, and the commit read with its tree.
-type ToRead = (Vec<String>, Vec<String>, Option<(String, String)>);
+/// the store no longer holds, the commit read with its tree, and whether
+/// the documents to load are all of them.
+type ToRead = (Vec<String>, Vec<String>, Option<(String, String)>, bool);
 
 fn read_open_store(
     store: &crate::indexed_markdown::IndexedMarkdownStore,
@@ -1907,7 +1938,7 @@ fn read_open_store(
         }
         None => None,
     };
-    Ok((present, removed, head))
+    Ok((present, removed, head, scan.render.is_none()))
 }
 
 /// Write one source's changes, problems and cursor in one transaction
@@ -1920,6 +1951,7 @@ async fn apply_source(
     write_lock: &WriteLock,
     stanza: &str,
     read: SourceRead,
+    contacts_owed: bool,
     read_ms: u64,
     held: Option<usize>,
     now: &datalib_time::StoredStamp,
@@ -1958,15 +1990,28 @@ async fn apply_source(
                 to_read,
                 removed,
                 head,
-            } => (Some((store, to_read)), removed, head),
+                whole,
+            } => (Some((store, to_read, whole)), removed, head),
         };
-        let (store, to_read) = docs.expect("read above");
+        let (store, to_read, whole) = docs.expect("read above");
         summary.markdowns_total += to_read.len();
         let removed_remade = remove_documents(write_lock, stanza, &removed, held, progress)
             .await
             .with_context(|| format!("delete the documents {stanza} dropped"))?;
         took.remove_ms = laps.lap();
         summary.markdowns_removed += removed.len();
+        // A whole read writes every document's people with the rest.
+        let fill_contacts = contacts_owed && !whole;
+        if fill_contacts {
+            let Some(carried) = fill_contacts_of(write_lock, stanza, &store, stop).await? else {
+                return Ok(None);
+            };
+            tracing::info!(
+                source = %stanza,
+                contacts = carried,
+                "filled this source's contacts, which this build made new"
+            );
+        }
         // Too few documents to change a sixteenth of the index, whatever
         // they hold, are not worth measuring.
         let probe = match held {
@@ -2032,6 +2077,7 @@ async fn apply_source(
         // Last and in the same transaction: a failure above rolls back to
         // both the old rows and the old cursor.
         if let Some((store_commit, store_tree)) = head {
+            contact_records::set_cursor(conn, stanza, Some(&store_commit)).await?;
             write_source_cursor(
                 conn,
                 &SourceCursorRow {
@@ -2046,7 +2092,7 @@ async fn apply_source(
             .await?;
         }
         Ok::<Option<bool>, anyhow::Error>(Some(
-            !to_read.is_empty() || !removed.is_empty() || problems_moved,
+            !to_read.is_empty() || !removed.is_empty() || problems_moved || fill_contacts,
         ))
     }
     .await;
@@ -2214,6 +2260,51 @@ async fn remove_documents(
         "removed the documents this source no longer has"
     );
     Ok(remade)
+}
+
+/// Replace the people of every document `store` holds with what it says
+/// now, reading nothing else of them, a page at a time. How many it
+/// carried; `None` when the stop came first.
+async fn fill_contacts_of(
+    write_lock: &WriteLock,
+    stanza: &str,
+    store: &crate::indexed_markdown::IndexedMarkdownStore,
+    stop: &StopFlag,
+) -> Result<Option<usize>> {
+    let mut documents = store
+        .all_document_uuids()
+        .map_err(|e| UnreadPage(format!("list the documents of {stanza}: {e:#}")))?;
+    documents.sort_unstable();
+    let mut carried_in_all = 0;
+    for page in documents.chunks(LOAD_PAGE) {
+        if stop.requested() {
+            return Ok(None);
+        }
+        let contacts = store
+            .contacts_matching(page)
+            .map_err(|e| UnreadPage(format!("read the contacts of {stanza}: {e:#}")))?;
+        let carried: Vec<(&str, &NormalizedContact)> = page
+            .iter()
+            .flat_map(|md| {
+                contacts
+                    .get(md)
+                    .into_iter()
+                    .flatten()
+                    .map(move |c| (md.as_str(), c))
+            })
+            .collect();
+        carried_in_all += carried.len();
+        let mut guard = write_lock.acquire().await?;
+        page::replace_contacts(
+            guard.conn(),
+            Store::Index,
+            &serde_json::to_string(page)?,
+            &carried,
+        )
+        .await
+        .with_context(|| format!("fill the contacts of {stanza}"))?;
+    }
+    Ok(Some(carried_in_all))
 }
 
 /// A page of a render store the load could not read.
@@ -3249,43 +3340,55 @@ mod shape_tests {
 
     /// What an open empties, from what the file records: nothing when
     /// its tables are this build's, the parts that moved when others did
-    /// not, and the whole file when every part moved or none is recorded.
+    /// not, the contacts with the grid, and the whole file when every part
+    /// moved or none is recorded.
     #[test]
     fn an_open_empties_only_the_parts_that_moved() {
         use crate::grid_index::{refill, shape, Part, Refill};
         let whole = shape().tables;
-        let (grid, keywords) = (Part::Grid.tables(), Part::Keywords.tables());
-        assert_ne!(grid, keywords);
-        let both = [("grid", grid.clone()), ("keywords", keywords.clone())];
-        assert_eq!(refill(None), Refill::Whole);
-        assert_eq!(refill(Some(&meta_with(&whole, &both))), Refill::Nothing);
-        assert_eq!(refill(Some(&meta_with(&whole, &[]))), Refill::Nothing);
-        assert_eq!(refill(Some(&meta_with("older", &[]))), Refill::Whole);
-        let older = |part: &str| {
-            both.iter()
+        let all: Vec<(&str, String)> = [Part::Grid, Part::Contacts, Part::Keywords]
+            .iter()
+            .map(|p| (p.as_str(), p.tables()))
+            .collect();
+        let older = |moved: &[&str]| -> Vec<(&str, String)> {
+            all.iter()
                 .map(|(p, h)| {
                     (
                         *p,
-                        if *p == part {
+                        if moved.contains(p) {
                             "older".into()
                         } else {
                             h.clone()
                         },
                     )
                 })
-                .collect::<Vec<_>>()
+                .collect()
         };
+        assert_eq!(refill(None), Refill::Whole);
+        assert_eq!(refill(Some(&meta_with(&whole, &all))), Refill::Nothing);
+        assert_eq!(refill(Some(&meta_with(&whole, &[]))), Refill::Nothing);
+        assert_eq!(refill(Some(&meta_with("older", &[]))), Refill::Whole);
+        assert_eq!(refill(Some(&meta_with("older", &all))), Refill::Whole);
+        for (moved, emptied) in [
+            (&["keywords"][..], vec![Part::Keywords]),
+            (&["contacts"][..], vec![Part::Contacts]),
+            (&["grid"][..], vec![Part::Grid, Part::Contacts]),
+            (&["grid", "contacts"][..], vec![Part::Grid, Part::Contacts]),
+            (
+                &["contacts", "keywords"][..],
+                vec![Part::Contacts, Part::Keywords],
+            ),
+        ] {
+            assert_eq!(
+                refill(Some(&meta_with("older", &older(moved)))),
+                Refill::Parts(emptied),
+                "{moved:?}"
+            );
+        }
         assert_eq!(
-            refill(Some(&meta_with("older", &older("keywords")))),
-            Refill::Parts(vec![Part::Keywords])
+            refill(Some(&meta_with("older", &older(&["grid", "keywords"])))),
+            Refill::Whole
         );
-        assert_eq!(
-            refill(Some(&meta_with("older", &older("grid")))),
-            Refill::Parts(vec![Part::Grid])
-        );
-        let none_kept = [("grid", "older".into()), ("keywords", "older".into())];
-        assert_eq!(refill(Some(&meta_with("older", &none_kept))), Refill::Whole);
-        assert_eq!(refill(Some(&meta_with("older", &both))), Refill::Whole);
     }
 
     /// The whole file's hash is still a hash over every statement, so a
@@ -3293,14 +3396,17 @@ mod shape_tests {
     /// wrote; and every table the file makes belongs to exactly one part.
     #[test]
     fn the_parts_split_the_whole() {
-        use crate::grid_index::{grid_ddl, index_ddl, Part};
+        use crate::grid_index::{contact_records, grid_ddl, index_ddl, Part};
         let keywords: Vec<&str> = datalib_search_index::KEYWORD_DDL.to_vec();
+        let contacts: Vec<&str> = contact_records::DDL.to_vec();
         assert_eq!(
             index_ddl().collect::<Vec<_>>(),
             grid_ddl()
+                .chain(contacts.iter().copied())
                 .chain(keywords.iter().copied())
                 .collect::<Vec<_>>()
         );
+        let parts = [Part::Grid, Part::Contacts, Part::Keywords];
         for ddl in index_ddl() {
             let mut words = ddl.split_whitespace();
             if !words.by_ref().take(4).any(|w| w == "TABLE") {
@@ -3310,12 +3416,16 @@ mod shape_tests {
                 continue;
             };
             let name = name.split('(').next().unwrap();
-            assert_eq!(
-                Part::Keywords.holds(name),
-                keywords.contains(&ddl),
-                "{name} is in the wrong part"
-            );
-            assert_ne!(Part::Grid.holds(name), Part::Keywords.holds(name));
+            let made_by = if keywords.contains(&ddl) {
+                Part::Keywords
+            } else if contacts.contains(&ddl) {
+                Part::Contacts
+            } else {
+                Part::Grid
+            };
+            for part in parts {
+                assert_eq!(part.holds(name), part == made_by, "{name} and {part:?}");
+            }
         }
     }
 
@@ -3329,7 +3439,7 @@ mod shape_tests {
         let search = datalib_search_index::Index::open(&db).await.unwrap();
         search.put(&[search_doc("md-1")]).await.unwrap();
         search.close().await;
-        recorded_by_another_build(&pool, &["", ".grid", ".keywords"]).await;
+        recorded_by_another_build(&pool, &["", ".grid", ".contacts", ".keywords"]).await;
         crate::grid_index::close_index(pool).await.unwrap();
 
         let pool = open_index(&db).await.unwrap();
@@ -3461,7 +3571,7 @@ mod shape_tests {
         assert_eq!(inode(&db), kept);
         assert_eq!(documents(&pool).await, 1);
         let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
-        assert_eq!(meta.parts.len(), 2, "{:?}", meta.parts);
+        assert_eq!(meta.parts.len(), 3, "{:?}", meta.parts);
         crate::grid_index::close_index(pool).await.unwrap();
     }
 
@@ -4546,6 +4656,75 @@ mod source_cursor_tests {
 
     /// What a reader sees once a pass has returned: what its transactions
     /// committed, a rolled-back one leaving nothing.
+    /// Each document's people as the grid index holds them.
+    async fn people(pool: &SqlitePool) -> Vec<(String, String, Option<i64>)> {
+        test_sql!(
+            "SELECT d.markdown_uuid, r.contact_json, d.seen_items FROM document_contacts d \
+             JOIN contact_records r USING (record_id) ORDER BY 1, 2"
+        )
+        .query_as()
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A build that changes only the contacts tables empties them on open,
+    /// and the next pass fills them from each source's people alone: no
+    /// document is read or written, the grid's rows are as they were, and
+    /// the people are what a pass from nothing wrote.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_change_of_the_contacts_tables_fills_them_alone() {
+        use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
+        let td = tempdir().unwrap();
+        let root = td.path();
+        let mut carrying = doc("src", "md-1", "body");
+        let mut riker = NormalizedContact::new("src", "U_RIKER", ContactKind::Person);
+        riker.names = vec!["Will Riker".into()];
+        riker.handles = vec![ContactHandle::email(None, "riker@enterprise.org")];
+        carrying.contacts = vec![riker];
+        render(root, "src", &[carrying, doc("src", "md-2", "other")]);
+        let sources = ["src".to_string()];
+        let pool = index_pool(root).await;
+        build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        let (held, rows) = (people(&pool).await, index_row_count(&pool).await);
+        assert_eq!(held.len(), 1);
+        test_sql!(
+            "UPDATE _datalib_meta SET value = 'older' \
+             WHERE key IN ('schema_hash', 'schema_hash.contacts')"
+        )
+        .query()
+        .execute(&pool)
+        .await
+        .unwrap();
+        crate::grid_index::close_index(pool).await.unwrap();
+
+        let pool = index_pool(root).await;
+        assert!(people(&pool).await.is_empty(), "the open empties them");
+        assert_eq!(index_row_count(&pool).await, rows, "and keeps the grid");
+        let filled = build_grid_index_for(&pool, root, &sources, |_| {}, None, &StopFlag::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            (filled.markdowns_total, filled.markdowns_loaded),
+            (0, 0),
+            "{filled:?}"
+        );
+        assert_eq!(people(&pool).await, held);
+        assert_eq!(index_row_count(&pool).await, rows);
+        let cursors: Vec<(String, String)> = test_sql!(
+            "SELECT c.source_id, c.store_commit FROM contact_cursors c \
+             JOIN source_cursors s ON s.source_id = c.source_id AND s.store_commit = c.store_commit"
+        )
+        .query_as()
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cursors.len(), 1, "the contacts' cursor is the grid's");
+        crate::grid_index::close_index(pool).await.unwrap();
+    }
+
     async fn sealed_cursors(pool: &SqlitePool) -> Vec<String> {
         test_sql!("SELECT source_id FROM source_cursors ORDER BY source_id")
             .query_scalar()

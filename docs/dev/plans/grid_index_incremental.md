@@ -3,8 +3,8 @@
 *Proposal (2026-11-26). Order step 1, the keywords as their own part,
 is built (`grid_index::Part`). Step 2 is built for the grid pass and the
 keyword index (`grid_index::apply_page`, `LOAD_PAGE`); the render store
-still writes a document at a time through it, and no real library has
-been measured. Step 3 is not built. Every number comes from
+still writes a document at a time through it. Step 3 is built
+(`Part::Contacts`, `contact_cursors`). No real library has been measured. Every number comes from
 one real library's rebuild that day: 21 sources, 257k documents, 1.23M
 grid rows. The step's own statement counts (`sql_*_total` in
 `runs.sqlite`, `docs/dev/logging.md`) and its "sealed the index" lines
@@ -140,7 +140,12 @@ keyword pass already reads a source whole when `read_at` is `None`.
   from the grid's queries with `ATTACH`. Check what
   [`completed/search_index_from_ram.md`](completed/search_index_from_ram.md)
   decided about keeping the two in one file before choosing.
-- **What reads across parts.** "The names people are known by" are
+- **What reads across parts.** *Settled as built: the grid's keyword
+  filter (`text_clause`) reads the keyword tables, so emptying them raises
+  the grid's generation; the names people are known by are written again
+  by any pass that seals (`refresh_people`), which a contacts fill does;
+  and emptying the grid empties the contacts, which ride on its
+  documents.* "The names people are known by" are
   written from authors (grid) and contacts together; a move of either
   part redoes them, at about a second. List every statement that joins
   two parts, and decide the same for each.

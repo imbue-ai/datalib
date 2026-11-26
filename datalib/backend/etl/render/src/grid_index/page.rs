@@ -468,6 +468,21 @@ async fn put_contacts(
     kept: &[&RenderedMarkdown],
     documents: &str,
 ) -> Result<()> {
+    let carried: Vec<(&str, &datalib_contact_schema::NormalizedContact)> = kept
+        .iter()
+        .flat_map(|md| md.contacts.iter().map(|c| (md.markdown_uuid.as_str(), c)))
+        .collect();
+    replace_contacts(conn, store, documents, &carried).await
+}
+
+/// The people the documents in the JSON array `documents` carry, replaced
+/// by `carried`, `(markdown_uuid, contact)`.
+pub(super) async fn replace_contacts(
+    conn: &mut SqliteConnection,
+    store: Store,
+    documents: &str,
+    carried: &[(&str, &datalib_contact_schema::NormalizedContact)],
+) -> Result<()> {
     for sql in store.delete_contacts() {
         sql.query()
             .bind(documents)
@@ -475,16 +490,12 @@ async fn put_contacts(
             .await
             .context("delete prior source contacts")?;
     }
-    let carried: Vec<(&str, &datalib_contact_schema::NormalizedContact)> = kept
-        .iter()
-        .flat_map(|md| md.contacts.iter().map(|c| (md.markdown_uuid.as_str(), c)))
-        .collect();
     if carried.is_empty() {
         return Ok(());
     }
     match store {
-        Store::Index => contact_records::insert_page(conn, &carried).await,
-        Store::Render => put_source_contacts(conn, &carried).await,
+        Store::Index => contact_records::insert_page(conn, carried).await,
+        Store::Render => put_source_contacts(conn, carried).await,
     }
 }
 
