@@ -1,4 +1,4 @@
-"""lint_repo.py's checks on what can be misspelled: checks 11, 20, 23 and 24."""
+"""lint_repo.py's checks on what can be misspelled: checks 11, 20, 23, 24 and 25."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from lint_repo import (
     reader_grant_problems,
     release_grant_problems,
     release_key_problems,
+    server_step_program_problems,
     step_program_mentions,
     unliteral_opens,
 )
@@ -448,8 +449,27 @@ class StepProgramMentionTest(unittest.TestCase):
         self.assertEqual(step_program_mentions(source), [3])
 
 
+class ServerStepProgramTest(unittest.TestCase):
+    def test_a_file_off_the_list_and_a_listed_file_that_stopped_are_both_refused(
+        self,
+    ) -> None:
+        listed = "datalib/backend/http/src/probe.rs"
+        found = server_step_program_problems(
+            {
+                "datalib/backend/http/src/new.rs": [4],
+                listed: [],
+                "datalib/backend/http/src/binaries.rs": [2],
+                "datalib/backend/http/src/starter.rs": [22],
+                "datalib/backend/http/src/step_program.rs": [1],
+            }
+        )
+        self.assertEqual(len(found), 2, found)
+        self.assertIn("new.rs:4", found[0])
+        self.assertIn(listed, found[1])
+
+
 class SqlNamesTest(unittest.TestCase):
-    """Check 24: a statement's name is written in one place."""
+    """Check 25: a statement's name is written in one place."""
 
     def test_a_name_written_twice_is_found_with_both_places(self):
         files = {

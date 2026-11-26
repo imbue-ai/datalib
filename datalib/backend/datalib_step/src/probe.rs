@@ -56,7 +56,7 @@ pub fn with_method(
             named(&live)
         ),
         (Some(m), [h], _) if *h != m => {
-            anyhow::bail!("`--method {m}`, but the params file selects `{h}`; name one of them")
+            anyhow::bail!("`--method {m}`, but the params select `{h}`; name one of them")
         }
         (Some(m), _, _) => m,
         (None, [_, ..], _) => return Ok(params.clone()),
@@ -194,17 +194,13 @@ fn one_attempt() -> std::sync::Arc<datalib_etl_web::retry::RetryGuard> {
     )
 }
 
-/// The `probe` subcommand end to end: read the params file, run the
-/// provider's probe, and write the answer where the caller reads it —
-/// the report on stdout, or on failure `{"failure": {issue, detail}}`
-/// there and the error chain on stderr. Never returns.
+/// The `probe` subcommand end to end: read the params from
+/// `DATALIB_DAG_PARAMS`, run the provider's probe, and write the answer
+/// where the caller reads it — the report on stdout, or on failure
+/// `{"failure": {issue, detail}}` there and the error chain on stderr.
+/// Never returns.
 #[allow(clippy::disallowed_macros)]
-pub async fn run_cli(
-    source_type: &str,
-    method: Option<&str>,
-    list: Option<&str>,
-    params_file: Option<&std::path::Path>,
-) -> ! {
+pub async fn run_cli(source_type: &str, method: Option<&str>, list: Option<&str>) -> ! {
     let report = async {
         let source_type = SourceType::parse(source_type).ok_or_else(|| {
             anyhow::anyhow!(
@@ -218,11 +214,7 @@ pub async fn run_cli(
                 anyhow::anyhow!("no list called {name:?} — a probe lists one of a picker's lists")
             })?),
         };
-        let params = with_method(
-            source_type,
-            &crate::source::read_params(params_file)?,
-            method,
-        )?;
+        let params = with_method(source_type, &crate::source::params_from_env()?, method)?;
         let progress = |p: datalib_probe::ProbeProgress| eprintln!("{}", p.line());
         datalib_etl_web::retry::scope(one_attempt(), run(source_type, &params, ask, &progress))
             .await
@@ -276,9 +268,9 @@ mod tests {
         );
     }
 
-    /// What the params file says stands; `--method` only adds a table.
+    /// What the params say stands; `--method` only adds a table.
     #[test]
-    fn the_params_file_keeps_its_settings() {
+    fn the_params_keep_their_settings() {
         let params = json!({ "gmail": { "user_id": "me" }, "only_extract_labels": ["Inbox"] });
         assert_eq!(
             with_method(SourceType::Email, &params, None).unwrap(),
@@ -291,7 +283,7 @@ mod tests {
         let err = with_method(SourceType::Email, &params, Some("jmap"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("selects `gmail`"), "{err}");
+        assert!(err.contains("select `gmail`"), "{err}");
     }
 
     /// A file-reading way in has no connection to test.

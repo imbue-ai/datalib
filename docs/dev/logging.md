@@ -382,7 +382,10 @@ scrape_configs:
     authorization: { credentials_file: <root>/system/api-token }
 ```
 
-What it serves:
+What it serves, each name in Prometheus's `<namespace>_<subsystem>_<name>`
+form: `datalib`, then what the series is about (`step`, `tree`, `disk`,
+`applet`), then the measure. `step` names the subject, a step of the
+config; it says nothing about which program the step runs.
 
 - **`datalib_step_<name>`**: every series a step the config declares
   has reported, its newest value from the last run it reported in,

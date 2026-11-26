@@ -5,7 +5,7 @@
 // docs/dev/wizard_file_pickers.md (a path field offers a native picker).
 
 import { shallowRef } from "vue";
-import type { PackageApplet } from "@/api";
+import type { PackageApplet, PackageCommand } from "@/api";
 import { NAME_IT_HELP } from "./accountNaming";
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
@@ -225,8 +225,9 @@ export type CatalogEntry = {
   /// Params this entry always writes, with no field to edit them.
   preset?: Preset[];
   /// Offer "Check connection", and a "Load" on every `probe:` field.
-  /// Requires a `datalib-step probe <type>` on the backend side; see
-  /// `datalib/backend/datalib_step/src/probe.rs`.
+  /// Requires a probe of the type on the backend side: a package's
+  /// `probe` command, or `datalib-step probe <type>`
+  /// (`datalib/backend/datalib_step/src/probe.rs`).
   canProbe?: boolean;
   /// One sentence above the form on what this source copies, where
   /// the tile's blurb does not say enough.
@@ -250,14 +251,15 @@ export type CatalogEntry = {
 
 /// Which package an entry came from, where it is unpacked relative to the
 /// data root, the command each of its steps runs inside it, by function
-/// (`ingest`, `render_markdown`, `render_time_series`), and the applets a
-/// source of it gets.
+/// (`ingest`, `render_markdown`, `render_time_series`), the slots of each
+/// lock those steps hold, and the applets a source of it gets.
 export type PackageOrigin = {
   id: string;
   name: string;
   version: string;
   dir: string;
-  commands: Record<string, string>;
+  commands: Record<string, PackageCommand>;
+  locks: Record<string, number>;
   applets: PackageApplet[];
 };
 
@@ -3015,6 +3017,11 @@ const packageEntries = shallowRef<CatalogEntry[]>([]);
 
 export function setPackageEntries(entries: CatalogEntry[]): void {
   packageEntries.value = entries;
+}
+
+/// The slots of every lock a package's steps hold, by lock name.
+export function packageLockSlots(): Record<string, number> {
+  return Object.assign({}, ...packageEntries.value.map((e) => e.package?.locks ?? {}));
 }
 
 function allEntries(): CatalogEntry[] {

@@ -580,14 +580,15 @@ the log card that reads them: [`logging.md`](logging.md).
 ## Verbs
 
 Besides an ordinary run, the runner may invoke a step with one verb
-appended: `--reset`, `--prepare`, `--compact` or `--collect`. It sends
+appended: `--reset`, `--prepare`, `--compact`, `--collect` or
+`--check`. It sends
 one only to a step whose program declares it in a `[[programs]]` entry,
 so a program that ignores its arguments is never sent one:
 
 ```toml
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect"]
+verbs = ["reset", "prepare", "compact", "collect", "check"]
 ```
 
 An invocation with a verb gets the same environment and params as a
@@ -600,6 +601,7 @@ it:
 | `--reset` | someone resets the step | the runner deletes `<data_root>/<id>/` itself |
 | `--prepare` | each time the runner starts, before the step's first run | nothing |
 | `--compact`, `--collect` | someone asks to free disk space | nothing |
+| `--check` | someone saves a config, or runs `datalib-pipeline check` | the step's params are not checked before it runs |
 
 ## Reset
 
@@ -691,6 +693,72 @@ were drawn by another version, which its keyword pass reads again.
 `embedding_map` deletes a map this build does not read and answers
 `needs_rerun`, which lays it out afresh; `embed` has nothing to answer.
 Any of them refuses a store a newer build wrote.
+
+## Check
+
+`datalib-pipeline check`, and the app each time a config is saved, ask
+every step whose program takes the verb whether it would run its params
+as written, with `--check` appended and nothing yet run. The step
+reads its params as a run would, opens and writes nothing, and answers:
+
+* **runs as written**: exit 0. A key that does nothing, or anything
+  else that runs but is probably a mistake, goes in the outcome's
+  `warnings`, one sentence each, which the app and the check show at
+  the step's line and do not refuse.
+* **would refuse**: exit non-zero and say why on stderr, as a run that
+  fails does. Name the key serde's way (``unknown field `chanels` ``)
+  and the diagnostic points at that key's line. The app does not write
+  the config, and `datalib-pipeline check` exits 2.
+
+```json
+{"event":"outcome","warnings":["`period` no longer does anything; delete it"],"outputs":[]}
+```
+
+A step has thirty seconds to answer. Up to eight are asked at once.
+`datalib-step` plans the params as a run would: its provider's config
+schema, its method tables, and the keys that no longer do anything,
+which it runs without and names as warnings.
+
+## Probe
+
+A probe is not a step and the runner never starts one. The app runs it
+when a person clicks "Check connection" in the "Add source" form, or
+"Load" beside a field that picks from a list. A package names the
+command that probes its type in its manifest (`packages.md`, `probe`);
+`datalib-step probe <type>` is Datalib's own. The app starts the
+command:
+
+- with `--list <list>` appended when it asks for one list (`channels`,
+  `conversations`, `labels`, `mailboxes`, `calendars`, `addressbooks`,
+  `teams`, `projects` or `servers`: `ProbeList` in
+  the `datalib_probe` crate), and nothing appended for
+  "Check connection";
+- with the source's ingest params, as the form would write them, as
+  JSON in `DATALIB_DAG_PARAMS`, the same variable a step's params come
+  in;
+- in the data root, with the environment a step gets less what only the
+  runner sets, and the variables its params name under a key ending in
+  `_env_var`;
+- with nothing on stdin.
+
+It owes one JSON object on stdout and an exit status:
+
+- **Success**, exit 0: a `ProbeReport`
+  (`datalib_probe`): `mode`, the ingest method it
+  asked through; `account`, with `id` and optionally `address`,
+  `display_name` and `message_estimate`; `items`, the list asked for,
+  each with `path`, `kind` and the optional `title`, `role`,
+  `messages`, `members` and `updated_at`; and `notes`, sentences to
+  show the person.
+- **Failure**, nonzero exit: `{"failure": {"issue": "<kind>", "detail":
+  "<what went wrong>"}}`, where the kind is one of `IssueKind`
+  (`datalib_probe::issue`). Without that line the app
+  reads the stderr lines that start with `error: `.
+
+While it pages through a long list it may write
+`probe-progress: {"done": 120, "total": 400}` lines on stderr, which
+the form shows. Any other stderr line is log. A probe that has not
+answered within two minutes is killed.
 
 ## Compact and collect
 
@@ -836,7 +904,7 @@ the ingest step carries the provider's download config (`common`
 envelope, the method table block, …), the render step only the render
 knobs (nothing for most providers; perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`). It
-honors `DATALIB_DAG_NOW` and the four verbs, which Datalib's configs
+honors `DATALIB_DAG_NOW` and the five verbs, which Datalib's configs
 declare for it in `[[programs]]`; it stops at its next consistent point
 on SIGINT and commits there, and emits versions where it has them (the
 index reports its generation; the versions are in the [runner's

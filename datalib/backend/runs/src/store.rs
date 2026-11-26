@@ -227,6 +227,12 @@ fn emptying_for(head: &[u8]) -> Emptying {
     }
 }
 
+/// Opens a second descriptor of the file and closes it, which drops every
+/// POSIX lock this process holds on the file, SQLite's included
+/// (fcntl(2); `datalib_dag::supervisor::announce` was bitten by it). Safe
+/// only because [`open_or_recreate`] calls it with no connection to the
+/// file open in this process: its own pools are closed, every reader
+/// opens and closes its own, and each process's one writer is the caller.
 fn emptying_of(path: &Path) -> Result<Emptying, sqlx::Error> {
     use std::io::Read;
     let mut head = Vec::with_capacity(16);

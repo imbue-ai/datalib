@@ -48,6 +48,7 @@ export function entriesOfManifest(id: string, sha256: string, m: PackageManifest
       type: s.type,
       kind: "package",
       wizard: true,
+      canProbe: !!s.probe,
       rendersDocuments: "render_markdown" in s.commands,
       package: {
         id,
@@ -55,6 +56,7 @@ export function entriesOfManifest(id: string, sha256: string, m: PackageManifest
         version: m.version,
         dir: packageDir(sha256),
         commands: s.commands,
+        locks: m.locks ?? {},
         applets: s.applets ?? [],
       },
     } as CatalogEntry;
@@ -188,7 +190,7 @@ export function updatePackage(text: string, id: string, lookup: PackageLookup): 
   const gone: ConfiguredStep[] = [];
   for (const s of entries.filter((e) => e.package === id)) {
     if (s.kind === "step") {
-      const command = sourceOf(s.group)?.commands[s.function ?? ""];
+      const command = sourceOf(s.group)?.commands[s.function ?? ""]?.command;
       const value = command ? inPackage(newDir, command) : inPackage(newDir, insideOld(s));
       next = setIn(next, { array: "steps", index: stepIndex(s) }, ["command"], quote(value));
     } else if ((sourceOf(s.group)?.applets ?? []).some((a) => a.command === insideOld(s))) {

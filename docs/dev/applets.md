@@ -39,9 +39,8 @@ step ([`step_protocol.md`](step_protocol.md#what-your-command-receives)):
 the command is split shell-style and looked up in `binary_dir`, then the
 library's own `system/bin/`, then the inherited `PATH`, and a relative
 path with a `/` in it is relative to the data root (how an applet runs a
-package's program); `params` arrives as `--params-file <path>`, an
-owner-only JSON file deleted when the applet stops, where a step gets
-its params in `DATALIB_DAG_PARAMS`; the working
+package's program); `params` arrives as JSON in `DATALIB_DAG_PARAMS`,
+as a step's does, and never on the command line; the working
 directory is the data root; and `env` is merged into the child. An
 applet is handed the same short list of the server's own environment as
 a step, but none of latchkey's `LATCHKEY_*` variables.
@@ -89,7 +88,7 @@ grid.
 One invocation, one process:
 
 ```
-<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params-file <path>]
+<command> -p 0 --frontend-dir <root>/system/frontend/<id>
 ```
 
 **Write the directory, bind a port, then print

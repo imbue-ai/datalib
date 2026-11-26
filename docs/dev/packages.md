@@ -34,9 +34,15 @@ step_protocol = 1                 # the step protocol it was written against
 aarch64-apple-darwin     = { url = "weather-1.2.0-aarch64-apple-darwin.tar.gz", sha256 = "…", size = 3141592 }
 x86_64-unknown-linux-gnu = { url = "weather-1.2.0-x86_64-unknown-linux-gnu.tar.gz", sha256 = "…" }
 
+[locks]                           # locks its steps hold, and their slots
+noaa = 1
+
 [[sources]]                       # a source type it adds to "Add source"
 type = "weather"                  # the group `type` such a source gets
-commands = { ingest = "bin/fetch-weather", render_markdown = "bin/render-weather" }
+probe = "bin/probe-weather"       # answers "Check connection"; optional
+[sources.commands]                # the command each function's step runs
+ingest = { command = "bin/fetch-weather", locks = ["noaa"] }
+render_markdown = "bin/render-weather"
 [sources.wizard]                  # its add-source form
 label = "Weather station"
 blurb = "Hourly observations from a NOAA station."
@@ -61,7 +67,21 @@ command = "bin/weather-chart"
   the store the indexes read, exactly as a built-in source's does
   (§"Rendering"). The first word of a command is a path inside the
   unpacked archive. What each program must do is the step protocol
-  (`step_protocol.md`).
+  (`step_protocol.md`). A command is either the command alone or a
+  table: `command`, `reads` (`"pinned"` or `"files"`, as in a
+  `[[steps]]` entry, `config_model.md`) and `locks`, the names of the
+  locks the step holds. The wizard writes `reads` and `locks` on the
+  step as the table gives them; with no `reads`, a step that has inputs
+  gets `reads = "pinned"`.
+- **`locks`**: each lock a command names, with its slots. A lock a
+  command names and `locks` does not is refused. Adding a source writes
+  a `[[locks]]` entry with these slots for each lock its steps hold that
+  the config does not declare yet; a config that already declares one
+  keeps its own slots.
+- **`sources.probe`**: the command that answers "Check connection" and a
+  picker's "Load" for a source of this type (`step_protocol.md`
+  §"Probe"), its first word a path inside the package. Without one the
+  form has no "Check connection".
 - **`sources.wizard`**: the add-source form, written as a `CatalogEntry`
   (`datalib/ui/src/config/catalog.ts`) without `type`: the same
   `label`, `blurb`, `sections`, `fields`, `before` and the rest that a

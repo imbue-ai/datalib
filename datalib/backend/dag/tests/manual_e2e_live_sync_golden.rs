@@ -1212,6 +1212,7 @@ fn run_pipeline(
         // The run's own fingerprint cache, so run 1 is cold on every host
         // and the host cache never sees this test.
         .env("DATALIB_CACHE_DIR", run_root.join("fingerprint_cache"))
+        .env("DATALIB_CHILD_ENV", "DATALIB_CACHE_DIR")
         .stdin(std::process::Stdio::null())
         .output()
         .expect("spawn datalib-pipeline");
