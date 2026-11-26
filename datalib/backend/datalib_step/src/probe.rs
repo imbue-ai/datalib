@@ -283,7 +283,7 @@ mod tests {
         let err = with_method(SourceType::Email, &params, Some("jmap"))
             .unwrap_err()
             .to_string();
-        assert!(err.contains("selects `gmail`"), "{err}");
+        assert!(err.contains("select `gmail`"), "{err}");
     }
 
     /// A file-reading way in has no connection to test.

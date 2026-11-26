@@ -731,7 +731,7 @@ command:
 - with `--list <list>` appended when it asks for one list (`channels`,
   `conversations`, `labels`, `mailboxes`, `calendars`, `addressbooks`,
   `teams`, `projects` or `servers`: `ProbeList` in
-  `datalib/backend/probe/src/lib.rs`), and nothing appended for
+  the `datalib_probe` crate), and nothing appended for
   "Check connection";
 - with the source's ingest params, as the form would write them, as
   JSON in `DATALIB_DAG_PARAMS`, the same variable a step's params come
@@ -744,7 +744,7 @@ command:
 It owes one JSON object on stdout and an exit status:
 
 - **Success**, exit 0: a `ProbeReport`
-  (`datalib/backend/probe/src/lib.rs`): `mode`, the ingest method it
+  (`datalib_probe`): `mode`, the ingest method it
   asked through; `account`, with `id` and optionally `address`,
   `display_name` and `message_estimate`; `items`, the list asked for,
   each with `path`, `kind` and the optional `title`, `role`,
@@ -752,7 +752,7 @@ It owes one JSON object on stdout and an exit status:
   show the person.
 - **Failure**, nonzero exit: `{"failure": {"issue": "<kind>", "detail":
   "<what went wrong>"}}`, where the kind is one of `IssueKind`
-  (`datalib/backend/probe/src/issue.rs`). Without that line the app
+  (`datalib_probe::issue`). Without that line the app
   reads the stderr lines that start with `error: `.
 
 While it pages through a long list it may write
