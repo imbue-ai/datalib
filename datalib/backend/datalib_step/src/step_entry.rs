@@ -1,7 +1,8 @@
 //! How a `datalib-step` step is written in a config: its `command`, which
 //! carries its function and its group's type, and the `reads` and `locks`
-//! it needs. The runner knows none of this; the example stanzas,
-//! `examples --append` and `check-params` read and write it here.
+//! it needs. The runner knows none of this; the example stanzas and
+//! `examples --append` read and write it here, and `examples --append`'s
+//! check finds a config's `datalib-step` steps by it.
 
 use clap::Parser;
 

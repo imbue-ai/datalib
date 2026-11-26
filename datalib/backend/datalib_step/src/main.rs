@@ -7,7 +7,7 @@
 //! not steps.
 
 mod append;
-mod check_params;
+mod check;
 mod compact;
 mod config_backup;
 mod dispatch;
@@ -139,10 +139,6 @@ const EXAMPLES: &[Example] = &[
     Example {
         what: "embed the prompts piped to stdin, one {\"hash\", \"prompt\"} object a line, as the embed step would; vectors come out on stdout",
         command: "datalib-step embed-prompts",
-    },
-    Example {
-        what: "say which datalib-step steps' params a sync would refuse (the app runs this on save)",
-        command: "datalib-step check-params ~/datalib/config.toml",
     },
     Example {
         what: "say whether a config lists each step below the steps it reads",
@@ -277,14 +273,6 @@ enum Cmd {
         /// user on the machine.
         #[arg(long = "params-file")]
         params_file: Option<PathBuf>,
-    },
-    /// Utility (not a pipeline step): plan every datalib-step step's params
-    /// in a config the way a sync would, and run nothing. Prints one JSON
-    /// object per step a sync would refuse, `{"step", "message"}`; nothing
-    /// when every one plans. The app runs it when a config is saved.
-    CheckParams {
-        /// The config file: `<data root>/config.toml`.
-        path: PathBuf,
     },
     /// Utility (not a pipeline step): put the pinned GGUF models in
     /// place, sha256-verified — what an `embed` step does before
@@ -659,9 +647,6 @@ async fn main() {
             }
         }
     }
-    if let Cmd::CheckParams { path } = &cli.cmd {
-        std::process::exit(check_params::run_cli(path));
-    }
     // `topo-sort-config` likewise: it reads and writes one file.
     if let Cmd::TopoSortConfig { path, check } = &cli.cmd {
         std::process::exit(topo_sort_config::run_cli(path, *check));
@@ -839,7 +824,6 @@ async fn run(
         Cmd::IndexText { .. } => unreachable!("index-text is answered in main"),
         Cmd::Markdown { .. } => unreachable!("markdown is answered in main"),
         Cmd::Examples { .. } => unreachable!("examples is answered in main"),
-        Cmd::CheckParams { .. } => unreachable!("check-params is answered in main"),
         Cmd::PullModels { .. } => unreachable!("pull-models is answered in main"),
         Cmd::EmbedPrompts { .. } => unreachable!("embed-prompts is answered in main"),
         Cmd::PullRuntime { .. } => unreachable!("pull-runtime is answered in main"),
@@ -864,8 +848,7 @@ async fn run(
             }
             if run.check {
                 let params = source::params_from_env()?;
-                let warnings =
-                    check_params::check(&env, params, data_root).map_err(anyhow::Error::msg)?;
+                let warnings = check::check(&env, params, data_root).map_err(anyhow::Error::msg)?;
                 emitter.warnings(warnings);
                 return Ok(Vec::new());
             }
