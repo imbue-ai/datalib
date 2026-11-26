@@ -118,7 +118,8 @@ set by anything Datalib ships:
   it; without it the cache goes under `XDG_CACHE_HOME` or `HOME`, which
   every step gets.
 - `DATALIB_EMBED_THREADS` caps the embedder's threads, and only
-  `.bazelrc` sets it.
+  `.bazelrc` sets it. The server handed it to every applet as well
+  (`APPLET_ALSO`), and no longer does.
 - `MINDS_VIA_DESKTOP_URL_PREFIX` was a URL prefix minds published for
   some requests. minds no longer publishes it and the route behind it is
   gone, so the code that read it is deleted.
