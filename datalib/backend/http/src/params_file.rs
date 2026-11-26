@@ -1,8 +1,8 @@
-//! How the server hands a program it starts, an applet or a probe, the
-//! params it was configured or asked with: in a file only its owner can
-//! read, named on its command line. Never on argv itself: params carry
-//! tokens, and argv is readable by every user on the machine. A step gets
-//! its params from the runner in `DATALIB_DAG_PARAMS` instead.
+//! How the server hands `datalib-step probe` the params it was asked
+//! with: in a file only its owner can read, named on its command line.
+//! Never on argv itself: params carry tokens, and argv is readable by
+//! every user on the machine. A step and an applet get theirs in
+//! `DATALIB_DAG_PARAMS` instead.
 
 use anyhow::Context as _;
 
