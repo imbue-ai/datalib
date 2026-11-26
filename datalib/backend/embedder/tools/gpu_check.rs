@@ -74,6 +74,7 @@ fn parse_args() -> Result<Args> {
 }
 
 fn main() -> Result<()> {
+    datalib_embedder::look_for_cuda_module(datalib_runtime::cuda_module::find);
     let args = parse_args()?;
     let text = std::fs::read_to_string(&args.prompts)
         .with_context(|| format!("read {}", args.prompts.display()))?;
