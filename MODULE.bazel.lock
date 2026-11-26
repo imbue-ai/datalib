@@ -637,8 +637,8 @@
           "REPO_MAPPING:rules_rust+,bazel_tools bazel_tools",
           "REPO_MAPPING:rules_rust+,rules_cc rules_cc+",
           "REPO_MAPPING:rules_rust+,rules_rust rules_rust+",
-          "FILE:@@//datalib/backend/Cargo.lock 80e9cb1ac9964fa786a88a818d49371ef5acd1fc9ce1db4c8238d9b878c9a06b",
-          "FILE:@@//datalib/backend/Cargo.toml 50887c742bebbeefac116d68c8f9a43d469d9bd4062cd1389a64d1f0eb109b01"
+          "FILE:@@//datalib/backend/Cargo.lock a583c90f070b40b1fb23fa10710f2d95b7a73eb2daf801b8787b13df89434baf",
+          "FILE:@@//datalib/backend/Cargo.toml 247a1d517d41765aa7c4810ef7c47a1bf8c4e3b1a03a5c56f133c7bd304a10a6"
         ],
         "generatedRepoSpecs": {
           "datalib_crates": {
