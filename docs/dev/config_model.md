@@ -381,13 +381,9 @@ it next reads the file, and `datalib-migrate-config` from a terminal
 
 Warnings: a group with nothing filed under it; an applet filed under an
 undeclared group; and a verb a `[[programs]]` entry lists that the
-runner does not know, which is ignored. The Manage screen's System row counts the config's
-warnings and names them on hover; a double-click opens the config.
-
-Warnings: a group with nothing filed under it, and an applet filed
-under an undeclared group. The Manage screen's System row counts the
-config's warnings and names them on hover; a double-click opens the
-config.
+runner does not know, which is ignored. The Manage screen's System row
+counts the config's warnings and names them on hover; a double-click
+opens the config.
 
 `datalib-step` drops a few keys from its params before parsing them,
 since they no longer do anything, and the step still runs: an ingest's

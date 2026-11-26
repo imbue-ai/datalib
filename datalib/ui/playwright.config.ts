@@ -216,9 +216,8 @@ const ROOT_OF: Record<string, (prefix: string) => string> = {
 };
 
 // What a sandbox's backend gets in its environment beyond the common
-// set. Every step a sync spawns inherits it from the runner, which
-// inherits it from the server — the same chain a real install has from
-// the user's shell.
+// set. Every step a sync spawns is handed it by the runner, which has it
+// from the server, because `spawnBackend` names it in `DATALIB_CHILD_ENV`.
 const PLAYBACK_DIR = process.env.DATALIB_TEST_E2E_PLAYBACK_DIR;
 const SANDBOX_ENV: Record<string, Record<string, string>> = {
   // The streaming spec's two sources replay tapes rather than fetch.
@@ -345,6 +344,17 @@ function logTail(file: string, lines = 30): string {
   }
 }
 
+// The switches the backends' steps and applets read that no real install
+// sets. The server and the runner hand a child only what they list, and
+// these they list only when `DATALIB_CHILD_ENV` names them.
+const TEST_SWITCHES = [
+  "DATALIB_SEARCH_NOW",
+  "DATALIB_SEARCH_NO_WARM",
+  "DATALIB_HTTP_PLAYBACK",
+  "DATALIB_HTTP_PLAYBACK_HOLD",
+  "DATALIB_HTTP_PLAYBACK_HOLD_SEALED",
+];
+
 function spawnBackend(name: string, root: string, env: Record<string, string> = {}): Pending {
   const dir = path.join(scratchParent, "servers");
   mkdirSync(dir, { recursive: true });
@@ -368,6 +378,7 @@ function spawnBackend(name: string, root: string, env: Record<string, string> = 
       // pinned past its newest stamp, and the newest row is the last one.
       DATALIB_SEARCH_NOW: "2400-01-01T00:00:00Z",
       ...env,
+      DATALIB_CHILD_ENV: TEST_SWITCHES.join(","),
     },
   });
   closeSync(fd);
