@@ -27,6 +27,7 @@ rust_library(
         "//datalib/backend/photo_schema:datalib_photo_schema",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/uuid_text:datalib_uuid_text",

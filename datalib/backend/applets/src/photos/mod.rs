@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 
+use datalib_sql::sql;
 use pictures::{Level, Size};
 
 const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
@@ -155,11 +156,14 @@ async fn find(root: &Path, uuid: &str) -> Result<Option<NormalizedPhoto>> {
     let Some(pool) = open_index(root).await? else {
         return Ok(None);
     };
-    let json: Result<Option<String>, sqlx::Error> =
-        sqlx::query_scalar("SELECT photo_json FROM source_photos WHERE photo_uuid = ? LIMIT 1")
-            .bind(uuid)
-            .fetch_optional(&pool)
-            .await;
+    let json: Result<Option<String>, sqlx::Error> = sql!(
+        "applets.photos.read_photo_json",
+        "SELECT photo_json FROM source_photos WHERE photo_uuid = ? LIMIT 1"
+    )
+    .query_scalar()
+    .bind(uuid)
+    .fetch_optional(&pool)
+    .await;
     pool.close().await;
     let json = json.context("read source_photos")?;
     json.map(|j| serde_json::from_str(&j).context("a stored photo"))
@@ -191,13 +195,15 @@ async fn list(
     let Some(pool) = open_index(&root).await.map_err(ours)? else {
         return Ok(Json(json!({ "photos": [], "next_offset": null })));
     };
-    let rows = sqlx::query(
+    let rows = sql!(
+        "applets.photos.list_photos_by_touched",
         "SELECT sp.photo_uuid, sp.photo_json FROM source_photos sp \
            JOIN grid_rows g ON g.uuid = sp.photo_uuid \
           WHERE ?1 IS NULL OR sp.source_id = ?1 \
           ORDER BY g.touched_at_utc DESC, sp.photo_uuid \
-          LIMIT ?2 OFFSET ?3",
+          LIMIT ?2 OFFSET ?3"
     )
+    .query()
     .bind(q.source_id.as_deref())
     .bind(PAGE + 1)
     .bind(offset)
@@ -303,11 +309,13 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
         .await
         .with_context(|| format!("open {}", db.display()))?;
     let read = async {
-        let entry = sqlx::query(
+        let entry = sql!(
+            "applets.photos.find_lightroom_cache_entry",
             "SELECT CAST(uuid AS TEXT) AS uuid, CAST(digest AS TEXT) AS digest, \
                     CAST(orientation AS TEXT) AS orientation \
-               FROM ImageCacheEntry WHERE CAST(imageId AS INTEGER) = ?",
+               FROM ImageCacheEntry WHERE CAST(imageId AS INTEGER) = ?"
         )
+        .query()
         .bind(image_id_local)
         .fetch_optional(&pool)
         .await
@@ -317,11 +325,13 @@ async fn current_render(photo: &NormalizedPhoto) -> Result<Option<Render>> {
         };
         let (uuid, digest): (String, String) = (entry.get("uuid"), entry.get("digest"));
         let orientation: Option<String> = entry.get("orientation");
-        let levels = sqlx::query(
+        let levels = sql!(
+            "applets.photos.list_lightroom_pyramid_levels",
             "SELECT CAST(level AS INTEGER) AS level, \
                     CAST(longDimension AS INTEGER) AS long_edge \
-               FROM PyramidLevel WHERE uuid = ? AND digest = ? ORDER BY level",
+               FROM PyramidLevel WHERE uuid = ? AND digest = ? ORDER BY level"
         )
+        .query()
         .bind(&uuid)
         .bind(&digest)
         .fetch_all(&pool)
@@ -561,6 +571,7 @@ fn chunks(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn ten_forward() -> NormalizedPhoto {
         use datalib_photo_schema::{Exposure, MediaKind, Original, Place};
         NormalizedPhoto {
@@ -608,17 +619,19 @@ mod tests {
         let pool = datalib_etl_render::grid_index::open_index(&db)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO source_photos VALUES (?1, ?1, 'lr', ?2)")
+        test_sql!("INSERT INTO source_photos VALUES (?1, ?1, 'lr', ?2)")
+            .query()
             .bind(uuid)
             .bind(photo_json)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
      sort_key, entire_chat, preview, content_hash, is_document, touched_at_utc) \
-     VALUES (?1, 'lightroom', 'Photo', 'Lightroom', ?1, ?1, '', '', '', 0, ?2)",
+     VALUES (?1, 'lightroom', 'Photo', 'Lightroom', ?1, ?1, '', '', '', 0, ?2)"
         )
+        .query()
         .bind(uuid)
         .bind(touched)
         .execute(&pool)

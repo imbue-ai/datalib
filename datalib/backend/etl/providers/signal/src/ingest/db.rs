@@ -7,6 +7,7 @@ use datalib_time::IsoOffsetTimestamp;
 
 use super::backups::{self, Held};
 use super::schema_raw::{full_ddl, LADDER};
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -14,9 +15,11 @@ datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
 impl RawDb {
     pub async fn read_ledger(&self) -> Result<Vec<Held>> {
-        let rows: Vec<(String, Option<String>, String)> = sqlx::query_as(
-            "SELECT fingerprint, snapshot_dir, ingested_at_utc FROM ingested_backups",
+        let rows: Vec<(String, Option<String>, String)> = sql!(
+            "signal.list_ingested_backups",
+            "SELECT fingerprint, snapshot_dir, ingested_at_utc FROM ingested_backups"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("read ingested_backups")?;
@@ -40,15 +43,17 @@ impl RawDb {
         total_byte_size: u64,
     ) -> Result<()> {
         let (now, tz_offset) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        sqlx::query(
+        sql!(
+            "signal.upsert_ingested_backup",
             "INSERT INTO ingested_backups
                  (fingerprint, blake3, snapshot_dir, total_byte_size, ingested_at_utc, tz_offset)
              VALUES (?, ?, ?, ?, ?, ?)
              ON CONFLICT(fingerprint) DO UPDATE SET
                  snapshot_dir = excluded.snapshot_dir,
                  ingested_at_utc = excluded.ingested_at_utc,
-                 tz_offset = excluded.tz_offset",
+                 tz_offset = excluded.tz_offset"
         )
+        .query()
         .bind(fingerprint)
         .bind(blake3_hex)
         .bind(snapshot_dir)

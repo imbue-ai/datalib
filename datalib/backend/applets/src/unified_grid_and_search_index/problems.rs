@@ -623,6 +623,7 @@ mod tests {
     use super::*;
     use datalib_problems::{Problem, Reason, Scope, Stage};
 
+    use datalib_sql::{test_sql_id, Sql};
     /// Problems committed to the root's grid index. The step copies a
     /// source's problems in from its render store; this writes the rows
     /// that copy would.
@@ -638,16 +639,15 @@ mod tests {
             .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
             .collect();
         let placeholders = vec!["?"; columns.len()].join(", ");
-        let sql = format!(
-            "INSERT INTO problems ({}) VALUES ({placeholders})",
-            columns.join(", ")
+        let sql = Sql::dynamic(
+            test_sql_id!(),
+            format!(
+                "INSERT INTO problems ({}) VALUES ({placeholders})",
+                columns.join(", ")
+            ),
         );
         for problem in problems {
-            problem
-                .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
-                .execute(&pool)
-                .await
-                .unwrap();
+            problem.bind_into(sql.query()).execute(&pool).await.unwrap();
         }
         datalib_etl_render::grid_index::seal(
             &datalib_etl_render::grid_index::WriteLock::for_index(pool.clone()),
@@ -746,9 +746,7 @@ mod tests {
             .markdown_uuid(Some("doc-1".to_string()))
             .build()
             .unwrap()
-            .bind_into(sqlx::query(sqlx::AssertSqlSafe(
-                datalib_table::insert_sql::<GridRow>(),
-            )))
+            .bind_into(Sql::dynamic(test_sql_id!(), datalib_table::insert_sql::<GridRow>()).query())
             .execute(&index)
             .await
             .unwrap();
@@ -773,9 +771,9 @@ mod tests {
             Problem::record(Reason::FetchFailed, "404").severity(Severity::Error),
             None,
         );
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
-            datalib_table::insert_sql::<ProblemRow>(),
-        )))
+        row.bind_into(
+            Sql::dynamic(test_sql_id!(), datalib_table::insert_sql::<ProblemRow>()).query(),
+        )
         .execute(&pool)
         .await
         .unwrap();

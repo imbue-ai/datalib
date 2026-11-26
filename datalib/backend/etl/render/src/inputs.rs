@@ -12,6 +12,7 @@ use std::sync::Mutex;
 
 use anyhow::Result;
 use datalib_etl::pin::Pin;
+use datalib_sql::sql;
 use sqlx::SqlitePool;
 
 pub use crate::indexed_markdown::Input;
@@ -123,11 +124,14 @@ pub async fn changed_rows(
     };
     let mut out: HashMap<String, HashSet<String>> = HashMap::new();
     for table in tables {
-        let exists: Option<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-                .bind(table)
-                .fetch_optional(pool)
-                .await?;
+        let exists: Option<String> = sql!(
+            "etl.render.find_input_table",
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?"
+        )
+        .query_scalar()
+        .bind(table)
+        .fetch_optional(pool)
+        .await?;
         if exists.is_none() {
             continue;
         }

@@ -2,6 +2,7 @@
 //! table; the real binary's render step, over an file_inventory store.
 use std::process::{Command, Stdio};
 
+use datalib_sql::test_sql;
 use serde_json::Value;
 
 /// file_inventory renders nothing of its own, so its Items cell comes from
@@ -18,7 +19,8 @@ async fn an_file_inventory_render_reports_its_files_as_items() {
         .await
         .unwrap();
     for path in ["bridge/log.txt", "bridge/map.png", "engineering/warp.dat"] {
-        sqlx::query("INSERT INTO files (id, kind, size, blake3) VALUES (?, 'file', 1, x'00')")
+        test_sql!("INSERT INTO files (id, kind, size, blake3) VALUES (?, 'file', 1, x'00')")
+            .query()
             .bind(path)
             .execute(db.pool())
             .await

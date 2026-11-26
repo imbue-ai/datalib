@@ -56,8 +56,9 @@ foreign key: the walker emits a directory's row only after every
 child's, in the same batch stream, and a directory's tree-hash is
 computed from the very child rows it just emitted, except where the
 walk could not read an entry and its last rows stand (below).
-`identity_uuid` is set on `dirs` rows alone, by the post-write
-stamping pass.
+`identity_uuid` is set on `dirs` rows alone: the walk copies it from
+a folder's existing breadcrumb, and the post-write stamping pass sets
+it on a folder it stamps.
 
 The **rescan cursor** — `(mtime_ns, size, ctime_ns, inode, dev, stamp_kind)`
 per path — is deliberately in neither table. It is host state

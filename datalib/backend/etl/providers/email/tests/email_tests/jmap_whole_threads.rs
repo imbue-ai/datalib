@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 
 use crate::jmap_tape::{Account, Tape, HOST};
 use crate::support::Mirror;
+use datalib_sql::test_sql;
 
 /// `M1`, archived, starts the thread; `M2`, its reply, is in the inbox.
 fn account() -> Account {
@@ -83,7 +84,8 @@ async fn run(m: &Mirror, whole_threads: bool) -> anyhow::Result<Value> {
 
 async fn emails(m: &Mirror) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT id FROM emails ORDER BY id")
+        test_sql!("SELECT id FROM emails ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -94,7 +96,8 @@ async fn emails(m: &Mirror) -> Vec<String> {
 /// Each thread's `(email_count, upstream_email_count)`.
 async fn threads(m: &Mirror) -> Vec<(i64, Option<i64>)> {
     m.read(|db: RawDb| async move {
-        sqlx::query_as("SELECT email_count, upstream_email_count FROM threads")
+        test_sql!("SELECT email_count, upstream_email_count FROM threads")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap()

@@ -313,6 +313,7 @@ fn relative_href(root: &Path, file: &Path) -> String {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// A fingerprint cache in a throwaway directory, so no test ever
     /// touches — or is influenced by — the host's real one. The temp
     /// dir is leaked deliberately: its lifetime should be the test
@@ -337,7 +338,8 @@ mod tests {
     }
 
     async fn contact_count(db: &RawDb) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM contacts")
+        test_sql!("SELECT COUNT(*) FROM contacts")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap()
@@ -426,14 +428,16 @@ mod tests {
          BEGIN:VCARD\nVERSION:3.0\nUID:hugh\nFN:Hugh\nEND:VCARD\n";
 
     async fn uids(db: &RawDb) -> Vec<String> {
-        sqlx::query_scalar("SELECT uid FROM contacts ORDER BY uid")
+        test_sql!("SELECT uid FROM contacts ORDER BY uid")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
     }
 
     async fn addressbook_hrefs(db: &RawDb) -> Vec<String> {
-        sqlx::query_scalar("SELECT href FROM addressbooks ORDER BY href")
+        test_sql!("SELECT href FROM addressbooks ORDER BY href")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -521,7 +525,8 @@ mod tests {
         let second = fetch(opts()).await.unwrap();
         assert_eq!(second.contacts_deleted, 0);
         assert_eq!(uids(&db).await, vec!["hugh", "locutus", "picard"]);
-        let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        let problems: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -532,7 +537,8 @@ mod tests {
         let third = fetch(opts()).await.unwrap();
         assert_eq!(third.contacts_deleted, 2);
         assert_eq!(uids(&db).await, vec!["picard"]);
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+        let left: i64 = test_sql!("SELECT COUNT(*) FROM problems")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -615,7 +621,8 @@ mod tests {
         let opts = || options(&db, input.path(), cache.clone());
         fetch(opts()).await.unwrap();
         let problems = || async {
-            sqlx::query_scalar::<_, String>("SELECT scope_key FROM problems")
+            test_sql!("SELECT scope_key FROM problems")
+                .query_scalar::<String>()
                 .fetch_all(db.pool())
                 .await
                 .unwrap()
@@ -658,7 +665,8 @@ mod tests {
             let s = fetch(opts()).await.unwrap();
             assert_eq!(s.contacts_deleted, 0, "{what} deleted contacts");
             assert_eq!(uids(&db).await, vec!["hugh", "locutus"], "{what}");
-            let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+            let problems: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .unwrap();

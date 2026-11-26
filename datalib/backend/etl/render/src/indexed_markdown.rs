@@ -37,23 +37,42 @@ use datalib_schema::source_photos::DDL as SOURCE_PHOTOS_DDL;
 
 use crate::grid_index::{RenderedMarkdown, WriteLock};
 use datalib_etl::bulk::BulkUpsertable;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// File name inside a source's `render_markdown/`.
 pub const STORE_FILE: &str = "indexed_markdown.doltlite_db";
 
 /// What `remove_documents` deletes beside the rows
 /// `grid_index::delete_document_rows` takes, the set bound as one JSON array.
-const REMOVED_PROBLEMS: &str = "DELETE FROM problems \
-     WHERE scope_kind = ? AND scope_key IN (SELECT value FROM json_each(?))";
-const REMOVED_SECTIONS: &str =
-    "DELETE FROM sections WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
-const DOCUMENT_SECTIONS: &str = "DELETE FROM sections WHERE markdown_uuid = ?";
-const REMOVED_DRAWN: &str =
-    "DELETE FROM drawings WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
-const DOCUMENT_DRAWN: &str = "DELETE FROM drawings WHERE markdown_uuid = ?";
-const REMOVED_FOLDS: &str =
-    "DELETE FROM folds WHERE markdown_uuid IN (SELECT value FROM json_each(?))";
-const DOCUMENT_FOLDS: &str = "DELETE FROM folds WHERE markdown_uuid = ?";
+const REMOVED_PROBLEMS: Sql = sql!(
+    "etl.render.store.delete_problems_of_documents",
+    "DELETE FROM problems \
+     WHERE scope_kind = ? AND scope_key IN (SELECT value FROM json_each(?))"
+);
+const REMOVED_SECTIONS: Sql = sql!(
+    "etl.render.store.delete_sections_of_documents",
+    "DELETE FROM sections WHERE markdown_uuid IN (SELECT value FROM json_each(?))"
+);
+const DOCUMENT_SECTIONS: Sql = sql!(
+    "etl.render.store.delete_sections_of_document",
+    "DELETE FROM sections WHERE markdown_uuid = ?"
+);
+const REMOVED_DRAWN: Sql = sql!(
+    "etl.render.store.delete_drawings_of_documents",
+    "DELETE FROM drawings WHERE markdown_uuid IN (SELECT value FROM json_each(?))"
+);
+const DOCUMENT_DRAWN: Sql = sql!(
+    "etl.render.store.delete_drawings_of_document",
+    "DELETE FROM drawings WHERE markdown_uuid = ?"
+);
+const REMOVED_FOLDS: Sql = sql!(
+    "etl.render.store.delete_folds_of_documents",
+    "DELETE FROM folds WHERE markdown_uuid IN (SELECT value FROM json_each(?))"
+);
+const DOCUMENT_FOLDS: Sql = sql!(
+    "etl.render.store.delete_folds_of_document",
+    "DELETE FROM folds WHERE markdown_uuid = ?"
+);
 /// Every column of `sections`, in the order a `SectionRow` is read.
 const SECTION_COLUMNS: &str = "markdown_uuid, seq, uuid, text, framed, form, author, \
      author_handle, at, tags, link, reactions, replies, replies_held, continues, addressed, \
@@ -126,7 +145,7 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
     let mut guard = write_lock.acquire().await?;
     let conn = guard.conn();
     for sql in [DOCUMENT_SECTIONS, DOCUMENT_DRAWN, DOCUMENT_FOLDS] {
-        sqlx::query(sql)
+        sql.query()
             .bind(&md.markdown_uuid)
             .execute(&mut **conn)
             .await
@@ -136,30 +155,42 @@ async fn put_sections(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<(
         return Ok(());
     }
     for row in crate::section::drawn(&md.markdown_uuid, &md.sections) {
-        sqlx::query("INSERT INTO drawings (markdown_uuid, seq, md) VALUES (?, ?, ?)")
-            .bind(&row.markdown_uuid)
-            .bind(row.seq)
-            .bind(&row.md)
-            .execute(&mut **conn)
-            .await
-            .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
+        sql!(
+            "etl.render.store.insert_drawing",
+            "INSERT INTO drawings (markdown_uuid, seq, md) VALUES (?, ?, ?)"
+        )
+        .query()
+        .bind(&row.markdown_uuid)
+        .bind(row.seq)
+        .bind(&row.md)
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("document {}: store drawing {}", md.markdown_uuid, row.seq))?;
     }
     for row in crate::section::folds(&md.markdown_uuid, &md.sections) {
-        sqlx::query("INSERT INTO folds (markdown_uuid, seq, class, summary) VALUES (?, ?, ?, ?)")
-            .bind(&row.markdown_uuid)
-            .bind(row.seq)
-            .bind(&row.class)
-            .bind(&row.summary)
-            .execute(&mut **conn)
-            .await
-            .with_context(|| format!("document {}: store fold {}", md.markdown_uuid, row.seq))?;
+        sql!(
+            "etl.render.store.insert_fold",
+            "INSERT INTO folds (markdown_uuid, seq, class, summary) VALUES (?, ?, ?, ?)"
+        )
+        .query()
+        .bind(&row.markdown_uuid)
+        .bind(row.seq)
+        .bind(&row.class)
+        .bind(&row.summary)
+        .execute(&mut **conn)
+        .await
+        .with_context(|| format!("document {}: store fold {}", md.markdown_uuid, row.seq))?;
     }
     for row in crate::section::stored(&md.markdown_uuid, &md.sections) {
         // Every value bound; the column list is a constant.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO sections ({SECTION_COLUMNS}) \
+        Sql::dynamic(
+            sql_id!("etl.render.store.insert_section"),
+            format!(
+                "INSERT INTO sections ({SECTION_COLUMNS}) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )))
+            ),
+        )
+        .query()
         .bind(&row.markdown_uuid)
         .bind(row.seq)
         .bind(&row.uuid)
@@ -226,30 +257,38 @@ async fn pieces_between(
     last: i64,
 ) -> Result<Pieces> {
     // The column list is a constant; every value is bound.
-    let sections = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT {SECTION_COLUMNS} \
+    let sections = Sql::dynamic(
+        sql_id!("etl.render.store.read_sections_in_range"),
+        format!(
+            "SELECT {SECTION_COLUMNS} \
          FROM sections WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq"
-    )))
+        ),
+    )
+    .query_as()
     .bind(markdown_uuid)
     .bind(first)
     .bind(last)
     .fetch_all(pool)
     .await
     .context("read a document's sections")?;
-    let drawn = sqlx::query_as(
+    let drawn = sql!(
+        "etl.render.store.read_drawings_in_range",
         "SELECT markdown_uuid, seq, md FROM drawings \
-         WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
+         WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq"
     )
+    .query_as()
     .bind(markdown_uuid)
     .bind(first)
     .bind(last)
     .fetch_all(pool)
     .await
     .context("read a document's drawings")?;
-    let folds = sqlx::query_as(
+    let folds = sql!(
+        "etl.render.store.read_folds_in_range",
         "SELECT markdown_uuid, seq, class, summary FROM folds \
-         WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq",
+         WHERE markdown_uuid = ? AND seq BETWEEN ? AND ? ORDER BY seq"
     )
+    .query_as()
     .bind(markdown_uuid)
     .bind(first)
     .bind(last)
@@ -323,13 +362,19 @@ fn lookup_indexes() -> impl Iterator<Item = &'static str> {
         ])
 }
 
-const GRID_ROW_BY_UPSTREAM: &str = "SELECT uuid FROM grid_rows \
+const GRID_ROW_BY_UPSTREAM: Sql = sql!(
+    "etl.render.store.find_row_by_upstream_key",
+    "SELECT uuid FROM grid_rows \
      INDEXED BY grid_rows_by_upstream_key \
-     WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1";
+     WHERE upstream_entity_kind = ? AND upstream_id = ? LIMIT 1"
+);
 
-const DOCUMENTS_FOR_RENDER_UNITS: &str = "SELECT render_unit_key, markdown_uuid \
+const DOCUMENTS_FOR_RENDER_UNITS: Sql = sql!(
+    "etl.render.store.list_documents_of_render_units",
+    "SELECT render_unit_key, markdown_uuid \
      FROM markdowns INDEXED BY markdowns_by_render_unit \
-     WHERE render_unit_key IN (SELECT value FROM json_each(?))";
+     WHERE render_unit_key IN (SELECT value FROM json_each(?))"
+);
 
 /// This store's shape: what its `_datalib_meta` records, what the render
 /// step folds into its params so a change to any render-store table
@@ -534,13 +579,15 @@ impl IndexedMarkdownStore {
     /// whole source every run, until the one render unit renders.
     pub fn render_versions(&self) -> Result<BTreeSet<u32>> {
         blocking(async {
-            let rows = sqlx::query(
+            let rows = sql!(
+                "etl.render.store.list_renderer_versions",
                 "SELECT DISTINCT renderer_version FROM markdowns \
                  WHERE renderer_version IS NOT NULL AND kind <> ? \
                    AND markdown_uuid NOT IN ( \
                        SELECT scope_key FROM problems \
-                        WHERE scope_kind = ? AND stage = ? AND reason IN (?, ?))",
+                        WHERE scope_kind = ? AND stage = ? AND reason IN (?, ?))"
             )
+            .query()
             .bind(datalib_schema::measurements::DOC_KIND)
             .bind(ScopeKind::Markdown.as_str())
             .bind(Stage::Render.as_str())
@@ -648,13 +695,14 @@ impl IndexedMarkdownStore {
                 .await
                 .context("remove documents from the store")?;
                 for sql in [REMOVED_SECTIONS, REMOVED_DRAWN, REMOVED_FOLDS] {
-                    sqlx::query(sql)
+                    sql.query()
                         .bind(&set)
                         .execute(&mut **conn)
                         .await
                         .context("remove the sections of documents removed from the store")?;
                 }
-                sqlx::query(REMOVED_PROBLEMS)
+                REMOVED_PROBLEMS
+                    .query()
                     .bind(ScopeKind::Markdown.as_str())
                     .bind(&set)
                     .execute(&mut **conn)
@@ -674,7 +722,7 @@ impl IndexedMarkdownStore {
             blocking(async {
                 let mut guard = self.write_lock.acquire().await?;
                 let conn = guard.conn();
-                let prior = sqlx::query("DELETE FROM render_inputs WHERE render_unit_key = ?")
+                let prior = sql!("etl.render.store.delete_inputs_of_render_unit", "DELETE FROM render_inputs WHERE render_unit_key = ?").query()
                     .bind(render_unit_key)
                     .execute(&mut **conn)
                     .await
@@ -692,7 +740,7 @@ impl IndexedMarkdownStore {
                     }
                     // Audited: a placeholder run sized from the chunk; every
                     // value is bound.
-                    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+                    let mut q = Sql::dynamic(sql_id!("etl.render.store.insert_render_inputs"), sql).query();
                     for input in chunk {
                         q = q.bind(render_unit_key).bind(&input.table).bind(&input.id);
                     }
@@ -718,7 +766,9 @@ impl IndexedMarkdownStore {
                 sql.push(')');
                 // Audited: a placeholder run sized from the chunk; every
                 // key is bound.
-                let mut q = sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql));
+                let mut q =
+                    Sql::dynamic(sql_id!("etl.render.store.list_inputs_of_render_units"), sql)
+                        .query_as::<(String, String, String)>();
                 for key in chunk {
                     q = q.bind(*key);
                 }
@@ -756,7 +806,8 @@ impl IndexedMarkdownStore {
                 sql.push(')');
                 // Audited: a placeholder run sized from the chunk; every
                 // value is bound.
-                let mut q = sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql));
+                let mut q = Sql::dynamic(sql_id!("etl.render.store.list_readers_of_inputs"), sql)
+                    .query_as::<(String, String, String)>();
                 for input in chunk {
                     q = q.bind(&input.table).bind(&input.id);
                 }
@@ -776,9 +827,11 @@ impl IndexedMarkdownStore {
     pub fn input_tables(&self) -> Result<Vec<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            sqlx::query_scalar(
-                "SELECT DISTINCT input_table FROM render_inputs ORDER BY input_table",
+            sql!(
+                "etl.render.store.list_input_tables",
+                "SELECT DISTINCT input_table FROM render_inputs ORDER BY input_table"
             )
+            .query_scalar()
             .fetch_all(&mut **guard.conn())
             .await
             .context("read render_inputs tables")
@@ -795,9 +848,7 @@ impl IndexedMarkdownStore {
             let tables: BTreeSet<&str> = changed.iter().map(|i| i.table.as_str()).collect();
             for table in tables {
                 out.extend(
-                    sqlx::query_scalar::<_, String>(
-                        "SELECT DISTINCT render_unit_key FROM render_inputs WHERE input_table = ? AND input_id = ?",
-                    )
+                    sql!("etl.render.store.list_units_reading_whole_table", "SELECT DISTINCT render_unit_key FROM render_inputs WHERE input_table = ? AND input_id = ?").query_scalar::<String>()
                     .bind(table)
                     .bind(WHOLE_TABLE)
                     .fetch_all(&mut **guard.conn())
@@ -818,7 +869,11 @@ impl IndexedMarkdownStore {
                 sql.push(')');
                 // Audited: a placeholder run sized from the chunk; every
                 // value is bound.
-                let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+                let mut q = Sql::dynamic(
+                    sql_id!("etl.render.store.list_units_reading_changed_rows"),
+                    sql,
+                )
+                .query_scalar::<String>();
                 for input in chunk {
                     q = q.bind(&input.table).bind(&input.id);
                 }
@@ -837,9 +892,11 @@ impl IndexedMarkdownStore {
     pub fn render_units_reading_table(&self, table: &str) -> Result<HashSet<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let render_units = sqlx::query_scalar::<_, String>(
-                "SELECT DISTINCT render_unit_key FROM render_inputs WHERE input_table = ?",
+            let render_units = sql!(
+                "etl.render.store.list_units_reading_table",
+                "SELECT DISTINCT render_unit_key FROM render_inputs WHERE input_table = ?"
             )
+            .query_scalar::<String>()
             .bind(table)
             .fetch_all(&mut **guard.conn())
             .await
@@ -859,12 +916,14 @@ impl IndexedMarkdownStore {
     ) -> Result<Vec<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            sqlx::query_scalar::<_, String>(
+            sql!(
+                "etl.render.store.page_input_ids_of_unit",
                 "SELECT input_id FROM render_inputs \
                   WHERE render_unit_key = ?1 AND input_table = ?2 AND input_id <> ?3 \
                     AND (?4 IS NULL OR input_id > ?4) \
-                  ORDER BY input_id LIMIT ?5",
+                  ORDER BY input_id LIMIT ?5"
             )
+            .query_scalar::<String>()
             .bind(render_unit_key)
             .bind(table)
             .bind(WHOLE_TABLE)
@@ -885,7 +944,8 @@ impl IndexedMarkdownStore {
     ) -> Result<Vec<(String, String)>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            sqlx::query_as::<_, (String, String)>(DOCUMENTS_FOR_RENDER_UNITS)
+            DOCUMENTS_FOR_RENDER_UNITS
+                .query_as::<(String, String)>()
                 .bind(serde_json::to_string(render_unit_keys)?)
                 .fetch_all(&mut **guard.conn())
                 .await
@@ -904,7 +964,8 @@ impl IndexedMarkdownStore {
                 sql.push(')');
                 // Audited: a placeholder run sized from the chunk; every
                 // uuid is bound.
-                let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+                let mut q = Sql::dynamic(sql_id!("etl.render.store.find_grid_rows_among"), sql)
+                    .query_scalar::<String>();
                 for uuid in chunk {
                     q = q.bind(uuid);
                 }
@@ -928,7 +989,8 @@ impl IndexedMarkdownStore {
             let mut guard = self.write_lock.acquire().await?;
             let mut out = HashMap::new();
             for (kind, id) in keys {
-                let uuid: Option<String> = sqlx::query_scalar(GRID_ROW_BY_UPSTREAM)
+                let uuid: Option<String> = GRID_ROW_BY_UPSTREAM
+                    .query_scalar()
                     .bind(kind)
                     .bind(id)
                     .fetch_optional(&mut **guard.conn())
@@ -948,11 +1010,13 @@ impl IndexedMarkdownStore {
     pub fn latest_items(&self) -> Result<HashMap<String, Option<i64>>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let rows = sqlx::query(
+            let rows = sql!(
+                "etl.render.store.read_latest_item_counts",
                 "SELECT subject, items FROM source_measurements m \
                   WHERE measured_at_utc = (SELECT MAX(measured_at_utc) FROM source_measurements \
-                                            WHERE subject = m.subject)",
+                                            WHERE subject = m.subject)"
             )
+            .query()
             .fetch_all(&mut **guard.conn())
             .await
             .context("read latest measurements")?;
@@ -968,9 +1032,11 @@ impl IndexedMarkdownStore {
     pub fn document_version(&self, markdown_uuid: &str) -> Result<Option<u32>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let v: Option<Option<String>> = sqlx::query_scalar(
-                "SELECT renderer_version FROM markdowns WHERE markdown_uuid = ?",
+            let v: Option<Option<String>> = sql!(
+                "etl.render.store.read_document_version",
+                "SELECT renderer_version FROM markdowns WHERE markdown_uuid = ?"
             )
+            .query_scalar()
             .bind(markdown_uuid)
             .fetch_optional(&mut **guard.conn())
             .await
@@ -984,10 +1050,14 @@ impl IndexedMarkdownStore {
     pub fn cursor(&self) -> Result<Option<RenderCursorRow>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            sqlx::query_as::<_, RenderCursorRow>("SELECT * FROM render_cursor LIMIT 1")
-                .fetch_optional(&mut **guard.conn())
-                .await
-                .context("read the render cursor")
+            sql!(
+                "etl.render.store.read_render_cursor",
+                "SELECT * FROM render_cursor LIMIT 1"
+            )
+            .query_as::<RenderCursorRow>()
+            .fetch_optional(&mut **guard.conn())
+            .await
+            .context("read the render cursor")
         })
     }
 
@@ -998,14 +1068,21 @@ impl IndexedMarkdownStore {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            sqlx::query("DELETE FROM render_cursor")
-                .execute(&mut **conn)
-                .await
-                .context("clear the prior render cursor")?;
-            let sql = datalib_etl::bulk::insert_sql::<RenderCursorRow>();
+            sql!(
+                "etl.render.store.delete_render_cursor",
+                "DELETE FROM render_cursor"
+            )
+            .query()
+            .execute(&mut **conn)
+            .await
+            .context("clear the prior render cursor")?;
+            let sql = Sql::dynamic(
+                sql_id!("etl.render.store.insert_render_cursor"),
+                datalib_etl::bulk::insert_sql::<RenderCursorRow>(),
+            );
             // Audited: `sql` is built from `RenderCursorRow`'s associated
             // consts; every value is bound.
-            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+            row.bind_into(sql.query())
                 .execute(&mut **conn)
                 .await
                 .context("write the render cursor")?;
@@ -1025,10 +1102,12 @@ impl IndexedMarkdownStore {
     pub fn holdings(&self, except: Option<&str>) -> Result<Holdings> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let (documents, items): (i64, i64) = sqlx::query_as(
+            let (documents, items): (i64, i64) = sql!(
+                "etl.render.store.count_documents_and_items",
                 "SELECT COUNT(*), COALESCE(SUM(item_count), 0) FROM markdowns \
-                 WHERE ? IS NULL OR markdown_uuid <> ?",
+                 WHERE ? IS NULL OR markdown_uuid <> ?"
             )
+            .query_as()
             .bind(except)
             .bind(except)
             .fetch_one(&mut **guard.conn())
@@ -1042,10 +1121,14 @@ impl IndexedMarkdownStore {
     /// learn which documents it owes and where their sections lie.
     pub fn markdown_rows(&self) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
         blocking(async {
-            sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid")
-                .fetch_all(&self.pool)
-                .await
-                .context("read markdowns")
+            sql!(
+                "etl.render.store.list_markdowns_rows",
+                "SELECT * FROM markdowns ORDER BY markdown_uuid"
+            )
+            .query_as()
+            .fetch_all(&self.pool)
+            .await
+            .context("read markdowns")
         })
     }
 
@@ -1055,11 +1138,13 @@ impl IndexedMarkdownStore {
         markdown_uuids: &[String],
     ) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
         blocking(async {
-            sqlx::query_as(
+            sql!(
+                "etl.render.store.list_markdowns_rows_in",
                 "SELECT * FROM markdowns \
                  WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
-                 ORDER BY markdown_uuid",
+                 ORDER BY markdown_uuid"
             )
+            .query_as()
             .bind(serde_json::to_string(markdown_uuids)?)
             .fetch_all(&self.pool)
             .await
@@ -1072,13 +1157,15 @@ impl IndexedMarkdownStore {
     /// draws a document's text from.
     pub fn kept_sections(&self, markdown_uuids: &[String]) -> Result<Vec<KeptSection>> {
         blocking(async {
-            sqlx::query_as(
+            sql!(
+                "etl.render.store.read_kept_sections",
                 "SELECT s.markdown_uuid, s.seq, s.uuid, s.text, s.framed, s.addressed, \
                         s.labels, g.author, g.author_handle, g.created_at \
                  FROM sections s LEFT JOIN grid_rows g ON g.uuid = s.uuid \
                  WHERE s.markdown_uuid IN (SELECT value FROM json_each(?)) \
-                 ORDER BY s.markdown_uuid, s.seq",
+                 ORDER BY s.markdown_uuid, s.seq"
             )
+            .query_as()
             .bind(serde_json::to_string(markdown_uuids)?)
             .fetch_all(&self.pool)
             .await
@@ -1116,11 +1203,13 @@ impl IndexedMarkdownStore {
     ) -> Result<Option<DocumentPage>> {
         use crate::document_window::{spans, window, Ask};
         blocking(async {
-            let len: Option<i64> = sqlx::query_scalar(
+            let len: Option<i64> = sql!(
+                "etl.render.store.count_document_pieces",
                 "SELECT MAX(m) + 1 FROM ( \
                    SELECT MAX(seq) AS m FROM sections WHERE markdown_uuid = ? \
-                   UNION ALL SELECT MAX(seq) FROM drawings WHERE markdown_uuid = ?)",
+                   UNION ALL SELECT MAX(seq) FROM drawings WHERE markdown_uuid = ?)"
             )
+            .query_scalar()
             .bind(markdown_uuid)
             .bind(markdown_uuid)
             .fetch_one(&self.pool)
@@ -1129,10 +1218,12 @@ impl IndexedMarkdownStore {
             let Some(len) = len else {
                 return Ok(None);
             };
-            let folds: Vec<datalib_schema::folds::FoldRow> = sqlx::query_as(
+            let folds: Vec<datalib_schema::folds::FoldRow> = sql!(
+                "etl.render.store.read_document_folds",
                 "SELECT markdown_uuid, seq, class, summary FROM folds \
-                 WHERE markdown_uuid = ? ORDER BY seq",
+                 WHERE markdown_uuid = ? ORDER BY seq"
             )
+            .query_as()
             .bind(markdown_uuid)
             .fetch_all(&self.pool)
             .await
@@ -1142,9 +1233,11 @@ impl IndexedMarkdownStore {
                 PageAsk::After(cursor) => Ask::After(cursor),
                 PageAsk::Before(cursor) => Ask::Before(cursor),
                 PageAsk::At(uuid) => {
-                    let seq: Option<i64> = sqlx::query_scalar(
-                        "SELECT seq FROM sections WHERE markdown_uuid = ? AND uuid = ?",
+                    let seq: Option<i64> = sql!(
+                        "etl.render.store.find_piece_seq_by_uuid",
+                        "SELECT seq FROM sections WHERE markdown_uuid = ? AND uuid = ?"
                     )
+                    .query_scalar()
                     .bind(markdown_uuid)
                     .bind(&uuid)
                     .fetch_optional(&self.pool)
@@ -1177,11 +1270,13 @@ impl IndexedMarkdownStore {
         uuids: &[String],
     ) -> Result<Vec<(String, String, Option<String>)>> {
         blocking(async {
-            sqlx::query_as(
+            sql!(
+                "etl.render.store.read_item_texts",
                 "SELECT uuid, text, class FROM sections \
                  WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
-                 AND uuid IN (SELECT value FROM json_each(?))",
+                 AND uuid IN (SELECT value FROM json_each(?))"
             )
+            .query_as()
             .bind(serde_json::to_string(markdown_uuids)?)
             .bind(serde_json::to_string(uuids)?)
             .fetch_all(&self.pool)
@@ -1252,10 +1347,14 @@ impl IndexedMarkdownStore {
     pub fn all_document_uuids(&self) -> Result<Vec<String>> {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
-            let rows = sqlx::query("SELECT markdown_uuid FROM markdowns")
-                .fetch_all(&mut **guard.conn())
-                .await
-                .context("list every document in the store")?;
+            let rows = sql!(
+                "etl.render.store.list_document_uuids",
+                "SELECT markdown_uuid FROM markdowns"
+            )
+            .query()
+            .fetch_all(&mut **guard.conn())
+            .await
+            .context("list every document in the store")?;
             rows.into_iter()
                 .map(|r| r.try_get::<String, _>(0).map_err(Into::into))
                 .collect()
@@ -1292,7 +1391,7 @@ fn index_facts(row: &datalib_schema::markdowns::MarkdownRow) -> datalib_search_i
 // `wanted` is a JSON array of document ids, bound as `?1`.
 async fn group_by_document<T>(
     pool: &SqlitePool,
-    sql: &'static str,
+    sql: Sql,
     key: &str,
     wanted: &str,
 ) -> Result<HashMap<String, Vec<T>>, sqlx::Error>
@@ -1301,7 +1400,7 @@ where
 {
     use futures::TryStreamExt;
     let mut by_doc: HashMap<String, Vec<T>> = HashMap::new();
-    let mut rows = sqlx::query(sql).bind(wanted).fetch(pool);
+    let mut rows = sql.query().bind(wanted).fetch(pool);
     while let Some(row) = rows.try_next().await? {
         let doc: String = row.try_get(key)?;
         by_doc.entry(doc).or_default().push(T::from_row(&row)?);
@@ -1320,22 +1419,30 @@ impl IndexedMarkdownStore {
         // `changed_at_utc`, and "this has been broken since Tuesday"
         // would be unanswerable.
         let mut seen: HashMap<String, ProblemRow> = HashMap::new();
-        for r in sqlx::query("SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?")
-            .bind(ScopeKind::Markdown.as_str())
-            .bind(markdown_uuid)
-            .fetch_all(&mut **conn)
-            .await
-            .context("read the document's problems")?
+        for r in sql!(
+            "etl.render.store.read_problems_of_document",
+            "SELECT * FROM problems WHERE scope_kind = ? AND scope_key = ?"
+        )
+        .query()
+        .bind(ScopeKind::Markdown.as_str())
+        .bind(markdown_uuid)
+        .fetch_all(&mut **conn)
+        .await
+        .context("read the document's problems")?
         {
             let row = ProblemRow::from_row(&r)?;
             seen.insert(row.problem_uuid.clone(), row);
         }
-        sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?")
-            .bind(ScopeKind::Markdown.as_str())
-            .bind(markdown_uuid)
-            .execute(&mut **conn)
-            .await
-            .context("clear prior problems for this document")?;
+        sql!(
+            "etl.render.store.delete_problems_of_document",
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
+        )
+        .query()
+        .bind(ScopeKind::Markdown.as_str())
+        .bind(markdown_uuid)
+        .execute(&mut **conn)
+        .await
+        .context("clear prior problems for this document")?;
         self.insert_problems(conn, problems, &seen).await
     }
 
@@ -1356,11 +1463,14 @@ impl IndexedMarkdownStore {
             );
             // Same generated write path the rows use; see
             // `PortableTable`'s `BulkUpsertable` impl.
-            let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+            let sql = Sql::dynamic(
+                sql_id!("etl.render.store.insert_problem"),
+                datalib_etl::bulk::insert_sql::<ProblemRow>(),
+            );
             // Audited: `sql` is built from `ProblemRow`'s
             // associated consts, never from row data; all values bound.
             stamped
-                .bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+                .bind_into(sql.query())
                 .execute(&mut **conn)
                 .await
                 .with_context(|| format!("insert problem {}", p.problem_uuid))?;
@@ -1393,11 +1503,13 @@ impl IndexedMarkdownStore {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
             for sample in samples {
-                sqlx::query(
+                sql!(
+                    "etl.render.store.upsert_measurement",
                     "INSERT OR REPLACE INTO source_measurements \
                      (subject, kind, measured_at_utc, tz_offset, bytes, items) \
-                     VALUES (?, ?, ?, ?, ?, ?)",
+                     VALUES (?, ?, ?, ?, ?, ?)"
                 )
+                .query()
                 .bind(&sample.subject)
                 .bind(&sample.kind)
                 .bind(&sample.measured_at_utc)
@@ -1422,17 +1534,25 @@ impl IndexedMarkdownStore {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            sqlx::query("DELETE FROM entity_items")
+            sql!(
+                "etl.render.store.clear_entity_items",
+                "DELETE FROM entity_items"
+            )
+            .query()
+            .execute(&mut **conn)
+            .await
+            .context("clear the entity items")?;
+            for (entity_key, item_uuid) in items {
+                sql!(
+                    "etl.render.store.insert_entity_item",
+                    "INSERT INTO entity_items (entity_key, item_uuid) VALUES (?, ?)"
+                )
+                .query()
+                .bind(entity_key)
+                .bind(item_uuid)
                 .execute(&mut **conn)
                 .await
-                .context("clear the entity items")?;
-            for (entity_key, item_uuid) in items {
-                sqlx::query("INSERT INTO entity_items (entity_key, item_uuid) VALUES (?, ?)")
-                    .bind(entity_key)
-                    .bind(item_uuid)
-                    .execute(&mut **conn)
-                    .await
-                    .with_context(|| format!("record {entity_key}'s item"))?;
+                .with_context(|| format!("record {entity_key}'s item"))?;
             }
             Ok(())
         })
@@ -1444,16 +1564,23 @@ impl IndexedMarkdownStore {
         blocking(async {
             let mut guard = self.write_lock.acquire().await?;
             let conn = guard.conn();
-            sqlx::query("DELETE FROM problems WHERE stage = ?")
-                .bind(stage.as_str())
-                .execute(&mut **conn)
-                .await
-                .with_context(|| format!("clear {} problems", stage.as_str()))?;
-            let sql = datalib_etl::bulk::insert_sql::<ProblemRow>();
+            sql!(
+                "etl.render.store.delete_problems_of_stage",
+                "DELETE FROM problems WHERE stage = ?"
+            )
+            .query()
+            .bind(stage.as_str())
+            .execute(&mut **conn)
+            .await
+            .with_context(|| format!("clear {} problems", stage.as_str()))?;
+            let sql = Sql::dynamic(
+                sql_id!("etl.render.store.insert_stage_problem"),
+                datalib_etl::bulk::insert_sql::<ProblemRow>(),
+            );
             for row in rows {
                 // Audited: `sql` is built from `ProblemRow`'s associated
                 // consts, never from row data; all values bound.
-                row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+                row.bind_into(sql.query())
                     .execute(&mut **conn)
                     .await
                     .with_context(|| format!("insert problem {}", row.problem_uuid))?;
@@ -1471,19 +1598,27 @@ impl IndexedMarkdownStore {
             let conn = guard.conn();
             let mut seen: HashMap<String, ProblemRow> = HashMap::new();
             for row in rows {
-                if let Some(r) = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
-                    .bind(&row.problem_uuid)
-                    .fetch_optional(&mut **conn)
-                    .await
-                    .context("read the problem about to be rewritten")?
+                if let Some(r) = sql!(
+                    "etl.render.store.find_problem_by_uuid",
+                    "SELECT * FROM problems WHERE problem_uuid = ?"
+                )
+                .query()
+                .bind(&row.problem_uuid)
+                .fetch_optional(&mut **conn)
+                .await
+                .context("read the problem about to be rewritten")?
                 {
                     seen.insert(row.problem_uuid.clone(), ProblemRow::from_row(&r)?);
                 }
-                sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
-                    .bind(&row.problem_uuid)
-                    .execute(&mut **conn)
-                    .await
-                    .context("clear the problem about to be rewritten")?;
+                sql!(
+                    "etl.render.store.delete_problem_by_uuid",
+                    "DELETE FROM problems WHERE problem_uuid = ?"
+                )
+                .query()
+                .bind(&row.problem_uuid)
+                .execute(&mut **conn)
+                .await
+                .context("clear the problem about to be rewritten")?;
             }
             self.insert_problems(conn, rows, &seen).await
         })
@@ -1537,12 +1672,16 @@ impl IndexedMarkdownStore {
                 }))
                 .collect();
             for (select, key) in clears {
-                let delete = if select.contains("INSTR") {
-                    "DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1"
-                } else {
-                    "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
-                };
-                for r in sqlx::query(select)
+                let delete = Sql::dynamic(
+                    sql_id!("etl.render.store.delete_entity_problems"),
+                    if select.contains("INSTR") {
+                        "DELETE FROM problems WHERE scope_kind = ? AND INSTR(scope_key, ?) = 1"
+                    } else {
+                        "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"
+                    },
+                );
+                for r in Sql::dynamic(sql_id!("etl.render.store.read_entity_problems"), select)
+                    .query()
                     .bind(ScopeKind::Entity.as_str())
                     .bind(key)
                     .fetch_all(&mut **conn)
@@ -1552,7 +1691,8 @@ impl IndexedMarkdownStore {
                     let row = ProblemRow::from_row(&r)?;
                     seen.insert(row.problem_uuid.clone(), row);
                 }
-                sqlx::query(delete)
+                delete
+                    .query()
                     .bind(ScopeKind::Entity.as_str())
                     .bind(key)
                     .execute(&mut **conn)
@@ -1570,10 +1710,14 @@ impl IndexedMarkdownStore {
             if !datalib_etl::doltlite_raw::has_dolt_extensions(&self.pool).await {
                 return Ok(Vec::new());
             }
-            let rows = sqlx::query("SELECT commit_hash, message FROM dolt_log()")
-                .fetch_all(&self.pool)
-                .await
-                .context("read dolt_log")?;
+            let rows = sql!(
+                "etl.render.store.read_dolt_log",
+                "SELECT commit_hash, message FROM dolt_log()"
+            )
+            .query()
+            .fetch_all(&self.pool)
+            .await
+            .context("read dolt_log")?;
             rows.into_iter()
                 .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
                 .collect()
@@ -1656,13 +1800,19 @@ impl IndexedMarkdownStore {
             // none, and must not cost a read of all of them.
             let mds: Vec<datalib_schema::markdowns::MarkdownRow> = match only {
                 Some(keep) if keep.is_empty() => return Ok(Vec::new()),
-                Some(keep) => sqlx::query_as(
+                Some(keep) => sql!(
+                    "etl.render.store.read_back_markdowns_in_set",
                     "SELECT * FROM markdowns \
                       WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                      ORDER BY markdown_uuid",
+                      ORDER BY markdown_uuid"
                 )
+                .query_as()
                 .bind(serde_json::to_string(keep)?),
-                None => sqlx::query_as("SELECT * FROM markdowns ORDER BY markdown_uuid"),
+                None => sql!(
+                    "etl.render.store.read_back_all_markdowns",
+                    "SELECT * FROM markdowns ORDER BY markdown_uuid"
+                )
+                .query_as(),
             }
             .fetch_all(&self.pool)
             .await
@@ -1678,9 +1828,12 @@ impl IndexedMarkdownStore {
             )?;
             let mut rows_by_doc = group_by_document::<datalib_schema::grid_rows::GridRow>(
                 &self.pool,
-                "SELECT * FROM grid_rows \
+                sql!(
+                    "etl.render.store.read_back_grid_rows",
+                    "SELECT * FROM grid_rows \
                   WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                  ORDER BY markdown_uuid, uuid",
+                  ORDER BY markdown_uuid, uuid"
+                ),
                 "markdown_uuid",
                 &wanted,
             )
@@ -1688,9 +1841,12 @@ impl IndexedMarkdownStore {
             .context("read grid rows")?;
             let mut edges_by_doc = group_by_document::<datalib_schema::edges::EdgeRow>(
                 &self.pool,
-                "SELECT * FROM edges \
+                sql!(
+                    "etl.render.store.read_back_edges",
+                    "SELECT * FROM edges \
                   WHERE src_markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                  ORDER BY src_markdown_uuid, edge_uuid",
+                  ORDER BY src_markdown_uuid, edge_uuid"
+                ),
                 "src_markdown_uuid",
                 &wanted,
             )
@@ -1698,9 +1854,12 @@ impl IndexedMarkdownStore {
             .context("read edges")?;
             let mut nodes_by_doc = group_by_document::<datalib_schema::data_nodes::DataNodeRow>(
                 &self.pool,
-                "SELECT * FROM data_nodes \
+                sql!(
+                    "etl.render.store.read_back_data_nodes",
+                    "SELECT * FROM data_nodes \
                   WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                  ORDER BY markdown_uuid, uuid",
+                  ORDER BY markdown_uuid, uuid"
+                ),
                 "markdown_uuid",
                 &wanted,
             )
@@ -1708,9 +1867,12 @@ impl IndexedMarkdownStore {
             .context("read containers")?;
             let mut filings_by_doc = group_by_document::<datalib_schema::filings::FilingRow>(
                 &self.pool,
-                "SELECT * FROM filings \
+                sql!(
+                    "etl.render.store.read_back_filings",
+                    "SELECT * FROM filings \
                   WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                  ORDER BY markdown_uuid, node_uuid, under_uuid",
+                  ORDER BY markdown_uuid, node_uuid, under_uuid"
+                ),
                 "markdown_uuid",
                 &wanted,
             )
@@ -1719,9 +1881,12 @@ impl IndexedMarkdownStore {
             let mut contacts_by_doc =
                 group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
                     &self.pool,
-                    "SELECT * FROM source_contacts \
+                    sql!(
+                        "etl.render.store.read_back_source_contacts",
+                        "SELECT * FROM source_contacts \
                       WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                      ORDER BY markdown_uuid, contact_key",
+                      ORDER BY markdown_uuid, contact_key"
+                    ),
                     "markdown_uuid",
                     &wanted,
                 )
@@ -1730,9 +1895,12 @@ impl IndexedMarkdownStore {
             let mut photos_by_doc =
                 group_by_document::<datalib_schema::source_photos::SourcePhotoRow>(
                     &self.pool,
-                    "SELECT * FROM source_photos \
+                    sql!(
+                        "etl.render.store.read_back_source_photos",
+                        "SELECT * FROM source_photos \
                       WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                      ORDER BY markdown_uuid, photo_uuid",
+                      ORDER BY markdown_uuid, photo_uuid"
+                    ),
                     "markdown_uuid",
                     &wanted,
                 )
@@ -1806,10 +1974,14 @@ impl IndexedMarkdownStore {
     pub fn problems_at_pin(&self) -> Result<Vec<ProblemRow>> {
         assert!(self.pin.is_some(), "problems_at_pin is a reader's call");
         blocking(async {
-            let rows = sqlx::query("SELECT * FROM problems ORDER BY problem_uuid")
-                .fetch_all(&self.pool)
-                .await
-                .context("read problems")?;
+            let rows = sql!(
+                "etl.render.store.list_problems",
+                "SELECT * FROM problems ORDER BY problem_uuid"
+            )
+            .query()
+            .fetch_all(&self.pool)
+            .await
+            .context("read problems")?;
             rows.iter().map(ProblemRow::from_row).collect()
         })
     }
@@ -1822,9 +1994,11 @@ impl IndexedMarkdownStore {
     /// newer build and a silent zero would read as clean.
     pub fn own_problem_counts(&self) -> Result<HashMap<Severity, i64>> {
         blocking(async {
-            let rows = sqlx::query(
-                "SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity",
+            let rows = sql!(
+                "etl.render.store.count_problems_by_severity",
+                "SELECT severity, COUNT(*) FROM problems WHERE stage <> ? GROUP BY severity"
             )
+            .query()
             .bind(Stage::Fetch.as_str())
             .fetch_all(&self.pool)
             .await
@@ -1876,6 +2050,7 @@ mod tests {
     use datalib_schema::problems::{Outcome, Problem, Reason, Scope, Stage};
     use datalib_schema::providers::Provider;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     fn store(dir: &Path) -> IndexedMarkdownStore {
         IndexedMarkdownStore::open(dir).expect("open store")
     }
@@ -1891,7 +2066,7 @@ mod tests {
         let st = store(td.path());
         let mut statements = vec![
             DOCUMENTS_FOR_RENDER_UNITS,
-            "DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?",
+            test_sql!("DELETE FROM problems WHERE scope_kind = ? AND scope_key = ?"),
             crate::grid_index::DELETE_DOCUMENT_GRID_ROWS,
             REMOVED_PROBLEMS,
             REMOVED_SECTIONS,
@@ -1901,8 +2076,8 @@ mod tests {
             REMOVED_FOLDS,
             DOCUMENT_FOLDS,
         ];
-        statements.extend(crate::grid_index::DELETE_DOCUMENTS);
-        statements.extend(crate::grid_index::Store::Render.delete_contacts());
+        statements.extend_from_slice(crate::grid_index::DELETE_DOCUMENTS);
+        statements.extend_from_slice(crate::grid_index::Store::Render.delete_contacts());
         blocking(crate::grid_index::assert_searched_by_index(
             &st.pool,
             &statements,
@@ -1918,9 +2093,13 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
         // Audited: a constant statement of this module.
-        let explain = format!("EXPLAIN QUERY PLAN {GRID_ROW_BY_UPSTREAM}");
+        let explain = Sql::dynamic(
+            test_sql_id!(),
+            format!("EXPLAIN QUERY PLAN {GRID_ROW_BY_UPSTREAM}"),
+        );
         let plan: Vec<String> = blocking(
-            sqlx::query(sqlx::AssertSqlSafe(explain))
+            explain
+                .query()
                 .bind("message")
                 .bind("x")
                 .fetch_all(&st.pool),
@@ -1980,13 +2159,16 @@ mod tests {
             .collect();
         // Audited: column names come from the derive's static list; `n` is
         // a number.
-        let fill = format!(
+        let fill = Sql::dynamic(
+            test_sql_id!(),
+            format!(
             "WITH RECURSIVE k(i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM k WHERE i + 1 < {n}) \
              INSERT INTO grid_rows ({}) SELECT {} FROM grid_rows, k WHERE uuid = 'seed'",
             columns.join(", "),
             copied.join(", "),
+        ),
         );
-        blocking(sqlx::query(sqlx::AssertSqlSafe(fill)).execute(&st.pool)).unwrap();
+        blocking(fill.query().execute(&st.pool)).unwrap();
         st.commit("fill").unwrap();
         st
     }
@@ -2118,7 +2300,8 @@ mod tests {
         st.commit("with riker").unwrap();
         let handles = |st: &IndexedMarkdownStore| -> Vec<String> {
             blocking(
-                sqlx::query_scalar("SELECT handle FROM source_contact_handles ORDER BY handle")
+                test_sql!("SELECT handle FROM source_contact_handles ORDER BY handle")
+                    .query_scalar()
                     .fetch_all(&st.pool),
             )
             .unwrap()
@@ -2142,7 +2325,9 @@ mod tests {
         st.put_document(&doc("a", "fp")).unwrap();
         assert!(handles(&st).is_empty());
         let rows: i64 = blocking(
-            sqlx::query_scalar("SELECT count(*) FROM source_contacts").fetch_one(&st.pool),
+            test_sql!("SELECT count(*) FROM source_contacts")
+                .query_scalar()
+                .fetch_one(&st.pool),
         )
         .unwrap();
         assert_eq!(rows, 0);
@@ -2195,7 +2380,8 @@ mod tests {
         st.put_document(&doc("a", "fp")).unwrap();
         for table in ["data_nodes", "filings"] {
             let n: i64 = blocking(
-                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+                Sql::dynamic(test_sql_id!(), format!("SELECT count(*) FROM {table}"))
+                    .query_scalar()
                     .fetch_one(&st.pool),
             )
             .unwrap();
@@ -2216,10 +2402,11 @@ mod tests {
         type Kept = (String, i64, Option<String>, String, bool);
         let kept = |st: &IndexedMarkdownStore| -> Vec<Kept> {
             blocking(
-                sqlx::query_as(
+                test_sql!(
                     "SELECT markdown_uuid, seq, uuid, text, framed FROM sections \
-                     ORDER BY markdown_uuid, seq",
+                     ORDER BY markdown_uuid, seq"
                 )
+                .query_as()
                 .fetch_all(&st.pool),
             )
             .unwrap()
@@ -2436,7 +2623,8 @@ mod tests {
 
         // Neither half-written document reached the store.
         let n: i64 = blocking(async {
-            sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+            test_sql!("SELECT COUNT(*) FROM markdowns")
+                .query_scalar()
                 .fetch_one(&st.pool)
                 .await
         })
@@ -2461,9 +2649,10 @@ mod tests {
         d.rows.push(inner);
         st.put_document(&d).unwrap();
         let (created, modified): (Option<String>, Option<String>) = blocking(async {
-            sqlx::query_as(
-                "SELECT created_at, modified_at FROM markdowns WHERE markdown_uuid = 'd-stamped'",
+            test_sql!(
+                "SELECT created_at, modified_at FROM markdowns WHERE markdown_uuid = 'd-stamped'"
             )
+            .query_as()
             .fetch_one(&st.pool)
             .await
         })
@@ -2567,10 +2756,11 @@ mod tests {
         .expect("second run");
 
         let series: Vec<(String, Option<i64>)> = blocking(async {
-            sqlx::query(
+            test_sql!(
                 "SELECT measured_at_utc, bytes FROM source_measurements \
-                 WHERE subject = 'src/raw' ORDER BY measured_at_utc",
+                 WHERE subject = 'src/raw' ORDER BY measured_at_utc"
             )
+            .query()
             .fetch_all(&st.pool)
             .await
             .expect("read the series")
@@ -2609,7 +2799,8 @@ mod tests {
         .expect("write");
 
         let (bytes, items): (Option<i64>, Option<i64>) = blocking(async {
-            let r = sqlx::query("SELECT bytes, items FROM source_measurements")
+            let r = test_sql!("SELECT bytes, items FROM source_measurements")
+                .query()
                 .fetch_one(&st.pool)
                 .await
                 .expect("read back");
@@ -2632,7 +2823,8 @@ mod tests {
             .expect("same instant again must not fail");
 
         let (n, bytes): (i64, Option<i64>) = blocking(async {
-            let r = sqlx::query("SELECT COUNT(*), MAX(bytes) FROM source_measurements")
+            let r = test_sql!("SELECT COUNT(*), MAX(bytes) FROM source_measurements")
+                .query()
                 .fetch_one(&st.pool)
                 .await
                 .expect("read back");
@@ -2666,7 +2858,8 @@ mod tests {
         s.put_document(&doc("md-1", "fp-1")).unwrap();
         s.put_document(&doc("md-1", "fp-1")).unwrap();
         let n: i64 = blocking(async {
-            sqlx::query_scalar("SELECT COUNT(*) FROM markdowns")
+            test_sql!("SELECT COUNT(*) FROM markdowns")
+                .query_scalar()
                 .fetch_one(&s.pool)
                 .await
         })
@@ -2727,7 +2920,8 @@ mod tests {
         s.put_document(&doc("md-1", "fp-2")).unwrap();
 
         let n: i64 = blocking(async {
-            sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows")
+            test_sql!("SELECT COUNT(*) FROM grid_rows")
+                .query_scalar()
                 .fetch_one(&s.pool)
                 .await
         })
@@ -2764,7 +2958,8 @@ mod tests {
             .put_document(&doc_in("doc-b", "row-1", "fp-b"))
             .expect("the row moves to doc-b");
         let owner: String = blocking(async {
-            sqlx::query_scalar("SELECT markdown_uuid FROM grid_rows WHERE uuid = 'row-1'")
+            test_sql!("SELECT markdown_uuid FROM grid_rows WHERE uuid = 'row-1'")
+                .query_scalar()
                 .fetch_one(&later.pool)
                 .await
         })
@@ -2774,7 +2969,8 @@ mod tests {
         // touch what doc-b now holds.
         later.put_document(&doc("doc-a", "fp-a2")).unwrap();
         let n: i64 = blocking(async {
-            sqlx::query_scalar("SELECT COUNT(*) FROM grid_rows WHERE uuid = 'row-1'")
+            test_sql!("SELECT COUNT(*) FROM grid_rows WHERE uuid = 'row-1'")
+                .query_scalar()
                 .fetch_one(&later.pool)
                 .await
         })

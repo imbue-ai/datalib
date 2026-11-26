@@ -16,6 +16,7 @@ use datalib_schema::search_terms::SearchTermKind;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::fixture_db_snapshot::fixture_db_path;
+use datalib_sql::test_sql;
 
 #[derive(sqlx::FromRow)]
 struct TermRow {
@@ -89,15 +90,16 @@ async fn snapshot_index(path: &Path, people_snapshot: &str) {
     // A storage report measures a source and is filed under `datalib`;
     // `fixture_db_snapshot` digests those rows and so does this, by
     // leaving them out.
-    let read: Vec<TermRow> = sqlx::query_as(
+    let read: Vec<TermRow> = test_sql!(
         "SELECT g.source_id, g.uuid, g.kind, t.kind AS term_kind, v.value \
            FROM grid_rows g \
            LEFT JOIN terms t ON t.row_id = g.rowid \
            LEFT JOIN vals v ON v.val_id = t.val_id \
           WHERE g.provider != ? \
           ORDER BY g.source_id, g.markdown_uuid, g.is_document DESC, g.message_index, g.uuid, \
-                   t.kind, v.value",
+                   t.kind, v.value"
     )
+    .query_as()
     .bind(Provider::Datalib.as_str())
     .fetch_all(&pool)
     .await
@@ -126,12 +128,14 @@ async fn snapshot_index(path: &Path, people_snapshot: &str) {
     }
 
     let names: Vec<(String, String)> =
-        sqlx::query_as("SELECT handle, name FROM names ORDER BY handle, name")
+        test_sql!("SELECT handle, name FROM names ORDER BY handle, name")
+            .query_as()
             .fetch_all(&pool)
             .await
             .expect("read the names");
     let accounts: Vec<(String, String)> =
-        sqlx::query_as("SELECT source_id, handle FROM account_handles ORDER BY source_id, handle")
+        test_sql!("SELECT source_id, handle FROM account_handles ORDER BY source_id, handle")
+            .query_as()
             .fetch_all(&pool)
             .await
             .expect("read the account handles");

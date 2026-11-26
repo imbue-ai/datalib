@@ -19,6 +19,7 @@ use datalib_etl_slack::recorded::{
 use serde_json::{json, Value};
 
 use crate::support::{channels_with_messages, checked_at, fetch_into, msg, serve, stored_ts};
+use datalib_sql::test_sql;
 
 const DM_TYPES: &str = "public_channel,private_channel,im,mpim";
 
@@ -95,7 +96,8 @@ async fn sync(api: &Path, out: &Path, adjust: impl FnOnce(FetchOptions) -> Fetch
 async fn history_scopes(out: &Path) -> BTreeSet<String> {
     let reader = datalib_pin::open_reader(&db_path_for(out)).await.unwrap();
     let scopes: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT scope FROM coverage WHERE scope LIKE 'history:%'")
+        test_sql!("SELECT DISTINCT scope FROM coverage WHERE scope LIKE 'history:%'")
+            .query_scalar()
             .fetch_all(&reader)
             .await
             .unwrap();
@@ -184,7 +186,8 @@ async fn a_closed_dm_is_checked_again_a_day_after_its_last_walk() {
 async fn spans(out: &Path, scope: &str) -> Vec<(String, String)> {
     let reader = datalib_pin::open_reader(&db_path_for(out)).await.unwrap();
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT lo, hi FROM coverage WHERE scope = ? ORDER BY lo")
+        test_sql!("SELECT lo, hi FROM coverage WHERE scope = ? ORDER BY lo")
+            .query_as()
             .bind(scope)
             .fetch_all(&reader)
             .await

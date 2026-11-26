@@ -13,6 +13,7 @@ use sqlx::Row;
 use super::store::Store;
 use super::tick::{StateKind, WaitKind};
 use crate::step::{FailureKind, StepId};
+use datalib_sql::{sql, Sql};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Record {
@@ -198,13 +199,17 @@ pub(super) const DDL: [&str; 5] = [
 pub(super) const INDEXES: [&str; 1] =
     ["CREATE INDEX IF NOT EXISTS invocations_open ON invocations (outcome, started_at_utc, id)"];
 
-pub(super) const CLOSE_ABANDONED_INVOCATIONS: &str =
+pub(super) const CLOSE_ABANDONED_INVOCATIONS: Sql = sql!(
+    "dag.supervisor.close_abandoned_invocations",
     "UPDATE invocations INDEXED BY invocations_open \
-     SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL";
+     SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL"
+);
 
-pub(super) const RUNNING_INVOCATIONS: &str =
+pub(super) const RUNNING_INVOCATIONS: Sql = sql!(
+    "dag.supervisor.list_running_invocations",
     "SELECT id, step, run_id, started_at_utc FROM invocations INDEXED BY invocations_open \
-     WHERE outcome IS NULL ORDER BY started_at_utc, id";
+     WHERE outcome IS NULL ORDER BY started_at_utc, id"
+);
 
 /// A process the loop started, as its row names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,10 +235,12 @@ pub struct InvocationEnd {
 impl Store {
     /// The record as the last save left it.
     pub async fn load_record(&self) -> Result<Record> {
-        let run = sqlx::query(
+        let run = sql!(
+            "dag.supervisor.read_latest_run",
             "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
-             ORDER BY rowid DESC LIMIT 1",
+             ORDER BY rowid DESC LIMIT 1"
         )
+        .query()
         .fetch_optional(self.pool())
         .await?;
         let current_run = match run {
@@ -242,13 +249,17 @@ impl Store {
                 let run_id: String = r.try_get("run_id")?;
                 let offset: Option<String> = r.try_get("tz_offset")?;
                 let joined = |utc: String| datalib_time::join_stamp(&utc, offset.as_deref());
-                let states = sqlx::query("SELECT step, state FROM run_steps WHERE run_id = ?")
-                    .bind(&run_id)
-                    .fetch_all(self.pool())
-                    .await?
-                    .iter()
-                    .map(|r| Ok((r.try_get("step")?, r.try_get("state")?)))
-                    .collect::<Result<BTreeMap<String, String>>>()?;
+                let states = sql!(
+                    "dag.supervisor.list_run_step_states",
+                    "SELECT step, state FROM run_steps WHERE run_id = ?"
+                )
+                .query()
+                .bind(&run_id)
+                .fetch_all(self.pool())
+                .await?
+                .iter()
+                .map(|r| Ok((r.try_get("step")?, r.try_get("state")?)))
+                .collect::<Result<BTreeMap<String, String>>>()?;
                 Some(CurrentRun {
                     run_id,
                     started_at: joined(r.try_get("started_at_utc")?),
@@ -261,14 +272,19 @@ impl Store {
         };
 
         let mut versions: BTreeMap<String, String> = BTreeMap::new();
-        for r in sqlx::query("SELECT path, version FROM sinks")
-            .fetch_all(self.pool())
-            .await?
+        for r in sql!(
+            "dag.supervisor.list_sink_versions",
+            "SELECT path, version FROM sinks"
+        )
+        .query()
+        .fetch_all(self.pool())
+        .await?
         {
             versions.insert(r.try_get("path")?, r.try_get("version")?);
         }
         let mut steps = BTreeMap::new();
-        for r in sqlx::query("SELECT * FROM steps")
+        for r in sql!("dag.supervisor.list_step_records", "SELECT * FROM steps")
+            .query()
             .fetch_all(self.pool())
             .await?
         {
@@ -344,11 +360,13 @@ impl Store {
                         .finished_at
                         .as_deref()
                         .map(|f| datalib_time::split_stamp(f).utc);
-                    sqlx::query(
+                    sql!(
+                        "dag.supervisor.upsert_run",
                         "INSERT INTO runs (run_id, started_at_utc, finished_at_utc, tz_offset) \
                          VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET \
-                         finished_at_utc = excluded.finished_at_utc",
+                         finished_at_utc = excluded.finished_at_utc"
                     )
+                    .query()
                     .bind(&run.run_id)
                     .bind(&started.utc)
                     .bind(finished)
@@ -356,16 +374,21 @@ impl Store {
                     .execute(&mut *tx)
                     .await?;
                     // Only the newest run's states are ever read.
-                    sqlx::query("DELETE FROM run_steps")
+                    sql!("dag.supervisor.delete_run_steps", "DELETE FROM run_steps")
+                        .query()
                         .execute(&mut *tx)
                         .await?;
                     for (step, state) in &run.states {
-                        sqlx::query("INSERT INTO run_steps (run_id, step, state) VALUES (?, ?, ?)")
-                            .bind(&run.run_id)
-                            .bind(step)
-                            .bind(state)
-                            .execute(&mut *tx)
-                            .await?;
+                        sql!(
+                            "dag.supervisor.insert_run_step",
+                            "INSERT INTO run_steps (run_id, step, state) VALUES (?, ?, ?)"
+                        )
+                        .query()
+                        .bind(&run.run_id)
+                        .bind(step)
+                        .bind(state)
+                        .execute(&mut *tx)
+                        .await?;
                     }
                 }
                 Change::Step(id, st) => {
@@ -380,14 +403,16 @@ impl Store {
                                 .map(|s| datalib_time::split_stamp(s).tz_offset)
                         })
                         .flatten();
-                    sqlx::query(
+                    sql!(
+                        "dag.supervisor.upsert_step_record",
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
                          last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
                          last_attempts, last_error, last_failure_kind, last_success_at_utc, \
                          tz_offset, state, state_detail, waiting_for, turned_off_by, requests, \
                          needs_rerun) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )
+                    .query()
                     .bind(id)
                     .bind(st.succeeded)
                     .bind(&st.fingerprint)
@@ -415,28 +440,40 @@ impl Store {
                     .await?;
                     match &st.version {
                         Some(version) => {
-                            sqlx::query(
-                                "INSERT OR REPLACE INTO sinks (path, version) VALUES (?, ?)",
+                            sql!(
+                                "dag.supervisor.upsert_sink_version",
+                                "INSERT OR REPLACE INTO sinks (path, version) VALUES (?, ?)"
                             )
+                            .query()
                             .bind(id)
                             .bind(version)
                             .execute(&mut *tx)
                             .await?;
                         }
                         None => {
-                            sqlx::query("DELETE FROM sinks WHERE path = ?")
-                                .bind(id)
-                                .execute(&mut *tx)
-                                .await?;
+                            sql!(
+                                "dag.supervisor.delete_sink_version",
+                                "DELETE FROM sinks WHERE path = ?"
+                            )
+                            .query()
+                            .bind(id)
+                            .execute(&mut *tx)
+                            .await?;
                         }
                     }
                 }
                 Change::Forget(id) => {
                     for stmt in [
-                        "DELETE FROM steps WHERE step = ?",
-                        "DELETE FROM sinks WHERE path = ?",
+                        sql!(
+                            "dag.save_record.delete_steps",
+                            "DELETE FROM steps WHERE step = ?"
+                        ),
+                        sql!(
+                            "dag.save_record.delete_sinks",
+                            "DELETE FROM sinks WHERE path = ?"
+                        ),
                     ] {
-                        sqlx::query(stmt).bind(id).execute(&mut *tx).await?;
+                        stmt.query().bind(id).execute(&mut *tx).await?;
                     }
                 }
             }
@@ -449,10 +486,8 @@ impl Store {
     /// Whether a loop has taken the request on: a step's record names
     /// it, or it has already closed.
     pub async fn taken_on(&self, request: &str) -> Result<bool> {
-        Ok(sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
-             OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)",
-        )
+        Ok(sql!("dag.supervisor.is_request_taken_on", "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
+             OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)").query_scalar()
         .bind(request)
         .fetch_one(self.pool())
         .await?)
@@ -460,10 +495,12 @@ impl Store {
 
     pub async fn open_invocation(&self, row: &InvocationRow) -> Result<()> {
         let started = datalib_time::split_stamp(&row.started_at_utc);
-        sqlx::query(
+        sql!(
+            "dag.supervisor.insert_invocation",
             "INSERT INTO invocations (id, step, run_id, started_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?)"
         )
+        .query()
         .bind(&row.id)
         .bind(&row.step)
         .bind(&row.run_id)
@@ -477,10 +514,8 @@ impl Store {
 
     pub async fn close_invocation(&self, id: &str, end: &InvocationEnd) -> Result<()> {
         let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        sqlx::query(
-            "UPDATE invocations SET finished_at_utc = ?, outcome = ?, failure_kind = ?, error = ?, \
-             attempts = ?, exit_code = ?, signal = ? WHERE id = ? AND outcome IS NULL",
-        )
+        sql!("dag.supervisor.close_invocation", "UPDATE invocations SET finished_at_utc = ?, outcome = ?, failure_kind = ?, error = ?, \
+             attempts = ?, exit_code = ?, signal = ? WHERE id = ? AND outcome IS NULL").query()
         .bind(now)
         .bind(&end.outcome)
         .bind(&end.failure_kind)
@@ -500,7 +535,8 @@ impl Store {
     /// For the process taking the lock. How many it closed.
     pub async fn close_abandoned_invocations(&self, why: &str) -> Result<u64> {
         let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let closed = sqlx::query(CLOSE_ABANDONED_INVOCATIONS)
+        let closed = CLOSE_ABANDONED_INVOCATIONS
+            .query()
             .bind(now)
             .bind(crate::run_state::RunState::Stopped.as_str())
             .bind(why)
@@ -514,10 +550,12 @@ impl Store {
     /// Every invocation the loop recorded, oldest first, each with how it
     /// ended once it has.
     pub async fn invocations(&self) -> Result<Vec<(InvocationRow, Option<InvocationEnd>)>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "dag.supervisor.list_invocations",
             "SELECT id, step, run_id, started_at_utc, outcome, failure_kind, error, attempts, \
-             exit_code, signal FROM invocations ORDER BY rowid",
+             exit_code, signal FROM invocations ORDER BY rowid"
         )
+        .query()
         .fetch_all(self.pool())
         .await?;
         rows.iter()
@@ -547,7 +585,8 @@ impl Store {
 
     /// The processes the loop started and has not seen end.
     pub async fn running_invocations(&self) -> Result<Vec<InvocationRow>> {
-        sqlx::query(RUNNING_INVOCATIONS)
+        RUNNING_INVOCATIONS
+            .query()
             .fetch_all(self.pool())
             .await?
             .iter()
@@ -585,6 +624,7 @@ pub(crate) async fn record(root: &std::path::Path, next: &Record) {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn step(fingerprint: &str) -> StepRecord {
         StepRecord {
             succeeded: true,
@@ -685,7 +725,8 @@ mod tests {
         reset.steps.remove("slack/raw");
         store.save_record(&st, &reset).await.unwrap();
         assert!(store.load_record().await.unwrap().steps.is_empty());
-        let sinks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sinks")
+        let sinks: i64 = test_sql!("SELECT COUNT(*) FROM sinks")
+            .query_scalar()
             .fetch_one(store.pool())
             .await
             .unwrap();

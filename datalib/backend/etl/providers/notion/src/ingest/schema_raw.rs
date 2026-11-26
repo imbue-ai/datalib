@@ -13,6 +13,7 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration};
 use datalib_etl_macros::CasEdgeRow;
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const PAGES: &str = "pages";
 pub const PAGE_MARKDOWN: &str = "page_markdown";
@@ -224,7 +225,9 @@ pub fn tree_rows_of_pages_sql(filter: &str) -> String {
 /// the page, whose row stays a `page`. Its title is read as
 /// [`tree_rows_of_pages_sql`] reads it, so a held page's row written
 /// again from the search is unchanged.
-pub const TREE_ROW_OF_LISTED_PAGE_SQL: &str = "INSERT INTO tree \
+pub const TREE_ROW_OF_LISTED_PAGE_SQL: Sql = sql!(
+    "notion.insert_tree_row_of_listed_page",
+    "INSERT INTO tree \
         (id, kind, title, parent_type, parent_id, created_time) \
      VALUES (?, 'unmirrored_page', \
         (SELECT group_concat(json_extract(t.value, '$.plain_text'), '') \
@@ -234,17 +237,21 @@ pub const TREE_ROW_OF_LISTED_PAGE_SQL: &str = "INSERT INTO tree \
      ON CONFLICT(id) DO UPDATE SET \
         kind = CASE WHEN tree.kind = 'page' THEN 'page' ELSE excluded.kind END, \
         title = excluded.title, parent_type = excluded.parent_type, \
-        parent_id = excluded.parent_id, created_time = excluded.created_time";
+        parent_id = excluded.parent_id, created_time = excluded.created_time"
+);
 
 /// Writes the `tree` row of a page seen as a block, its title bound:
 /// an `unmirrored_page`, unless the store holds the page.
-pub const TREE_ROW_OF_PLACED_PAGE_SQL: &str = "INSERT INTO tree \
+pub const TREE_ROW_OF_PLACED_PAGE_SQL: Sql = sql!(
+    "notion.upsert_tree_row_of_placed_page",
+    "INSERT INTO tree \
         (id, kind, title, parent_type, parent_id, created_time) \
      VALUES (?, 'unmirrored_page', ?, ?, ?, ?) \
      ON CONFLICT(id) DO UPDATE SET \
         kind = CASE WHEN tree.kind = 'page' THEN 'page' ELSE excluded.kind END, \
         title = excluded.title, parent_type = excluded.parent_type, \
-        parent_id = excluded.parent_id, created_time = excluded.created_time";
+        parent_id = excluded.parent_id, created_time = excluded.created_time"
+);
 
 /// `listed_pages` — every page roots mode listed, by the walk down from
 /// the roots or by the search, at the `last_edited_time` it was listed at: what a page under a root is owed
@@ -314,11 +321,13 @@ pub const LADDER: &[Migration] = &[
 /// so one stored before holes were filled in place, and links kept, would
 /// stay as it is and report nothing. Those bodies are read again once.
 async fn bodies_with_holes_are_owed(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
-    let rows: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(String, Option<String>, Option<String>)> = sql!(
+        "notion.migrate_holes.list_bodies_with_holes",
         "SELECT id, markdown, unresolved_block_ids FROM page_markdown \
          WHERE markdown LIKE '%<unknown%' \
-            OR (unresolved_block_ids IS NOT NULL AND unresolved_block_ids NOT IN ('', '[]'))",
+            OR (unresolved_block_ids IS NOT NULL AND unresolved_block_ids NOT IN ('', '[]'))"
     )
+    .query_as()
     .fetch_all(&mut *conn)
     .await?;
     for (id, markdown, unresolved) in rows {
@@ -330,10 +339,14 @@ async fn bodies_with_holes_are_owed(conn: &mut sqlx::SqliteConnection) -> anyhow
             "unresolved_block_ids": unresolved,
         }));
         if body.has_holes_that_matter() {
-            sqlx::query("UPDATE page_markdown_bookkeeping SET held_version = NULL WHERE id = ?")
-                .bind(&id)
-                .execute(&mut *conn)
-                .await?;
+            sql!(
+                "notion.migrate_holes.mark_body_owed",
+                "UPDATE page_markdown_bookkeeping SET held_version = NULL WHERE id = ?"
+            )
+            .query()
+            .bind(&id)
+            .execute(&mut *conn)
+            .await?;
         }
     }
     Ok(())
@@ -346,19 +359,26 @@ async fn bodies_with_holes_are_owed(conn: &mut sqlx::SqliteConnection) -> anyhow
 async fn pages_into_the_tree(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for ddl in [TREE_DDL.to_string(), dr::bookkeeping_ddl_for(TREE)] {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("notion.migrate_tree.create_tree_tables"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
     // Audited: a constant filter.
-    sqlx::query(sqlx::AssertSqlSafe(tree_rows_of_pages_sql("true")))
-        .execute(&mut *conn)
-        .await?;
-    let (now, offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
-        "INSERT INTO tree_bookkeeping (id, attempt_count, fetched_at_utc, tz_offset) \
-         SELECT id, 0, ?, ? FROM tree WHERE true ON CONFLICT(id) DO NOTHING",
+    Sql::dynamic(
+        sql_id!("notion.migrate_tree.place_all_pages_in_tree"),
+        tree_rows_of_pages_sql("true"),
     )
+    .query()
+    .execute(&mut *conn)
+    .await?;
+    let (now, offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    sql!(
+        "notion.migrate_tree.hold_all_tree_rows",
+        "INSERT INTO tree_bookkeeping (id, attempt_count, fetched_at_utc, tz_offset) \
+         SELECT id, 0, ?, ? FROM tree WHERE true ON CONFLICT(id) DO NOTHING"
+    )
+    .query()
     .bind(&now)
     .bind(&offset)
     .execute(&mut *conn)
@@ -375,9 +395,11 @@ async fn pages_into_the_tree(conn: &mut sqlx::SqliteConnection) -> anyhow::Resul
 /// held).
 async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     let has = |table: &'static str| {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+        sql!(
+            "notion.migrate_held.table_exists",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)"
         )
+        .query_scalar::<bool>()
         .bind(table)
     };
     for ddl in [
@@ -386,22 +408,27 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
         datalib_etl_web::coverage::DDL.to_string(),
     ] {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("notion.migrate_held.create_comment_tables"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
     for table in [PAGES, PAGE_MARKDOWN] {
-        let has_column: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')",
+        let has_column: bool = sql!(
+            "notion.migrate_held.has_held_version_column",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')"
         )
+        .query_scalar()
         .bind(format!("{table}_bookkeeping"))
         .fetch_one(&mut *conn)
         .await?;
         if !has_column {
             // Audited: `table` is one of this module's constants.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"
-            )))
+            Sql::dynamic(
+                sql_id!("notion.migrate_held.add_held_version_column"),
+                format!("ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"),
+            )
+            .query()
             .execute(&mut *conn)
             .await?;
         }
@@ -411,44 +438,54 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
 
     // A stub without an object is nothing the new listing knows of.
     if problems {
-        sqlx::query(
+        sql!(
+            "notion.migrate_held.delete_problems_of_stubs",
             "DELETE FROM problems WHERE scope_kind = ? \
-             AND scope_key IN (SELECT 'pages:' || id FROM pages WHERE payload IS NULL)",
+             AND scope_key IN (SELECT 'pages:' || id FROM pages WHERE payload IS NULL)"
         )
+        .query()
         .bind(datalib_problems::ScopeKind::Entity.as_str())
         .execute(&mut *conn)
         .await?;
     }
-    sqlx::query(
-        "DELETE FROM pages_bookkeeping WHERE id IN (SELECT id FROM pages WHERE payload IS NULL)",
+    sql!(
+        "notion.migrate_held.delete_stub_sidecars",
+        "DELETE FROM pages_bookkeeping WHERE id IN (SELECT id FROM pages WHERE payload IS NULL)"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
-    sqlx::query("DELETE FROM pages WHERE payload IS NULL")
-        .execute(&mut *conn)
-        .await?;
+    sql!(
+        "notion.migrate_held.delete_page_stubs",
+        "DELETE FROM pages WHERE payload IS NULL"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await?;
 
     // Comments were listed with the page, so a page is held for them
     // unless its row says the listing failed, or the credential could
     // not read comments at all.
     let forbidden = problems
-        && sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM problems WHERE scope_key = 'listing:comments')",
+        && sql!(
+            "notion.migrate_held.comments_listing_forbidden",
+            "SELECT EXISTS(SELECT 1 FROM problems WHERE scope_key = 'listing:comments')"
         )
+        .query_scalar::<bool>()
         .fetch_one(&mut *conn)
         .await?;
     if !forbidden {
-        sqlx::query(
+        sql!(
+            "notion.migrate_held.list_comments_of_pages",
             "INSERT INTO page_comments (id) \
              SELECT p.id FROM pages p LEFT JOIN pages_bookkeeping b ON b.id = p.id \
-             WHERE b.last_error IS NULL OR b.last_error NOT LIKE 'comments: %'",
+             WHERE b.last_error IS NULL OR b.last_error NOT LIKE 'comments: %'"
         )
+        .query()
         .execute(&mut *conn)
         .await?;
-        sqlx::query(
-            "INSERT INTO page_comments_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
-             SELECT p.id, 0, ?, p.last_edited_time FROM page_comments c JOIN pages p ON p.id = c.id",
-        )
+        sql!("notion.migrate_held.hold_page_comments", "INSERT INTO page_comments_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
+             SELECT p.id, 0, ?, p.last_edited_time FROM page_comments c JOIN pages p ON p.id = c.id").query()
         .bind(&now)
         .execute(&mut *conn)
         .await?;
@@ -456,38 +493,46 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
 
     // Every page with an object is held at its last_edited_time, and
     // the failures its row carried are owed listings now.
-    sqlx::query(
+    sql!(
+        "notion.migrate_held.hold_pages",
         "INSERT INTO pages_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
          SELECT id, 0, ?, last_edited_time FROM pages WHERE true \
          ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version, \
             fetched_at_utc = COALESCE(pages_bookkeeping.fetched_at_utc, excluded.fetched_at_utc), \
-            last_error = NULL",
+            last_error = NULL"
     )
+    .query()
     .bind(&now)
     .execute(&mut *conn)
     .await?;
     if problems {
-        sqlx::query("DELETE FROM problems WHERE scope_kind = ? AND scope_key LIKE 'pages:%'")
-            .bind(datalib_problems::ScopeKind::Entity.as_str())
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "notion.migrate_held.delete_page_problems",
+            "DELETE FROM problems WHERE scope_kind = ? AND scope_key LIKE 'pages:%'"
+        )
+        .query()
+        .bind(datalib_problems::ScopeKind::Entity.as_str())
+        .execute(&mut *conn)
+        .await?;
     }
 
     // A body is held at the stamp its row carried; a stub that never
     // fetched carried none and stays owed.
-    sqlx::query(
-        "INSERT INTO page_markdown_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
+    sql!("notion.migrate_held.hold_page_markdown", "INSERT INTO page_markdown_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
          SELECT id, 0, ?, source_last_edited_time FROM page_markdown \
          WHERE source_last_edited_time IS NOT NULL \
          ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version, \
-            fetched_at_utc = COALESCE(page_markdown_bookkeeping.fetched_at_utc, excluded.fetched_at_utc)",
-    )
+            fetched_at_utc = COALESCE(page_markdown_bookkeeping.fetched_at_utc, excluded.fetched_at_utc)").query()
     .bind(&now)
     .execute(&mut *conn)
     .await?;
-    sqlx::query("ALTER TABLE page_markdown DROP COLUMN source_last_edited_time")
-        .execute(&mut *conn)
-        .await?;
+    sql!(
+        "notion.migrate_held.drop_source_edited_column",
+        "ALTER TABLE page_markdown DROP COLUMN source_last_edited_time"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await?;
 
     for (table, sql) in [
         (
@@ -500,7 +545,10 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
         ),
     ] {
         if has(table).fetch_one(&mut *conn).await? {
-            sqlx::query(sql).execute(&mut *conn).await?;
+            Sql::dynamic(sql_id!("notion.migrate_held.forget_workspace_cursors"), sql)
+                .query()
+                .execute(&mut *conn)
+                .await?;
         }
     }
     Ok(())

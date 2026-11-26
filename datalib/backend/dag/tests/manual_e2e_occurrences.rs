@@ -10,6 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use serde_json::{json, Value};
 
 /// Ids listed in a report, at most; the counts say the rest.
@@ -88,15 +89,13 @@ pub fn listing(data_root: &Path, stanza: &str) -> String {
         let path = data_root.join(stanza).join("render_occurrences/occurrences.doltlite_db");
         let pool = super::open_readonly(&path).await;
         let mut lines = Vec::new();
-        let w = sqlx::query("SELECT from_utc, until_utc FROM occurrences_window")
+        let w = test_sql!("SELECT from_utc, until_utc FROM occurrences_window").query()
             .fetch_one(&pool)
             .await
             .expect("read occurrences_window");
         lines.push(json!({ "window": [w.get::<String, _>("from_utc"), w.get::<String, _>("until_utc")] }));
-        let rows = sqlx::query(
-            "SELECT calendar_id, instance_id, series_id, start_time, end_time, status, all_day, title \
-             FROM occurrences ORDER BY start_utc, calendar_id, instance_id",
-        )
+        let rows = test_sql!("SELECT calendar_id, instance_id, series_id, start_time, end_time, status, all_day, title \
+             FROM occurrences ORDER BY start_utc, calendar_id, instance_id").query()
         .fetch_all(&pool)
         .await
         .expect("read occurrences");
@@ -112,7 +111,7 @@ pub fn listing(data_root: &Path, stanza: &str) -> String {
                 "title": r.get::<Option<String>, _>("title"),
             }));
         }
-        let unlisted = sqlx::query("SELECT event_row, reason FROM unlisted ORDER BY event_row, reason")
+        let unlisted = test_sql!("SELECT event_row, reason FROM unlisted ORDER BY event_row, reason").query()
             .fetch_all(&pool)
             .await
             .expect("read unlisted");
@@ -217,7 +216,8 @@ async fn read_ours(
             .join("render_occurrences/occurrences.doltlite_db"),
     )
     .await;
-    let rows = sqlx::query("SELECT instance_id, start_utc, start_time, all_day FROM occurrences")
+    let rows = test_sql!("SELECT instance_id, start_utc, start_time, all_day FROM occurrences")
+        .query()
         .fetch_all(&occ)
         .await
         .expect("read occurrences");
@@ -232,7 +232,8 @@ async fn read_ours(
             (id, start)
         })
         .collect();
-    let w = sqlx::query("SELECT from_utc, until_utc FROM occurrences_window")
+    let w = test_sql!("SELECT from_utc, until_utc FROM occurrences_window")
+        .query()
         .fetch_one(&occ)
         .await
         .expect("read occurrences_window");
@@ -241,14 +242,18 @@ async fn read_ours(
 
     let raw =
         super::open_readonly(&data_root.join(stanza).join("ingest/entities.doltlite_db")).await;
-    let sql = match method {
-        "google" => "SELECT DISTINCT calendar_id AS id, '' AS url FROM google_events",
-        _ => {
-            "SELECT DISTINCT o.calendar_id AS id, a.server_url || '|' || c.href AS url \
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        match method {
+            "google" => "SELECT DISTINCT calendar_id AS id, '' AS url FROM google_events",
+            _ => {
+                "SELECT DISTINCT o.calendar_id AS id, a.server_url || '|' || c.href AS url \
              FROM ics_objects o JOIN calendars c ON c.id = o.calendar_id JOIN accounts a"
-        }
-    };
-    let calendars = sqlx::query(sql)
+            }
+        },
+    );
+    let calendars = sql
+        .query()
         .fetch_all(&raw)
         .await
         .expect("read calendars")

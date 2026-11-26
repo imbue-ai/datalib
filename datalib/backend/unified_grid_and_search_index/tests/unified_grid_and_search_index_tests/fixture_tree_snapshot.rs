@@ -16,6 +16,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use crate::fixture_db_snapshot::fixture_db_path;
 use crate::fixture_terms_snapshot::lightroom_index_path;
+use datalib_sql::test_sql;
 
 #[derive(sqlx::FromRow)]
 struct Placed {
@@ -56,25 +57,24 @@ impl Tree {
             .connect_with(SqliteConnectOptions::new().filename(path).read_only(true))
             .await
             .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
-        let placed: Vec<Placed> = sqlx::query_as(
-            "SELECT uuid, source_id, kind, conversation_name AS name, conversation_uuid, is_document, \
+        let placed: Vec<Placed> = test_sql!("SELECT uuid, source_id, kind, conversation_name AS name, conversation_uuid, is_document, \
                     parent_uuid, read_uuid, place_uuid, diff_status \
-               FROM grid_rows ORDER BY parent_uuid, sort_key, uuid",
-        )
+               FROM grid_rows ORDER BY parent_uuid, sort_key, uuid").query_as()
         .fetch_all(&pool)
         .await
         .expect("read where the rows sit");
         let roles: Vec<(String, bool, bool)> =
-            sqlx::query_as("SELECT uuid, read_together, is_place FROM nodes")
+            test_sql!("SELECT uuid, read_together, is_place FROM nodes")
+                .query_as()
                 .fetch_all(&pool)
                 .await
                 .expect("read the containers");
-        let filings: Vec<(String, String)> = sqlx::query_as(
-            "SELECT node_uuid, under_uuid FROM filings ORDER BY node_uuid, under_uuid",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("read the filings");
+        let filings: Vec<(String, String)> =
+            test_sql!("SELECT node_uuid, under_uuid FROM filings ORDER BY node_uuid, under_uuid")
+                .query_as()
+                .fetch_all(&pool)
+                .await
+                .expect("read the filings");
         pool.close().await;
 
         let mut children: HashMap<String, Vec<String>> = HashMap::new();

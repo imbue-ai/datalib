@@ -17,6 +17,7 @@ use datalib_etl_airvisual::ingest::schema_raw::load_clock_changes;
 pub use datalib_etl_timeseries_render::series::Series;
 
 use super::units::METRICS;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// One row of `airvisual_devices`: the serial that keys the samples,
 /// and the name a person knows it by.
@@ -113,10 +114,14 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
         device.last_ts_ms = newest.get(&device.id).copied();
     }
     let files = load_files(pool).await;
-    let sample_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM airvisual_samples")
-        .fetch_one(pool)
-        .await
-        .context("count airvisual_samples")?;
+    let sample_count: i64 = sql!(
+        "airvisual_render.count_samples",
+        "SELECT COUNT(*) FROM airvisual_samples"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await
+    .context("count airvisual_samples")?;
 
     Ok(ParsedAirvisual {
         head: Some(pin.commit().to_string()),
@@ -128,10 +133,12 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
 }
 
 async fn load_devices(pool: &SqlitePool) -> Result<Vec<DeviceRow>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "airvisual_render.list_devices",
         "SELECT id, name, model, mac_address, app_version, system_version, timezone, last_ts_ms \
-           FROM airvisual_devices ORDER BY name, id",
+           FROM airvisual_devices ORDER BY name, id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load airvisual_devices")?;
@@ -194,12 +201,16 @@ async fn load_series(
     let columns: Vec<&'static str> = METRICS.iter().map(|m| m.metric).collect();
     // Audited: `columns` is the `&'static str` metric table above, our
     // own column names; no runtime data reaches the statement.
-    let sql = format!(
-        "SELECT device_id, ts_ms, source_file, {} \
+    let sql = Sql::dynamic(
+        sql_id!("airvisual_render.list_samples_by_device"),
+        format!(
+            "SELECT device_id, ts_ms, source_file, {} \
            FROM airvisual_samples ORDER BY device_id, ts_ms",
-        columns.join(", ")
+            columns.join(", ")
+        ),
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .context("load airvisual_samples")?;
@@ -231,9 +242,13 @@ async fn load_series(
 }
 
 async fn load_files(pool: &SqlitePool) -> Vec<IngestedFile> {
-    let Ok(rows) = sqlx::query("SELECT rel_path, size_bytes FROM ingested_files ORDER BY rel_path")
-        .fetch_all(pool)
-        .await
+    let Ok(rows) = sql!(
+        "airvisual_render.list_ingested_files",
+        "SELECT rel_path, size_bytes FROM ingested_files ORDER BY rel_path"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
     else {
         return Vec::new();
     };

@@ -13,6 +13,7 @@ use datalib_etl_web::dav;
 use datalib_etl_web::http::{HttpMethod, HttpResponse, LatchkeySettings};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::write_fixture;
+use datalib_sql::{test_sql, Sql};
 
 pub(crate) const HOST: &str = "https://carddav.enterprise.test";
 pub(crate) const PRINCIPAL: &str = "/dav/principals/user/picard@enterprise.test/";
@@ -193,11 +194,12 @@ async fn run_named(
     summary
 }
 
-async fn scalar(store: &Path, sql: &'static str) -> Option<String> {
+async fn scalar(store: &Path, sql: Sql) -> Option<String> {
     let db = RawDb::open(&db_path_for(store))
         .await
         .expect("reopen store");
-    let v: Option<String> = sqlx::query_scalar(sql)
+    let v: Option<String> = sql
+        .query_scalar()
         .fetch_optional(db.pool())
         .await
         .expect("query")
@@ -259,13 +261,13 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
         "{first:?}"
     );
     assert_eq!(
-        scalar(&store, "SELECT display_name FROM addressbooks")
+        scalar(&store, test_sql!("SELECT display_name FROM addressbooks"))
             .await
             .as_deref(),
         Some("Bridge")
     );
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM addressbooks")
+        scalar(&store, test_sql!("SELECT sync_token FROM addressbooks"))
             .await
             .as_deref(),
         Some("data:,1")
@@ -273,7 +275,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
     assert_eq!(
         scalar(
             &store,
-            "SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-senior-staff'"
+            test_sql!("SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-senior-staff'")
         )
         .await
         .as_deref(),
@@ -295,7 +297,7 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
     assert_eq!(
         scalar(
             &store,
-            "SELECT group_concat(uid, ',') FROM (SELECT uid FROM contacts ORDER BY uid)"
+            test_sql!("SELECT group_concat(uid, ',') FROM (SELECT uid FROM contacts ORDER BY uid)")
         )
         .await
         .as_deref(),
@@ -303,13 +305,13 @@ async fn discovers_through_well_known_and_syncs_incrementally() {
     );
     assert!(scalar(
         &store,
-        "SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-picard'"
+        test_sql!("SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-picard'")
     )
     .await
     .unwrap()
     .contains("NCC-1701-E"));
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM addressbooks")
+        scalar(&store, test_sql!("SELECT sync_token FROM addressbooks"))
             .await
             .as_deref(),
         Some("data:,2")
@@ -320,7 +322,8 @@ async fn problem_keys(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store))
         .await
         .expect("reopen store");
-    let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+    let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .expect("query problems");
@@ -331,7 +334,7 @@ async fn problem_keys(store: &Path) -> Vec<String> {
 async fn stored_uids(store: &Path) -> Option<String> {
     scalar(
         store,
-        "SELECT group_concat(uid, ',') FROM (SELECT uid FROM contacts ORDER BY uid)",
+        test_sql!("SELECT group_concat(uid, ',') FROM (SELECT uid FROM contacts ORDER BY uid)"),
     )
     .await
 }
@@ -406,14 +409,14 @@ async fn an_expired_token_lists_the_book_whole_again() {
         Some("tng-picard,tng-riker,tng-senior-staff,tng-worf")
     );
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM addressbooks")
+        scalar(&store, test_sql!("SELECT sync_token FROM addressbooks"))
             .await
             .as_deref(),
         Some("data:,5")
     );
     assert!(scalar(
         &store,
-        "SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-picard'"
+        test_sql!("SELECT json_extract(payload, '$.vcard') FROM contacts WHERE uid = 'tng-picard'")
     )
     .await
     .unwrap()
@@ -719,11 +722,15 @@ async fn an_address_book_the_server_no_longer_lists_goes_with_its_cards() {
     );
     assert_eq!(stored_uids(&store).await, None);
     for sql in [
-        "SELECT CAST(count(*) AS TEXT) FROM addressbooks",
-        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
-        "SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping",
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM addressbooks"),
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM dav_resources"),
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM dav_resources_bookkeeping"),
     ] {
-        assert_eq!(scalar(&store, sql).await.as_deref(), Some("0"), "{sql}");
+        assert_eq!(
+            scalar(&store, sql.clone()).await.as_deref(),
+            Some("0"),
+            "{sql}"
+        );
     }
 }
 
@@ -773,9 +780,13 @@ async fn a_home_listing_that_names_nothing_deletes_no_address_book() {
     let second = run_named(&two, &store, Default::default(), &[]).await;
     assert!(second.is_err(), "{second:?}");
     for sql in [
-        "SELECT CAST(count(*) AS TEXT) FROM addressbooks",
-        "SELECT CAST(count(*) AS TEXT) FROM dav_resources",
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM addressbooks"),
+        test_sql!("SELECT CAST(count(*) AS TEXT) FROM dav_resources"),
     ] {
-        assert_eq!(scalar(&store, sql).await.as_deref(), Some("1"), "{sql}");
+        assert_eq!(
+            scalar(&store, sql.clone()).await.as_deref(),
+            Some("1"),
+            "{sql}"
+        );
     }
 }

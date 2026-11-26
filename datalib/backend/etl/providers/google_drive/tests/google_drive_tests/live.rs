@@ -16,6 +16,7 @@
 use datalib_etl_google_drive::ingest::{self, db_path_for, FetchSummary, RawDb};
 use datalib_etl_google_drive_config::GoogleDriveApi;
 use datalib_etl_web::http::LatchkeySettings;
+use datalib_sql::test_sql;
 
 async fn run(store: &std::path::Path, api: &GoogleDriveApi) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
@@ -59,11 +60,12 @@ async fn named_files_capture_whole_and_a_second_run_owes_nothing() {
     assert_eq!(first.captured, ids.len(), "{first:?}");
 
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let without_native: i64 = sqlx::query_scalar(
+    let without_native: i64 = test_sql!(
         "SELECT COUNT(*) FROM captures c WHERE NOT EXISTS \
          (SELECT 1 FROM capture_parts p WHERE p.capture_id = c.id \
-          AND p.part = 'native.json.gz' AND p.blake3 IS NOT NULL)",
+          AND p.part = 'native.json.gz' AND p.blake3 IS NOT NULL)"
     )
+    .query_scalar()
     .fetch_one(db.pool())
     .await
     .unwrap();

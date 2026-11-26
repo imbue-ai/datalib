@@ -17,6 +17,7 @@ use datalib_etl_web::playback;
 
 use crate::playback::TABLES;
 use crate::tape::{self, Edition};
+use datalib_sql::test_sql;
 
 struct Drive {
     playback: PathBuf,
@@ -74,10 +75,11 @@ impl Rig for Drive {
     async fn contents(&self, dir: &Path) -> Result<String> {
         let db = self.open(dir).await?;
         let mut out = dump_tables(db.pool(), TABLES).await?;
-        let held: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+        let held: Vec<(String, bool, Option<String>)> = test_sql!(
             "SELECT id, fetched_at_utc IS NOT NULL, held_version \
-             FROM files_bookkeeping ORDER BY id",
+             FROM files_bookkeeping ORDER BY id"
         )
+        .query_as()
         .fetch_all(db.pool())
         .await?;
         for (id, fetched, version) in held {

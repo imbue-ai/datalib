@@ -13,6 +13,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
@@ -70,6 +71,7 @@ rust_test(
     deps = [
         "//datalib/backend/etl/providers/file_inventory:datalib_etl_file_inventory",
         ":datalib_dirtree_diff",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:hex",
         "@datalib_crates//:serde_json",

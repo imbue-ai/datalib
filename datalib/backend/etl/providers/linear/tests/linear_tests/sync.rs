@@ -8,6 +8,7 @@ use datalib_etl_linear_config::LinearSync;
 use serde_json::{json, Value};
 
 use crate::fake::FakeLinear;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 fn at(minute: u32) -> String {
     format!("2026-09-01T{:02}:{:02}:00.000Z", minute / 60, minute % 60)
@@ -127,16 +128,20 @@ async fn records_changed(db: &RawDb, from: &str, to: &str) -> Vec<String> {
 }
 
 async fn ids(db: &RawDb, table: &str) -> Vec<String> {
-    let sql = format!("SELECT id FROM {table} WHERE payload IS NOT NULL ORDER BY id");
-    sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-        .fetch_all(db.pool())
-        .await
-        .unwrap()
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT id FROM {table} WHERE payload IS NOT NULL ORDER BY id"),
+    );
+    sql.query_scalar().fetch_all(db.pool()).await.unwrap()
 }
 
 async fn payload(db: &RawDb, table: &str, id: &str) -> Value {
-    let sql = format!("SELECT json(payload) FROM {table} WHERE id = ?");
-    let text: String = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(payload) FROM {table} WHERE id = ?"),
+    );
+    let text: String = sql
+        .query_scalar()
         .bind(id)
         .fetch_one(db.pool())
         .await
@@ -145,8 +150,12 @@ async fn payload(db: &RawDb, table: &str, id: &str) -> Value {
 }
 
 async fn volatile(db: &RawDb, table: &str, id: &str) -> Value {
-    let sql = format!("SELECT json(volatile_payload) FROM {table}_bookkeeping WHERE id = ?");
-    let text: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(volatile_payload) FROM {table}_bookkeeping WHERE id = ?"),
+    );
+    let text: Option<String> = sql
+        .query_scalar()
         .bind(id)
         .fetch_one(db.pool())
         .await
@@ -301,7 +310,8 @@ async fn a_first_run_leaves_little_for_gc_to_reclaim() {
     let written = std::fs::metadata(&path).unwrap().len();
 
     let db = RawDb::open(&path).await.unwrap();
-    sqlx::query("SELECT dolt_gc()")
+    test_sql!("SELECT dolt_gc()")
+        .query()
         .execute(db.pool())
         .await
         .unwrap();

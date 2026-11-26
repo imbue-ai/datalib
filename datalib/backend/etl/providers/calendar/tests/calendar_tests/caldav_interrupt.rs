@@ -21,6 +21,7 @@ use datalib_etl_web::playback;
 use crate::caldav_playback::{
     account_fixtures, fixture, multistatus, resource, xml, BRIDGE, HOST, RECEPTION, STAFF,
 };
+use datalib_sql::test_sql;
 
 /// What the download mirrors and what upstream listed; not the
 /// `_bookkeeping` sidecars, whose attempt counts a run that was cut off
@@ -36,10 +37,11 @@ pub const TABLES: &[&str] = &[
 pub async fn contents(db: &RawDb) -> Result<String> {
     let mut out = dump_tables(db.pool(), TABLES).await?;
     out.push_str("== held\n");
-    let held: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+    let held: Vec<(String, bool, Option<String>)> = test_sql!(
         "SELECT id, fetched_at_utc IS NOT NULL, held_version \
-         FROM dav_resources_bookkeeping ORDER BY id",
+         FROM dav_resources_bookkeeping ORDER BY id"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await?;
     for (id, fetched, version) in held {

@@ -1,5 +1,5 @@
 //! Ingest an unpacked Claude **bulk export** into this provider's raw
-//! store — the ingest wave of the `claude_export` source type.
+//! store — the `claude` source's `export` method.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -409,10 +409,13 @@ mod tests {
     use serde_json::json;
     use std::collections::HashMap;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     async fn dump(pool: &sqlx::SqlitePool, table: &str) -> HashMap<String, Value> {
-        let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT id, json(payload) FROM {table}"
-        )))
+        let rows: Vec<(String, String)> = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT id, json(payload) FROM {table}"),
+        )
+        .query_as()
         .fetch_all(pool)
         .await
         .unwrap();
@@ -642,7 +645,8 @@ mod tests {
         // The always-paired lifecycle holds through a delete too: the
         // sidecar row goes with its object row.
         let orphans: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM conversations_bookkeeping WHERE id = 'c2'")
+            test_sql!("SELECT COUNT(*) FROM conversations_bookkeeping WHERE id = 'c2'")
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap();
@@ -756,7 +760,8 @@ mod tests {
         let db = open_raw(raw.path()).await;
         let s = ingest(opts(&db, ex.path())).await.unwrap();
         assert_eq!((s.conversations, s.without_uuid), (1, 1));
-        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+        let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -768,7 +773,8 @@ mod tests {
             &json!([conv("c1", "First")]),
         );
         ingest(opts(&db, ex.path())).await.unwrap();
-        let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM problems")
+        let left: i64 = test_sql!("SELECT COUNT(*) FROM problems")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -817,7 +823,8 @@ mod tests {
         assert_eq!(dump(db.pool(), "projects").await.len(), 1);
         assert_eq!(dump(db.pool(), "project_docs").await.len(), 1);
         assert_eq!(s.pruned, 0);
-        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY 1")
+        let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems ORDER BY 1")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();

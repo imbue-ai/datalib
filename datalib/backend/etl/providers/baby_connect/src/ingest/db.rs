@@ -10,6 +10,7 @@ use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
 
 use super::schema_raw::*;
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -71,11 +72,14 @@ async fn write_as<T: Table>(
 
 /// The kids the store holds, as the home page last listed them.
 pub async fn kids(tx: &mut Transaction<'_, Sqlite>) -> Result<Vec<Value>> {
-    let payloads: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT json(payload) FROM kids ORDER BY id")
-            .fetch_all(&mut **tx)
-            .await
-            .context("read the kids")?;
+    let payloads: Vec<Option<String>> = sql!(
+        "baby_connect.list_kids",
+        "SELECT json(payload) FROM kids ORDER BY id"
+    )
+    .query_scalar()
+    .fetch_all(&mut **tx)
+    .await
+    .context("read the kids")?;
     Ok(payloads
         .into_iter()
         .flatten()

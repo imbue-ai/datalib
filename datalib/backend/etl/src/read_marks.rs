@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use datalib_etl_macros::RawTable;
+use datalib_sql::sql;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 pub const TABLE: &str = "read_marks";
@@ -89,21 +90,28 @@ pub async fn forget(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<
         return Ok(());
     }
     let ids = serde_json::to_string(ids).context("serialize read mark ids")?;
-    sqlx::query("DELETE FROM read_marks WHERE id IN (SELECT value FROM json_each(?))")
-        .bind(ids)
-        .execute(&mut **tx)
-        .await
-        .context("forget read_marks")?;
+    sql!(
+        "etl.read_marks.delete_marks_by_ids",
+        "DELETE FROM read_marks WHERE id IN (SELECT value FROM json_each(?))"
+    )
+    .query()
+    .bind(ids)
+    .execute(&mut **tx)
+    .await
+    .context("forget read_marks")?;
     Ok(())
 }
 
 /// Every mark the store holds, by id.
 pub async fn load(pool: &SqlitePool) -> Result<BTreeMap<String, ReadMark>> {
-    let rows: Vec<(String, Option<String>, Option<i64>)> =
-        sqlx::query_as("SELECT id, read_through, read FROM read_marks")
-            .fetch_all(pool)
-            .await
-            .context("load read_marks")?;
+    let rows: Vec<(String, Option<String>, Option<i64>)> = sql!(
+        "etl.read_marks.list_marks",
+        "SELECT id, read_through, read FROM read_marks"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("load read_marks")?;
     Ok(rows
         .into_iter()
         .filter_map(|(id, read_through, read)| {
@@ -136,10 +144,12 @@ pub async fn moved(pool: &SqlitePool, from: &str, to: &str) -> Result<Vec<MovedM
     if !crate::doltlite_raw::table_exists(pool, TABLE).await? {
         return Ok(Vec::new());
     }
-    let created_between: i64 = sqlx::query_scalar(
+    let created_between: i64 = sql!(
+        "etl.read_marks.check_table_added_between",
         "SELECT COUNT(*) FROM dolt_diff_summary WHERE from_ref = ? AND to_ref = ? \
-         AND to_table_name = ? AND diff_type = 'added'",
+         AND to_table_name = ? AND diff_type = 'added'"
     )
+    .query_scalar()
     .bind(from)
     .bind(to)
     .bind(TABLE)
@@ -157,10 +167,12 @@ pub async fn moved(pool: &SqlitePool, from: &str, to: &str) -> Result<Vec<MovedM
         Option<String>,
         Option<i64>,
     );
-    let rows: Vec<Diff> = sqlx::query_as(
+    let rows: Vec<Diff> = sql!(
+        "etl.read_marks.list_changed_marks",
         "SELECT from_id, to_id, from_read_through, from_read, to_read_through, to_read \
-         FROM dolt_diff_read_marks WHERE from_ref = ? AND to_ref = ? AND diff_type != 'unchanged'",
+         FROM dolt_diff_read_marks WHERE from_ref = ? AND to_ref = ? AND diff_type != 'unchanged'"
     )
+    .query_as()
     .bind(from)
     .bind(to)
     .fetch_all(pool)
@@ -193,6 +205,7 @@ mod tests {
     use super::*;
     use crate::doltlite_raw::{commit_run, head_commit, open};
 
+    use datalib_sql::test_sql;
     /// What a render reads: every mark, and which moved between two
     /// commits. Across the commit that created the table, none did, or a
     /// store's first render after its rung would redraw every document.
@@ -296,7 +309,8 @@ mod tests {
         let after = head_commit(&pool).await.unwrap().unwrap();
 
         assert_eq!(moved(&pool, &before, &after).await.unwrap(), vec![]);
-        let muted: Option<i64> = sqlx::query_scalar("SELECT muted FROM read_marks WHERE id = 'm1'")
+        let muted: Option<i64> = test_sql!("SELECT muted FROM read_marks WHERE id = 'm1'")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();

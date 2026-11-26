@@ -19,6 +19,7 @@ use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl_web::playback;
 
 use crate::jmap_tape::{Account, Email, Tape, HOST};
+use datalib_sql::test_sql;
 
 /// What the download mirrors, what upstream listed, and the state
 /// tokens. Not the `_bookkeeping` sidecars (attempt counts and stamps,
@@ -44,10 +45,11 @@ pub const MIRRORED: &[&str] = &[
 pub async fn contents(db: &RawDb) -> Result<String> {
     let mut out = dump_tables(db.pool(), MIRRORED).await?;
     out.push_str("== held\n");
-    let held: Vec<(String, String)> = sqlx::query_as(
+    let held: Vec<(String, String)> = test_sql!(
         "SELECT id, held_version FROM listed_messages_bookkeeping
-         WHERE held_version IS NOT NULL ORDER BY id",
+         WHERE held_version IS NOT NULL ORDER BY id"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await?;
     for (id, version) in held {

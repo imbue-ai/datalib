@@ -4,7 +4,7 @@
 //! its functions) and from the docs compiled into it
 //! (`datalib_agent_docs`); `main` prints them.
 
-use datalib_agent_docs::{Doc, DOCS, GETTING_YOUR_DATA};
+use datalib_agent_docs::{Doc, DOCS, GETTING_YOUR_DATA, RAW_STORES};
 use datalib_cli_help::Example;
 use datalib_source_common::Reach;
 use strum::VariantArray;
@@ -86,6 +86,13 @@ const SETUP: &[SetupStep] = &[
             what: "sync it",
             command: "datalib-pipeline sync ~/datalib slack/ingest --by claude",
         }],
+    },
+    SetupStep {
+        say: "Before answering from it, check the sync is over and the copy is complete, \
+              and know what it covers: `datalib-step help <type>` says what the source can \
+              never see and how to check it owes nothing, and `datalib-step help agent` § \
+              \"Before you answer from the copy\" has the checks every source shares.",
+        commands: &[],
     },
     SetupStep {
         say: "Read what came in. Search it as the app's search box does, with no server, \
@@ -363,7 +370,8 @@ fn overview(commands: &[String]) -> String {
         ),
         (
             "datalib-step help <type>",
-            "one source: what it mirrors, how it signs in, its ingest methods",
+            "one source: what it mirrors and what it cannot, how it signs in, its \
+             ingest methods, how to read and check its raw store",
         ),
         (
             "datalib-step examples <type>",
@@ -488,6 +496,23 @@ fn source_page(t: SourceType, git_ref: &str) -> String {
         0,
         0,
     ));
+    if let Some(section) = raw_store_section(t) {
+        out.push('\n');
+        out.push_str(&wrap(
+            "What this source's raw store holds, table by table, from `datalib-step help \
+             raw-stores`, which also says how to open a store and what every store has \
+             besides these:",
+            0,
+            0,
+        ));
+        out.push('\n');
+        out.push_str(&datalib_agent_docs::print_links(
+            section.trim_end(),
+            RAW_STORES,
+            git_ref,
+            datalib_agent_docs::Reader::SourcePage(t.as_str()),
+        ));
+    }
     out.truncate(out.trim_end().len());
     out
 }
@@ -652,6 +677,24 @@ fn sections_for(t: SourceType) -> Vec<&'static str> {
         .collect()
 }
 
+// raw_stores.md heads a source's section `## <Name> (`<type>`)`, the shape
+// `raw_stores_doc_test.rs` parses.
+fn raw_store_section(t: SourceType) -> Option<&'static str> {
+    let suffix = format!("(`{}`)", t.as_str());
+    let doc = datalib_agent_docs::by_path(RAW_STORES)
+        .expect("raw_stores.md is compiled in")
+        .text;
+    let starts: Vec<usize> = doc.match_indices("\n## ").map(|(i, _)| i + 1).collect();
+    starts.iter().enumerate().find_map(|(n, &start)| {
+        let section = &doc[start..starts.get(n + 1).copied().unwrap_or(doc.len())];
+        section
+            .lines()
+            .next()
+            .is_some_and(|heading| heading.trim_end().ends_with(&suffix))
+            .then_some(section)
+    })
+}
+
 fn first_sentence(s: &str) -> &str {
     s.split_once(". ").map_or(s, |(first, _)| first)
 }
@@ -770,6 +813,40 @@ mod tests {
             for m in ingest_methods(t) {
                 assert!(page.contains(m.path), "{t}: method {} missing", m.path);
             }
+        }
+    }
+
+    /// Agents answered from a copy without knowing what the source can
+    /// never see, or how to read what it stored, because a source's page
+    /// said only how to set it up.
+    #[test]
+    fn every_source_page_says_what_it_misses_and_how_to_read_it() {
+        let has = |section: &str, sub: &str| section.lines().any(|l| l.trim_end() == sub);
+        for &t in SourceType::VARIANTS {
+            let sections = sections_for(t);
+            for section in &sections {
+                let heading = section.lines().next().unwrap_or_default();
+                assert!(
+                    has(section, "### Limitations"),
+                    "{t}: getting_your_data.md \"{heading}\" has no \"### Limitations\""
+                );
+            }
+            let reading = sections
+                .iter()
+                .filter(|s| has(s, "### Reading the copy"))
+                .count();
+            assert_eq!(
+                reading, 1,
+                "{t}: one of its getting_your_data.md sections, and only one, has \
+                 \"### Reading the copy\""
+            );
+            let page = page(&[t.as_str().into()], &commands(), "abc123").unwrap();
+            let raw = format!("(`{}`)", t.as_str());
+            assert!(
+                page.lines()
+                    .any(|l| l.starts_with("## ") && l.trim_end().ends_with(&raw)),
+                "{t}: raw_stores.md has no \"## … {raw}\" section for its page"
+            );
         }
     }
 

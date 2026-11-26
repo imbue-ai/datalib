@@ -5,6 +5,7 @@
 use sqlx::sqlite::SqlitePool;
 
 use crate::dolt_backend_integration::{explain, unique_db_path, writer};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const BY_SOURCE: &str = "CREATE INDEX by_source ON t (source, stamp, flag, id)";
 const BY_CHANNEL: &str = "CREATE INDEX by_channel ON t (channel, stamp, flag, id)";
@@ -35,7 +36,8 @@ async fn unranked() -> SqlitePool {
 }
 
 async fn run(db: &SqlitePool, sql: &str) {
-    sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .execute(db)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"));
@@ -91,7 +93,8 @@ async fn analyze_counts_the_rows_with_no_value_as_one_value() {
     let per_value = |index: &'static str| {
         let db = db.clone();
         async move {
-            let stat: String = sqlx::query_scalar("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+            let stat: String = test_sql!("SELECT stat FROM sqlite_stat1 WHERE idx = ?")
+                .query_scalar()
                 .bind(index)
                 .fetch_one(&db)
                 .await
@@ -114,7 +117,8 @@ async fn analyze_counts_the_rows_with_no_value_as_one_value() {
 #[tokio::test]
 async fn our_sqlite_keeps_only_an_average_per_column() {
     let db = table(&[]).await;
-    let options: Vec<String> = sqlx::query_scalar("PRAGMA compile_options")
+    let options: Vec<String> = test_sql!("PRAGMA compile_options")
+        .query_scalar()
         .fetch_all(&db)
         .await
         .unwrap();

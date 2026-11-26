@@ -16,6 +16,7 @@ rust_library(
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/step_problems:datalib_step_problems",
         # For the `BulkUpsertable` impl `PortableTable` generates.
         "//datalib/backend/table:datalib_table",

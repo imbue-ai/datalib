@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use sqlx::sqlite::SqlitePoolOptions;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::layer::{Context, SubscriberExt};
@@ -84,14 +85,16 @@ async fn store(dir: &Path) -> (std::path::PathBuf, sqlx::SqlitePool) {
         .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE t (k INTEGER NOT NULL, flag INTEGER NOT NULL, v TEXT)")
+    test_sql!("CREATE TABLE t (k INTEGER NOT NULL, flag INTEGER NOT NULL, v TEXT)")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(
+    test_sql!(
         "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < ?) \
-         INSERT INTO t SELECT x, x % 2, 'v' || x FROM c",
+         INSERT INTO t SELECT x, x % 2, 'v' || x FROM c"
     )
+    .query()
     .bind(ROWS as i64)
     .execute(&pool)
     .await
@@ -99,7 +102,7 @@ async fn store(dir: &Path) -> (std::path::PathBuf, sqlx::SqlitePool) {
     (path, pool)
 }
 
-const LOOKUP: &str = "SELECT v FROM t WHERE k = ?";
+const LOOKUP: Sql = test_sql!("SELECT v FROM t WHERE k = ?");
 
 #[tokio::test]
 async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
@@ -111,7 +114,8 @@ async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
     );
 
     // The last key, so the scan reads every row before it finds it.
-    let v: String = sqlx::query_scalar(LOOKUP)
+    let v: String = LOOKUP
+        .query_scalar()
         .bind(ROWS as i64)
         .fetch_one(&pool)
         .await
@@ -120,7 +124,7 @@ async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
     let logged = lines_about(&path);
     assert_eq!(logged.len(), 1, "{logged:#?}");
     let line = &logged[0];
-    assert_eq!(line["statement"], LOOKUP);
+    assert_eq!(line["statement"], LOOKUP.as_str());
     assert_eq!(line["params"], "int", "the value's shape, not the value");
     assert_eq!(line["rows"], "1");
     assert!(
@@ -128,11 +132,13 @@ async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
         "{line:#?}"
     );
 
-    sqlx::query("CREATE INDEX t_by_k ON t (k)")
+    test_sql!("CREATE INDEX t_by_k ON t (k)")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-    let v: String = sqlx::query_scalar(LOOKUP)
+    let v: String = LOOKUP
+        .query_scalar()
         .bind(ROWS as i64 - 2)
         .fetch_one(&pool)
         .await
@@ -150,13 +156,12 @@ async fn a_statement_marked_as_walking_by_design_is_not_logged() {
     let (path, pool) = store(dir.path()).await;
     for (mark, logged) in [("/* walks by design */", 0), ("", 1)] {
         // Safe: the two marks are the literals above.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DELETE FROM t {mark} WHERE k < ?"
-        )))
-        .bind(0)
-        .execute(&pool)
-        .await
-        .unwrap();
+        Sql::dynamic(test_sql_id!(), format!("DELETE FROM t {mark} WHERE k < ?"))
+            .query()
+            .bind(0)
+            .execute(&pool)
+            .await
+            .unwrap();
         assert_eq!(
             lines_about(&path).len(),
             logged,
@@ -173,17 +178,18 @@ async fn a_statement_marked_as_walking_by_design_is_not_logged() {
 async fn a_search_by_an_unselective_index_is_logged_though_it_scans_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let (path, pool) = store(dir.path()).await;
-    sqlx::query("CREATE INDEX t_by_flag ON t (flag)")
+    test_sql!("CREATE INDEX t_by_flag ON t (flag)")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
 
-    let v: String =
-        sqlx::query_scalar("SELECT v FROM t INDEXED BY t_by_flag WHERE flag = 1 AND k = ?")
-            .bind(ROWS as i64 - 1)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let v: String = test_sql!("SELECT v FROM t INDEXED BY t_by_flag WHERE flag = 1 AND k = ?")
+        .query_scalar()
+        .bind(ROWS as i64 - 1)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(v, format!("v{}", ROWS - 1));
     let logged = lines_about(&path);
     assert_eq!(logged.len(), 1, "{logged:#?}");

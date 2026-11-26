@@ -477,6 +477,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     const NOW: &str = "2026-10-22T00:00:00-07:00";
 
     fn write(dir: &Path, rel: &str, v: &Value) {
@@ -529,14 +530,16 @@ mod tests {
     }
 
     async fn ids(db: &RawDb) -> Vec<String> {
-        sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
+        test_sql!("SELECT id FROM conversations ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
     }
 
     async fn problem_keys(db: &RawDb) -> Vec<String> {
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY 1")
+        test_sql!("SELECT scope_key FROM problems ORDER BY 1")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -664,7 +667,8 @@ mod tests {
         ingest(fill()).await.unwrap();
         let api_payload = |id: &str| -> String { format!("{id} as the API stored it") };
         for id in ["c1", "c2", "c3"] {
-            sqlx::query("UPDATE conversations SET title = ? WHERE id = ?")
+            test_sql!("UPDATE conversations SET title = ? WHERE id = ?")
+                .query()
                 .bind(api_payload(id))
                 .bind(id)
                 .execute(db.pool())
@@ -684,12 +688,12 @@ mod tests {
         let s = ingest(fill()).await.unwrap();
         assert_eq!((s.conversations, s.unchanged, s.pruned), (1, 2, 0));
         assert_eq!(ids(&db).await, ["c1", "c2", "c3", "c4"]);
-        let titles: Vec<String> = sqlx::query_scalar(
-            "SELECT title FROM conversations WHERE id IN ('c1','c2') ORDER BY id",
-        )
-        .fetch_all(db.pool())
-        .await
-        .unwrap();
+        let titles: Vec<String> =
+            test_sql!("SELECT title FROM conversations WHERE id IN ('c1','c2') ORDER BY id")
+                .query_scalar()
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
         assert_eq!(titles, [api_payload("c1"), api_payload("c2")]);
         db.close().await;
     }
@@ -718,7 +722,8 @@ mod tests {
         assert_eq!(ids(&db).await, ["c1"]);
         assert!(db.attachments_listed().await.unwrap().is_empty());
         let orphans: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM conversations_bookkeeping WHERE id = 'c2'")
+            test_sql!("SELECT COUNT(*) FROM conversations_bookkeeping WHERE id = 'c2'")
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap();

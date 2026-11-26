@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::ingest::{self, RawDb};
 use datalib_etl_pdf_render::render::{self, convert};
+use datalib_sql::test_sql;
 use flate2::{Compress, Compression, FlushCompress};
 
 struct CountingAllocator;
@@ -240,7 +241,8 @@ async fn scan(root: &Path, raw: &Path) -> Vec<(String, String)> {
     })
     .await
     .unwrap();
-    let problems = sqlx::query_as("SELECT scope_key, sample FROM problems")
+    let problems = test_sql!("SELECT scope_key, sample FROM problems")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap();

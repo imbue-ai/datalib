@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use datalib_runs::{MetricRow, Retention, RunWriter};
+use datalib_sql::{test_sql_id, Sql};
 
 const MEASURED: &str = "items";
 const OTHER_SERIES: i64 = 20_000;
@@ -44,12 +45,12 @@ async fn store(root: &Path, beside: bool) {
     ] {
         // Safe: the table, column and run are literals, the count a
         // constant.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
+        Sql::dynamic(test_sql_id!(), format!(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {OTHER_SERIES}) \
              INSERT INTO {table} (run_id, step, name, labels, value, {stamp}) \
              SELECT '{run}', 'big/ingest', 'rss_bytes', 'n=' || i, i, \
                '2026-09-01T00:00:00.000000+00:00' FROM n"
-        )))
+        )).query()
         .execute(&pool)
         .await
         .unwrap();

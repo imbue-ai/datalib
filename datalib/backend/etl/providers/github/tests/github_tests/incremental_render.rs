@@ -14,6 +14,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::test_sql;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 
@@ -78,7 +79,8 @@ async fn download(api: &Path, playback: &Path, out_db: &Path) {
     // while this one is still alive, which is what makes a `dolt_commit`
     // fail with "commit conflict".
     let _ = datalib_etl::doltlite_raw::commit_run(db.pool(), "test: download").await;
-    let commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log")
+    let commits: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -176,7 +178,8 @@ async fn a_pr_that_left_the_store_is_a_render_unit_with_no_rows() {
     let db = datalib_etl_github::ingest::RawDb::open(&db_path_for(&out_db))
         .await
         .unwrap();
-    sqlx::query("DELETE FROM pull_requests WHERE id = ?")
+    test_sql!("DELETE FROM pull_requests WHERE id = ?")
+        .query()
         .bind(format!("{REPO}#2"))
         .execute(db.pool())
         .await

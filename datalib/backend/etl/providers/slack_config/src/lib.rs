@@ -59,7 +59,10 @@ pub struct SlackApiSync {
     /// Trailing edit-catcher — *not* a way to say "only fetch the last N
     /// days". On a channel that already has history, re-query the last N
     /// days on top of the forward walk so edits and reactions on
-    /// already-stored messages land, and messages deleted upstream go.
+    /// already-stored top-level messages land, and messages deleted
+    /// upstream go. A thread's other replies are not re-read by it (only
+    /// those also sent to the channel are): they are read again only
+    /// when the thread's newest reply changes.
     /// It only ever *adds* work: the range a run fetches still starts at
     /// `since`. Unset is 30 days; `0` skips the pass.
     #[serde(default)]

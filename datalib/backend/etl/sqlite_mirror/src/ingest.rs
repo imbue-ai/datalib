@@ -13,9 +13,8 @@ use crate::mirror::{self, MirrorOptions, MirrorStats};
 /// providers' `FetchOptions`.
 pub struct FetchOptions {
     /// The doltlite mirror store (`<raw_dir>/entities.doltlite_db`).
-    /// Ignored when `pool` is `Some` — the orchestrator opens the store
-    /// itself so it can register the interrupt-commit hook before any
-    /// write happens.
+    /// Ignored when `pool` is `Some`: a caller that already holds the
+    /// store's one connection passes it instead.
     pub mirror_path: PathBuf,
     /// An already-open mirror pool to reuse.
     pub pool: Option<SqlitePool>,

@@ -15,6 +15,7 @@ use serde_json::json;
 use tempfile::tempdir;
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 /// A body that would not fetch used to be a log line, and the page was
 /// stored with its new `last_edited_time`, so no later run asked again.
@@ -392,7 +393,8 @@ async fn a_body_that_will_not_come_is_held_in_roots_mode() {
 
 async fn coverage(store: &Path) -> Vec<(String, String)> {
     let db = RawDb::open(store).await.unwrap();
-    let spans = sqlx::query_as("SELECT lo, hi FROM coverage WHERE scope = 'search' ORDER BY lo")
+    let spans = test_sql!("SELECT lo, hi FROM coverage WHERE scope = 'search' ORDER BY lo")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap();

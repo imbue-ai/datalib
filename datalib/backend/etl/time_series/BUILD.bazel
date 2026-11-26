@@ -9,6 +9,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/problems:datalib_problems",
@@ -41,11 +42,11 @@ rust_binary(
     deps = [
         ":datalib_etl_time_series",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
     ],
 )

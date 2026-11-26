@@ -23,6 +23,7 @@ use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 use crate::owed::{self, Listed};
 use datalib_etl::doltlite_raw as dr;
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const RESOURCES: &str = "dav_resources";
 
@@ -81,10 +82,12 @@ pub async fn list(
     resources: &[Resource],
 ) -> Result<()> {
     for r in resources {
-        sqlx::query(
+        sql!(
+            "etl.web.dav.upsert_listed_resource",
             "INSERT INTO dav_resources (id, collection, href, etag) VALUES (?, ?, ?, ?)
-             ON CONFLICT(id) DO UPDATE SET etag = excluded.etag",
+             ON CONFLICT(id) DO UPDATE SET etag = excluded.etag"
         )
+        .query()
         .bind(resource_id(collection, &r.href))
         .bind(collection)
         .bind(&r.href)
@@ -98,12 +101,15 @@ pub async fn list(
 
 /// Everything `collection` lists, by href.
 pub async fn resources(pool: &SqlitePool, collection: &str) -> Result<Vec<Resource>> {
-    let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT href, etag FROM dav_resources WHERE collection = ? ORDER BY href")
-            .bind(collection)
-            .fetch_all(pool)
-            .await
-            .context("read what the collection lists")?;
+    let rows: Vec<(String, Option<String>)> = sql!(
+        "etl.web.dav.list_resources_of_collection",
+        "SELECT href, etag FROM dav_resources WHERE collection = ? ORDER BY href"
+    )
+    .query_as()
+    .bind(collection)
+    .fetch_all(pool)
+    .await
+    .context("read what the collection lists")?;
     Ok(rows
         .into_iter()
         .map(|(href, etag)| Resource { href, etag })
@@ -136,11 +142,15 @@ pub async fn forget(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &s
 
 /// The listing row alone; for a loop that drops the sidecar itself.
 pub async fn unlist(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &str) -> Result<()> {
-    sqlx::query("DELETE FROM dav_resources WHERE id = ?")
-        .bind(resource_id(collection, href))
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("unlist {href}"))?;
+    sql!(
+        "etl.web.dav.delete_resource",
+        "DELETE FROM dav_resources WHERE id = ?"
+    )
+    .query()
+    .bind(resource_id(collection, href))
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("unlist {href}"))?;
     Ok(())
 }
 
@@ -149,16 +159,28 @@ pub async fn unlist(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &s
 /// the transaction that removes the provider's content for it.
 pub async fn forget_collection(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
     for sql in [
-        "DELETE FROM problems INDEXED BY problems_by_scope \
+        sql!(
+            "etl.web.forget_collection.delete_problems",
+            "DELETE FROM problems INDEXED BY problems_by_scope \
          WHERE scope_kind = ? AND scope_key IN \
-         (SELECT 'dav_resources:' || id FROM dav_resources WHERE collection = ?)",
-        "DELETE FROM dav_resources_bookkeeping WHERE id IN \
-         (SELECT id FROM dav_resources WHERE collection = ?)",
-        "DELETE FROM dav_resources WHERE collection = ?",
-        "DELETE FROM dav_unconfirmed WHERE collection = ?",
+         (SELECT 'dav_resources:' || id FROM dav_resources WHERE collection = ?)"
+        ),
+        sql!(
+            "etl.web.forget_collection.delete_dav_resources_bookkeeping",
+            "DELETE FROM dav_resources_bookkeeping WHERE id IN \
+         (SELECT id FROM dav_resources WHERE collection = ?)"
+        ),
+        sql!(
+            "etl.web.forget_collection.delete_dav_resources",
+            "DELETE FROM dav_resources WHERE collection = ?"
+        ),
+        sql!(
+            "etl.web.forget_collection.delete_dav_unconfirmed",
+            "DELETE FROM dav_unconfirmed WHERE collection = ?"
+        ),
     ] {
-        let mut q = sqlx::query(sql);
-        if sql.contains("scope_kind") {
+        let mut q = sql.query();
+        if sql.as_str().contains("scope_kind") {
             q = q.bind(datalib_problems::ScopeKind::Entity.as_str());
         }
         q.bind(collection)
@@ -173,15 +195,21 @@ pub async fn forget_collection(tx: &mut Transaction<'_, Sqlite>, collection: &st
 /// unconfirmed until named. A listing already under way is abandoned
 /// for this one.
 pub async fn begin_whole(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
-    sqlx::query("DELETE FROM dav_unconfirmed WHERE collection = ?")
-        .bind(collection)
-        .execute(&mut **tx)
-        .await
-        .context("clear an abandoned listing")?;
-    sqlx::query(
-        "INSERT OR IGNORE INTO dav_unconfirmed (collection, href) \
-         SELECT collection, href FROM dav_resources WHERE collection = ?",
+    sql!(
+        "etl.web.dav.delete_abandoned_unconfirmed",
+        "DELETE FROM dav_unconfirmed WHERE collection = ?"
     )
+    .query()
+    .bind(collection)
+    .execute(&mut **tx)
+    .await
+    .context("clear an abandoned listing")?;
+    sql!(
+        "etl.web.dav.insert_unconfirmed_from_listed",
+        "INSERT OR IGNORE INTO dav_unconfirmed (collection, href) \
+         SELECT collection, href FROM dav_resources WHERE collection = ?"
+    )
+    .query()
     .bind(collection)
     .execute(&mut **tx)
     .await
@@ -196,12 +224,15 @@ pub async fn stored(pool: &SqlitePool, ids: &[String]) -> Result<HashSet<String>
     let mut out = HashSet::new();
     for chunk in ids.chunks(datalib_etl::bulk::SQL_CHUNK) {
         // Audited: one `?` per id, every id bound.
-        let sql = format!(
-            "SELECT id FROM dav_resources_bookkeeping \
+        let sql = Sql::dynamic(
+            sql_id!("etl.web.dav.list_stored_resource_ids"),
+            format!(
+                "SELECT id FROM dav_resources_bookkeeping \
              WHERE fetched_at_utc IS NOT NULL AND last_error IS NULL AND id IN ({})",
-            vec!["?"; chunk.len()].join(",")
+                vec!["?"; chunk.len()].join(",")
+            ),
         );
-        let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query_scalar::<String>();
         for id in chunk {
             q = q.bind(id);
         }
@@ -221,12 +252,16 @@ pub async fn settle(
     hrefs: &[&str],
 ) -> Result<()> {
     for href in hrefs {
-        sqlx::query("DELETE FROM dav_unconfirmed WHERE collection = ? AND href = ?")
-            .bind(collection)
-            .bind(href)
-            .execute(&mut **tx)
-            .await
-            .context("settle a listed href")?;
+        sql!(
+            "etl.web.dav.delete_confirmed_href",
+            "DELETE FROM dav_unconfirmed WHERE collection = ? AND href = ?"
+        )
+        .query()
+        .bind(collection)
+        .bind(href)
+        .execute(&mut **tx)
+        .await
+        .context("settle a listed href")?;
     }
     Ok(())
 }
@@ -238,17 +273,24 @@ pub async fn finish_listing(
     tx: &mut Transaction<'_, Sqlite>,
     collection: &str,
 ) -> Result<Vec<String>> {
-    let gone: Vec<String> =
-        sqlx::query_scalar("SELECT href FROM dav_unconfirmed WHERE collection = ? ORDER BY href")
-            .bind(collection)
-            .fetch_all(&mut **tx)
-            .await
-            .context("read the unconfirmed hrefs")?;
-    sqlx::query("DELETE FROM dav_unconfirmed WHERE collection = ?")
-        .bind(collection)
-        .execute(&mut **tx)
-        .await
-        .context("close the listing")?;
+    let gone: Vec<String> = sql!(
+        "etl.web.dav.list_unconfirmed_hrefs",
+        "SELECT href FROM dav_unconfirmed WHERE collection = ? ORDER BY href"
+    )
+    .query_scalar()
+    .bind(collection)
+    .fetch_all(&mut **tx)
+    .await
+    .context("read the unconfirmed hrefs")?;
+    sql!(
+        "etl.web.dav.delete_unconfirmed_of_collection",
+        "DELETE FROM dav_unconfirmed WHERE collection = ?"
+    )
+    .query()
+    .bind(collection)
+    .execute(&mut **tx)
+    .await
+    .context("close the listing")?;
     Ok(gone)
 }
 
@@ -267,23 +309,30 @@ pub async fn adopt(
 ) -> Result<()> {
     for stmt in ddl() {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(stmt))
+        Sql::dynamic(sql_id!("etl.web.dav.migrate_create_state_tables"), stmt)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     // Audited: `table` and `collection_col` are the calling rung's
     // `&'static str`; values bound.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT OR IGNORE INTO dav_resources (id, collection, href, etag) \
+    Sql::dynamic(
+        sql_id!("etl.web.dav.migrate_list_held_objects"),
+        format!(
+            "INSERT OR IGNORE INTO dav_resources (id, collection, href, etag) \
          SELECT {collection_col} || '#' || href, {collection_col}, href, etag FROM {table} \
          WHERE href IS NOT NULL AND etag IS NOT NULL"
-    )))
+        ),
+    )
+    .query()
     .execute(&mut *conn)
     .await
     .context("list what the store holds")?;
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "INSERT OR IGNORE INTO dav_resources_bookkeeping \
+    Sql::dynamic(
+        sql_id!("etl.web.dav.migrate_hold_listed_objects"),
+        format!(
+            "INSERT OR IGNORE INTO dav_resources_bookkeeping \
             (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, \
              volatile_payload, tz_offset, held_version) \
          SELECT t.{collection_col} || '#' || t.href, COALESCE(b.fetched_at_utc, ?), \
@@ -291,53 +340,71 @@ pub async fn adopt(
                 COALESCE(b.tz_offset, ?), t.etag \
          FROM {table} t LEFT JOIN {table}_bookkeeping b ON b.id = t.id \
          WHERE t.href IS NOT NULL AND t.etag IS NOT NULL"
-    )))
+        ),
+    )
+    .query()
     .bind(&now)
     .bind(&tz_offset)
     .execute(&mut *conn)
     .await
     .context("hold what the store holds")?;
 
-    let has_unstored: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dav_unstored')",
+    let has_unstored: bool = sql!(
+        "etl.web.dav.migrate_check_unstored_table",
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dav_unstored')"
     )
+    .query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if !has_unstored {
         return Ok(());
     }
-    sqlx::query(
+    sql!(
+        "etl.web.dav.migrate_list_unstored",
         "INSERT OR IGNORE INTO dav_resources (id, collection, href, etag) \
-         SELECT collection || '#' || href, collection, href, NULL FROM dav_unstored",
+         SELECT collection || '#' || href, collection, href, NULL FROM dav_unstored"
     )
+    .query()
     .execute(&mut *conn)
     .await
     .context("list what could not be stored")?;
-    sqlx::query(
+    sql!(
+        "etl.web.dav.migrate_unstored_attempts",
         "INSERT OR IGNORE INTO dav_resources_bookkeeping \
             (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, \
              volatile_payload, tz_offset, held_version) \
-         SELECT collection || '#' || href, NULL, 1, ?, detail, NULL, ?, NULL FROM dav_unstored",
+         SELECT collection || '#' || href, NULL, 1, ?, detail, NULL, ?, NULL FROM dav_unstored"
     )
+    .query()
     .bind(&now)
     .bind(&tz_offset)
     .execute(&mut *conn)
     .await
     .context("owe what could not be stored")?;
-    let has_problems: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'problems')",
+    let has_problems: bool = sql!(
+        "etl.web.dav.migrate_check_problems_table",
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'problems')"
     )
+    .query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if has_problems {
-        sqlx::query("DELETE FROM problems WHERE instr(scope_key, ?) = 1")
-            .bind(format!("record:{table}:"))
-            .execute(&mut *conn)
-            .await?;
-    }
-    sqlx::query("DROP TABLE dav_unstored")
+        sql!(
+            "etl.web.dav.migrate_drop_record_problems",
+            "DELETE FROM problems WHERE instr(scope_key, ?) = 1"
+        )
+        .query()
+        .bind(format!("record:{table}:"))
         .execute(&mut *conn)
         .await?;
+    }
+    sql!(
+        "etl.web.dav.migrate_drop_unstored_table",
+        "DROP TABLE dav_unstored"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -345,6 +412,7 @@ pub async fn adopt(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     async fn store() -> (tempfile::TempDir, SqlitePool) {
         let d = tempfile::tempdir().unwrap();
         let ddl = ddl();
@@ -443,7 +511,8 @@ mod tests {
             [r("/z", "1")],
             "a failed fetch leaves it owed; a forgotten object is not"
         );
-        let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY 1")
+        let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems ORDER BY 1")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();

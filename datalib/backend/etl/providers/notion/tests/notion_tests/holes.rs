@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 use tempfile::{tempdir, TempDir};
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 const HOLE: &str = "1701d000-0000-4000-8000-0000000000a1";
 const INNER_HOLE: &str = "1701d000-0000-4000-8000-0000000000a2";
@@ -51,7 +52,8 @@ fn serve_block(tape: &Path, id: &str, kind: &str, content: Value) {
 async fn stored(store: &Path) -> (String, Vec<String>) {
     let db = RawDb::open(store).await.unwrap();
     let (markdown, unresolved): (String, Option<String>) =
-        sqlx::query_as("SELECT markdown, unresolved_block_ids FROM page_markdown WHERE id = ?")
+        test_sql!("SELECT markdown, unresolved_block_ids FROM page_markdown WHERE id = ?")
+            .query_as()
             .bind(BRIDGE)
             .fetch_one(db.pool())
             .await
@@ -228,7 +230,8 @@ async fn a_block_the_api_will_not_show_is_a_warning_naming_it() {
 
     assert_eq!(problems(&b.store).await, warning_on_the_bridge());
     let db = RawDb::open(&b.store).await.unwrap();
-    let said: String = sqlx::query_scalar("SELECT sample FROM problems")
+    let said: String = test_sql!("SELECT sample FROM problems")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();
@@ -281,14 +284,16 @@ async fn a_body_an_earlier_build_stored_is_read_again_only_if_it_gains() {
         ),
         (SICKBAY, format!("{}\n", marker(HOLE, Some("button")))),
     ] {
-        sqlx::query("UPDATE page_markdown SET markdown = ? WHERE id = ?")
+        test_sql!("UPDATE page_markdown SET markdown = ? WHERE id = ?")
+            .query()
             .bind(markdown)
             .bind(id)
             .execute(db.pool())
             .await
             .unwrap();
     }
-    sqlx::query("UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'")
+    test_sql!("UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'")
+        .query()
         .execute(db.pool())
         .await
         .unwrap();
@@ -299,7 +304,8 @@ async fn a_body_an_earlier_build_stored_is_read_again_only_if_it_gains() {
 
     let db = RawDb::open(&store).await.expect("the rung carries it");
     let held: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, held_version FROM page_markdown_bookkeeping ORDER BY id")
+        test_sql!("SELECT id, held_version FROM page_markdown_bookkeeping ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();

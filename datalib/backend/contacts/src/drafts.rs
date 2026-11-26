@@ -16,6 +16,7 @@ use sqlx::{Row, SqliteConnection};
 
 use crate::schema::fields::FieldRow;
 use crate::{FieldKind, Store};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// What a contact says, as its card edits it: everything but its links
 /// and its photo, which change at once rather than through a draft.
@@ -112,17 +113,25 @@ async fn read_edit(
 ) -> Result<Option<ContactEdit>> {
     let contact = match at {
         At::Here => {
-            sqlx::query("SELECT name, note FROM contacts WHERE contact_id = ?")
-                .bind(contact_id)
-                .fetch_optional(&mut *conn)
-                .await
+            sql!(
+                "contacts_app.drafts.read_contact_draft",
+                "SELECT name, note FROM contacts WHERE contact_id = ?"
+            )
+            .query()
+            .bind(contact_id)
+            .fetch_optional(&mut *conn)
+            .await
         }
         At::Commit(c) => {
-            sqlx::query("SELECT name, note FROM dolt_at_contacts(?) WHERE contact_id = ?")
-                .bind(c)
-                .bind(contact_id)
-                .fetch_optional(&mut *conn)
-                .await
+            sql!(
+                "contacts_app.drafts.read_contact_at_commit",
+                "SELECT name, note FROM dolt_at_contacts(?) WHERE contact_id = ?"
+            )
+            .query()
+            .bind(c)
+            .bind(contact_id)
+            .fetch_optional(&mut *conn)
+            .await
         }
     }
     .context("read a contact")?;
@@ -132,20 +141,28 @@ async fn read_edit(
     const COLS: &str = "field_id, kind, label, value, handle, copied_from_source, copied_from_key";
     let rows = match at {
         At::Here => {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                // Audited: COLS is a constant.
-                "SELECT {COLS} FROM fields WHERE contact_id = ? ORDER BY position, field_id"
-            )))
+            Sql::dynamic(
+                sql_id!("contacts_app.drafts.list_fields_draft"),
+                format!(
+                    // Audited: COLS is a constant.
+                    "SELECT {COLS} FROM fields WHERE contact_id = ? ORDER BY position, field_id"
+                ),
+            )
+            .query()
             .bind(contact_id)
             .fetch_all(&mut *conn)
             .await
         }
         At::Commit(c) => {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                // Audited: COLS is a constant.
-                "SELECT {COLS} FROM dolt_at_fields(?) WHERE contact_id = ? \
+            Sql::dynamic(
+                sql_id!("contacts_app.drafts.list_fields_at_commit"),
+                format!(
+                    // Audited: COLS is a constant.
+                    "SELECT {COLS} FROM dolt_at_fields(?) WHERE contact_id = ? \
                   ORDER BY position, field_id"
-            )))
+                ),
+            )
+            .query()
             .bind(c)
             .bind(contact_id)
             .fetch_all(&mut *conn)
@@ -187,10 +204,12 @@ async fn write_edit(
     edit: &ContactEdit,
 ) -> Result<()> {
     let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let done = sqlx::query(
+    let done = sql!(
+        "contacts_app.drafts.update_contact_name_note",
         "UPDATE contacts SET name = ?, note = ?, updated_at_utc = ?, tz_offset = ? \
-          WHERE contact_id = ?",
+          WHERE contact_id = ?"
     )
+    .query()
     .bind(edit.name.trim())
     .bind(
         edit.note
@@ -208,17 +227,25 @@ async fn write_edit(
         bail!("no contact {contact_id}");
     }
     let kept: Vec<&str> = edit.fields.iter().map(|f| f.field_id.as_str()).collect();
-    let held: Vec<String> = sqlx::query_scalar("SELECT field_id FROM fields WHERE contact_id = ?")
-        .bind(contact_id)
-        .fetch_all(&mut **tx)
-        .await
-        .context("read a contact's fields")?;
+    let held: Vec<String> = sql!(
+        "contacts_app.drafts.list_field_ids_of_contact",
+        "SELECT field_id FROM fields WHERE contact_id = ?"
+    )
+    .query_scalar()
+    .bind(contact_id)
+    .fetch_all(&mut **tx)
+    .await
+    .context("read a contact's fields")?;
     for gone in held.iter().filter(|id| !kept.contains(&id.as_str())) {
-        sqlx::query("DELETE FROM fields WHERE field_id = ?")
-            .bind(gone)
-            .execute(&mut **tx)
-            .await
-            .context("drop a field")?;
+        sql!(
+            "contacts_app.drafts.delete_dropped_field",
+            "DELETE FROM fields WHERE field_id = ?"
+        )
+        .query()
+        .bind(gone)
+        .execute(&mut **tx)
+        .await
+        .context("drop a field")?;
     }
     let rows: Vec<FieldRow> = edit
         .fields
@@ -368,6 +395,7 @@ mod tests {
     use crate::ContactKind;
     use strum::VariantArray;
 
+    use datalib_sql::test_sql;
     struct Fixture {
         _dir: tempfile::TempDir,
         store: Store,
@@ -408,7 +436,8 @@ mod tests {
     }
 
     async fn log(store: &Store, n: i64) -> Vec<String> {
-        sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT ?")
+        test_sql!("SELECT message FROM dolt_log() LIMIT ?")
+            .query_scalar()
             .bind(n)
             .fetch_all(&store.pool)
             .await

@@ -18,6 +18,7 @@ use datalib_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
 
 use crate::world::{self, *};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// Every table a run's result is compared on.
 pub const TABLES: &[&str] = &[
@@ -68,17 +69,21 @@ async fn run(store: &Path, tape: &Path) -> anyhow::Result<FetchSummary> {
     run_at(store, tape, sync(), world::now()).await
 }
 
-async fn count(store: &Path, sql: &'static str) -> i64 {
+async fn count(store: &Path, sql: Sql) -> i64 {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let n = sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap();
+    let n = sql.query_scalar().fetch_one(db.pool()).await.unwrap();
     db.close().await;
     n
 }
 
 async fn payload(store: &Path, table: &str, id: &str) -> Option<Value> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let sql = format!("SELECT json(payload) FROM {table} WHERE id = ?");
-    let got: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(payload) FROM {table} WHERE id = ?"),
+    );
+    let got: Option<String> = sql
+        .query_scalar()
         .bind(id)
         .fetch_optional(db.pool())
         .await
@@ -89,7 +94,8 @@ async fn payload(store: &Path, table: &str, id: &str) -> Option<Value> {
 
 async fn problems(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let got = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+    let got = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -119,7 +125,7 @@ async fn a_first_sync_copies_every_conversation_the_account_can_read() {
     assert!(payload(&store, "channels", READY_ROOM).await.is_some());
     let unread = count(
         &store,
-        "SELECT COUNT(*) FROM messages WHERE channel_id = '7002'",
+        test_sql!("SELECT COUNT(*) FROM messages WHERE channel_id = '7002'"),
     );
     assert_eq!(unread.await, 0);
     assert_eq!(
@@ -135,7 +141,7 @@ async fn a_first_sync_copies_every_conversation_the_account_can_read() {
     );
     let held = count(
         &store,
-        "SELECT COUNT(*) FROM discord_attachments WHERE blake3 IS NOT NULL",
+        test_sql!("SELECT COUNT(*) FROM discord_attachments WHERE blake3 IS NOT NULL"),
     );
     assert_eq!(held.await, 1);
 }
@@ -259,14 +265,14 @@ async fn an_earlier_since_fetches_what_it_now_covers() {
     assert_eq!(s.messages, (BRIDGE_MESSAGES - 150) + 2, "{s:?}");
     let older = count(
         &store,
-        "SELECT COUNT(*) FROM messages WHERE channel_id = '7001'",
+        test_sql!("SELECT COUNT(*) FROM messages WHERE channel_id = '7001'"),
     );
     assert_eq!(older.await, BRIDGE_MESSAGES as i64 - 150);
     run_at(&store, &tape, from(None), world::now())
         .await
         .unwrap();
     assert_eq!(problems(&store).await, [] as [&str; 0]);
-    let all = count(&store, "SELECT COUNT(*) FROM messages");
+    let all = count(&store, test_sql!("SELECT COUNT(*) FROM messages"));
     assert_eq!(all.await, BRIDGE_MESSAGES as i64 + 5);
 }
 
@@ -382,8 +388,12 @@ async fn signing_in_as_another_account_leaves_one() {
     run(&store, &w.tape(d.path(), "picard")).await.unwrap();
     w.value["me"]["id"] = json!(RIKER);
     run(&store, &w.tape(d.path(), "riker")).await.unwrap();
-    let accounts = count(&store, "SELECT count(*) FROM account").await;
-    let sidecars = count(&store, "SELECT count(*) FROM account_bookkeeping").await;
+    let accounts = count(&store, test_sql!("SELECT count(*) FROM account")).await;
+    let sidecars = count(
+        &store,
+        test_sql!("SELECT count(*) FROM account_bookkeeping"),
+    )
+    .await;
     assert_eq!((accounts, sidecars), (1, 1));
     assert!(payload(&store, "account", RIKER).await.is_some());
 }
@@ -436,15 +446,16 @@ async fn a_run_that_seals_after_a_problem_leaves_it_out_of_its_deltas() {
         "the store holds the one problem: {got:?}"
     );
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let seals: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log")
+    let seals: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();
-    let summary: String =
-        sqlx::query_scalar("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let summary: String = test_sql!("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     db.close().await;
     assert!(seals > 2, "the run sealed as it went: {seals} commits");
     let summary: Value = serde_json::from_str(&summary).unwrap();

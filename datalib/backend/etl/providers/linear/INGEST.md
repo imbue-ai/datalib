@@ -2,7 +2,8 @@
 
 The `linear` source copies one Linear workspace through Linear's
 GraphQL API (`https://api.linear.app/graphql`). It is download-only:
-there is no render step, and the raw store is the copy. Each kind of
+nothing is rendered (its `render_markdown` step writes only the storage
+report that counts its issues), and the raw store is the copy. Each kind of
 Linear object gets its own table of `(id, payload)` rows, keyed by
 Linear's id. The payload is the object as the API returned it.
 
@@ -145,7 +146,8 @@ What the download does with a refusal (`linear_retryability` in
 
 A query past 10,000 points is not a rate limit: Linear answers HTTP 400
 with `INPUT_ERROR` ("Query too complex"), and waiting never admits it.
-It fails that one page as any other error does.
+It fails as any other error does: the list or walk that page belongs to
+stops there for this run, with a `listing:` problem.
 
 ### One transaction between two seals
 

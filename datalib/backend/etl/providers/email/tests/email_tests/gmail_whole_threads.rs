@@ -19,6 +19,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, put_gmail_all_mail, Mirror,
 };
+use datalib_sql::test_sql;
 
 /// Archived out of the inbox, under `away team`: the thread's start.
 const HAIL: &str = "18c9f2a1b2c3d801";
@@ -159,7 +160,8 @@ async fn an_email_carries_gmails_ids_and_labels() {
     h.run(json!({})).await;
     let rows: Vec<(String, String, String)> =
         h.0.read(|db| async move {
-            sqlx::query_as("SELECT id, thread_id, label_ids FROM emails ORDER BY id")
+            test_sql!("SELECT id, thread_id, label_ids FROM emails ORDER BY id")
+                .query_as()
                 .fetch_all(db.pool())
                 .await
                 .unwrap()
@@ -242,7 +244,8 @@ impl Harness {
     async fn thread_counts(&self) -> Vec<(Option<i64>, Option<i64>)> {
         self.0
             .read(|db| async move {
-                sqlx::query_as("SELECT email_count, upstream_email_count FROM threads")
+                test_sql!("SELECT email_count, upstream_email_count FROM threads")
+                    .query_as()
                     .fetch_all(db.pool())
                     .await
                     .unwrap()
