@@ -160,7 +160,7 @@ fn to_contact(source_id: &str, p: &Value) -> ContactDoc {
 /// `datalib_time::parse_yyyy_mm_dd_assumed_utc`'s policy for
 /// date-only inputs: the day stays correct for sorting and the invented
 /// time-of-day is explicit. The original `16 Jun 2026` text still shows
-/// in the contact's `Connected On` field (see `FIELD_COLUMNS`), so no
+/// in the contact's `Connected On` detail (`to_contact`), so no
 /// human-facing information is lost. Returns `None` for an empty /
 /// unparseable value — a contact with no parseable date simply carries
 /// no timestamp rather than a bogus one (we never fabricate the day).

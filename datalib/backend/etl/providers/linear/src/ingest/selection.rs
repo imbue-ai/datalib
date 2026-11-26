@@ -4,8 +4,10 @@
 //!
 //! An issue is in when its team is chosen or its project is. The
 //! projects mirrored are the chosen ones and every project a chosen team
-//! works in, and a document, project update or milestone is in when its
-//! project is. A comment follows what it is on.
+//! works in. A project update or milestone is in when its project is, and
+//! a document when its team or its project is. A comment follows the
+//! issue, project or project update it is on; one on a document or an
+//! initiative is left out.
 
 use std::collections::BTreeSet;
 

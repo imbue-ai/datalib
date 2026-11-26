@@ -1,7 +1,7 @@
 //! Claude (claude.ai) API transport. Every request goes through
 //! [`datalib_etl_web::http::latchkey_curl`], which captures the full
 //! response (status + every header + body) and supports playback from
-//! disk fixtures. Mirrors `src/ingest/claude_web.py:_get`.
+//! disk fixtures.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

@@ -34,13 +34,15 @@ pub struct MediaConfig {
     pub fswalk: Option<LocalPath>,
 
     /// Gitignore-shaped patterns pruned from the scan, in addition to
-    /// any `.gitignore` files found in the tree. Matched by the
+    /// the `.gitignore` files inside a git repository and any `.ignore`
+    /// files in the tree. Matched by the
     /// `ignore` crate (the one ripgrep uses), so `**`, anchored `/`,
     /// and character classes all behave as expected.
     #[serde(default)]
     pub ignore: Vec<String>,
 
-    /// Skip files larger than this entirely — no row at all. Bytes, or
+    /// Skip files larger than this: such a file is not read, a warning
+    /// names it, and a row an earlier scan wrote for it stays. Bytes, or
     /// a string like `"4 GB"`.
     #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
     #[schemars(with = "Option<byte_size::ByteSize>")]

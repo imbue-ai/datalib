@@ -62,10 +62,10 @@ pub struct ParsedSignal {
     /// matching render unit in `docs`.
     pub chats: HashMap<String, ParsedChat>,
     /// One render unit per chat that needs re-rendering: a chat survives
-    /// Phase 1 iff `dolt_diff_*` reported any row of it as
-    /// added/modified/removed since the last render cursor, and is then
-    /// loaded whole in Phase 2. Ordered by chat_id so the rendered tree
-    /// is deterministic.
+    /// Phase 1 when `dolt_diff_*` reported any row of it as
+    /// added/modified/removed since the last render cursor, a read mark
+    /// of one of its messages moved, or the driver found one of its
+    /// declared inputs stale; it is then loaded whole in Phase 2.
     pub docs: Vec<DocRenderUnit>,
     /// Count of chats `dolt_diff` said were unchanged.
     pub docs_skipped: usize,

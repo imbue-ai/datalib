@@ -127,8 +127,9 @@ its place. The one thing the walk cannot list is a database past
 Notion's cap of 10,000 results on a query: when one reaches it, the run
 says so in a `listing:roots` row and lists the whole workspace through
 the search instead, as an earlier build's first sync did, which covers
-the beginning so the next run does not walk again. `full_sync` walks
-down again.
+the beginning so the next run does not walk again.
+`FetchOptions::full_sync` walks down again; no config key sets it,
+and nothing in the tree sets it to true.
 
 Then the `tree` loop below places the blocks and parents not yet
 placed, and a page is under a root when its chain of parents reaches

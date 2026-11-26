@@ -31,8 +31,9 @@ pub fn card_photo(vcard: &str) -> (Option<CardPhoto>, Option<String>) {
     (None, url)
 }
 
-/// The inline photo of every card in a row's vCard text, which for a row
-/// a `.vcf` file made may hold several cards.
+/// The inline photo of every card in a row's vCard text. A `.vcf` file is
+/// stored one card per row; a server's object is stored as served, and
+/// nothing refuses one that holds several cards.
 pub fn inline_photos(vcard_text: &str) -> Vec<CardPhoto> {
     let mut cards = split_vcards(vcard_text);
     if cards.is_empty() {

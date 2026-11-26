@@ -124,8 +124,7 @@ pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
     if !path.is_file() {
         return Err(format!(
             "no config at {} — create one before syncing: in the app's Setup tab, or from \
-             a shell with `datalib-pipeline init {}` and then the steps `datalib-step help` \
-             prints",
+             a shell with `datalib-pipeline init {}`, then add a source to it",
             path.display(),
             root.display()
         ));

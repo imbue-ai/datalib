@@ -56,8 +56,7 @@ pub fn plan_ingest(
 }
 
 /// The mirror processor. Owns its doltlite store end to end (open,
-/// register the interrupt hook, mirror, commit + close via
-/// `run_store`).
+/// mirror, commit + close via `run_store`).
 struct LightroomIngest {
     id: String,
     raw_path: PathBuf,

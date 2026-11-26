@@ -303,9 +303,6 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     Ok(summary)
 }
 
-/// Delete the messages and calls no file holds, with their attachment
-/// edges. Only right after reading every file. Returns how
-/// many records went.
 /// An MMS stored before its `addrs` were kept: every file is read again,
 /// once, so a root from before has them too.
 async fn an_mms_lacks_its_addrs(pool: &sqlx::SqlitePool) -> Result<bool> {
@@ -318,6 +315,9 @@ async fn an_mms_lacks_its_addrs(pool: &sqlx::SqlitePool) -> Result<bool> {
     .context("look for an MMS stored without its addrs")
 }
 
+/// Delete the messages and calls no file holds, with their attachment
+/// edges and read marks. Only right after reading every file. Returns how
+/// many records went.
 async fn prune_unseen(
     tx: &mut Transaction<'_, Sqlite>,
     messages: &[SmsMessageRow],

@@ -1,5 +1,5 @@
 //! Ingest an unpacked Claude **bulk export** into this provider's raw
-//! store — the ingest wave of the `claude_export` source type.
+//! store — the `claude` source's `export` method.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

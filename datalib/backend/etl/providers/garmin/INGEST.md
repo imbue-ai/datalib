@@ -59,9 +59,11 @@ resolved each run; days it slides past stay stored.
 **No walk keeps a cursor.** What a run fetches is what the window lists
 less what the store already holds, worked out from the store each run
 ([`data_architecture_ingestion.md`](/docs/dev/data_architecture_ingestion.md#what-is-left-to-fetch-listed-minus-held)),
-with what a row is held at in its sidecar's `held_version`. Each kind
-below is one `datalib_etl_web::owed::drain` over a fetcher of its own, one request per
-record; days are written 31 to a transaction, details, files and
+with what a row is held at in its sidecar's `held_version`. The days,
+details, files and bundles below are each one
+`datalib_etl_web::owed::drain` over a fetcher of its own, one request per
+record (the weigh-ins and the activity listing are plain walks over
+their range); days are written 31 to a transaction, details, files and
 bundles 20, and a stop writes what was answered before it.
 
 | what | listed | at version | held when | so a run fetches |
@@ -247,8 +249,9 @@ churns has not been measured on an account with a watch.
 - The FIT files and the minute-by-minute series are mirrored but not
   rendered; what is, is in
   [`../garmin_render/TRANSLATE.md`](../garmin_render/TRANSLATE.md).
-- `garmin.cn` accounts are reachable (`login --domain garmin.cn`, and
-  the token records its domain) but untested.
+- `garmin.cn` accounts are not reachable. Every request goes to
+  `connectapi.garmin.com` (`api::DOMAIN`), and the latchkey plugin
+  refuses a token that names another domain.
 
 ## Known gaps
 

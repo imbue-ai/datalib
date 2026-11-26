@@ -158,8 +158,9 @@ pub fn contact_pk(addressbook_id: &str, uid: &str) -> String {
 }
 
 impl ContactRow {
-    /// The vCard text the row holds: one card, or for a row a `.vcf`
-    /// file made, possibly several.
+    /// The vCard text the row holds. A `.vcf` file is stored one card per
+    /// row; a server's object is stored as served, which could hold
+    /// several.
     pub fn vcard(&self) -> String {
         serde_json::from_str::<serde_json::Value>(&self.id_and_payload.payload)
             .ok()

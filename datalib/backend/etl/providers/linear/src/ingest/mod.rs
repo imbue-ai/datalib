@@ -2,10 +2,10 @@
 //! API answers them, into one raw table per kind.
 //!
 //! A run is two parts. The workspace's small lists — teams, people,
-//! states, labels, cycles, projects, milestones, initiatives — are read
-//! whole every run: a few requests, and the only way to see the
-//! progress series Linear recomputes without moving a record's
-//! `updatedAt`. Then the big ones — issues with their history,
+//! states, labels, project statuses, cycles, projects, milestones,
+//! initiatives — are read whole every run: a few requests, and the only
+//! way to see the progress series Linear recomputes without moving a
+//! record's `updatedAt`. Then the big ones — issues with their history,
 //! comments, documents, project updates, attachments — are each walked
 //! newest first over what no earlier run has covered (`walk`), so a run
 //! after the first reads only what changed. INGEST.md has the whole

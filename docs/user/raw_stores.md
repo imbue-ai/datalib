@@ -252,9 +252,10 @@ document.
 
 ### `sync_runs`
 
-One row per download run, for the sources that reach a service over the
-network (not Garmin, YoLink or contacts), and for a few that read local
-files. The start of the newest `ok` row is how recent the source
+One row per download run, for most sources that reach a service over
+the network (not Garmin, YoLink or contacts); most that read local
+files keep none. Each source's section, under "Is the copy complete?",
+says what to read where it keeps none. The start of the newest `ok` row is how recent the source
 is as a whole: [building on Datalib](building_on_datalib.md) § "How
 fresh is the mirror?".
 

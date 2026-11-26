@@ -144,8 +144,9 @@ sits beside it and has to be read too. From a terminal, the terminal needs
 Full Disk Access (System Settings → Privacy & Security); an ingest that
 reports "Operation not permitted" is missing that, not the file.
 
-The whole database is mirrored table for table with its history, so a
-message deleted on the Mac is still in an earlier commit of the store.
+The whole database is mirrored table for table with its history, and
+rows are only ever added, so a message deleted on the Mac stays in the
+copy.
 Every chat renders as one page, however long it runs.
 
 ### Limitations
@@ -348,8 +349,8 @@ for people and faces.
 `type = "baby_connect"` — the [Baby Connect](https://www.baby-connect.com)
 web app through latchkey (`api`). Copies every entry logged for each of
 your children: feeds, sleeps, diapers, medicine, growth, milestones,
-diary entries, and the notes typed with any of them. Each child's month
-becomes one document, its days in order.
+diary entries, and the notes typed with any of them. Each child becomes
+one document, its days in order.
 
 Baby Connect has no API, so the download makes the two requests its own
 web page makes, signed in with the page's session cookies. Register the
@@ -1470,8 +1471,9 @@ servers in `servers`, by name or id, or set `all_servers = true`;
 A server with years of history is read 100 messages a request, so set
 `since` (a day, or an offset from the sync such as `"-90d"`) on a big
 one. Each sync after the first reads only the conversations with
-something new, and re-reads the last week of those for edits, reactions
-and deletions (`refresh_window_days`).
+something new, and every 6 hours (`refresh_every_minutes`) re-reads the
+last week (`refresh_window_days`) of every conversation holding a
+message from that week, for edits, reactions and deletions.
 
 Not copied: who reacted (only how many), the nicknames people use on one
 server, what you have and have not read, and a direct message you have
@@ -1645,8 +1647,8 @@ list.
 ## Facebook
 
 `type = "facebook"` — Facebook's "Download your information" export,
-in JSON (`export`). Mirrors posts, photo albums, comments and
-reactions; friends as contacts; every other file of the export goes to
+in JSON (`export`). Mirrors posts, photo albums, comments, reactions
+and Messenger conversations; friends as contacts; every other file of the export goes to
 the raw store.
 
 **Settings & privacy** → **Settings** → **Accounts Center** → **Your
@@ -3169,8 +3171,9 @@ data**, request the full archive, and unzip it when the email arrives
 unzip ~/Downloads/Complete_LinkedInDataExport_*.zip -d ~/backups/LinkedInDataExport
 ```
 
-Point `export.path` at that directory, and unzip each newer export over
-it or in its place.
+Point `export.path` at that directory, and unzip each newer export into
+an empty one in its place: unzipped over the old one, a file the new
+export dropped stays and is read again as current.
 
 Connections come without photos: the export has none, and linkedin.com
 shows a profile only to someone signed in.
@@ -3474,8 +3477,8 @@ only a real request tells you.
 
 To mirror only part of the workspace, list the pages in `api.roots`
 (page ids or paste-able URLs); every page linked under them comes
-along. A database embedded in one of those pages does not: its rows
-are mirrored only by the whole-workspace default.
+along, and so does a database embedded in one of those pages, with its
+rows.
 
 ### Limitations
 
@@ -3558,8 +3561,10 @@ The raw store is `<data_root>/<group id>/ingest/entities.doltlite_db`. `pdf_docu
 `type = "perseus"` — a public download (`github`). Mirrors TEI
 editions of Greek and Latin texts from the Perseus Digital Library.
 
-No credentials. An empty `github` table pulls the default Thucydides
-pair from PerseusDL's `canonical-greekLit`; `files` picks others. Since
+No credentials. An empty `github` table pulls 13 editions and
+translations of Thucydides' *Histories* from PerseusDL's
+`canonical-greekLit`; `files` picks others, though only Thucydides is
+rendered. Since
 it needs nothing of yours, it is a good first sync to check an install
 with.
 
@@ -3658,7 +3663,8 @@ device over `adb`:
 adb pull /sdcard/Signal/SignalBackups ~/backups/SignalBackups
 ```
 
-You'll also need the 30-digit passphrase shown when you enabled backups.
+You'll also need the 64-character recovery key shown when you enabled
+backups.
 The provider reads it from the environment variable `aep_env_var` names;
 the app writes `SIGNAL_BACKUP_PASSPHRASE` there. Name the variable even
 when it is that one: the runner hands a step only the variables its
@@ -3781,8 +3787,9 @@ params name.
 
 ## Slack
 
-`type = "slack"` — web API through latchkey (`api`). Mirrors channels,
-DMs and file attachments.
+`type = "slack"` — web API through latchkey (`api`). Mirrors the
+channels the account is in and their file attachments; DMs and the
+channels it has not joined when the config asks for them.
 
 Built into latchkey — no manual export:
 
@@ -3961,7 +3968,9 @@ adb pull /sdcard/SMSBackupRestore ~/backups/SMSBackupRestore
 (Or copy them over MTP / a file manager / the app's share sheet.) Point
 the source's `backup.path` at that directory — it walks every `*.xml`
 inside, so keeping multiple dated backups there is fine; re-ingesting a
-newer export deduplicates against what's already there.
+newer export deduplicates against what's already there, except a
+message whose type changed between backups (queued, then sent), which
+is stored twice.
 
 ### Limitations
 
