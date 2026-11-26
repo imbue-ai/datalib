@@ -831,6 +831,11 @@ chip in the UI is separate and always uses the latest answer.
   unresolved chips. `tests/e2e/contacts.spec.ts` runs on a root with the
   contacts app: it links Riker's Slack and email handles to one contact
   from two documents and checks the documents and an open grid follow.
+- `curated_overlay`: a contacts store an earlier build wrote, checked in,
+  laid over the TNG root (`:tng_overlay_test`) and over the live bake's
+  data, opened as the applet opens it, and asked through the search what
+  each contact, merge and `me` reaches
+  ([`curated_overlay/README.md`](../../datalib/backend/curated_overlay/README.md)).
 
 ## Not built
 

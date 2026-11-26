@@ -1,0 +1,15 @@
+# The TNG corpus's curated stores: what Picard curated, checked in as the
+# files an older build left. Laid over the TNG root by
+# //datalib/backend/curated_overlay:tng_overlay_test; how to change them is
+# datalib/backend/curated_overlay/README.md.
+filegroup(
+    name = "python_sources",
+    srcs = glob(["*.py"]),
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "tng",
+    srcs = glob(["datalib_curated/**/*.doltlite_db"]),
+    visibility = ["//datalib:__subpackages__"],
+)

@@ -313,6 +313,9 @@ datalib/
                    written lowercase with dashes; the one reader. No deps.
     store_dump/    a store's tables as the text of a golden, one row a
                    line; only tests link it.
+    curated_overlay/ a checked-in `datalib_curated/` laid over a root and
+                   checked to fit; the TNG test and the live bake share
+                   it. Only tests link it.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source
