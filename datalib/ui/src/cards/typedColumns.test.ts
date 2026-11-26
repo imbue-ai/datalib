@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { copyText, membershipAt, membershipRank, typedColumns } from "./typedColumns";
-import type { ColumnSpec, Identity, Membership } from "@/api";
-import type { Formatter } from "@slickgrid-universal/common";
+import type { ColumnSpec, ColumnType, Identity, Membership } from "@/api";
+import {
+  SlickDataView,
+  type Formatter,
+  type Grouping,
+  type SlickGroup,
+} from "@slickgrid-universal/common";
+import { countsByKey, type Getter } from "@/grid/serverGroups";
 import { timeView } from "@/config/timeView";
 
 describe("what a cell copies as", () => {
@@ -325,5 +331,141 @@ describe("a picture cell", () => {
 
   it("copies as the name", () => {
     expect(copyText("image", "datalib:photo/p1")).toBe("datalib:photo/p1");
+  });
+});
+
+/// Rows with these values in one column, and the groups the grid should
+/// fold them into, by the words each group row shows.
+const GROUPED: Record<ColumnType, { cells: unknown[]; groups: string[] }> = {
+  text: { cells: ["Log", "Note", "Log"], groups: ["Log", "Note"] },
+  count: { cells: [1, 2], groups: ["1", "2"] },
+  number: { cells: [1.5, 2], groups: ["1.5", "2"] },
+  bytes: { cells: [1024, 2048], groups: ["1024", "2048"] },
+  timestamp: {
+    cells: ["2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00"],
+    groups: ["2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00"],
+  },
+  datetime: {
+    cells: ["2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00"],
+    groups: ["2026-01-01T00:00:00+00:00", "2026-02-01T00:00:00+00:00"],
+  },
+  image: {
+    cells: ["datalib:photo/p1", "datalib:photo/p2"],
+    groups: ["datalib:photo/p1", "datalib:photo/p2"],
+  },
+  identity: {
+    cells: [
+      { id: "enterprise", label: "Enterprise" },
+      { id: "defiant", label: "Defiant" },
+      { id: "enterprise", label: "Enterprise" },
+    ],
+    groups: ["Defiant", "Enterprise"],
+  },
+  identities: {
+    cells: [[{ id: "picard", label: "Picard" }], [{ id: "riker", label: "Riker" }]],
+    groups: ["Picard", "Riker"],
+  },
+  // By the label: two rows synced at different times are both Synced.
+  status: {
+    cells: [
+      { key: "ok", label: "Synced", at: "2026-01-01T00:00:00+00:00" },
+      { key: "ok", label: "Synced", at: "2026-01-02T00:00:00+00:00" },
+      { key: "failed", label: "Failed", at: "2026-01-03T00:00:00+00:00" },
+    ],
+    groups: ["Failed", "Synced"],
+  },
+  chips: {
+    cells: [
+      [{ kind: "error", text: "ERROR", title: "" }],
+      [{ kind: "warning", text: "WARN", title: "" }],
+      [{ kind: "error", text: "ERROR", title: "" }],
+    ],
+    groups: ["ERROR", "WARN"],
+  },
+  timeseries: {
+    cells: [
+      { value: 3, unit: "items", samples: [], window_secs: 60 },
+      { value: 5, unit: "items", samples: [], window_secs: 60 },
+    ],
+    groups: ["3 items", "5 items"],
+  },
+  quantity: {
+    cells: [
+      { value: 3, unit: "count" },
+      { value: null, unit: "count", note: "unknown" },
+    ],
+    groups: ["3", "unknown"],
+  },
+  membership: { cells: [{ applies: true }, { applies: false }], groups: ["in", "out"] },
+  // A row of buttons says nothing to group by: one group, drawn as "—".
+  actions: {
+    cells: [
+      [{ id: "sync", label: "Sync", enabled: true }],
+      [{ id: "stop", label: "Stop", enabled: true }],
+    ],
+    groups: [""],
+  },
+};
+
+/// The groups the grid's own data view makes of `cells` under the
+/// column's grouping, as a grid with that column dropped on its
+/// grouping bar does.
+function groupsOf(
+  type: ColumnType,
+  cells: unknown[],
+): { groups: SlickGroup[]; grouping: Grouping } {
+  const spec: ColumnSpec = {
+    field: "cell",
+    header: "Cell",
+    type,
+    default_visible: true,
+    editable: false,
+  };
+  const [col] = typedColumns<Record<string, unknown>>([spec], {
+    groupable: true,
+    chips: { who: () => undefined, entity: () => undefined },
+  });
+  const dataView = new SlickDataView({});
+  dataView.setItems(cells.map((cell, i) => ({ id: `r${i}`, cell })));
+  dataView.setGrouping(col.grouping!);
+  return { groups: dataView.getGroups(), grouping: col.grouping! };
+}
+
+describe("a grid grouped by a column of any type", () => {
+  /** Grouping the Problems grid by Severity made one group titled
+   *  "Severity: [object Object]": a chips cell is an object, and the
+   *  grid keys a group by its value as a string. Every type here groups
+   *  by the words its cell shows. */
+  for (const type of Object.keys(GROUPED) as ColumnType[]) {
+    it(`groups a ${type} column by what its cells say`, () => {
+      const { cells, groups: want } = GROUPED[type];
+      const { groups, grouping } = groupsOf(type, cells);
+      expect(groups.map((g) => String(g.value)).sort()).toEqual(want);
+      for (const g of groups) {
+        const title = (grouping.formatter as (g: SlickGroup) => HTMLElement)(g);
+        expect(title.textContent).not.toContain("[object Object]");
+        expect(title.textContent).toMatch(/^Cell: .+ \(\d+\)$/);
+      }
+    });
+  }
+
+  /** The Problems grid is grouped by the server, which sends each
+   *  group's true count; the grid finds it under the key its data view
+   *  gave the group. With every severity keyed "[object Object]" the
+   *  counts of all of them landed on the one group (15805 of 404 shown). */
+  it("finds each server group's count under the key the grid gives it", () => {
+    const { cells } = GROUPED.chips;
+    const { groups, grouping } = groupsOf("chips", cells);
+    const counts = countsByKey(
+      [
+        { values: ["error"], count: 40, sample: { cell: cells[0] } },
+        { values: ["warning"], count: 7, sample: { cell: cells[1] } },
+      ],
+      [grouping.getter as Getter<Record<string, unknown>>],
+    );
+    expect(Object.fromEntries(groups.map((g) => [g.value, counts.get(g.groupingKey)]))).toEqual({
+      ERROR: 40,
+      WARN: 7,
+    });
   });
 });
