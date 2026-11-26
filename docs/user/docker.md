@@ -18,7 +18,7 @@ Generate a token, start the demo, open it — on macOS, in one go:
 export DATALIB_TOKEN=$(openssl rand -hex 16)
 docker run -d --rm --name datalib-demo \
   -p 127.0.0.1:8731:8731 -e DATALIB_TOKEN \
-  ghcr.io/imbue-ai/datalib@sha256:b99231999f6036adc6019c4ed39101200ccb6b3689cccc0a45ba3a805b66a934 datalib-http /opt/datalib/demo &&
+  ghcr.io/imbue-ai/datalib@sha256:96b7abfd5c28462b0dd204e61e893abd867510562fc8355709e5bde87cb139a3 datalib-http /opt/datalib/demo &&
   sleep 3 && open "http://127.0.0.1:8731/?token=$DATALIB_TOKEN"
 ```
 
@@ -56,7 +56,7 @@ page:
 
 <!-- doc-test: setup -->
 ```sh
-IMG=ghcr.io/imbue-ai/datalib@sha256:b99231999f6036adc6019c4ed39101200ccb6b3689cccc0a45ba3a805b66a934
+IMG=ghcr.io/imbue-ai/datalib@sha256:96b7abfd5c28462b0dd204e61e893abd867510562fc8355709e5bde87cb139a3
 PORT=8731                        # host port the web UI will be on
 TOKEN="$(openssl rand -hex 16)"  # the API token; the URL below carries it
 DATA_ROOT="$HOME/datalib-docker" # where your own data will go (step 2)
