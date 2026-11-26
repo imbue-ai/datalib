@@ -198,11 +198,6 @@ files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "/* sql:etl.render.store.read_back_all_markdowns */ SELECT * FROM markdowns ORDER BY markdown_uuid"
-files = ["*/render_markdown/indexed_markdown.doltlite_db"]
-why = "Reads every row by design: the statement has no WHERE."
-
-[[scan]]
 statement = "/* sql:dag.supervisor.list_step_records */ SELECT * FROM steps"
 files = ["*/supervisor.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
