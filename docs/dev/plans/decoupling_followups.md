@@ -147,24 +147,25 @@ item 8.
 
 The gateway in `datalib-http` starts applets
 (`datalib/backend/http/src/applets.rs:91`), using `AppletEntry` from the
-runner's crate (`datalib/backend/dag/src/config.rs:357`). Either the
-runner treats `[[applets]]` as a section that belongs to another
-program and only skips it, or applets move to a file of their own.
+runner's crate (`datalib/backend/dag/src/config.rs:357`).
+
+**Decided:** the model of the config file moves out of the runner's
+crate into a crate of its own, which the runner, the server,
+`datalib-step` and `datalib-migrate-config` all link, and `[[applets]]`
+stays in it. `datalib_dag::config` is more than the runner's: it is the
+model of the file every program reads (`datalib-step` links it in
+`datalib/backend/datalib_step/src/append.rs` and `check.rs`). The move
+takes `config`, `diagnostics`, `written` and `config_order`. The two
+options it was chosen over were the runner skipping `[[applets]]` while
+the server parses it, and applets moving to a file of their own.
 
 The two helpers the gateway and the probe use to hand a program its
-params in a file, `write_params_file` and `PARAMS_FILE_FLAG`, have moved
-out of the runner's crate to `datalib/backend/http/src/params_file.rs`.
-`applet_type` (`datalib/backend/dag/src/written.rs`), which knows that
-`datalib-applet <type>` names an applet's type, stays with the rest of
-the config file's lenient reading until applets move.
-
-`datalib_dag::config` is more than the runner's: it is the model of the
-config file every program reads. `datalib-step` links it
-(`datalib/backend/datalib_step/src/append.rs`, `check_params.rs`), so do
-`datalib-migrate-config` and the server. So a third way to settle this
-item is to split that model (`config`, `diagnostics`, `written`,
-`config_order`) into a crate of its own, which the runner, the server
-and `datalib-step` link, and leave `[[applets]]` in it.
+params in a file, `write_params_file` and `PARAMS_FILE_FLAG`, have
+already moved out of the runner's crate to
+`datalib/backend/http/src/params_file.rs`. `applet_type`
+(`datalib/backend/dag/src/written.rs`), which knows that
+`datalib-applet <type>` names an applet's type, moves with the rest of
+the config file's lenient reading.
 
 ## When the decoupling is done
 
