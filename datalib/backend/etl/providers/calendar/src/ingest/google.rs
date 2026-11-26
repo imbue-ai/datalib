@@ -21,7 +21,7 @@ use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, GoogleEventRow, GOOGLE_EVENT_VOLATILE_PATHS};
-use super::{noting_how_it_ended, select_calendars, FetchSummary, Window};
+use super::{recorded, select_calendars, FetchSummary, Window};
 
 pub const API: GoogleApi = GoogleApi {
     service: HttpService::GoogleCalendar,
@@ -45,9 +45,11 @@ pub struct FetchOptions {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let config =
+        serde_json::json!({"method": "google", "calendars": opts.calendars, "window": opts.window});
     let sealer = opts.sealer.clone();
     run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |found| {
-        noting_how_it_ended(found.clone(), sync_account(opts, found))
+        recorded(found.clone(), &pool, &config, sync_account(opts, found))
     })
     .await
 }

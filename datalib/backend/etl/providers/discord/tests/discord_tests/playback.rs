@@ -1,6 +1,14 @@
 //! One run after another over the tapes in [`crate::world`].
 
 use std::path::Path;
+use std::time::Duration;
+
+use datalib_etl::checkpointer::Cadence;
+use datalib_etl::control::DownloadControl;
+use datalib_etl::download_metrics::DownloadMetrics;
+use datalib_etl::processor::RunCtx;
+use datalib_etl::progress::Progress;
+use datalib_obs::diagnostics::Diagnostics;
 
 use datalib_etl::doltlite_raw::commit_run;
 use datalib_etl_discord::ingest::{self, db_path_for, schema_raw, snowflake, FetchSummary, RawDb};
@@ -388,4 +396,87 @@ async fn signing_in_as_another_account_leaves_one() {
     .await;
     assert_eq!((accounts, sidecars), (1, 1));
     assert!(payload(&store, "account", RIKER).await.is_some());
+}
+
+/// A first sync where `holodeck` is configured and the server has no such
+/// channel, sealing at every point the download calls consistent or
+/// never. Returns the commits the store has and the run's deltas.
+async fn first_sync_missing_a_channel(seal_as_it_goes: bool) -> (i64, Value) {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    let tape = World::before().tape(d.path(), "before");
+    let sync = DiscordSync {
+        channels: Some(vec!["bridge".into(), "holodeck".into()]),
+        threads: false,
+        ..sync()
+    };
+    if seal_as_it_goes {
+        let control = DownloadControl {
+            checkpoint_cadence: Some(Cadence {
+                at_most_every: Duration::ZERO,
+            }),
+            ..Default::default()
+        };
+        let (progress, now) = (Progress::noop(), world::now().to_string());
+        let ctx = RunCtx::new(
+            "discord",
+            &store,
+            &now,
+            &progress,
+            &control,
+            DownloadMetrics::new(),
+            Diagnostics::new(),
+        );
+        let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        let sealing = ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let opts = ingest::FetchOptions {
+                control: control.clone(),
+                sealer: Some(sealer),
+                ..options(db.clone(), sync, world::now())
+            };
+            ingest::fetch(opts).await.map(|s| s.line())
+        });
+        playback::scope(&tape, sealing).await.unwrap();
+    } else {
+        run_at(&store, &tape, sync, world::now()).await.unwrap();
+    }
+
+    let got = problems(&store).await;
+    assert!(
+        got.len() == 1 && got[0].contains("holodeck"),
+        "the store holds the one problem: {got:?}"
+    );
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+    let commits: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let summary: String = test_sql!("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    let summary: Value = serde_json::from_str(&summary).unwrap();
+    (commits, summary["deltas"].clone())
+}
+
+/// The bake's run 1 counted the missing channel in its `sync_runs` deltas
+/// only when a seal landed after the listing found it, so its golden
+/// changed from one bake to the next. The deltas are counted after the
+/// run's problems are written, so they count it either way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runs_deltas_count_its_problem_whether_or_not_a_seal_followed_it() {
+    let (sealed, with_seals) = first_sync_missing_a_channel(true).await;
+    let (unsealed, without) = first_sync_missing_a_channel(false).await;
+    assert!(
+        sealed > unsealed,
+        "the sealing run committed as it went: {sealed} commits against {unsealed}"
+    );
+    for deltas in [&with_seals, &without] {
+        assert!(deltas.get("messages").is_some(), "{deltas}");
+        assert_eq!(deltas["problems"]["added"], 1, "{deltas}");
+    }
 }

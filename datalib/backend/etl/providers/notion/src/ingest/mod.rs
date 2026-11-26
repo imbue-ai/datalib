@@ -626,7 +626,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "full_sync": opts.full_sync,
         "refresh_window_days": opts.refresh_window_days,
     });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let client = NotionOfficialClient::with_latchkey(opts.latchkey.clone());
     let ctx = Ctx {
         client: &client,
@@ -673,7 +673,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             s.failed_pages
         ));
     }
-    run.finish(found.ended_early(), &result, &s).await;
+    run.summarize(&s);
     result?;
     Ok(s)
 }

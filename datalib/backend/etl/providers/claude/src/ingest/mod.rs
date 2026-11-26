@@ -245,7 +245,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "cowork": opts.cowork,
         "cowork_session_ids": opts.cowork_session_ids,
     });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let client = ClaudeClient::with_latchkey(opts.latchkey.clone());
     // One `now` per fetch — threaded into every bulk upsert so all
     // `<table>_bookkeeping.fetched_at_utc` stamps from a single sync share
@@ -289,7 +289,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         .counts
         .forbidden_retry_recoveries
         .load(Ordering::Relaxed) as u64;
-    run.finish(found.ended_early(), &result, &summary).await;
+    run.summarize(&summary);
     result?;
     Ok(summary)
 }
