@@ -27,6 +27,12 @@
 //                         Sandbox alike, find no network, counted from the
 //                         first Sandbox asked for; FAKE_MODAL_OFFLINE_FROM
 //                         is how many calls are answered before that
+//   FAKE_MODAL_QUEUED     how many Sandboxes, the first ones asked for,
+//                         wait for a GPU until they are ended: `create`
+//                         never returns them, as the SDK's does not, and
+//                         only `sandboxes.list` by their tags finds them.
+//                         Each appends `{"queued":id}` to `<log>.queue`
+//                         when asked for and `{"ended":id}` when ended
 
 import { spawn } from "node:child_process";
 import {
@@ -184,6 +190,32 @@ class Sandbox {
   }
 }
 
+/// Every Sandbox asked for and not yet ended, queued or placed, with the
+/// tags it was made with.
+const unended = new Map();
+
+function queued(n, params) {
+  const sandboxId = `sb-fake-${n}`;
+  const queue = `${log}.queue`;
+  mkdirSync(dirname(queue), { recursive: true });
+  appendFileSync(queue, JSON.stringify({ queued: sandboxId }) + "\n");
+  // Waiting on Modal keeps the SDK's Node alive.
+  const waiting = setInterval(() => {}, 1000);
+  unended.set(sandboxId, {
+    tags: params.tags ?? {},
+    sb: {
+      sandboxId,
+      terminate: async () => {
+        network();
+        clearInterval(waiting);
+        unended.delete(sandboxId);
+        appendFileSync(queue, JSON.stringify({ ended: sandboxId }) + "\n");
+      },
+    },
+  });
+  return new Promise(() => {});
+}
+
 export class ModalClient {
   constructor() {
     this.apps = {
@@ -193,7 +225,7 @@ export class ModalClient {
             "Profile is missing credentials. Please set them in .modal.toml, as environment variables, or via the ModalClient constructor.",
           );
         }
-        return { name };
+        return { name, appId: `ap-fake-${name}` };
       },
     };
     this.images = { fromRegistry: (tag) => ({ tag }) };
@@ -201,7 +233,10 @@ export class ModalClient {
       create: async (app, image, params) => {
         network();
         const n = nextSandbox();
+        if (n <= Number(process.env.FAKE_MODAL_QUEUED ?? 0)) return queued(n, params);
         const sb = new Sandbox(n, params);
+        unended.set(sb.sandboxId, { tags: params.tags ?? {}, sb });
+        sb.exit.then(() => unended.delete(sb.sandboxId));
         sb.logged = sb.exit.then(() => {
           mkdirSync(dirname(log), { recursive: true });
           appendFileSync(
@@ -219,6 +254,13 @@ export class ModalClient {
           );
         });
         return sb;
+      },
+      list: async function* ({ appId, tags }) {
+        network();
+        if (!appId?.startsWith("ap-fake-")) throw new Error(`no app ${appId}`);
+        for (const { tags: has, sb } of [...unended.values()]) {
+          if (Object.entries(tags ?? {}).every(([k, v]) => has[k] === v)) yield sb;
+        }
       },
     };
   }

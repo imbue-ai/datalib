@@ -391,8 +391,15 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
 - **Nothing about the remote work is stored** but how much of it there
   was (the metrics above): no Sandbox to go back to. An interrupted run loses
   the slices in flight and nothing already written: a stop sends the
-  driver SIGTERM, and it ends every Sandbox it started before it exits.
-  The next run owes what is still missing and sends only that.
+  driver SIGTERM, and it ends every Sandbox it asked for before it
+  exits. That includes those still waiting for a GPU, which the SDK's
+  `create` names only once Modal has placed them: each Sandbox is made
+  with a tag naming this run of the driver (`datalib_embed_run`), and the
+  stop lists the app's running Sandboxes with that tag and ends them.
+  Left alone, one would start after the run had gone and idle, billed,
+  to its limit. One asked for in the instant of the stop, before Modal
+  has listed it, can still be missed. The next run owes what is still
+  missing and sends only that.
 - **The driver is handed only what it needs** of the step's environment:
   what every child gets, and Modal's own variables (`MODAL_TOKEN_ID`,
   `MODAL_TOKEN_SECRET`, `MODAL_PROFILE`, `MODAL_CONFIG_PATH`,
