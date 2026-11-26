@@ -397,8 +397,10 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   with a tag naming this run of the driver (`datalib_embed_run`), and the
   stop lists the app's running Sandboxes with that tag and ends them.
   Left alone, one would start after the run had gone and idle, billed,
-  to its limit. One asked for in the instant of the stop, before Modal
-  has listed it, can still be missed. The next run owes what is still
+  to its limit. Measured on 2026-11-26 with three T4 Sandboxes stopped
+  before Modal placed any: the list found all three and each was
+  cancelled before it started. One asked for in the instant of the
+  stop, before Modal has listed it, can still be missed. The next run owes what is still
   missing and sends only that.
 - **The driver is handed only what it needs** of the step's environment:
   what every child gets, and Modal's own variables (`MODAL_TOKEN_ID`,
