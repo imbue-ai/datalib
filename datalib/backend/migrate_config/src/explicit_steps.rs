@@ -669,9 +669,8 @@ pub fn rewrite(text: &str) -> Result<String> {
     {
         tail.push(format!(
             "# The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).\n\
-             [[programs]]\ncommand = {}\nverbs = {STEP_VERBS}\n{}\n",
-            quote(program),
-            crate::program_pass_env::pass_env_line()
+             [[programs]]\ncommand = {}\nverbs = {STEP_VERBS}\n",
+            quote(program)
         ));
     }
     let declared_locks: BTreeSet<&str> = view.locks.iter().map(|l| l.name.as_str()).collect();

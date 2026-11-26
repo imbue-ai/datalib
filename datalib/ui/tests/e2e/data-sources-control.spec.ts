@@ -304,7 +304,6 @@ DATALIB_STEP_CHECKPOINT_CADENCE = "2"
 [[programs]]
 command = "${STEP_BIN}"
 verbs = ["reset", "prepare", "compact", "collect", "check"]
-pass_env = ["DATALIB_CACHE_DIR", "MINDS_VIA_DESKTOP_URL_PREFIX", "DATALIB_EMBED_THREADS"]
 
 [[locks]]
 name = "index"

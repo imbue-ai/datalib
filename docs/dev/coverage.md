@@ -179,8 +179,9 @@ profraws lived in the sandbox and were gone by then.
    (`datalib_env::inherit_only`), and `LLVM_PROFILE_FILE` is not on it.
    Without help a step writes no profile, and the report still looks
    complete: download code simply reads near 0%. The wrapper passes
-   `--test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV`,
-   which adds the variable to the list. Check a run you did not make
+   `--test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV,…`,
+   which adds the variable to the list, beside the two `.bazelrc`
+   names there for every test. Check a run you did not make
    through the wrapper by looking at a provider's download `processor.rs`.
 
 ### Why `data` and not `deps`?

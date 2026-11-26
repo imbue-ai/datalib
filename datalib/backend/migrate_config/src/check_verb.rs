@@ -12,7 +12,6 @@
 
 use anyhow::{bail, Context as _, Result};
 
-use crate::program_pass_env::entry_lines;
 use crate::retired::is_datalib_step;
 
 const VERB: &str = "check";
@@ -92,6 +91,49 @@ fn closing_bracket(text: &str, command: &str) -> Option<(usize, bool)> {
         return Some((start + key.len() + 1 + close, empty));
     }
     None
+}
+
+/// From the start of the first `key = value` line to just past the last
+/// one, of the `[[programs]]` entry for `command`, when the entry is
+/// written under its own header.
+fn entry_lines(text: &str, command: &str) -> Option<std::ops::Range<usize>> {
+    let mut start = None;
+    let mut in_programs = false;
+    let mut found = false;
+    let mut end = None;
+    let mut at = 0;
+    for line in text.split_inclusive('\n') {
+        at += line.len();
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            if found {
+                break;
+            }
+            in_programs = trimmed == "[[programs]]";
+            (start, end) = (None, None);
+            continue;
+        }
+        if !in_programs || trimmed.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = trimmed.split_once('=') else {
+            continue;
+        };
+        start.get_or_insert(at - line.len());
+        end = Some(at);
+        if key.trim() == "command" && string_value(value).as_deref() == Some(command) {
+            found = true;
+        }
+    }
+    found.then_some(start?..end?)
+}
+
+fn string_value(toml_value: &str) -> Option<String> {
+    toml::from_str::<toml::Value>(&format!("v = {}", toml_value.trim()))
+        .ok()?
+        .get("v")?
+        .as_str()
+        .map(str::to_string)
 }
 
 #[cfg(test)]
