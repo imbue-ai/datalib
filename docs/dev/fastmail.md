@@ -95,7 +95,7 @@ same call the wizard's **Check connection** makes (add
 
 ```sh
 echo '{"fastmail": {}, "latchkey_settings": {"account": "you@fastmail.com contacts"}}' > p.json
-datalib-step probe contacts --params-file p.json
+DATALIB_DAG_PARAMS="$(cat p.json)" datalib-step probe contacts
 ```
 
 The DAV discovery quirks (where it starts, CDATA everywhere, the inbox
