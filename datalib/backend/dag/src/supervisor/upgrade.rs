@@ -1,6 +1,6 @@
-//! What a host does before the loop takes any request, each time it
-//! starts (`dag/README.md` §"Upgrading a root"): ask every step whose
-//! program takes the `--prepare` verb to make what it wrote usable. The
+//! Which steps the prepare pass asks each time the loop starts
+//! (`dag/README.md` §"Upgrading a root"): every step whose program takes
+//! the `--prepare` verb, to make what it wrote usable. The
 //! runner knows nothing of any store or of when a program changed; each
 //! step answers for its own (`step_protocol.md` § Verbs).
 

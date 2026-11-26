@@ -487,7 +487,9 @@ Each step ships alone, and the harness stays green throughout.
    and finishes what a dropped step had ended. `carry`, `remap_consumed`,
    `Slot::remapped`, `QueueLedger::remap` and `remap_by_step` are gone,
    and the queue ledger is keyed by step id.
-3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
+3. **Everything goes through the mailbox.** Done so far: the prepare
+   pass runs inside the loop and holds only what it has not reached
+   (open question 3). Still to do: turn `wipes` into `jobs`
    and add prepare, with its progress in `job_steps` instead of the
    server's memory. Make the CLI's reset and shrink write jobs. Put
    both hosts on `supervisor::run`. Item 6 did not wait for this: the
@@ -519,13 +521,11 @@ now outside the loop.
    by invocation matches what a process did. Before we choose, we need
    to know which one people look at.
 3. **Does the prepare pass block every request, or only the steps it
-   has not reached?** Now it blocks everything: the server disables
-   every Sync (`ManageResponse::sync_paused`,
-   `datalib/backend/http/src/manage/mod.rs:266`) and a request opened
-   another way waits for the pass. Since #1894 the pass runs at every
-   start, not only after an upgrade, so that wait is paid at every
-   launch. As a job, it could hold only the steps it has yet to ask and
-   what reads them, the way a wipe holds only its targets.
+   has not reached? (answered: only those.)** The pass runs inside a
+   host's loop, one step at a time beside everything else. A step it has
+   not asked, and what reads one, waits (`Wait::Prepare`), and Sync stays
+   offered. The CLI's sync still asks every step first, until it becomes
+   a client.
 4. **Retries and locks.** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it
    lets another step take the slot in between. Check whether any

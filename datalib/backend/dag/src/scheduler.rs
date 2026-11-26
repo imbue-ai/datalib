@@ -352,67 +352,86 @@ impl Runner {
             .by_id
             .get(step)
             .ok_or_else(|| InvokeError::Failed("no such step".to_string()))?;
-        let spec = &graph.steps[i];
-        let StepRun::Subprocess { argv, env, params } = &spec.run else {
-            return Err(InvokeError::Failed("not a subprocess step".to_string()));
-        };
-        let ctx = StepCtx {
-            step_id: spec.id.clone(),
-            data_root: self.data_root.clone(),
-            inputs: vec![],
-            changed_inputs: vec![],
-            failed_inputs: vec![],
-            reads: BTreeMap::new(),
-            progress: StepProgress::new(spec.id.clone(), self.sink.clone()),
-            checkpoint: crate::step::CheckpointSink::disconnected(),
-            stop: StopSignal::never(),
-        };
-        let argv: Vec<String> = argv.iter().cloned().chain([verb.flag()]).collect();
-        self.sink.emit(&Event::StepStart {
-            step: spec.id.clone(),
-            attempt: 1,
-        });
-        let result = crate::subprocess::run_subprocess(
-            &argv,
-            env,
-            params.as_deref(),
-            &self.steps_env(),
-            1,
-            &ctx,
-            &self.sink,
-        )
-        .await;
-        let error = result.as_ref().err().map(|e| format!("{:#}", e.error));
-        let exit = match &result {
-            Ok(o) => o.exit,
-            Err(e) => e.exit,
-        };
-        self.sink.emit(&Event::StepFinish {
-            step: spec.id.clone(),
-            status: if error.is_none() {
-                RunState::Succeeded
-            } else {
-                RunState::Failed
-            },
-            error: error.clone(),
-            exit_code: exit.and_then(|x| x.code),
-            signal: exit.and_then(|x| x.signal),
-        });
-        match result {
-            Ok(o) => Ok((i, o)),
-            Err(e) if e.kind == FailureKind::Incompatible => {
-                Err(InvokeError::Refused(error.unwrap_or_default()))
+        let outcome = self.verb_task(&graph.steps[i], verb).await?;
+        Ok((i, outcome))
+    }
+
+    /// [`Runner::invoke_once`] of one step, owning what it needs, so the
+    /// loop can run it beside the steps it runs.
+    pub(crate) fn verb_task(
+        &self,
+        spec: &crate::step::StepSpec,
+        verb: Verb,
+    ) -> impl std::future::Future<Output = std::result::Result<StepOutcome, InvokeError>> + Send + 'static
+    {
+        let spec = spec.clone();
+        let data_root = self.data_root.clone();
+        let sink = self.sink.clone();
+        let child_env = self.steps_env();
+        async move {
+            let StepRun::Subprocess { argv, env, params } = &spec.run else {
+                return Err(InvokeError::Failed("not a subprocess step".to_string()));
+            };
+            let ctx = StepCtx {
+                step_id: spec.id.clone(),
+                data_root,
+                inputs: vec![],
+                changed_inputs: vec![],
+                failed_inputs: vec![],
+                reads: BTreeMap::new(),
+                progress: StepProgress::new(spec.id.clone(), sink.clone()),
+                checkpoint: crate::step::CheckpointSink::disconnected(),
+                stop: StopSignal::never(),
+            };
+            let argv: Vec<String> = argv.iter().cloned().chain([verb.flag()]).collect();
+            sink.emit(&Event::StepStart {
+                step: spec.id.clone(),
+                attempt: 1,
+            });
+            let result = crate::subprocess::run_subprocess(
+                &argv,
+                env,
+                params.as_deref(),
+                &child_env,
+                1,
+                &ctx,
+                &sink,
+            )
+            .await;
+            let error = result.as_ref().err().map(|e| format!("{:#}", e.error));
+            let exit = match &result {
+                Ok(o) => o.exit,
+                Err(e) => e.exit,
+            };
+            sink.emit(&Event::StepFinish {
+                step: spec.id.clone(),
+                status: if error.is_none() {
+                    RunState::Succeeded
+                } else {
+                    RunState::Failed
+                },
+                error: error.clone(),
+                exit_code: exit.and_then(|x| x.code),
+                signal: exit.and_then(|x| x.signal),
+            });
+            match result {
+                Ok(o) => Ok(o),
+                Err(e) if e.kind == FailureKind::Incompatible => {
+                    Err(InvokeError::Refused(error.unwrap_or_default()))
+                }
+                // No exit: the process never started (its program is not there).
+                Err(e) if e.exit.is_none() => {
+                    Err(InvokeError::NotStarted(error.unwrap_or_default()))
+                }
+                Err(_) => Err(InvokeError::Failed(error.unwrap_or_default())),
             }
-            // No exit: the process never started (its program is not there).
-            Err(e) if e.exit.is_none() => Err(InvokeError::NotStarted(error.unwrap_or_default())),
-            Err(_) => Err(InvokeError::Failed(error.unwrap_or_default())),
         }
     }
 }
 
 /// Why a verb's invocation did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum InvokeError {
+pub(crate) enum InvokeError {
     /// The step refused: what it wrote is a newer program's.
     Refused(String),
     Failed(String),
@@ -445,14 +464,9 @@ async fn record_answer(
     outcome: &StepOutcome,
     store: &crate::supervisor::store::Store,
 ) -> Result<()> {
-    let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)?;
     let saved = store.load_record().await.context("load the record")?;
     let mut state = saved.clone();
-    let entry = state.steps.entry(graph.steps[i].id.clone()).or_default();
-    if let Some(version) = version {
-        entry.version = Some(version);
-    }
-    entry.needs_rerun |= outcome.needs_rerun;
+    apply_answer(graph, i, outcome, &mut state)?;
     if state == saved {
         return Ok(());
     }
@@ -460,6 +474,22 @@ async fn record_answer(
         .save_record(&saved, &state)
         .await
         .context("save the record")
+}
+
+/// [`record_answer`] on a record the caller holds: the loop's own.
+pub(crate) fn apply_answer(
+    graph: &Graph,
+    i: usize,
+    outcome: &StepOutcome,
+    state: &mut crate::supervisor::record::Record,
+) -> Result<()> {
+    let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)?;
+    let entry = state.steps.entry(graph.steps[i].id.clone()).or_default();
+    if let Some(version) = version {
+        entry.version = Some(version);
+    }
+    entry.needs_rerun |= outcome.needs_rerun;
+    Ok(())
 }
 
 /// How one step answered `--prepare`: whether it needs to run again, or

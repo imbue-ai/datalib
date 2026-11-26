@@ -292,13 +292,15 @@ A new build of a program can change the shape of what its steps wrote:
 for `datalib-step`, a raw store's tables, a render store's, the grid
 index's. The runner knows none of those shapes, nor when a program
 changed; each step answers for its own. **Each time the loop starts**,
-the process that holds `runner-lock` (the http server or a
-`datalib-pipeline serve` when it takes the lock, a `datalib-pipeline` sync when it
-runs on its own) asks every step whose
-program's `[[programs]]` entry lists the `prepare` verb, producers
-first, before the loop takes any request: `Runner::prepare` invokes
-each once with `--prepare` appended
-(`docs/dev/step_protocol.md` § Prepare). Since it asks at every start,
+it asks every step whose program's `[[programs]]` entry lists the
+`prepare` verb, producers first, one at a time, each invoked once with
+`--prepare` appended (`docs/dev/step_protocol.md` § Prepare). In a host's
+loop (`Runner::run_forever`: the http server's `datalib-pipeline serve`)
+the pass runs beside everything else: a step it has not yet asked, and
+every step that reads one, waits (`waiting_for = "prepare"`), and the
+rest run as requests want them. A `datalib-pipeline` sync on its own
+asks every step first, through `Runner::prepare`, before it serves
+anything. Since it asks at every start,
 a step answers quickly when there is nothing to do. It answers in one
 of four ways:
 
@@ -346,8 +348,9 @@ runs and while any step it marked `needs_rerun` has not run since,
 saying how each source is going: the cards would only show refusals
 meanwhile. Its one button opens Sources, for a source whose re-run
 fails, and lifts the screen for that page. Every Sync on the Sources
-card is disabled while the pass runs (`ManageResponse::sync_paused`); a
-request opened another way waits for the pass. After it, a pill where
+card stays offered while the pass runs; a sync it holds back reads as
+waiting on the upgrade, and runs once the pass has reached it. After it,
+a pill where
 the sync indicator sits stays red for a step the pass could not prepare
 until it is dismissed, and, once the screen is lifted, amber, with a
 button that runs them, while any step the pass marked `needs_rerun` has
@@ -765,7 +768,7 @@ A host holding the lock runs one loop until it is told to stop,
 nothing: a request asked to stop before the loop took it is closed as
 `stopped`, and a switch or a config edit reaches the record. The first
 request or wipe taken on with none open begins a busy period, which the
-host records through `supervisor::period::RunPeriods`: the loop asks it
+host records through `supervisor::loop_host::LoopHost`: the loop asks it
 for the period's step environment when it opens, and tells it when it
 closes. `supervisor::serve::run` runs that loop after taking the lock and
 the prepare pass; `datalib-pipeline serve` calls that, and the harness
