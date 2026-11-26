@@ -22,6 +22,7 @@ rust_library(
         "//datalib/backend/store_meta:datalib_store_meta",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
         "@datalib_crates//:walkdir",
     ],

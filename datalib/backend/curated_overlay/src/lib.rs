@@ -416,8 +416,13 @@ pub fn changed_by_this_build(data_root: &Path, src: &Path) -> Vec<(PathBuf, Path
         .into_iter()
         .filter_map(|path| {
             let checked_in = src.join(path.strip_prefix(&curated).expect("under datalib_curated"));
-            let same = without_build(raw_dump(&path), false)
-                == without_build(raw_dump(&checked_in), false);
+            // Read a copy: an open leaves a lock file beside the store, and
+            // the checked-in one may be a link into the source tree.
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let copy = tmp.path().join(checked_in.file_name().expect("a file"));
+            std::fs::copy(&checked_in, &copy).expect("copy the checked-in store");
+            let same =
+                without_build(raw_dump(&path), false) == without_build(raw_dump(&copy), false);
             (!same).then_some((path, checked_in))
         })
         .collect()

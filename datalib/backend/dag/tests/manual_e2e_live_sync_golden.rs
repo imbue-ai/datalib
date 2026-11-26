@@ -626,13 +626,14 @@ fn manual_e2e_live_sync_golden() {
     // Snapshot each group's stores, mirroring the on-disk per-group layout:
     // `ingest/`, `render_markdown/`, a time-series source's
     // `render_time_series/` and the time-series index's `time_series_index/`.
-    // `system/` and the grid and search index are skipped.
+    // `system/` and the grid and search index are skipped, and so is
+    // `datalib_curated/`, which is no group: it is checked below.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "system")
+        .filter(|name| name != "system" && name != datalib_contacts::CURATED_DIR)
         .collect();
     stanzas.sort();
 

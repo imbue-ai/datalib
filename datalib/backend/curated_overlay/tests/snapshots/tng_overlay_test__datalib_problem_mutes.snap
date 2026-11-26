@@ -51,24 +51,24 @@ expression: dump
   "mutes": [
     {
       "agent": null,
-      "muted_at_utc": "2026-11-26T07:50:18.306850+00:00",
+      "muted_at_utc": "2026-11-26T08:36:50.561479+00:00",
       "muted_how": "manual",
       "problem_uuid": "1860e56d-3cbf-504d-ab0b-df061b1bfe4a",
-      "tz_offset": "+01:00"
+      "tz_offset": "+00:00"
     },
     {
       "agent": "tng-curator",
-      "muted_at_utc": "2026-11-26T07:50:18.307910+00:00",
+      "muted_at_utc": "2026-11-26T08:36:50.562519+00:00",
       "muted_how": "agent",
       "problem_uuid": "4a7fcf9d-734b-5848-8e07-f0cd6bcd7491",
-      "tz_offset": "+01:00"
+      "tz_offset": "+00:00"
     },
     {
       "agent": null,
-      "muted_at_utc": "2026-11-26T07:50:18.306850+00:00",
+      "muted_at_utc": "2026-11-26T08:36:50.561479+00:00",
       "muted_how": "manual",
       "problem_uuid": "6df47df9-b6ad-5372-942e-5db5e4d068bb",
-      "tz_offset": "+01:00"
+      "tz_offset": "+00:00"
     }
   ]
 }

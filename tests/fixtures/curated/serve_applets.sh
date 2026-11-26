@@ -11,6 +11,9 @@
 # secret in <state_dir>/applet-secret as `X-Datalib-Applet-Secret`. Runs
 # until interrupted. DATALIB_APPLET names the binary; the default is
 # the one `bazelisk build //datalib/backend:bin` stages.
+#
+# The applets run in UTC, so a checked-in store's stamps say nothing of
+# where it was curated.
 set -euo pipefail
 
 root="$(cd "${1:?usage: serve_applets.sh <data_root> <state_dir>}" && pwd)"
@@ -25,7 +28,7 @@ head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$state/applet-secret"
 echo '{}' > "$state/params.json"
 cd "$root"
 for id in datalib_contacts unified_grid_and_search_index; do
-  DATALIB_DAG_DATA_ROOT="$root" DATALIB_APPLET_ID="$id" DATALIB_APPLET_BASE="/applet/$id/" \
+  TZ=UTC DATALIB_DAG_DATA_ROOT="$root" DATALIB_APPLET_ID="$id" DATALIB_APPLET_BASE="/applet/$id/" \
   DATALIB_APPLET_SECRET_FILE="$state/applet-secret" \
     "$applet" "$id" --port 0 --params-file "$state/params.json" \
     > "$state/port.$id" 2> "$state/applet.$id.log" &
