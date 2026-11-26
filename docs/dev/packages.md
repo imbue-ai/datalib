@@ -84,8 +84,11 @@ command = "bin/weather-chart"
   form has no "Check connection".
 - **`sources.wizard`**: the add-source form, written as a `CatalogEntry`
   (`datalib/ui/src/config/catalog.ts`) without `type`: the same
-  `label`, `blurb`, `sections`, `fields`, `before` and the rest that a
-  built-in source declares. The "Add source" dialog draws it with the
+  `label`, `blurb`, `sections`, `fields`, `before` and the rest that
+  each of `datalib-step`'s sources declares in
+  `datalib/backend/datalib_step/src/sources.toml`, which `datalib-step
+  --describe` prints in this same shape (`step_protocol.md`
+  §"Describe"). The "Add source" dialog draws it with the
   same code, so `wizard_design.md` applies to it unchanged. A form can
   only ask for what a field kind can ask for; a package cannot bring its
   own form code.

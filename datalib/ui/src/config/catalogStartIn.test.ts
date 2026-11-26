@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { CATALOG } from "./catalog";
+import { CATALOG } from "../../tests/builtinCatalog";
 
 const startFields = CATALOG.flatMap((entry) =>
   (entry.fields ?? []).flatMap((f) =>

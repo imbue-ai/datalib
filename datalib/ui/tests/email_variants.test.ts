@@ -8,7 +8,8 @@
 // `datalib-step`; a Fastmail step read back as the
 // catch-all `email` entry loses its form and its Edit button.
 import { describe, expect, it } from "vitest";
-import { CATALOG, catalogFor, catalogForStep, entryKey } from "../src/config/catalog";
+import { catalogFor, catalogForStep, entryKey } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import {
   buildStep,
   entryForStep,

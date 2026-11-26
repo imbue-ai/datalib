@@ -155,9 +155,6 @@ impl Manifest {
         if self.name.trim().is_empty() || self.version.trim().is_empty() {
             bail!("`name` and `version` must not be empty");
         }
-        if let Some((name, _)) = self.locks.iter().find(|(_, slots)| **slots == 0) {
-            bail!("locks.{name}: a lock needs at least one slot");
-        }
         if self.artifacts.is_empty() {
             bail!("`artifacts` names no build");
         }
@@ -172,7 +169,46 @@ impl Manifest {
                 bail!("artifacts.{target}: sha256 must be 64 lowercase hex digits");
             }
         }
-        for s in &self.sources {
+        check_offer(&self.sources, &self.locks)
+    }
+
+    /// The build for `target`: its own, else the one for every platform.
+    pub fn artifact_for(&self, target: &str) -> Option<(&str, &Artifact)> {
+        self.artifacts
+            .get_key_value(target)
+            .or_else(|| self.artifacts.get_key_value(ANY))
+            .map(|(k, a)| (k.as_str(), a))
+    }
+}
+
+/// What a program a config's `[[programs]]` entry names offers "Add
+/// source", as it prints it when the app runs `<program> --describe`
+/// (`docs/dev/step_protocol.md` §"Describe"): sources in a manifest's
+/// shape, each command the words that follow the program's own.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Description {
+    #[serde(default)]
+    pub sources: Vec<SourceTemplate>,
+    #[serde(default)]
+    pub locks: BTreeMap<String, usize>,
+}
+
+impl Description {
+    pub fn parse(json: &str) -> Result<Description> {
+        let d: Description = serde_json::from_str(json).context("the description")?;
+        check_offer(&d.sources, &d.locks)?;
+        Ok(d)
+    }
+}
+
+/// The rules a manifest's and a description's sources and locks keep.
+fn check_offer(sources: &[SourceTemplate], locks: &BTreeMap<String, usize>) -> Result<()> {
+    if let Some((name, _)) = locks.iter().find(|(_, slots)| **slots == 0) {
+        bail!("locks.{name}: a lock needs at least one slot");
+    }
+    {
+        for s in sources {
             if !s.commands.contains_key("ingest") {
                 bail!("source {:?}: `commands` needs an `ingest`", s.source_type);
             }
@@ -182,7 +218,7 @@ impl Manifest {
                 .find(|f| !SOURCE_FUNCTIONS.contains(&f.as_str()))
             {
                 bail!(
-                    "source {:?}: function {f:?} is not one a package source runs ({})",
+                    "source {:?}: function {f:?} is not one a source runs ({})",
                     s.source_type,
                     SOURCE_FUNCTIONS.join(", ")
                 );
@@ -194,10 +230,10 @@ impl Manifest {
                         s.source_type
                     );
                 }
-                if let Some(lock) = c.locks.iter().find(|l| !self.locks.contains_key(*l)) {
+                if let Some(lock) = c.locks.iter().find(|l| !locks.contains_key(*l)) {
                     bail!(
-                        "source {:?}: `commands.{f}` holds lock {lock:?}, which the manifest's \
-                         `locks` does not declare",
+                        "source {:?}: `commands.{f}` holds lock {lock:?}, which `locks` does \
+                         not declare",
                         s.source_type
                     );
                 }
@@ -222,16 +258,8 @@ impl Manifest {
                 );
             }
         }
-        Ok(())
     }
-
-    /// The build for `target`: its own, else the one for every platform.
-    pub fn artifact_for(&self, target: &str) -> Option<(&str, &Artifact)> {
-        self.artifacts
-            .get_key_value(target)
-            .or_else(|| self.artifacts.get_key_value(ANY))
-            .map(|(k, a)| (k.as_str(), a))
-    }
+    Ok(())
 }
 
 fn is_identifier(s: &str) -> bool {

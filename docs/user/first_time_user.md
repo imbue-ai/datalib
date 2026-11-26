@@ -431,7 +431,7 @@ data_root = "~/datalib"
 
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect", "check"]
+verbs = ["reset", "prepare", "compact", "collect", "check", "describe"]
 
 [[locks]]
 name = "index"

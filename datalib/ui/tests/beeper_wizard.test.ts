@@ -2,7 +2,7 @@
 // under `texts`, the table that names the method, and the network filter
 // on the render step, written only when networks are chosen.
 import { describe, expect, it } from "vitest";
-import { CATALOG } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import {
   buildStep,
   listSteps,

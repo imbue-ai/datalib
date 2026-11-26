@@ -59,6 +59,7 @@ rust_library(
         "src/packages.rs",
         "src/plugins.rs",
         "src/probe.rs",
+        "src/programs.rs",
         "src/prometheus.rs",
         "src/remote_media.rs",
         "src/request_log.rs",

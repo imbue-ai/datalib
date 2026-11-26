@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import https from "node:https";
@@ -305,6 +306,12 @@ export async function startWorld(internet, options) {
   mkdirSync(root);
   const home = path.join(dir, "home");
   mkdirSync(home);
+  // The starter config names `datalib-step` bare, as a release does; the
+  // server finds it, to describe its sources and run their probes, in
+  // the step-binary directory.
+  const bin = path.join(dir, "bin");
+  mkdirSync(bin);
+  symlinkSync(need("DATALIB_STEP_BIN"), path.join(bin, "datalib-step"));
   const key = randomBytes(32).toString("base64");
   // Offline: every host is a port nothing listens on.
   const curl = curlShim(dir, offline ? await closedPort() : internet.port);
@@ -317,7 +324,7 @@ export async function startWorld(internet, options) {
     DATALIB_BIND: "127.0.0.1:0",
     DATALIB_TOKEN: API_TOKEN,
     DATALIB_PARENT_PIPE: "0",
-    DATALIB_STEP_BIN: need("DATALIB_STEP_BIN"),
+    DATALIB_BINARY_DIR: bin,
     DATALIB_PIPELINE_BIN: need("DATALIB_PIPELINE_BIN"),
     DATALIB_RUNTIME_DIR: runtime ? need("DATALIB_TEST_AUTH_RUNTIME_DIR") : path.join(dir, "no-runtime"),
     DATALIB_CACHE_DIR: path.join(dir, "cache"),

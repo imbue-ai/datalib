@@ -1,0 +1,2568 @@
+# The sources `datalib-step` offers in "Add source", in the shape of a
+# package manifest's `[[sources]]` (docs/dev/packages.md): the group
+# `type`, the command that probes it, and the add-source form as a
+# `CatalogEntry` without `type` (datalib/ui/src/config/catalog.ts).
+# `datalib-step --describe` prints these with the commands each
+# function's step runs (`describe.rs`). Before adding a source here,
+# read docs/dev/wizard_design.md (how a form is laid out and worded),
+# docs/dev/config_model.md (what the form writes) and
+# docs/dev/wizard_file_pickers.md (a path field offers a native picker).
+#
+# Fields are kept inline per entry rather than factored out, even where
+# two entries agree: a descriptor is data owned by one provider.
+#
+# Order matters where one `type` has several entries: the UI takes the
+# first whose `variantKey` the step's params hold, so a more specific
+# key comes first, and the entry without one last.
+
+[[sources]]
+type = "slack"
+probe = "probe slack"
+
+[sources.wizard]
+method = "api"
+label = "Slack"
+blurb = "Copy channels and DMs from one Slack workspace."
+keywords = ["slack", "chat", "workspace", "channels", "messages"]
+kind = "api"
+icon = "slack"
+defaultName = "slack"
+nameHint = "Work Slack"
+wizard = true
+credentialService = "slack"
+
+[[sources.wizard.sections]]
+heading = "Which channels?"
+
+[[sources.wizard.sections.answers]]
+label = "Every channel I'm in"
+sets = { "api.all_channels" = false }
+
+[[sources.wizard.sections.answers]]
+label = "Every channel in the workspace"
+help = "Including ones you haven't joined."
+sets = { "api.all_channels" = true }
+
+# No `sets`: a channel list wins over `all_channels` in the
+# downloader, so a config holding both is this answer.
+[[sources.wizard.sections.answers]]
+label = "Only the channels I choose"
+fields = ["api.channels"]
+
+[[sources.wizard.sections]]
+heading = "All of each channel?"
+fields = ["api.scope"]
+
+[[sources.wizard.sections]]
+heading = "Direct messages?"
+
+[[sources.wizard.sections.answers]]
+label = "Leave them out"
+help = "DMs are the most private part of a workspace."
+sets = { "api.dms" = false }
+
+[[sources.wizard.sections.answers]]
+label = "All my direct messages"
+help = "One-to-one and group conversations. Each is read in full once; after that, a sync reads the ones open in Slack's sidebar with new messages, and the closed ones once a day."
+sets = { "api.dms" = true }
+
+[[sources.wizard.sections.answers]]
+label = "Only the conversations I choose"
+sets = { "api.dms" = true }
+fields = ["api.dm_conversations"]
+
+[[sources.wizard.sections]]
+heading = "How far back?"
+answers = [
+  { label = "Everything" },
+  { label = "Only messages since a date I choose", fields = ["api.since"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Files people shared"
+fields = ["api.media", "common.blob_size_limit_bytes"]
+
+[[sources.wizard.sections]]
+heading = "Archived channels"
+fields = ["api.archived"]
+advanced = true
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "channels"
+target = "api.channels"
+label = "Channels"
+help = "A channel named here is copied whether or not you're a member of it."
+
+[[sources.wizard.fields]]
+kind = "select"
+target = "api.scope"
+label = "Copy"
+default = "every_conversation"
+options = [
+  { value = "every_conversation", label = "Everything in those channels" },
+  { value = "involves_me", label = "Only the channels that involve me" },
+]
+help = "The second copies only the channels where you're mentioned, you posted, or someone wrote @here or @channel, from a day before. A first sync takes minutes rather than hours. Direct messages follow the next question either way."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "Start date"
+help = "Choosing an earlier date later brings in the older messages on the next sync."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.until"
+label = "Copy until"
+help = "Last day to copy. Empty keeps up with today; a past day fixes the window."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.media"
+label = "Download them"
+default = true
+help = "Off keeps each file's name and details, without the file."
+
+[[sources.wizard.fields]]
+kind = "bytes"
+target = "common.blob_size_limit_bytes"
+requires = "api.media"
+label = "Skip files bigger than"
+default = 5_000_000
+help = "A few very large uploads usually take most of the disk space and hold little text. Clear the number for no limit; raising it later brings in the files it skipped."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.all_channels"
+label = "Include channels you're not a member of"
+default = false
+help = "Ignored when Channels is set."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.archived"
+label = "Copy archived channels too"
+default = false
+help = "Use it with every channel in the workspace: Slack drops almost everyone from a channel it archives, so with every channel you're in it adds almost nothing. Each archived channel is copied once. One you choose by name is copied either way."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.dms"
+label = "Download direct messages"
+default = false
+help = "Your 1:1 and group DMs, alongside the channels above. Off by default — DMs are the most private thing in a workspace, so copying them is opt-in."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "conversations"
+target = "api.dm_conversations"
+requires = "api.dms"
+label = "Conversations"
+help = "A link to a conversation works too: right-click it in Slack's sidebar and choose Copy link."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refresh_window_days"
+label = "Edit-catcher window (days)"
+help = "Re-queries the trailing N days of channels that already have history, for edits, reactions and deletions. Not a range bound. Empty is 30; 0 turns it off."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refresh_every_minutes"
+label = "Re-query that window every (minutes)"
+help = "How long after the last re-query a sync re-queries a conversation's window again. New messages are fetched on every sync either way. Empty is 60; 0 re-queries every sync."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.list_every_hours"
+label = "Re-read the user list and bookmarks every (hours)"
+help = "How long after the last read a sync reads the workspace's user list and bookmarks again. A new author is looked up as their first message lands either way. Empty is 6; 0 re-reads every sync."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.involves_me"
+label = "What involves me"
+help = "With Copy set to the channels that involve you: any of mention, from_me, and broadcast (@here and @channel). Empty is all three."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "api.context_before"
+label = "Start before the first one"
+help = "An offset such as -1d or -3h: how long before the oldest message that involves you a channel is copied from. Empty is -1d."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "api.context_after"
+label = "Stop after each one"
+help = "An offset such as +1d: copy only this long after each message that involves you. Empty copies up to now."
+
+[[sources]]
+type = "discord"
+probe = "probe discord"
+
+[sources.wizard]
+method = "api"
+label = "Discord"
+blurb = "Copy your direct messages and the servers you choose."
+keywords = ["discord", "chat", "server", "channels", "threads", "dms", "messages"]
+kind = "api"
+icon = "discord"
+defaultName = "discord"
+nameHint = "Personal Discord"
+wizard = true
+intro = "Datalib reads Discord as you, through your own sign-in. Discord forbids automating a personal account and may close one it catches, so decide whether that risk is worth it. A sync only reads, one request at a time."
+credentialService = "discord"
+credentialConnectWarning = "Discord may close an account it catches being automated."
+
+# latchkey's own example is a bot's, which sees no direct messages
+# and may not list threads.
+[sources.wizard.credentialPaste]
+headers = ["Authorization: {secret}"]
+help = "Your own account's token: the Authorization header of any request a signed-in discord.com tab makes. A bot's token does not work here."
+
+[[sources.wizard.sections]]
+heading = "Which servers?"
+
+[[sources.wizard.sections.answers]]
+label = "None, only my direct messages"
+sets = { "api.all_servers" = false }
+
+[[sources.wizard.sections.answers]]
+label = "Only the servers I choose"
+sets = { "api.all_servers" = false }
+fields = ["api.servers", "api.channels"]
+
+[[sources.wizard.sections.answers]]
+label = "Every server I'm in"
+help = "A first sync of a big public server takes hours."
+sets = { "api.all_servers" = true }
+
+[[sources.wizard.sections]]
+heading = "Threads and forum posts"
+fields = ["api.threads"]
+
+[[sources.wizard.sections]]
+heading = "Direct messages?"
+
+[[sources.wizard.sections.answers]]
+label = "All my direct messages"
+sets = { "api.dms" = true }
+
+[[sources.wizard.sections.answers]]
+label = "Only the conversations I choose"
+sets = { "api.dms" = true }
+fields = ["api.dm_conversations"]
+
+[[sources.wizard.sections.answers]]
+label = "Leave them out"
+sets = { "api.dms" = false }
+
+[[sources.wizard.sections]]
+heading = "How far back?"
+answers = [
+  { label = "Everything", help = "Discord hands over 100 messages at a time." },
+  { label = "Only messages since a date I choose", fields = ["api.since"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Files people shared"
+fields = ["api.media", "common.blob_size_limit_bytes"]
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "servers"
+target = "api.servers"
+label = "Servers"
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "channels"
+target = "api.channels"
+label = "Only these channels"
+help = "Empty copies every channel you can read. A category copies the channels in it."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.all_servers"
+label = "Copy every server"
+default = false
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.threads"
+label = "Copy them"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.dms"
+label = "Copy direct messages"
+default = true
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "conversations"
+target = "api.dm_conversations"
+requires = "api.dms"
+label = "Conversations"
+help = "A link to a conversation works too."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "Start date"
+help = "Choosing an earlier date later brings in the older messages on the next sync."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.media"
+label = "Download them"
+default = true
+help = "Off keeps each file's name and details, without the file."
+
+[[sources.wizard.fields]]
+kind = "bytes"
+target = "common.blob_size_limit_bytes"
+requires = "api.media"
+label = "Skip files bigger than"
+default = 5_000_000
+help = "Clear the number for no limit; raising it later brings in the files it skipped."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refresh_window_days"
+label = "Edit-catcher window (days)"
+help = "Re-reads the trailing N days of conversations that already have history, for edits, reactions and deletions. Not a range bound. Empty is 7; 0 turns it off."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refresh_every_minutes"
+label = "Re-read that window every (minutes)"
+help = "How long after the last re-read a sync re-reads a conversation's window again. New messages are fetched on every sync either way. Empty is 360; 0 re-reads every sync."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.list_every_hours"
+label = "List roles and threads every (hours)"
+help = "How long after the last listing a sync lists a server's roles and a channel's threads again. Empty is 6; 0 lists them every sync."
+
+[[sources]]
+type = "claude"
+probe = "probe claude"
+
+[sources.wizard]
+variantKey = "api"
+method = "api"
+label = "Claude"
+blurb = "Copy your claude.ai conversations and projects."
+keywords = ["claude", "anthropic", "chat", "llm", "conversations"]
+kind = "api"
+icon = "claude"
+defaultName = "claude"
+nameHint = "Claude Account 1"
+wizard = true
+credentialService = "claude-ai"
+# Kept to one line on purpose: the point is that clicking has a
+# cost, not the history of how we found out (2026-08-31, the
+# captured cookie and the everyday browser evicting each other).
+credentialConnectWarning = "Signing in again may log out your other claude.ai session."
+
+# The whole claude.ai credential is the `sessionKey` cookie, so
+# cookie-capture is the flow that fits.
+[sources.wizard.credentialRegister]
+base_api_url = "https://claude.ai/"
+login_url = "https://claude.ai/login"
+login_flow = "cookie-capture"
+login_flow_params = { cookieKeys = ["sessionKey"] }
+
+# latchkey offers a service it did not ship the generic Bearer
+# example; claude.ai's credential is the cookie.
+[sources.wizard.credentialPaste]
+headers = ["Cookie: sessionKey={secret}"]
+help = "The sessionKey cookie from a signed-in claude.ai tab: DevTools → Application → Cookies → https://claude.ai → sessionKey → Value."
+
+[[sources.wizard.sections]]
+heading = "Which conversations?"
+
+[[sources.wizard.sections.answers]]
+label = "All of them"
+
+[[sources.wizard.sections.answers]]
+label = "Only the conversations I choose"
+help = "Useful for a first sync of a large account."
+fields = ["api.conv_uuids"]
+
+[[sources.wizard.sections.answers]]
+label = "Only conversations updated since a date I choose"
+fields = ["api.since"]
+
+[[sources.wizard.sections]]
+heading = "Projects"
+fields = ["api.projects"]
+
+[[sources.wizard.sections]]
+heading = "Cowork"
+fields = ["api.cowork"]
+
+[[sources.wizard.sections]]
+heading = "Deleted chats"
+fields = ["when_deleted_upstream"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Claude account"
+help = "Either pick an existing one, or type a new name here and use one of the authentication options below to create a new latchkey account."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "Start date"
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.projects"
+label = "Also copy Claude Projects"
+default = true
+help = "Each project's description, custom instructions and knowledge documents."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.cowork"
+label = "Also copy Cowork tasks"
+default = true
+help = "Each task that ran in the cloud, as a conversation: your prompts, Claude's steps and its answers."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.max_conversations_per_run"
+label = "Most conversations to fetch per sync"
+help = "The ones never fetched come first; the next sync fetches the rest. Empty is no limit."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refetch_newest_conversations"
+label = "Fetch the N newest again each sync"
+help = "Even when updated_at says they have not changed, in each org. Empty fetches only what changed."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.seconds_between_requests"
+label = "Seconds between requests"
+help = "Empty waits none; a rate limit is still waited out."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "conversations"
+target = "api.conv_uuids"
+label = "Conversations"
+help = "Chat links work too: paste one in the box."
+
+[[sources.wizard.fields]]
+kind = "select"
+target = "when_deleted_upstream"
+label = "When a chat is deleted on claude.ai"
+default = "delete_local_copy"
+options = [
+  { value = "delete_local_copy", label = "Delete my copy too" },
+  { value = "keep_local_copy", label = "Keep my copy" },
+]
+help = "Keep your copy if you mean to delete chats there for privacy and still have them here. Check the copy before you delete anything: it can't be downloaded again."
+
+[[sources]]
+type = "chatgpt"
+probe = "probe chatgpt"
+
+[sources.wizard]
+# Before the export entry: a step with an `api` table beside its
+# `export` is this one, the API seeded from the export.
+variantKey = "api"
+method = "api"
+label = "ChatGPT"
+blurb = "Copy your ChatGPT conversations."
+keywords = ["chatgpt", "openai", "gpt", "chat", "llm", "conversations"]
+kind = "api"
+icon = "chatgpt"
+defaultName = "chatgpt"
+nameHint = "ChatGPT Account 1"
+wizard = true
+credentialService = "chatgpt"
+
+# The credential is the bearer token chatgpt.com's own session
+# endpoint hands the page, so token-capture is the flow that fits.
+# Same registration `docs/user/getting_your_data.md` gives by hand.
+[sources.wizard.credentialRegister]
+base_api_url = "https://chatgpt.com/"
+login_url = "https://chatgpt.com/auth/login"
+login_flow = "token-capture"
+login_flow_params = { tokenUrl = "https://chatgpt.com/api/auth/session", tokenField = "accessToken" }
+
+[[sources.wizard.sections]]
+heading = "Which conversations?"
+
+[[sources.wizard.sections.answers]]
+label = "All of them"
+
+[[sources.wizard.sections.answers]]
+label = "Only the conversations I choose"
+help = "Useful for a first sync of a large account."
+fields = ["api.conv_uuids"]
+
+[[sources.wizard.sections.answers]]
+label = "Only conversations updated since a date I choose"
+fields = ["api.since"]
+
+[[sources.wizard.sections]]
+heading = "Start from an export?"
+
+[[sources.wizard.sections.answers]]
+label = "No, download every conversation"
+
+[[sources.wizard.sections.answers]]
+label = "Yes, read a ChatGPT data export first"
+help = "Copies every conversation the export holds without asking chatgpt.com, so only what changed after it is downloaded. Ask for one in ChatGPT's Settings → Data controls → Export data."
+fields = ["export.path"]
+
+[[sources.wizard.sections]]
+heading = "Deleted chats"
+fields = ["when_deleted_upstream"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "ChatGPT account"
+help = "Either pick an existing one, or type a new name here and use one of the authentication options below to create a new latchkey account."
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "file"
+pickTitle = "Choose the ChatGPT export .zip"
+extensions = ["zip"]
+target = "export.path"
+label = "Export file"
+help = "The .zip as it downloaded, ~/Downloads/chatgpt-export.zip say, or the folder you unzipped it into. A newer export can replace it at any time."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "Start date"
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "conversations"
+target = "api.conv_uuids"
+label = "Conversations"
+help = "Chat links work too: paste one in the box."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.max_conversations_per_run"
+label = "Most conversations to fetch per sync"
+help = "The ones never fetched come first; the next sync fetches the rest. Empty is no limit."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refetch_newest_conversations"
+label = "Fetch the N newest again each sync"
+help = "Even when update_time says they have not changed. Empty fetches only what changed."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.seconds_between_requests"
+label = "Seconds between requests"
+help = "Empty waits none; a rate limit is still waited out."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.max_listing_pages"
+label = "Stop listing after (pages of 100)"
+help = "A listing cut short deletes nothing here. Empty lists them all."
+
+[[sources.wizard.fields]]
+kind = "select"
+target = "when_deleted_upstream"
+label = "When a chat is deleted on chatgpt.com"
+default = "delete_local_copy"
+options = [
+  { value = "delete_local_copy", label = "Delete my copy too" },
+  { value = "keep_local_copy", label = "Keep my copy" },
+]
+help = "Keep your copy if you mean to delete chats there for privacy and still have them here. Check the copy before you delete anything: it can't be downloaded again."
+
+[[sources]]
+type = "github"
+probe = "probe github"
+
+[sources.wizard]
+method = "api"
+label = "GitHub"
+blurb = "Copy pull requests and their review threads."
+keywords = ["github", "pr", "pull request", "code", "review"]
+kind = "api"
+icon = "github"
+defaultName = "github"
+nameHint = "Work GitHub"
+wizard = true
+intro = "Each pull request becomes a document you can read and search, with its comments and reviews. Issues and code are not copied."
+credentialService = "github"
+# What latchkey's GitHub login does: it ticks nearly every scope on
+# GitHub's token form and leaves the expiry at the form's 30 days
+# (`services/github.js` in latchkey).
+credentialConnectWarning = "Signing in creates a token on your GitHub account that can also change and delete things, and that expires in 30 days. Copying only reads."
+
+[sources.wizard.credentialPaste]
+help = "Make a token at github.com/settings/tokens. A classic token with the repo scope reads every repository you can. A fine-grained one reads only the repositories you pick, and needs read access to their pull requests."
+
+[[sources.wizard.sections]]
+heading = "Which pull requests?"
+
+[[sources.wizard.sections.answers]]
+label = "Every one I'm part of"
+help = "The ones you opened, commented on or were mentioned in, in any repository."
+
+[[sources.wizard.sections.answers]]
+label = "Only the pull requests I choose"
+fields = ["api.pull_requests"]
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.pull_requests"
+label = "Pull requests"
+help = "Paste a pull request's link, or write it as owner/repo#123."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refresh_window_days"
+label = "Search back (days)"
+help = "Each sync searches only the stretch of time no earlier search covered, back this many days. Empty or 0 is no limit."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.max_prs"
+label = "Pull requests per sync"
+help = "Fetch at most this many in one sync; the rest wait for the next. Empty is no cap."
+
+# GitLab is listed for completeness; no form yet.
+[[sources]]
+type = "gitlab"
+
+[sources.wizard]
+method = "api"
+label = "GitLab"
+blurb = "Copy merge requests and their discussions."
+keywords = ["gitlab", "mr", "code"]
+kind = "api"
+icon = "gitlab"
+defaultName = "gitlab"
+nameHint = "Work GitLab"
+wizard = false
+credentialService = "gitlab"
+
+[[sources]]
+type = "notion"
+probe = "probe notion"
+
+[sources.wizard]
+method = "api"
+label = "Notion"
+blurb = "Copy pages and comment threads."
+keywords = ["notion", "wiki", "docs", "pages"]
+kind = "api"
+icon = "notion"
+defaultName = "notion"
+nameHint = "Team Notion"
+wizard = true
+intro = "Each page becomes a document you can read and search, with its comments and attached files. Database rows come along as pages."
+credentialService = "notion"
+
+# latchkey's example stores the token alone, but Notion refuses a
+# request without `Notion-Version`, and the version has to be stored
+# with the token: one sent beside the stored one joins it and Notion
+# refuses the pair (notion/INGEST.md). Keep it equal to the version
+# INGEST.md names.
+[sources.wizard.credentialPaste]
+headers = ["Authorization: Bearer {secret}", "Notion-Version: 2026-03-11"]
+help = "Make a personal access token at notion.so/profile/integrations; it starts ntn_. An internal integration works too, but copies only the pages shared with it."
+
+[[sources.wizard.sections]]
+heading = "Which pages?"
+
+[[sources.wizard.sections.answers]]
+label = "Every page I can see"
+
+[[sources.wizard.sections.answers]]
+label = "Only the pages I choose"
+help = "Each page or database and everything inside it: sub-pages at any depth and a database's rows. Pages a chosen page links to or @-mentions come too, but not what is inside them."
+fields = ["api.roots"]
+
+[[sources.wizard.sections]]
+heading = "Comments and files"
+fields = ["api.comments", "api.attachments"]
+advanced = true
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.roots"
+label = "Pages"
+help = "Paste a page's or a database's link, or its id."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.comments"
+label = "Copy comments"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.attachments"
+label = "Copy attached files"
+default = true
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.refresh_window_days"
+label = "Re-list edits from the last (days)"
+help = "Whole-workspace copy only: each sync lists pages edited this many days before the newest it has seen, so a page shared with you late is still found. Empty is 0."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "api.max_pages"
+label = "Stop after (pages)"
+help = "A guard against a copy that reaches further than meant. Empty is no limit."
+
+[[sources]]
+type = "linear"
+probe = "probe linear"
+
+[sources.wizard]
+method = "api"
+label = "Linear"
+blurb = "Copy issues, comments, projects and documents from one Linear workspace."
+keywords = ["linear", "issues", "tickets", "projects", "tracker"]
+kind = "api"
+icon = "linear"
+defaultName = "linear"
+nameHint = "Work Linear"
+wizard = true
+# Download-only: the copy is Linear's own objects, kept as they
+# came, and nothing is rendered.
+rendersDocuments = false
+credentialService = "linear"
+
+[[sources.wizard.sections]]
+heading = "Which issues?"
+
+[[sources.wizard.sections.answers]]
+label = "The whole workspace"
+
+[[sources.wizard.sections.answers]]
+label = "Only the teams and projects I choose"
+help = "Most issues belong to a team and no project, so choose their teams."
+fields = ["api.teams", "api.projects"]
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "teams"
+target = "api.teams"
+label = "Teams"
+help = "Every issue in these teams, and the projects they work on."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "projects"
+target = "api.projects"
+label = "Projects"
+help = "Every issue in these projects, whichever team it is in."
+
+[[sources]]
+type = "todoist"
+probe = "probe todoist"
+
+[sources.wizard]
+method = "api"
+label = "Todoist"
+blurb = "Copy your Todoist projects, tasks and comments."
+keywords = ["todoist", "tasks", "todo", "to-do", "projects"]
+kind = "api"
+icon = "todoist"
+defaultName = "todoist"
+nameHint = "Personal Todoist"
+wizard = true
+intro = "Each project becomes a document you can read and search: its sections, its tasks and their comments."
+credentialService = "todoist"
+credentialPaste = { help = "The API token is in Todoist under Settings → Integrations → Developer." }
+
+[[sources.wizard.sections]]
+heading = "Completed tasks?"
+
+[[sources.wizard.sections.answers]]
+label = "Copy them too"
+help = "The first sync reads back to the day you joined, a quarter at a time."
+sets = { "api.completed" = true }
+
+[[sources.wizard.sections.answers]]
+label = "Only open tasks"
+sets = { "api.completed" = false }
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.completed"
+label = "Copy completed tasks"
+default = true
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "Completed since"
+requires = "api.completed"
+help = "How far back the first sync reads completed tasks. Empty reads back to the day the account joined Todoist."
+
+[[sources]]
+type = "baby_connect"
+
+[sources.wizard]
+method = "api"
+label = "Baby Connect"
+blurb = "Copy everything you logged for your children: feeds, sleeps, diapers and notes."
+keywords = ["baby connect", "baby", "babyconnect", "tracker", "feeding", "sleep", "diaper"]
+kind = "api"
+icon = "baby_connect"
+defaultName = "baby_connect"
+nameHint = "Baby Connect"
+wizard = true
+intro = "Each child's month becomes a document you can read and search: every entry, with who logged it and the notes you typed. The first sync asks for one day at a time, from your eldest child's birthday."
+credentialService = "babyconnect"
+credentialConnectWarning = "Tick Remember Me when you sign in. Without it the session can end within a day, and every sync after that fails until you sign in again."
+
+# A session is two cookies: `seacloud1`, set at sign-in, and `srf`,
+# which the home page's token must match.
+[sources.wizard.credentialRegister]
+base_api_url = "https://app.babyconnect.com/"
+login_url = "https://app.babyconnect.com/login"
+login_flow = "cookie-capture"
+login_flow_params = { cookieKeys = ["seacloud1", "srf"] }
+
+[[sources.wizard.fields]]
+kind = "text"
+phase = "render"
+target = "time_zone"
+label = "Time zone"
+help = "Where you were when you logged, as a zone name such as America/Los_Angeles. Baby Connect keeps times without one; empty reads them as UTC. Changing it re-renders; it never re-downloads."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "From"
+help = "The first day to copy. Empty starts at your eldest child's birthday."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.until"
+label = "Until"
+help = "The last day to copy. Empty copies up to today."
+
+# ── the two `email` variants ──────────────────────────────────────
+#
+# Gmail must come before the JMAP entry: `variantKey` matching takes
+# the first hit, and a Gmail step has no `jmap` table to confuse it
+# — but a future entry keyed on something broader would.
+[[sources]]
+type = "email"
+probe = "probe email"
+
+[sources.wizard]
+variantKey = "gmail"
+label = "Gmail"
+blurb = "Copy a Gmail account through Google's API."
+keywords = ["gmail", "google", "email", "mail", "inbox", "labels"]
+kind = "api"
+icon = "gmail"
+defaultName = "gmail"
+nameHint = "Work Gmail"
+mailboxNoun = "labels"
+wizard = true
+credentialService = "google-gmail"
+# The presence of a `gmail` table is what selects this mode,
+# and a table needs a key. `user_id` is the one to spend: `me`
+# is both Gmail's meaning of "the authenticated user" and the
+# backend's own default, so writing it changes nothing except
+# making the mode explicit in the file. The JMAP server of the
+# Fastmail entry is a preset too, rather than a field: that entry
+# *is* Fastmail, and a different host is a different service that
+# wants its own entry.
+preset = [
+  { target = "gmail.user_id", value = "me" },
+  { target = "outlink_format", value = "gmail", phase = "render" },
+]
+
+[[sources.wizard.sections]]
+heading = "Which mail?"
+answers = [
+  { label = "The whole account" },
+  { label = "Only the labels I choose", fields = ["only_extract_labels"] },
+]
+
+[[sources.wizard.sections]]
+heading = "How far back?"
+answers = [
+  { label = "Everything" },
+  { label = "Only mail since a date I choose", fields = ["gmail.since"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Start from a Takeout?"
+answers = [
+  { label = "No, download every message" },
+  { label = "Yes, I have a Google Takeout of this account", fields = ["mbox.path"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Large messages"
+fields = ["common.blob_size_limit_bytes"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Google account"
+help = "Which stored Google login to copy. Leave it empty if only one is stored — it is required only when the google-gmail service has more than one account, and naming the wrong one copies the wrong mailbox."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "labels"
+target = "only_extract_labels"
+label = "Labels"
+help = "A nested label is named in full (Work/Projects), and choosing a parent does not include its children. A label added later brings in its mail on the next sync."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "gmail.since"
+label = "Start date"
+help = "The first sync lists only mail from this day on, so it takes minutes rather than hours. Choosing an earlier date later brings in the older mail on the next sync."
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the folder holding your Google Takeout"
+target = "mbox.path"
+label = "Takeout folder"
+help = "The folder holding the Takeout's .zip or .tgz files as Google sent them, every part, or the Mail folder of an unzipped one. Messages in the Takeout are not downloaded again, so the first sync takes minutes rather than hours. Mail newer than the Takeout, and every message's labels, still come from Gmail."
+
+[[sources.wizard.fields]]
+kind = "bytes"
+target = "common.blob_size_limit_bytes"
+label = "Skip messages bigger than"
+help = "A skipped message keeps its headers and loses its body. Decide before the first sync: raising the limit later does not go back for messages already skipped. Empty means no limit."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "mailboxes"
+phase = "render"
+target = "only_render_labels"
+label = "Render only these labels"
+help = "A narrower filter applied at render. Empty renders everything downloaded. Changing it re-renders; it never re-downloads."
+
+[[sources]]
+type = "email"
+probe = "probe email"
+
+[sources.wizard]
+variantKey = "jmap"
+label = "Fastmail"
+blurb = "Copy a Fastmail mailbox over JMAP."
+keywords = ["fastmail", "jmap", "email", "mail", "inbox", "folders"]
+kind = "api"
+icon = "fastmail"
+defaultName = "fastmail"
+nameHint = "Personal Fastmail"
+wizard = true
+credentialService = "fastmail"
+preset = [
+  { target = "jmap.hostname", value = "api.fastmail.com" },
+  { target = "outlink_format", value = "fastmail", phase = "render" },
+]
+
+# Fastmail has no read-only OAuth scope, so the browser login can
+# read, change and send mail; a hand-made token is the way to less.
+[sources.wizard.credentialPaste]
+help = "For read-only access, make an API token at app.fastmail.com → Settings → Privacy & Security → Integrations → API tokens, with Read-only access ticked, and paste it here. Web login signs in with full read and write access instead."
+
+[[sources.wizard.sections]]
+heading = "Which mail?"
+answers = [
+  { label = "The whole mailbox" },
+  { label = "Only the folders I choose", fields = ["only_extract_labels"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Large attachments"
+fields = ["common.blob_size_limit_bytes"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Fastmail account"
+help = "Which stored Fastmail login to copy. Leave it empty if only one is stored."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "labels"
+target = "only_extract_labels"
+label = "Folders"
+help = "A folder inside another is named in full (travel/portugal), and choosing a parent does not include its children."
+
+[[sources.wizard.fields]]
+kind = "bytes"
+target = "common.blob_size_limit_bytes"
+label = "Skip attachments bigger than"
+help = "Attachments take most of a mailbox's disk space and hold almost none of its text. Empty means no limit."
+
+[[sources.wizard.fields]]
+kind = "int"
+target = "jmap.blob_download_concurrency"
+label = "Message downloads in flight"
+help = "JMAP fetches each message body in its own request. Empty is the default; 1 is strictly one at a time."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "mailboxes"
+phase = "render"
+target = "only_render_labels"
+label = "Render only these folders"
+help = "A narrower filter applied at render. Empty renders everything downloaded. Changing it re-renders; it never re-downloads."
+
+[[sources]]
+type = "email"
+
+[sources.wizard]
+variantKey = "apple_mail"
+label = "Apple Mail (Local)"
+blurb = "Copy the accounts of the Mail app on this Mac, from its own files."
+keywords = ["apple", "mail", "email", "mac", "emlx", "inbox", "icloud"]
+kind = "local"
+icon = "apple_mail"
+defaultName = "apple-mail"
+nameHint = "Mail on this Mac"
+wizard = true
+intro = "Copies the mail of every account in the Mail app on this Mac, with its mailboxes and read state. A message Mail has not downloaded yet is copied once Mail has it."
+
+[[sources.wizard.sections]]
+heading = "Mail folder"
+fields = ["apple_mail.path"]
+
+[[sources.wizard.sections]]
+heading = "Which mail?"
+answers = [
+  { label = "Every mailbox" },
+  { label = "Only the mailboxes I choose", fields = ["only_extract_labels"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+# Choosing the folder is what grants the app access to it on macOS
+# (docs/dev/wizard_file_pickers.md), as for ~/Library/Messages.
+picks = "dir"
+pickTitle = "Choose your Mail folder"
+startIn = "~/Library/Mail"
+required = true
+target = "apple_mail.path"
+label = "Mail folder"
+guarded = "Let Datalib read your Mail folder"
+help = "The folder the Mail app keeps its mail in, ~/Library/Mail. A copy of it works too."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "only_extract_labels"
+label = "Mailboxes"
+help = "Named as Mail shows them. A mailbox inside another is named in full ([Gmail]/Sent Mail), and choosing a parent does not include its children."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "apple_mail.account"
+label = "Only this Mail account"
+help = "apple_mail.account: copy just this account, by the name of its folder under ~/Library/Mail/V10. Empty copies every account in Mail, each under its own id."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+phase = "render"
+target = "only_render_labels"
+label = "Render only these mailboxes"
+help = "A narrower filter applied at render. Empty renders everything copied. Changing it re-renders; it never copies again."
+
+# The catch-all `email` entry, and deliberately last: it has no
+# `variantKey`, so it is what an email step matches when none of
+# the three above does — an mbox source, or a JMAP server that is not
+# Fastmail. No form, because the thing it stands for is "some other
+# way of getting mail", which is not one form.
+[[sources]]
+type = "email"
+
+[sources.wizard]
+label = "Email (mbox or JMAP)"
+blurb = "A Google Takeout .mbox, or a JMAP server other than Fastmail."
+keywords = ["email", "mail", "jmap", "imap", "mbox", "takeout"]
+kind = "api"
+icon = "email"
+defaultName = "email"
+nameHint = "Old mail archive"
+wizard = false
+
+# ── the `calendar` variants ───────────────────────────────────────
+#
+# Like `email`: one type, and an entry per way in, each keyed on its
+# own method table. Every method has a form, so there is no catch-all.
+[[sources]]
+type = "calendar"
+probe = "probe calendar"
+
+[sources.wizard]
+variantKey = "google"
+method = "google"
+label = "Google Calendar"
+blurb = "Copy the calendars on a Google account through Google's API."
+keywords = ["google", "calendar", "gcal", "events", "meetings", "schedule"]
+kind = "api"
+icon = "google_calendar"
+defaultName = "google_calendar"
+nameHint = "Work calendar"
+wizard = true
+credentialService = "google-calendar"
+
+[[sources.wizard.sections]]
+heading = "Which calendars?"
+answers = [
+  { label = "Every calendar on the account", help = "Subscribed ones included." },
+  { label = "Only the calendars I choose", fields = ["google.calendars"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Which events?"
+answers = [
+  { label = "All events" },
+  { label = "Only events in a range of dates", fields = ["google.since", "google.until"] },
+]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Google account"
+help = "Which stored Google login to copy. Leave it empty if only one is stored for google-calendar."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "calendars"
+target = "google.calendars"
+label = "Calendars"
+help = "A calendar added later is downloaded whole."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "google.since"
+label = "First day"
+help = "Only events with some part in the range are copied, and a series keeps only its changed dates inside it."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "google.until"
+label = "Last day"
+help = "The last day, included. Leave empty for no end."
+
+[[sources]]
+type = "calendar"
+probe = "probe calendar"
+
+[sources.wizard]
+variantKey = "fastmail"
+method = "fastmail"
+label = "Fastmail Calendar"
+blurb = "Copy a Fastmail account's calendars over CalDAV."
+keywords = ["fastmail", "calendar", "caldav", "events", "meetings", "schedule"]
+kind = "api"
+icon = "fastmail_calendar"
+defaultName = "fastmail_calendar"
+nameHint = "Personal calendar"
+wizard = true
+# CalDAV takes an app password, which is its own latchkey service,
+# not the OAuth login the `fastmail` mail entry uses.
+credentialService = "fastmail-dav"
+
+[sources.wizard.credentialPaste]
+help = "Your Fastmail address and an app password from app.fastmail.com → Settings → Privacy & Security → Integrations → App passwords: Access “Calendars (CalDAV)”, with Read-only access ticked. An API token won’t do: CalDAV refuses them."
+accountSuffix = "calendar"
+
+[[sources.wizard.sections]]
+heading = "Which calendars?"
+answers = [
+  { label = "Every calendar" },
+  { label = "Only the calendars I choose", fields = ["fastmail.calendars"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Which events?"
+
+[[sources.wizard.sections.answers]]
+label = "All events"
+
+[[sources.wizard.sections.answers]]
+label = "Only events in a range of dates"
+fields = ["fastmail.since", "fastmail.until"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Fastmail account"
+help = "The name the app password is stored under in latchkey — “you@fastmail.com calendar”, say. Leave it empty if only one is stored."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "calendars"
+target = "fastmail.calendars"
+label = "Calendars"
+help = "A calendar added later is downloaded whole."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "fastmail.since"
+label = "First day"
+help = "Only events with some part in the range are copied, and a series keeps only its changed dates inside it."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "fastmail.until"
+label = "Last day"
+help = "The last day, included. Leave empty for no end."
+
+[[sources]]
+type = "calendar"
+probe = "probe calendar"
+
+# No `credentialService`: latchkey keys a CalDAV login by the
+# server's host, and a host it does not ship needs registering
+# first, with an app password rather than a browser login — which
+# the Connect flow cannot do. The help text says how.
+[sources.wizard]
+variantKey = "caldav"
+label = "Calendar (CalDAV)"
+blurb = "Copy the calendars on any CalDAV server: iCloud, Nextcloud, Radicale, …."
+keywords = ["calendar", "caldav", "icloud", "nextcloud", "radicale", "events", "schedule"]
+kind = "api"
+icon = "calendar"
+defaultName = "caldav_calendar"
+nameHint = "iCloud calendar"
+wizard = true
+
+[sources.wizard.before]
+terminalSignIn = true
+text = "The sign-in for this server is set up in a terminal, with latchkey:"
+needs = [
+  "`latchkey services register` a service for this host.",
+  "`latchkey auth set <service> -u \"you@example.com:<app password>\"`",
+]
+
+[[sources.wizard.sections]]
+heading = "Server address"
+fields = ["caldav.server_url"]
+
+[[sources.wizard.sections]]
+heading = "Which calendars?"
+answers = [
+  { label = "Every calendar" },
+  { label = "Only the calendars I choose", fields = ["caldav.calendars"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Which events?"
+answers = [
+  { label = "All events" },
+  { label = "Only events in a range of dates", fields = ["caldav.since", "caldav.until"] },
+]
+
+[[sources.wizard.fields]]
+kind = "text"
+required = true
+target = "caldav.server_url"
+label = "Server address"
+help = "Where the server's CalDAV starts, e.g. https://caldav.icloud.com/. The host alone is usually enough."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "latchkey_settings.account"
+label = "Latchkey account"
+help = "Which stored login to use, when more than one is stored for this host."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "calendars"
+target = "caldav.calendars"
+label = "Calendars"
+help = "A calendar added later is downloaded whole."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "caldav.since"
+label = "First day"
+help = "Only events with some part in the range are copied, and a series keeps only its changed dates inside it."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "caldav.until"
+label = "Last day"
+help = "The last day, included. Leave empty for no end."
+
+[[sources]]
+type = "calendar"
+probe = "probe calendar"
+
+[sources.wizard]
+variantKey = "calendly"
+method = "calendly"
+label = "Calendly"
+blurb = "Copy the meetings people book with you on Calendly, with their answers."
+keywords = ["calendly", "calendar", "scheduling", "bookings", "meetings", "invitees"]
+kind = "api"
+icon = "calendar"
+defaultName = "calendly"
+nameHint = "Work Calendly"
+wizard = true
+# latchkey's `calendly` takes only a pasted personal access token;
+# the wizard offers no browser sign-in because latchkey lists none.
+credentialService = "calendly"
+
+[sources.wizard.credentialPaste]
+help = "A personal access token from Calendly: Integrations → API & Webhooks → Personal Access Tokens. Give it the users:read and scheduled_events:read scopes."
+
+[[sources.wizard.sections]]
+heading = "Which meetings?"
+
+[[sources.wizard.sections.answers]]
+label = "All meetings"
+
+[[sources.wizard.sections.answers]]
+label = "Only meetings in a range of dates"
+fields = ["calendly.since", "calendly.until"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Calendly account"
+help = "The name the token is stored under in latchkey. Leave it empty if only one is stored."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "calendly.since"
+label = "First day"
+help = "Only meetings that start in the range are copied. One that leaves it is dropped."
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "calendly.until"
+label = "Last day"
+help = "The last day, included. Leave empty for no end."
+
+[[sources]]
+type = "calendar"
+
+[sources.wizard]
+variantKey = "ics"
+label = "Calendar (.ics files)"
+blurb = "A folder of .ics exports, such as Google Takeout's Calendar folder."
+keywords = ["calendar", "ics", "ical", "icalendar", "takeout", "export", "events"]
+kind = "export"
+icon = "calendar"
+defaultName = "ics_calendar"
+nameHint = "Old calendar export"
+wizard = true
+sections = [
+  { heading = "Calendar folder", fields = ["ics.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the folder of .ics files"
+required = true
+target = "ics.path"
+label = "Calendar folder"
+help = "A folder of .ics files, one per calendar: the Calendar folder from a Google Takeout, say. Each file is the whole of its calendar: an event a re-read file no longer holds is dropped from the copy."
+
+[[sources]]
+type = "google_drive"
+
+[sources.wizard]
+method = "api"
+label = "Google Drive"
+blurb = "Copy the Docs, Sheets and Slides on a Google account."
+keywords = ["google", "drive", "docs", "sheets", "slides", "documents", "spreadsheets"]
+kind = "api"
+icon = "google_drive"
+defaultName = "google_drive"
+nameHint = "Work Drive"
+wizard = true
+intro = "Each Doc becomes a document you can read and search, its comments beside the text. Sheets and Slides are kept, but not shown yet."
+credentialService = "google-drive"
+credentialAlso = [
+  { service = "google-docs", label = "Google Docs" },
+  { service = "google-sheets", label = "Google Sheets" },
+  { service = "google-slides", label = "Google Slides" },
+]
+
+[[sources.wizard.sections]]
+heading = "Which files?"
+
+[[sources.wizard.sections.answers]]
+label = "Every file the account can open"
+help = "Files shared with it included."
+sets = { "api.owned_only" = false }
+
+[[sources.wizard.sections.answers]]
+label = "Only the files it owns"
+sets = { "api.owned_only" = true }
+
+# No `sets`: a list of files wins over `owned_only` and
+# `kinds` in the downloader, so a config holding both is
+# this answer.
+[[sources.wizard.sections.answers]]
+label = "Only the files I choose"
+fields = ["api.file_ids"]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Google account"
+help = "Which stored Google login to copy. Leave it empty if only one is stored. It has to be signed in to Drive, Docs, Sheets and Slides alike."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.owned_only"
+label = "Only files the account owns"
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.file_ids"
+label = "Files"
+help = "A link to each, as the address bar shows it, or its id."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.kinds"
+label = "Kinds of file"
+help = "Any of document, spreadsheet and presentation. Empty means all three. Ignored when files are chosen by name."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.exports"
+label = "Converted copies"
+help = "Any of odf (.odt, .ods, .odp, which LibreOffice opens), ooxml (.docx, .xlsx, .pptx) and pdf, kept beside Google's own JSON of each version. Each is a request, and 1 to 4 MB a version for a Doc or a deck. Empty means none."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "api.revision_exports"
+label = "Converted copies of old versions"
+help = "The same formats, of every revision Drive lists for a Doc or a Sheet, fetched once each: the only copy of a version from before the first sync. Decks get none. Empty means none."
+
+# ── the `contacts` variants ───────────────────────────────────────
+#
+# Like `calendar`: one type, an entry per way in, keyed on its method
+# table, and a form for each, so no catch-all.
+[[sources]]
+type = "contacts"
+probe = "probe contacts"
+
+[sources.wizard]
+variantKey = "google"
+method = "google"
+label = "Google Contacts"
+blurb = "Copy a Google account's contacts, labels and photos through Google's API."
+keywords = ["google", "contacts", "gmail", "people", "address book", "labels"]
+kind = "api"
+icon = "google_contacts"
+defaultName = "google_contacts"
+nameHint = "Personal contacts"
+wizard = true
+credentialService = "google-people"
+mailboxNoun = "labels"
+
+[[sources.wizard.sections]]
+heading = "Which contacts?"
+answers = [
+  { label = "Every contact" },
+  { label = "Only the contacts with the labels I choose", fields = ["google.labels"] },
+]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Google account"
+help = "Which stored Google login to copy. Leave it empty if only one is stored for google-people."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "labels"
+target = "google.labels"
+label = "Labels"
+
+[[sources]]
+type = "contacts"
+probe = "probe contacts"
+
+[sources.wizard]
+variantKey = "fastmail"
+method = "fastmail"
+label = "Fastmail Contacts"
+blurb = "Copy a Fastmail account's address books over CardDAV."
+keywords = ["fastmail", "contacts", "carddav", "vcard", "address book"]
+kind = "api"
+icon = "fastmail_contacts"
+defaultName = "fastmail_contacts"
+nameHint = "Personal contacts"
+wizard = true
+# The app password Fastmail Calendar uses too: DAV refuses the OAuth
+# login the `fastmail` mail entry holds.
+credentialService = "fastmail-dav"
+
+[sources.wizard.credentialPaste]
+help = "Your Fastmail address and an app password from app.fastmail.com → Settings → Privacy & Security → Integrations → App passwords: Access “Contacts (CardDAV)”, with Read-only access ticked. An API token won’t do: CardDAV refuses them."
+accountSuffix = "contacts"
+
+[[sources.wizard.sections]]
+heading = "Which address books?"
+answers = [
+  { label = "Every address book" },
+  { label = "Only the address books I choose", fields = ["fastmail.addressbooks"] },
+]
+
+[[sources.wizard.fields]]
+kind = "text"
+latchkey = true
+target = "latchkey_settings.account"
+label = "Fastmail account"
+help = "The name the app password is stored under in latchkey — “you@fastmail.com contacts”, say. Leave it empty if only one is stored."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "addressbooks"
+target = "fastmail.addressbooks"
+label = "Address books"
+
+[[sources]]
+type = "contacts"
+probe = "probe contacts"
+
+# No `credentialService`, for the reason CalDAV has none: latchkey
+# keys the login by the server's host, and registering one takes an
+# app password, which the Connect flow cannot do.
+[sources.wizard]
+variantKey = "carddav"
+label = "Contacts (CardDAV)"
+blurb = "Copy the address books on any CardDAV server: iCloud, Nextcloud, Radicale, …."
+keywords = ["contacts", "carddav", "icloud", "nextcloud", "vcard", "address book"]
+kind = "api"
+icon = "contacts"
+defaultName = "contacts"
+nameHint = "Phone contacts"
+wizard = true
+
+[sources.wizard.before]
+terminalSignIn = true
+text = "The sign-in for this server is set up in a terminal, with latchkey:"
+needs = [
+  "`latchkey services register` a service for this host.",
+  "`latchkey auth set <service> -u \"you@example.com:<app password>\"`",
+]
+
+[[sources.wizard.sections]]
+heading = "Server address"
+fields = ["carddav.server_url"]
+
+[[sources.wizard.sections]]
+heading = "Which address books?"
+answers = [
+  { label = "Every address book" },
+  { label = "Only the address books I choose", fields = ["carddav.addressbooks"] },
+]
+
+[[sources.wizard.fields]]
+kind = "text"
+required = true
+target = "carddav.server_url"
+label = "Server address"
+help = "Where the server's CardDAV starts, e.g. https://contacts.icloud.com/. The host alone is usually enough."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "latchkey_settings.account"
+label = "Latchkey account"
+help = "Which stored login to use, when more than one is stored for this host."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+probe = "addressbooks"
+target = "carddav.addressbooks"
+label = "Address books"
+
+[[sources]]
+type = "contacts"
+
+[sources.wizard]
+variantKey = "vcf"
+label = "Contacts (.vcf files)"
+blurb = "A folder of .vcf exports, from Google Contacts, iCloud or a phone."
+keywords = ["contacts", "vcf", "vcard", "export", "address book"]
+kind = "export"
+icon = "contacts"
+defaultName = "vcf-contacts"
+nameHint = "Old address book"
+wizard = true
+sections = [
+  { heading = "Contacts folder", fields = ["vcf.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the folder of .vcf files"
+required = true
+target = "vcf.path"
+label = "Contacts folder"
+help = "A folder of .vcf files, from Google Contacts, iCloud or a phone: ~/Downloads/contacts, say. Folders inside it are read too. A file may hold one contact or a whole address book."
+
+[[sources]]
+type = "garmin"
+probe = "probe garmin"
+
+[sources.wizard]
+method = "api"
+label = "Garmin"
+blurb = "Weight, sleep, heart rate, activities and FIT files from Garmin Connect."
+keywords = [
+  "garmin",
+  "connect",
+  "watch",
+  "forerunner",
+  "fenix",
+  "running",
+  "weight",
+  "sleep",
+  "fitness",
+]
+kind = "api"
+icon = "garmin"
+defaultName = "garmin"
+nameHint = "My Garmin"
+wizard = true
+# From latchkey's Garmin plugin, which datalib ships and installs
+# on the first sign-in (datalib/backend/http/src/plugins.rs).
+credentialService = "garmin"
+
+[sources.wizard.credentialPaste]
+help = "A folder holding oauth1_token.json, as garth or python-garminconnect write it. latchkey keeps a copy; the folder is not read again."
+
+[[sources.wizard.sections]]
+heading = "How far back?"
+answers = [
+  { label = "One year before the first sync" },
+  { label = "From a date I choose", fields = ["api.since"] },
+]
+
+[[sources.wizard.sections]]
+heading = "FIT files"
+fields = ["api.activity_files", "api.wellness_files"]
+advanced = true
+
+[[sources.wizard.fields]]
+kind = "date"
+target = "api.since"
+label = "First day"
+help = "Choose an earlier date later to bring in older data."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.activity_files"
+label = "Keep each activity's original FIT file"
+default = true
+help = "The complete record of a workout; the JSON summary is a projection of it."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "api.wellness_files"
+label = "Keep each day's wellness FIT bundle"
+default = false
+help = "All-day heart rate, stress, steps, body battery and sleep at sensor resolution, one zip per day. The per-day metrics already carry the same series at chart resolution."
+
+[[sources]]
+type = "yolink"
+
+[sources.wizard]
+method = "api"
+label = "YoLink"
+blurb = "Per-device temperature, humidity and water history."
+keywords = ["yolink", "sensor", "temperature", "iot", "yosmart"]
+kind = "api"
+icon = "yolink"
+defaultName = "yolink"
+nameHint = "House sensors"
+wizard = false
+
+[[sources]]
+type = "claude"
+
+[sources.wizard]
+variantKey = "export"
+label = "Claude (export)"
+blurb = "Ingest an unpacked Claude data export already on disk."
+keywords = ["claude", "anthropic", "export", "backup"]
+kind = "export"
+icon = "claude"
+defaultName = "claude-export"
+nameHint = "Claude export"
+wizard = true
+sections = [
+  { heading = "Export folder", fields = ["export.path"] },
+  { heading = "Deleted chats", fields = ["when_deleted_upstream"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the unpacked Claude export"
+required = true
+target = "export.path"
+label = "Export folder"
+help = "The folder you unpacked the Claude export into: the one holding conversations.json, ~/Downloads/claude-export say. The export is a complete snapshot: a conversation it no longer mentions is dropped from the copy, unless you keep it below."
+
+[[sources.wizard.fields]]
+kind = "select"
+target = "when_deleted_upstream"
+label = "When a newer export leaves a chat out"
+default = "delete_local_copy"
+options = [
+  { value = "delete_local_copy", label = "Delete my copy too" },
+  { value = "keep_local_copy", label = "Keep my copy" },
+]
+help = "Keep your copy if you mean to delete chats there for privacy and still have them here. Check the copy before you delete anything: it can't be downloaded again."
+
+[[sources]]
+type = "chatgpt"
+
+[sources.wizard]
+variantKey = "export"
+label = "ChatGPT (export)"
+blurb = "Ingest a ChatGPT data export already on disk."
+keywords = ["chatgpt", "openai", "gpt", "export", "backup"]
+kind = "export"
+icon = "chatgpt"
+defaultName = "chatgpt-export"
+nameHint = "ChatGPT export"
+wizard = true
+sections = [
+  { heading = "Export file", fields = ["export.path"] },
+  { heading = "Deleted chats", fields = ["when_deleted_upstream"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "file"
+pickTitle = "Choose the ChatGPT export .zip"
+extensions = ["zip"]
+required = true
+target = "export.path"
+label = "Export file"
+help = "The .zip ChatGPT emailed you a link to, as it downloaded: ~/Downloads/chatgpt-export.zip say. Ask for one in ChatGPT's Settings → Data controls → Export data. The folder you unzipped it into works too; type its path. The export is a complete snapshot: a conversation it no longer mentions is dropped from the copy, unless you keep it below."
+
+[[sources.wizard.fields]]
+kind = "select"
+target = "when_deleted_upstream"
+label = "When a newer export leaves a chat out"
+default = "delete_local_copy"
+options = [
+  { value = "delete_local_copy", label = "Delete my copy too" },
+  { value = "keep_local_copy", label = "Keep my copy" },
+]
+help = "Keep your copy if you mean to delete chats there for privacy and still have them here. Check the copy before you delete anything: it can't be downloaded again."
+
+[[sources]]
+type = "claude_code"
+
+[sources.wizard]
+# With nothing filled in the form still writes `sessions = {}`, which
+# is the standard store: every Claude Code on this machine keeps its
+# transcripts under ~/.claude/projects.
+method = "sessions"
+label = "Claude Code (Local)"
+blurb = "Copy your Claude Code sessions — terminal, desktop and IDE — from their store on this machine."
+keywords = ["claude", "code", "anthropic", "agent", "sessions", "transcripts", "coding"]
+kind = "local"
+icon = "claude_code"
+defaultName = "claude-code"
+nameHint = "Claude Code on this Mac"
+wizard = true
+
+[[sources.wizard.sections]]
+heading = "Sessions"
+help = "A session Claude Code later deletes stays in the copy."
+answers = [
+  { label = "The standard place on this computer", help = "~/.claude/projects" },
+  { label = "Another folder", fields = ["sessions.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the Claude Code sessions folder"
+required = false
+target = "sessions.path"
+label = "Sessions folder"
+help = "For a copy of that folder from another machine."
+
+[[sources]]
+type = "codex"
+
+[sources.wizard]
+# With nothing filled in the form still writes `sessions = {}`, which
+# is the standard home: Codex keeps its rollouts under ~/.codex.
+method = "sessions"
+label = "Codex (Local)"
+blurb = "Copy your Codex CLI sessions from their store on this machine."
+keywords = ["codex", "openai", "agent", "sessions", "rollouts", "transcripts", "coding"]
+kind = "local"
+icon = "codex"
+defaultName = "codex"
+nameHint = "Codex on this Mac"
+wizard = true
+
+[[sources.wizard.sections]]
+heading = "Sessions"
+help = "A thread Codex later deletes stays in the copy."
+answers = [
+  { label = "The standard place on this computer", help = "~/.codex" },
+  { label = "Another folder", fields = ["sessions.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the Codex home folder"
+required = false
+target = "sessions.path"
+label = "Codex home"
+help = "For a copy of that folder from another machine."
+
+[[sources]]
+type = "google_takeout"
+
+[sources.wizard]
+label = "Google Takeout"
+blurb = "Google Chat, Voice, Gemini, Maps and YouTube from an export."
+keywords = ["google", "takeout", "chat", "voice", "youtube", "maps", "gemini"]
+kind = "export"
+icon = "google_takeout"
+defaultName = "google-takeout"
+nameHint = "My Google Takeout"
+wizard = true
+
+# Every feed starts ticked: an export holds what its owner asked
+# Google for, so reading all of it is what they expect. The provider
+# still defaults each feed off, so a config that names none reads
+# none (providers/google_takeout/INGEST.md).
+[[sources.wizard.sections]]
+heading = "Takeout folder"
+fields = ["export.path"]
+
+[[sources.wizard.sections]]
+heading = "Conversations"
+fields = ["export.google_chat", "export.google_voice", "export.google_voice_include_spam"]
+
+[[sources.wizard.sections]]
+heading = "Activity"
+fields = [
+  "export.youtube_watch_history",
+  "export.youtube_subscriptions",
+  "export.maps_reviews",
+  "export.maps_saved_places",
+  "export.maps_photos",
+  "export.gemini_apps",
+]
+
+[[sources.wizard.sections]]
+heading = "Lists, maps and books"
+fields = ["export.maps_saved_lists", "export.my_maps", "export.play_books"]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your Google Takeout folder"
+required = true
+target = "export.path"
+label = "Takeout folder"
+help = "The folder holding the export's .zip or .tgz files as Google sent them, every part, or the unzipped Takeout folder holding Google Chat, Voice, YouTube and YouTube Music and the rest. Gmail is not read here: its .mbox is an email source of its own."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.google_chat"
+label = "Google Chat"
+default = true
+help = "Direct messages and spaces, with their attachments."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.google_voice"
+label = "Google Voice"
+default = true
+help = "Texts, voicemails, calls and bills."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.google_voice_include_spam"
+requires = "export.google_voice"
+label = "Include Voice spam"
+default = true
+help = "Also reads Voice/Spam. Bulky, and rarely worth searching."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.youtube_watch_history"
+label = "YouTube watch history"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.youtube_subscriptions"
+label = "YouTube subscriptions"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.maps_reviews"
+label = "Maps reviews"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.maps_saved_places"
+label = "Maps saved places"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.maps_photos"
+label = "Maps photos and videos"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.gemini_apps"
+label = "Gemini activity"
+default = true
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.maps_saved_lists"
+label = "Maps saved lists"
+default = true
+help = "Your lists of places, with the notes you wrote on them."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.my_maps"
+label = "My Maps"
+default = true
+help = "The maps you drew: pins, lines and shapes, and what you wrote on them."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "export.play_books"
+label = "Play Books notes and highlights"
+default = true
+help = "What you highlighted, noted and bookmarked, a page per book."
+
+[[sources]]
+type = "facebook"
+
+[sources.wizard]
+label = "Facebook"
+blurb = "Posts, photo albums, comments, reactions and friends from a data export."
+keywords = ["facebook", "meta", "export", "posts", "photos", "friends"]
+kind = "export"
+icon = "facebook"
+defaultName = "facebook"
+nameHint = "My Facebook"
+wizard = true
+sections = [
+  { heading = "Export folder", fields = ["export.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your unpacked Facebook export folder"
+required = true
+target = "export.path"
+label = "Export folder"
+help = "The unzipped \"Download your information\" export, requested in JSON format: the folder holding your_facebook_activity, connections and the rest. The HTML format is not read."
+
+[[sources]]
+type = "linkedin"
+
+[sources.wizard]
+label = "LinkedIn"
+blurb = "Messages and connections from a data export."
+keywords = ["linkedin", "export", "connections"]
+kind = "export"
+icon = "linkedin"
+defaultName = "linkedin"
+nameHint = "My LinkedIn"
+wizard = true
+sections = [
+  { heading = "Export folder", fields = ["export.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your unzipped LinkedIn export folder"
+required = true
+target = "export.path"
+label = "Export folder"
+help = "The unzipped \"Get a copy of your data\" export: the folder of CSV files, ~/Downloads/LinkedInDataExport say. Every CSV in it is read."
+
+[[sources]]
+type = "signal"
+
+[sources.wizard]
+label = "Signal backups"
+blurb = "Decrypt and copy an Android Signal backup."
+keywords = ["signal", "backup", "messages", "sms", "chat"]
+kind = "export"
+icon = "signal"
+defaultName = "signal"
+nameHint = "Signal on my phone"
+wizard = true
+sections = [
+  { heading = "Backup folder", fields = ["backup.path"] },
+  { heading = "Passphrase", fields = ["backup.aep_env_var"] },
+]
+
+[sources.wizard.before]
+text = "This reads a Signal backup from an Android phone. You need two things:"
+needs = [
+  "The backup folder from the phone, copied to this computer.",
+  "The backup passphrase Signal showed when backups were turned on.",
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your Signal backups folder"
+required = true
+target = "backup.path"
+label = "Backup folder"
+help = "The folder holding your signal-backup-* files. Each one is kept as a version, so you can see what changed from one backup to the next."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "backup.aep_env_var"
+label = "Passphrase"
+envVar = { default = "SIGNAL_BACKUP_PASSPHRASE", holds = "passphrase" }
+help = "Name of the environment variable holding the passphrase, not the passphrase itself."
+
+[[sources]]
+type = "whatsapp"
+
+[sources.wizard]
+label = "WhatsApp backups"
+blurb = "Decrypt and copy an Android crypt15 backup."
+keywords = ["whatsapp", "backup", "messages", "chat"]
+kind = "export"
+icon = "whatsapp"
+defaultName = "whatsapp"
+nameHint = "WhatsApp old phone"
+wizard = true
+sections = [
+  { heading = "WhatsApp folder", fields = ["backup.path"] },
+  { heading = "Backup key", fields = ["backup.key_env_var"] },
+]
+
+[sources.wizard.before]
+text = "This reads a WhatsApp backup from an Android phone, protected with a 64-digit key (not a password). You need two things:"
+needs = [
+  "The WhatsApp folder from the phone, copied to this computer.",
+  "The 64-digit key WhatsApp showed when the encrypted backup was turned on.",
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your WhatsApp backup folder"
+required = true
+target = "backup.path"
+label = "WhatsApp folder"
+help = "Choose the folder named WhatsApp: the one with Databases and Media inside it."
+
+[[sources.wizard.fields]]
+kind = "text"
+target = "backup.key_env_var"
+label = "Backup key"
+envVar = { default = "WHATSAPP_BACKUP_DECRYPTION_KEY", holds = "64-digit key" }
+help = "Name of the environment variable holding the hex-encoded 32-byte root key, not the key itself."
+
+[[sources]]
+type = "sms_backup_restore"
+
+[sources.wizard]
+label = "SMS Backup & Restore"
+blurb = "Android SMS Backup & Restore XML exports."
+keywords = ["sms", "mms", "calls", "android", "texts"]
+kind = "export"
+icon = "sms"
+defaultName = "sms"
+nameHint = "Texts and calls"
+wizard = true
+sections = [
+  { heading = "Backup folder", fields = ["backup.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your SMS Backup & Restore folder"
+required = true
+target = "backup.path"
+label = "Backup folder"
+help = "The folder the Android app SMS Backup & Restore writes its sms-*.xml and calls-*.xml files to, copied off the phone: ~/Documents/SMSBackupRestore, say. The path of a single .xml file, typed in, works too."
+
+[[sources]]
+type = "beeper"
+
+[sources.wizard]
+label = "Beeper (Local)"
+blurb = "Copy the chats Beeper keeps on this Mac, from every network it connects. Poorly supported — expect rough edges."
+keywords = ["beeper", "matrix", "chat", "signal", "whatsapp", "slack", "google chat"]
+kind = "local"
+icon = "beeper"
+defaultName = "beeper"
+nameHint = "Beeper on this Mac"
+wizard = true
+intro = "Copies the chats the Beeper desktop app keeps on this Mac, for every network you connected in it. Only what Beeper has downloaded is here: a chat you never opened in Beeper may have only its latest messages."
+
+[[sources.wizard.sections]]
+heading = "Beeper folder"
+fields = ["texts.path"]
+
+[[sources.wizard.sections]]
+heading = "Which networks?"
+answers = [
+  { label = "All of them" },
+  { label = "Only the networks I choose", fields = ["networks"] },
+]
+
+[[sources.wizard.sections]]
+heading = "Photos and files"
+fields = ["texts.media"]
+
+[[sources.wizard.fields]]
+kind = "path"
+# The folder, not `index.db`: a sync also reads each on-device
+# bridge's database and the cached files beside it.
+picks = "dir"
+pickTitle = "Choose your Beeper folder"
+startIn = "~/Library/Application Support/BeeperTexts"
+required = true
+target = "texts.path"
+label = "Beeper folder"
+help = "The folder Beeper keeps its data in, ~/Library/Application Support/BeeperTexts."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+phase = "render"
+target = "networks"
+label = "Networks"
+help = "signal, whatsapp, slack, googlechat, telegram, discord, instagram, facebook, linkedin, twitter or sms. Every network is still copied; this picks what is shown."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "texts.media"
+label = "Copy photos and files"
+default = true
+help = "Only the ones Beeper has downloaded. Off, a message still says what was attached."
+
+[[sources]]
+type = "pdf"
+
+[sources.wizard]
+label = "PDFs (Local)"
+blurb = "Convert a directory tree of PDFs into searchable markdown."
+keywords = ["pdf", "documents", "papers", "files"]
+kind = "local"
+icon = "pdf"
+defaultName = "pdfs"
+nameHint = "Papers and manuals"
+wizard = true
+sections = [
+  { heading = "PDF folder", fields = ["fswalk.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the folder of PDFs to index"
+required = true
+target = "fswalk.path"
+label = "PDF folder"
+help = "Every PDF in this folder and the folders inside it. The same file in two places counts as one document. A scanned PDF with no text is recorded but not converted."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "ignore"
+label = "Ignore patterns"
+help = "Gitignore-shaped patterns, comma-separated (drafts/**, **/scans/**), on top of any .gitignore in the tree."
+
+[[sources.wizard.fields]]
+kind = "bytes"
+target = "max_bytes"
+label = "Skip files larger than"
+help = "Empty is the 512 MiB default."
+
+[[sources]]
+type = "markdown"
+
+[sources.wizard]
+label = "Markdown (Local)"
+blurb = "Make a folder of markdown notes searchable, such as an Obsidian vault."
+keywords = ["markdown", "notes", "obsidian", "vault", "md", "zettelkasten", "files"]
+kind = "local"
+icon = "markdown"
+defaultName = "notes"
+nameHint = "My Obsidian vault"
+wizard = true
+sections = [
+  { heading = "Notes folder", fields = ["fswalk.path"] },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the folder of notes to index"
+required = true
+target = "fswalk.path"
+label = "Notes folder"
+help = "Every .md file in this folder and the folders inside it. Folders whose names start with a dot, such as .obsidian and .trash, are skipped."
+
+[[sources.wizard.fields]]
+kind = "string_list"
+target = "ignore"
+label = "Ignore patterns"
+help = "Gitignore-shaped patterns, comma-separated (templates/**, **/archive/**), on top of any .gitignore in the tree."
+
+[[sources.wizard.fields]]
+kind = "bytes"
+target = "max_bytes"
+label = "Skip files larger than"
+help = "Empty is the 16 MiB default."
+
+[[sources]]
+type = "file_inventory"
+
+[sources.wizard]
+label = "File inventory (Local)"
+blurb = "Keep a record of a directory tree — paths, sizes, content hashes."
+keywords = ["files", "filesystem", "index", "inventory", "directory", "disk"]
+kind = "local"
+icon = "file_inventory"
+defaultName = "file_inventory"
+nameHint = "My home folder"
+wizard = true
+sections = [
+  { heading = "Folder", fields = ["fswalk.path"] },
+  { heading = "Scan", fields = ["stamp"], advanced = true },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose the folder to index"
+required = true
+target = "fswalk.path"
+label = "Folder"
+help = "Records the path, kind, size and content hash of everything in this folder and the folders inside it. Files are not turned into pages: this source appears in Datalib as a storage report."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "stamp"
+label = "Write UUID breadcrumbs into the tree"
+default = false
+help = "Off keeps the scan read-only. On writes a UUID into the .file_inventory.toml of any directory that set stamp_me_with_uuid = true, so it keeps one identity across moves and renames."
+
+[[sources]]
+type = "media"
+
+[sources.wizard]
+label = "Media (Local)"
+blurb = "Index a media tree — tags, EXIF, playlists, and a metadata-free content hash."
+keywords = ["music", "photos", "video", "mp3", "jpeg", "raw", "dng", "playlists", "media"]
+kind = "local"
+icon = "media"
+defaultName = "media"
+nameHint = "Photos and music"
+wizard = true
+# Download-only: media has no text to convert, so nothing is
+# rendered and no render step is declared.
+rendersDocuments = false
+sections = [
+  { heading = "Media folder", fields = ["fswalk.path"] },
+  { heading = "Scan", fields = ["playlists", "skip_dataless"], advanced = true },
+]
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your media folder"
+required = true
+target = "fswalk.path"
+label = "Media folder"
+help = "Scanned for audio, images, video and .m3u playlists. Retagging a track or re-rendering a preview does not make a file look new."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "playlists"
+label = "Index .m3u playlists"
+default = true
+help = "Records each playlist's entries in order, missing tracks included. Streaming .m3u8 manifests are skipped."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "skip_dataless"
+label = "Skip cloud placeholders"
+default = true
+help = "Leaves Dropbox online-only and iCloud evicted files alone. Turn off only if the filesystem reports no block counts."
+
+[[sources]]
+type = "airvisual"
+
+[sources.wizard]
+method = "export"
+label = "IQAir AirVisual (Local)"
+blurb = "IQAir AirVisual Pros' own history, read off each unit's network share."
+keywords = ["airvisual", "iqair", "air quality", "co2", "pm2.5", "sensor", "samba"]
+kind = "local"
+icon = "airvisual"
+defaultName = "airvisual"
+nameHint = "Air quality"
+# One `devices` entry per Pro, each with its own share path; the
+# wizard has no list field yet, so this one is written by hand
+# (see docs/user/config_examples/all_sources.toml).
+wizard = false
+
+[[sources]]
+type = "lightroom"
+
+[sources.wizard]
+label = "Lightroom (Local)"
+blurb = "Copy a Lightroom Classic catalog, with full history."
+keywords = ["lightroom", "photos", "adobe", "catalog", "sqlite", "images", "backup", "zip"]
+kind = "local"
+icon = "lightroom"
+defaultName = "lightroom"
+nameHint = "Lightroom catalog"
+wizard = true
+applet = "photos"
+# Download-only: a photo catalog isn't chat-shaped, so nothing is
+# rendered and no render step is declared.
+rendersDocuments = false
+requiresOneOf = ["catalog.path", "backups.path"]
+intro = "Copies a Lightroom Classic catalog, with full history. Choose the catalog, the backups folder, or both."
+
+[[sources.wizard.sections]]
+heading = "Catalog file"
+fields = ["catalog.path"]
+
+[[sources.wizard.sections]]
+heading = "Backups folder"
+fields = ["backups.path"]
+
+[[sources.wizard.sections]]
+heading = "Catalog database"
+fields = ["skip_xmp", "snapshot", "gc"]
+advanced = true
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "file"
+pickTitle = "Choose your Lightroom catalog"
+extensions = ["lrcat", "zip"]
+startIn = "~/Pictures/Lightroom"
+target = "catalog.path"
+label = "Catalog file"
+help = "A .lrcat catalog, or one of Lightroom's backup .zip files. Lightroom keeps it in ~/Pictures/Lightroom."
+
+[[sources.wizard.fields]]
+kind = "path"
+picks = "dir"
+pickTitle = "Choose your Lightroom backups folder"
+startIn = "~/Pictures/Lightroom"
+target = "backups.path"
+label = "Backups folder"
+help = "The folder Lightroom writes its backups into, by default a Backups folder beside the catalog in ~/Pictures/Lightroom. Each backup becomes one point in the history, dated when it was taken, so the history reaches back before your first sync."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "skip_xmp"
+label = "Skip XMP packets and search indexes"
+default = false
+help = "The bulkiest columns, wholly derived from columns that stay."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "snapshot"
+label = "Snapshot before reading"
+default = true
+help = "Takes a VACUUM INTO copy first. An open catalog can't then be read half-written."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "gc"
+label = "Collect unreachable chunks each sync"
+default = false
+help = "Much smaller store, history unaffected, but rewrites the whole chunk store every sync."
+
+[[sources]]
+type = "apple_messages"
+
+[sources.wizard]
+label = "Apple Messages (Local)"
+blurb = "Copy the Messages app's own database, with full history."
+keywords = ["apple", "messages", "imessage", "sms", "texts", "chat.db", "iphone"]
+kind = "local"
+icon = "apple_messages"
+defaultName = "apple-messages"
+nameHint = "Messages on this Mac"
+wizard = true
+intro = "Copies your full Messages history from this Mac. Photos, videos and files in a conversation are listed by name; the files themselves are not copied."
+
+[[sources.wizard.sections]]
+heading = "Messages folder"
+fields = ["messages.path"]
+
+[[sources.wizard.sections]]
+heading = "Messages database"
+fields = ["skip_churn", "snapshot", "gc"]
+advanced = true
+
+[[sources.wizard.fields]]
+kind = "path"
+# Choosing the folder here is what grants the app access to it on
+# macOS (docs/dev/wizard_file_pickers.md) — the same wall Photos
+# sits behind. Not the file: picking chat.db grants that one file,
+# and the snapshot also reads chat.db-wal beside it.
+picks = "dir"
+pickTitle = "Choose your Messages folder"
+startIn = "~/Library/Messages"
+required = true
+target = "messages.path"
+label = "Messages folder"
+guarded = "Let Datalib read your Messages folder"
+help = "The folder the Messages app keeps its database in, ~/Library/Messages. A copied chat.db file, typed in, works too."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "skip_churn"
+label = "Skip the app's counters and sync queues"
+default = true
+help = "Messages rewrites these tables continuously; off, every sync commits even when nobody messaged. No message data lives there."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "snapshot"
+label = "Snapshot before reading"
+default = true
+help = "Takes a VACUUM INTO copy first. Messages keeps the database open, so this is the only consistent read."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "gc"
+label = "Collect unreachable chunks each sync"
+default = false
+help = "Much smaller store, history unaffected, but rewrites the whole chunk store every sync."
+
+[[sources]]
+type = "apple_photos"
+
+[sources.wizard]
+label = "Apple Photos (Local)"
+blurb = "Copy an Apple Photos library's database, with full history."
+keywords = ["apple", "photos", "photoslibrary", "iphone", "icloud", "sqlite", "images"]
+kind = "local"
+icon = "apple_photos"
+defaultName = "apple_photos"
+nameHint = "Photos library"
+wizard = true
+# Download-only, like lightroom: nothing is rendered.
+rendersDocuments = false
+intro = "Copies the database inside your Photos library (database/Photos.sqlite), with full history."
+
+[[sources.wizard.sections]]
+heading = "Photos library"
+fields = ["library.path"]
+
+[[sources.wizard.sections]]
+heading = "Photos database"
+fields = ["skip_history", "snapshot", "gc"]
+advanced = true
+
+[[sources.wizard.fields]]
+kind = "path"
+# A .photoslibrary is a package: the folder picker cannot select
+# it, and choosing it here is also what grants the app access to
+# it on macOS (docs/dev/wizard_file_pickers.md).
+picks = "file"
+pickTitle = "Choose your Photos library"
+extensions = ["photoslibrary"]
+startIn = "~/Pictures"
+required = true
+target = "library.path"
+label = "Photos library"
+guarded = "Let Datalib read your Photos library"
+help = "The library bundle, usually Photos Library.photoslibrary in ~/Pictures. Its database/Photos.sqlite is what gets copied."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "skip_history"
+label = "Skip Core Data's change log and daemon bookkeeping"
+default = true
+help = "Photos writes these continuously; off, every sync commits even when no photo changed. No photo data lives there."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "snapshot"
+label = "Snapshot before reading"
+default = true
+help = "Takes a VACUUM INTO copy first. Photos' daemons keep the library open, so this is the only consistent read."
+
+[[sources.wizard.fields]]
+kind = "bool"
+target = "gc"
+label = "Collect unreachable chunks each sync"
+default = false
+help = "Much smaller store, history unaffected, but rewrites the whole chunk store every sync."
+
+[[sources]]
+type = "perseus"
+
+[sources.wizard]
+method = "github"
+label = "Perseus Digital Library"
+blurb = "Classical texts from the Perseus Digital Library."
+keywords = ["perseus", "greek", "latin", "classics", "sample"]
+kind = "local"
+icon = "perseus"
+defaultName = "perseus"
+nameHint = "Greek and Latin texts"
+wizard = false

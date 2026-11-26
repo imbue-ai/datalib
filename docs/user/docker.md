@@ -135,7 +135,7 @@ mkdir -p "$DATA_ROOT"
 cat > "$DATA_ROOT/config.toml" <<EOF
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect", "check"]
+verbs = ["reset", "prepare", "compact", "collect", "check", "describe"]
 
 [[locks]]
 name = "index"

@@ -21,6 +21,7 @@ import {
   removePackage,
   updatePackage,
 } from "@/config/packages";
+import { refreshPrograms } from "@/config/programs";
 import { useApi } from "@/cards/cardApi";
 import {
   listGroups,
@@ -1140,6 +1141,7 @@ export function useSourcesCard(ctx: CardCtx) {
     // this is the walk that produces the numbers on screen.
     await reloadAll(true);
     void refreshPackages();
+    void refreshPrograms();
   });
 
   onUnmounted(() => {

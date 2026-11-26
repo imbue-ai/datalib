@@ -218,7 +218,7 @@ DATALIB_STEP_CHECKPOINT_CADENCE = "0"
 
 [[programs]]
 command = "${STEP_BIN}"
-verbs = ["reset", "prepare", "compact", "collect", "check"]
+verbs = ["reset", "prepare", "compact", "collect", "check", "describe"]
 
 [[locks]]
 name = "index"

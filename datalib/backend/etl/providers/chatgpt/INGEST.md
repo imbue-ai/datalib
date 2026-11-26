@@ -406,7 +406,7 @@ every conversation this one holds.
 
 It works because the `chatgpt` service is registered with latchkey's
 `token-capture` login flow, which the wizard does on the first sign-in
-(`credentialRegister` in `datalib/ui/src/config/catalog.ts`). `latchkey
+(`credentialRegister` in `datalib/backend/datalib_step/src/sources.toml`). `latchkey
 services info chatgpt` says whether yours is: `authOptions` lists `browser` if it is, and only
 `set` if it was registered any other way. latchkey refuses to
 re-register a name that already exists, so switching an old

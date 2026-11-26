@@ -155,7 +155,7 @@ command = "datalib-applet datalib_contacts"
 # The verbs `datalib-step` takes (docs/dev/step_protocol.md § Verbs).
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect", "check"]
+verbs = ["reset", "prepare", "compact", "collect", "check", "describe"]
 
 # One embed at a time: each loads the model and writes the search index.
 [[locks]]

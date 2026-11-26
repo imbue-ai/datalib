@@ -38,7 +38,8 @@ import {
   unwireFromFanIns,
   wireIntoFanIns,
 } from "../src/config/sourceSteps";
-import { CATALOG, catalogFor, catalogForStep } from "../src/config/catalog";
+import { catalogFor, catalogForStep } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 
 const SLACK = catalogFor("slack")!;
 const CLAUDE = catalogFor("claude")!;

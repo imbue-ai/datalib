@@ -1,7 +1,7 @@
 # Icons
 
 One file per icon. The file's name without its extension is the token
-the catalogs name (`icon: "gmail"` in `config/catalog.ts`,
+the catalogs name (`icon = "gmail"` in `backend/datalib_step/src/sources.toml`,
 `Some("gmail")` in `backend/columns/src/source_catalog.rs`), and
 `config/icons.ts` picks every file here up by that name. The repo
 README's source grid uses these same files by path.

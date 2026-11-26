@@ -3,7 +3,8 @@
 // values and written back. docs/dev/wizard_design.md.
 
 import { describe, expect, it } from "vitest";
-import { CATALOG, type CatalogEntry } from "./catalog";
+import { type CatalogEntry } from "./catalog";
+import { CATALOG } from "../../tests/builtinCatalog";
 import {
   answerIsEmpty,
   applyAnswer,

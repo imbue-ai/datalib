@@ -10,4 +10,4 @@ pub mod platform;
 pub mod source;
 
 pub use install::{ensure, installed, lookup, Lookup};
-pub use manifest::Manifest;
+pub use manifest::{Description, Manifest};

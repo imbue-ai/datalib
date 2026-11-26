@@ -680,7 +680,6 @@ _GRID_CELL = re.compile(
 )
 _GRID_IMAGE = re.compile(r'(?:src|srcset)="([^"]+)"')
 _DOC_TYPE_LINE = re.compile(r'^`type = "([a-z_]+)"`', re.MULTILINE)
-_CATALOG_TYPE = re.compile(r'\btype: "([a-z_]+)"')
 
 
 def _github_slug(heading: str) -> str:
@@ -712,9 +711,14 @@ def _known_source_types(root: Path) -> set[str]:
     with open(root / "docs/user/config_examples/all_sources.toml", "rb") as fh:
         groups = tomllib.load(fh).get("groups", [])
     types = {g["type"] for g in groups if "type" in g}
-    catalog = (root / "datalib/ui/src/config/catalog.ts").read_text(encoding="utf-8")
-    types.update(_CATALOG_TYPE.findall(catalog))
+    types.update(s["type"] for s in _step_sources(root))
     return types
+
+
+def _step_sources(root: Path) -> list[dict]:
+    """The `[[sources]]` datalib-step offers "Add source"."""
+    with open(root / _STEP_SOURCES, "rb") as fh:
+        return tomllib.load(fh)["sources"]
 
 
 def _check_source_grid(root: Path) -> int:
@@ -1165,7 +1169,7 @@ _RUST_ENTRY = re.compile(
     r'\be\(\s*"([a-z_]+)",\s*(?:None|Some\("([a-z_]+)"\)),\s*"([^"]*)",'
     r'\s*(?:None|Some\("([a-z_]+)"\)),?\s*\)'
 )
-_TS_FIELD = re.compile(r'^    (type|variantKey|icon|label): "([^"]+)",$')
+_STEP_SOURCES = "datalib/backend/datalib_step/src/sources.toml"
 _HEX = r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b"
 _SVG_FILL = re.compile(r'\b(?:fill|stroke)="(' + _HEX + r')"')
 _SVG_THEMED = re.compile(r"prefers-color-scheme")
@@ -1208,21 +1212,14 @@ def _rust_catalog(root: Path) -> dict[_CatalogKey, tuple[str, str | None]]:
 
 
 def _ts_catalog(root: Path) -> dict[_CatalogKey, tuple[str, str | None]]:
-    """(type, variantKey) → (label, icon)."""
-    text = (root / "datalib/ui/src/config/catalog.ts").read_text(encoding="utf-8")
-    body = text[text.index("export const CATALOG") :]
-    body = body[: body.index("\n];")]
-    out: dict[_CatalogKey, tuple[str, str | None]] = {}
-    for entry in re.split(r"^  \{$", body, flags=re.MULTILINE)[1:]:
-        fields: dict[str, str] = {}
-        for line in entry.splitlines():
-            if m := _TS_FIELD.match(line):
-                fields[m.group(1)] = m.group(2)
-        out[(fields["type"], fields.get("variantKey"))] = (
-            fields["label"],
-            fields.get("icon"),
+    """(type, variantKey) → (label, icon), as datalib-step's sources say."""
+    return {
+        (s["type"], s["wizard"].get("variantKey")): (
+            s["wizard"]["label"],
+            s["wizard"].get("icon"),
         )
-    return out
+        for s in _step_sources(root)
+    }
 
 
 def _check_icons(root: Path) -> int:
@@ -1235,8 +1232,8 @@ def _check_icons(root: Path) -> int:
     rust = {key: icon for key, (_, icon) in rust_entries.items()}
     ts = {key: icon for key, (_, icon) in ts_entries.items()}
     if not rust or not ts:
-        bad.append(f"read no entries from {_RUST_CATALOG} or catalog.ts")
-    for where, catalog in ((_RUST_CATALOG, rust), ("catalog.ts", ts)):
+        bad.append(f"read no entries from {_RUST_CATALOG} or {_STEP_SOURCES}")
+    for where, catalog in ((_RUST_CATALOG, rust), (_STEP_SOURCES, ts)):
         for (t, v), icon in sorted(catalog.items(), key=str):
             if icon and icon not in files:
                 bad.append(
@@ -1244,17 +1241,19 @@ def _check_icons(root: Path) -> int:
                 )
     for key in sorted(ts, key=str):
         if key not in rust:
-            bad.append(f"catalog.ts has {key[0]}/{key[1]}, which {_RUST_CATALOG} lacks")
+            bad.append(
+                f"{_STEP_SOURCES} has {key[0]}/{key[1]}, which {_RUST_CATALOG} lacks"
+            )
             continue
         if ts[key] != rust[key]:
             bad.append(
-                f"{key[0]}/{key[1]}: catalog.ts says `{ts[key]}`, "
+                f"{key[0]}/{key[1]}: {_STEP_SOURCES} says `{ts[key]}`, "
                 f"{_RUST_CATALOG} says `{rust[key]}`"
             )
         ts_label, rust_label = ts_entries[key][0], rust_entries[key][0]
         if ts_label != rust_label:
             bad.append(
-                f'{key[0]}/{key[1]}: catalog.ts calls it "{ts_label}", '
+                f'{key[0]}/{key[1]}: {_STEP_SOURCES} calls it "{ts_label}", '
                 f'{_RUST_CATALOG} "{rust_label}"'
             )
 
@@ -1789,13 +1788,10 @@ def _check_runner_names_no_step_program(root: Path) -> int:
 # program has to leave it, and a file not on it may not start.
 _SERVER_SRC = "datalib/backend/http/src/"
 _SERVER_STEP_PROGRAM_FILES = {
-    # Item 2: "Check connection" runs `datalib-step probe`, found by name.
-    "datalib/backend/http/src/binaries.rs": "item 2",
-    "datalib/backend/http/src/probe.rs": "item 2",
     # Item 3: the app writes datalib-step's steps; the starter config is
     # one of them.
     "datalib/backend/http/src/starter.rs": "item 3",
-    "datalib/backend/http/src/step_program.rs": "items 2 and 3",
+    "datalib/backend/http/src/step_program.rs": "item 3",
 }
 
 

@@ -1,0 +1,40 @@
+// The sources the config's programs offer "Add source": each program its
+// `[[programs]]` lists with `describe` answers `--describe` with sources
+// in a package manifest's shape (docs/dev/step_protocol.md §"Describe"),
+// which `GET /api/programs` serves. `datalib-step` is one such program.
+
+import { shallowRef } from "vue";
+import { fetchPrograms, type ProgramDescription, type ProgramsResponse } from "@/api";
+import { setProgramEntries, type CatalogEntry } from "./catalog";
+import { entryOfSource } from "./packages";
+
+/// A program's sources as catalog entries, each writing its steps as the
+/// program's word and then the source's command for the step's function.
+export function entriesOfDescription(command: string, d: ProgramDescription): CatalogEntry[] {
+  return d.sources.map((s) => ({
+    ...entryOfSource(s, ""),
+    program: { command, commands: s.commands },
+  }));
+}
+
+export function catalogEntriesOf(res: ProgramsResponse): CatalogEntry[] {
+  return res.programs.flatMap((p) =>
+    p.description ? entriesOfDescription(p.command, p.description) : [],
+  );
+}
+
+/// The programs as the server last described them; `null` before the
+/// first answer.
+export const programsState = shallowRef<ProgramsResponse | null>(null);
+
+/// Ask the server again, and put the programs' sources in the catalog.
+export async function refreshPrograms(): Promise<ProgramsResponse | null> {
+  try {
+    const res = await fetchPrograms();
+    programsState.value = res;
+    setProgramEntries(catalogEntriesOf(res));
+    return res;
+  } catch {
+    return programsState.value;
+  }
+}

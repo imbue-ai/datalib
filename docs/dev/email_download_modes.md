@@ -21,7 +21,7 @@ Which Fastmail credential reaches what — and the read-only API token
 the JMAP mode can use — is in [`fastmail.md`](fastmail.md).
 
 Three of the four have a wizard form: **Gmail**, **Fastmail** and
-**Apple Mail** are separate entries in `datalib/ui/src/config/catalog.ts`,
+**Apple Mail** are separate entries in `datalib/backend/datalib_step/src/sources.toml`,
 each writing the table that selects its mode; the Gmail form also asks whether to start
 from a Takeout, and writes `mbox.path` beside `gmail` when it does. They are not one form with a mode dropdown
 — they authenticate against different latchkey services and want

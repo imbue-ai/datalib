@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { INGEST_METHODS, ingestLabel, ingestReach, methodsHeld } from "../src/config/ingestMethods";
-import { CATALOG } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 
 describe("ingestReach", () => {
   it("reads a table by presence, and not when it is false", () => {

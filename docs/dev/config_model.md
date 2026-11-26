@@ -14,7 +14,7 @@ complete config with every line commented.
 ```toml
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect", "check"]
+verbs = ["reset", "prepare", "compact", "collect", "check", "describe"]
 
 [[locks]]
 name = "index"

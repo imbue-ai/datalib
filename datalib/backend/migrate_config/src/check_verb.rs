@@ -1,9 +1,14 @@
 //! A `[[programs]]` entry for `datalib-step` whose `verbs` leave out
-//! `check`. The runner sends `--check` only to a program that lists it,
-//! and `datalib-step` answers it with what a sync would make of its
-//! step's params (`docs/dev/step_protocol.md` § Check), so the verb is
-//! added: without it, a save and `datalib-pipeline check` would let a
-//! misspelled param through to the first sync.
+//! `check` or `describe`, each added at the end.
+//!
+//! - The runner sends `--check` only to a program that lists it, and
+//!   `datalib-step` answers it with what a sync would make of its step's
+//!   params (`docs/dev/step_protocol.md` § Check). Without it, a save and
+//!   `datalib-pipeline check` would let a misspelled param through to the
+//!   first sync.
+//! - The app runs `--describe` only on a program that lists it, and
+//!   `datalib-step` answers with the sources it offers "Add source"
+//!   (§ Describe). Without it, the dialog offers none of them.
 //!
 //! A text edit: every comment and key the file holds survives. An entry
 //! whose `verbs` is not one line under a `[[programs]]` header is
@@ -14,10 +19,11 @@ use anyhow::{bail, Context as _, Result};
 
 use crate::retired::is_datalib_step;
 
-const VERB: &str = "check";
+const VERBS: &[&str] = &["check", "describe"];
 
-/// The `command` of each `datalib-step` entry whose `verbs` lack `check`.
-fn unchecked(text: &str) -> Result<Vec<String>> {
+/// Each `datalib-step` entry whose `verbs` lack one of [`VERBS`]: its
+/// `command`, and the verbs it lacks.
+fn unchecked(text: &str) -> Result<Vec<(String, Vec<&'static str>)>> {
     let doc: toml::Value = toml::from_str(text).context("parse the config")?;
     let programs = doc
         .get("programs")
@@ -26,14 +32,17 @@ fn unchecked(text: &str) -> Result<Vec<String>> {
         .unwrap_or_default();
     Ok(programs
         .iter()
-        .filter(|p| {
-            p.get("verbs")
-                .and_then(|v| v.as_array())
-                .is_some_and(|verbs| !verbs.iter().any(|v| v.as_str() == Some(VERB)))
+        .filter_map(|p| {
+            let command = p.get("command").and_then(|c| c.as_str())?;
+            let verbs = p.get("verbs").and_then(|v| v.as_array())?;
+            let lacks: Vec<&'static str> = VERBS
+                .iter()
+                .copied()
+                .filter(|verb| !verbs.iter().any(|v| v.as_str() == Some(*verb)))
+                .collect();
+            (is_datalib_step(command.trim()) && !lacks.is_empty())
+                .then(|| (command.to_string(), lacks))
         })
-        .filter_map(|p| p.get("command").and_then(|c| c.as_str()))
-        .filter(|c| is_datalib_step(c.trim()))
-        .map(str::to_string)
         .collect())
 }
 
@@ -44,23 +53,28 @@ pub fn is_retired(text: &str) -> Result<bool> {
 pub fn rewrite(text: &str) -> Result<String> {
     let mut out = text.to_string();
     let mut by_hand = Vec::new();
-    for command in unchecked(text)? {
-        match closing_bracket(&out, &command) {
-            Some((at, empty)) => {
-                let word = if empty {
-                    format!("\"{VERB}\"")
-                } else {
-                    format!(", \"{VERB}\"")
-                };
-                out.insert_str(at, &word);
+    for (command, lacks) in unchecked(text)? {
+        for verb in lacks {
+            match closing_bracket(&out, &command) {
+                Some((at, empty)) => {
+                    let word = if empty {
+                        format!("\"{verb}\"")
+                    } else {
+                        format!(", \"{verb}\"")
+                    };
+                    out.insert_str(at, &word);
+                }
+                None => {
+                    by_hand.push(format!("{command} (add \"{verb}\")"));
+                    break;
+                }
             }
-            None => by_hand.push(command),
         }
     }
     if !by_hand.is_empty() {
         bail!(
-            "these `[[programs]]` entries for datalib-step leave `{VERB}` out of `verbs`, and \
-             their `verbs` is not one line this rewrite can add to: {}; add \"{VERB}\" to each",
+            "these `[[programs]]` entries for datalib-step leave a verb out of `verbs`, and \
+             their `verbs` is not one line this rewrite can add to: {}",
             by_hand.join(", ")
         );
     }
@@ -164,7 +178,7 @@ mod tests {
         let out = rewrite(text).unwrap();
         assert_eq!(
             verbs_of(&out, "datalib-step"),
-            ["reset", "prepare", "check"]
+            ["reset", "prepare", "check", "describe"]
         );
         assert_eq!(
             verbs_of(&out, "./bin/mine"),
@@ -181,8 +195,23 @@ mod tests {
     #[test]
     fn an_empty_list_gets_the_one_word_and_no_list_is_left_alone() {
         let out = rewrite("[[programs]]\ncommand = \"datalib-step\"\nverbs = []\n").unwrap();
-        assert_eq!(verbs_of(&out, "datalib-step"), ["check"]);
+        assert_eq!(verbs_of(&out, "datalib-step"), ["check", "describe"]);
         assert!(!is_retired("[[programs]]\ncommand = \"datalib-step\"\n").unwrap());
+    }
+
+    /// A config from before `describe`: its entry already takes `check`,
+    /// and gains only the new word, without which "Add source" would offer
+    /// none of datalib-step's sources.
+    #[test]
+    fn an_entry_that_takes_check_gains_describe() {
+        let text = "[[programs]]\ncommand = \"datalib-step\"\n\
+                    verbs = [\"reset\", \"prepare\", \"compact\", \"collect\", \"check\"]\n";
+        assert!(is_retired(text).unwrap());
+        let out = rewrite(text).unwrap();
+        assert_eq!(
+            verbs_of(&out, "datalib-step"),
+            ["reset", "prepare", "compact", "collect", "check", "describe"]
+        );
     }
 
     #[test]

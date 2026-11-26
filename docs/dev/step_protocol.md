@@ -588,7 +588,7 @@ so a program that ignores its arguments is never sent one:
 ```toml
 [[programs]]
 command = "datalib-step"
-verbs = ["reset", "prepare", "compact", "collect", "check"]
+verbs = ["reset", "prepare", "compact", "collect", "check", "describe"]
 ```
 
 An invocation with a verb gets the same environment and params as a
@@ -602,6 +602,7 @@ it:
 | `--prepare` | each time the runner starts, before the step's first run | nothing |
 | `--compact`, `--collect` | someone asks to free disk space | nothing |
 | `--check` | someone saves a config, or runs `datalib-pipeline check` | the step's params are not checked before it runs |
+| `--describe` | never by the runner: the app sends it to the program, not to a step (§"Describe") | "Add source" offers none of the program's sources |
 
 ## Reset
 
@@ -719,14 +720,48 @@ A step has thirty seconds to answer. Up to eight are asked at once.
 schema, its method tables, and the keys that no longer do anything,
 which it runs without and names as warnings.
 
+## Describe
+
+A program offers sources to "Add source" by answering `--describe`.
+The app runs `<program> --describe`, with nothing else on the command
+line, for each `[[programs]]` entry that lists `describe` among its
+`verbs`, from the data root and with the environment a step gets. It
+asks again only once the program's file has changed. The program
+prints one JSON object on stdout and exits 0:
+
+```json
+{
+  "sources": [
+    {
+      "type": "tide",
+      "commands": { "ingest": "run ingest tide", "render_markdown": "run render_markdown tide" },
+      "probe": "probe tide",
+      "wizard": { "label": "Tide gauge", "kind": "api", "wizard": true, "fields": [] }
+    }
+  ],
+  "locks": {}
+}
+```
+
+Each source has the shape of a package manifest's `[[sources]]`
+(`packages.md` §"The manifest"), with one difference: a command, and
+the probe, are the words that follow the program's own word, not a path
+inside a package. The wizard writes a source's step for `ingest` as
+`command = "<program> run ingest tide"`, spelling the program as the
+`[[programs]]` entry does, and the probe route runs `<program> probe
+tide`. Sources come in the order the program lists them; a package's
+come first, so a package that offers a type a program also offers is
+drawn by its own form. `datalib-step` describes its sources from the
+`sources.toml` beside its code.
+
 ## Probe
 
 A probe is not a step and the runner never starts one. The app runs it
 when a person clicks "Check connection" in the "Add source" form, or
 "Load" beside a field that picks from a list. A package names the
-command that probes its type in its manifest (`packages.md`, `probe`);
-`datalib-step probe <type>` is Datalib's own. The app starts the
-command:
+command that probes its type in its manifest (`packages.md`, `probe`),
+and a program in its description (§"Describe"); `datalib-step probe
+<type>` is how `datalib-step` answers. The app starts the command:
 
 - with `--list <list>` appended when it asks for one list (`channels`,
   `conversations`, `labels`, `mailboxes`, `calendars`, `addressbooks`,
@@ -904,8 +939,8 @@ the ingest step carries the provider's download config (`common`
 envelope, the method table block, …), the render step only the render
 knobs (nothing for most providers; perseus `alignment_pairs`, email
 `outlink_format`/`only_render_labels`). It
-honors `DATALIB_DAG_NOW` and the five verbs, which Datalib's configs
-declare for it in `[[programs]]`; it stops at its next consistent point
+honors `DATALIB_DAG_NOW` and the five verbs a step is sent, which Datalib's
+configs declare for it in `[[programs]]` with `describe`; it stops at its next consistent point
 on SIGINT and commits there, and emits versions where it has them (the
 index reports its generation; the versions are in the [runner's
 README](../../datalib/backend/dag/README.md#versions-reported-by-the-step)). It reads three knobs a

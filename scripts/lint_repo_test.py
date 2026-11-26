@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 
 from lint_repo import (
+    _SERVER_STEP_PROGRAM_FILES,
     checkout_token_settings,
     floating_images,
     floating_npx,
@@ -452,14 +453,12 @@ class ServerStepProgramTest(unittest.TestCase):
     def test_a_file_off_the_list_and_a_listed_file_that_stopped_are_both_refused(
         self,
     ) -> None:
-        listed = "datalib/backend/http/src/probe.rs"
+        listed = "datalib/backend/http/src/starter.rs"
         found = server_step_program_problems(
             {
                 "datalib/backend/http/src/new.rs": [4],
                 listed: [],
-                "datalib/backend/http/src/binaries.rs": [2],
-                "datalib/backend/http/src/starter.rs": [22],
-                "datalib/backend/http/src/step_program.rs": [1],
+                **{rel: [1] for rel in _SERVER_STEP_PROGRAM_FILES if rel != listed},
             }
         )
         self.assertEqual(len(found), 2, found)

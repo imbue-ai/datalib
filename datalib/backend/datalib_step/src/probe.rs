@@ -174,10 +174,34 @@ pub async fn run(
         }
         other => anyhow::bail!(
             "no probe for source type `{other}`. Probing means asking a live service what an \
-             account can reach; only `calendar`, `contacts`, `email`, `claude`, `chatgpt`, \
-             `discord`, `garmin`, `github`, `linear`, `notion`, `slack` and `todoist` implement it so far."
+             account can reach; only {} implement it so far.",
+            PROBED
+                .iter()
+                .map(|t| format!("`{t}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
         ),
     }
+}
+
+/// The types [`run`] has a probe for: one arm each.
+const PROBED: &[SourceType] = &[
+    SourceType::Email,
+    SourceType::Claude,
+    SourceType::Chatgpt,
+    SourceType::Calendar,
+    SourceType::Contacts,
+    SourceType::Slack,
+    SourceType::Discord,
+    SourceType::Garmin,
+    SourceType::Linear,
+    SourceType::Notion,
+    SourceType::Todoist,
+    SourceType::Github,
+];
+
+pub fn probes(source_type: SourceType) -> bool {
+    PROBED.contains(&source_type)
 }
 
 /// How a probe treats a failed request: it reports it. A check is
@@ -284,6 +308,20 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("select `gmail`"), "{err}");
+    }
+
+    /// `PROBED` is what "Add source" offers "Check connection" for, so a
+    /// type `run` has an arm for must be in it.
+    #[tokio::test]
+    async fn every_type_left_out_of_probed_has_no_probe() {
+        use strum::VariantArray;
+        for t in SourceType::VARIANTS.iter().filter(|t| !probes(**t)) {
+            let err = run(*t, &json!({}), ProbeAsk::Account, &|_| {})
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(err.starts_with("no probe for source type"), "{t}: {err}");
+        }
     }
 
     /// A file-reading way in has no connection to test.

@@ -1,5 +1,5 @@
 // A field whose backend type is a closed enum is a dropdown, not a text
-// box — `kind: "select"` in `ui/src/config/catalog.ts`.
+// box — `kind = "select"` in `datalib/backend/datalib_step/src/sources.toml`.
 import { test, expect, type Page } from "@playwright/test";
 import { openAdvanced, reviewToml } from "./wizard-helpers";
 import {

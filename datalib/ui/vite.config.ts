@@ -117,5 +117,7 @@ export default defineConfig(({ command }) => ({
     exclude: ["**/node_modules/**", "**/dist/**", "tests/e2e/**", "tests/e2e_auth/**"],
     // A stylesheet imports as "" in a test unless named here.
     css: { include: [/chip\.css/] },
+    // The built-in sources, which the app reads from the server.
+    setupFiles: ["tests/builtinCatalog.ts"],
   },
 }));

@@ -3,10 +3,10 @@
 **Status: notes, partly built; checked against the tree 2026-11-20.**
 The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
-is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
+is not forgotten. Done: items 1, 2, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
-own tool. Items 2 and 9 are half done. Untouched: items 3 and 8 (item 8
-is decided), and the reconciler in section 10.
+own tool. Items 3 and 9 are half done. Untouched: item 8 (decided), and
+the reconciler in section 10.
 
 ## The end state
 
@@ -45,20 +45,27 @@ with the step that can see the problem, as a warning when it runs.
 `datalib-step check-params`, which did the same for a whole file, is
 gone; `datalib-pipeline check` is the one way to ask.
 
-### 2. Checking a connection (half done)
+### 2. Checking a connection (done)
 
 The wizard's "Check connection" and a picker's "Load" run the probe of
 the source's type, a command that gets the source's params in
 `DATALIB_DAG_PARAMS` and prints one report (`docs/dev/step_protocol.md`
 §"Probe"). A package names one in its manifest (`sources.probe`,
-`docs/dev/packages.md`), and the server runs it for a type the
-package offers (`probe_command` in `datalib/backend/http/src/probe.rs`).
-Any other type still runs `datalib-step probe <type>`, found by name
-next to the server (`datalib/backend/http/src/binaries.rs`). That goes
-once `datalib-step` describes its sources the way a manifest does, with
-their probes (item 3).
+`docs/dev/packages.md`), and a program in what it answers to
+`--describe` (§"Describe"); the server runs the probe of whichever
+offers the type (`probe_command` in
+`datalib/backend/http/src/probe.rs`), and finds a program by its
+`[[programs]]` entry, never by name.
 
-### 3. Adding a source writes datalib-step's steps
+### 3. Adding a source writes datalib-step's steps (half done)
+
+Done: the sources are no longer compiled into the UI. `datalib-step
+--describe` prints them, in a package manifest's shape, from
+`datalib/backend/datalib_step/src/sources.toml`; the server serves
+every describing program's at `GET /api/programs`
+(`datalib/backend/http/src/programs.rs`); the wizard draws them beside
+the packages' and writes a source's `ingest` and `render_markdown`
+steps from the description's commands. What follows is what is left.
 
 The source wizard knows `datalib-step`'s source types, their params and
 the steps each one needs, and writes `command = "datalib-step"`
@@ -203,7 +210,7 @@ Add the check that keeps it true at the same time: `//:lint_repo`
 refuses the string `datalib-step` in `datalib/backend/dag/src` and in
 `datalib/backend/http/src` outside tests. The runner's half is check 23
 in `scripts/lint_repo.py`. The server's is check 24, which for now lets
-the string stand in the files of the items still open (2 and 3), named
+the string stand in the files of the items still open (item 3), named
 in `_SERVER_STEP_PROGRAM_FILES`, and refuses a listed file that no
 longer needs it; the list empties as those items land.
 

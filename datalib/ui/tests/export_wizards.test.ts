@@ -4,7 +4,7 @@
 // written by hand, which may still carry the retired
 // `always_clear_before_ingest`.
 import { describe, expect, it } from "vitest";
-import { CATALOG } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import type { CatalogEntry } from "../src/config/catalog";
 import {
   buildStep,

@@ -12,7 +12,8 @@ import {
   sourceStepsOf,
   untouchedSettings,
 } from "../src/config/sourceSteps";
-import { CATALOG, catalogFor } from "../src/config/catalog";
+import { catalogFor } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 
 const SLACK = catalogFor("slack")!;
 

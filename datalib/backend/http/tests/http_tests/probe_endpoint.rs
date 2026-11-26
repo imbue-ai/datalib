@@ -132,3 +132,82 @@ async fn a_packages_type_with_no_probe_is_refused_by_name() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert!(body.to_string().contains("Weather"), "{body}");
 }
+
+/// A program that describes one source, `tide`, whose probe is the
+/// program run with `probe tide`, answering as [`PROBE`] does.
+fn write_describing_program(root: &Path) {
+    let bin = root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("tides");
+    let describe = r#"{"sources":[{"type":"tide","commands":{"ingest":"run ingest tide"},"probe":"probe tide","wizard":{"label":"Tide gauge"}}]}"#;
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --describe ]; then echo '{describe}'; exit 0; fi\n{}",
+            PROBE.trim_start_matches("#!/bin/sh\n")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(
+        root.join("config.toml"),
+        "[[programs]]\ncommand = \"bin/tides\"\nverbs = [\"describe\"]\n",
+    )
+    .unwrap();
+}
+
+async fn finished(app: &axum::Router, id: &str) -> serde_json::Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let (_, s) = get_json(app, &format!("/api/probe/{id}")).await;
+        if s["status"] != "running" {
+            return s;
+        }
+        assert!(Instant::now() < deadline, "the probe never finished: {s}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn a_program_that_lists_describe_is_asked_what_it_offers() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_describing_program(tmp.path());
+    let app = datalib_http::router(state(tmp.path()).await);
+    let (status, body) = get_json(&app, "/api/programs").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let program = &body["programs"][0];
+    assert_eq!(program["command"], "bin/tides", "{body}");
+    let source = &program["description"]["sources"][0];
+    assert_eq!(source["type"], "tide", "{body}");
+    assert_eq!(
+        source["commands"]["ingest"]["command"], "run ingest tide",
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_programs_type_is_probed_by_the_probe_it_describes() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_describing_program(tmp.path());
+    let app = datalib_http::router(state(tmp.path()).await);
+    let (status, started) = post_probe(
+        &app,
+        serde_json::json!({ "type": "tide", "params": { "station": "KSFO" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let done = finished(&app, started["id"].as_str().unwrap()).await;
+    assert_eq!(done["status"], "ok", "{done}");
+    assert_eq!(done["report"]["account"]["id"], "KSFO", "{done}");
+    assert_eq!(done["report"]["notes"][0], "probe tide", "{done}");
+}
+
+#[tokio::test]
+async fn a_type_nothing_offers_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_describing_program(tmp.path());
+    let app = datalib_http::router(state(tmp.path()).await);
+    let (status, body) =
+        post_probe(&app, serde_json::json!({ "type": "slack", "params": {} })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+}

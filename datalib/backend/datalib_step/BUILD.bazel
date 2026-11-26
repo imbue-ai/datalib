@@ -11,8 +11,12 @@ load("//tools:insta.bzl", "insta_update")
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
-    # The Modal driver, run by the bundled Node (src/modal.rs).
-    compile_data = ["src/modal/embed_on_modal.mjs"],
+    # The Modal driver, run by the bundled Node (src/modal.rs), and the
+    # sources `--describe` prints (src/describe.rs).
+    compile_data = [
+        "src/modal/embed_on_modal.mjs",
+        "src/sources.toml",
+    ],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
@@ -22,6 +26,7 @@ rust_binary(
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/packages:datalib_packages",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/etl/time_series:datalib_etl_time_series",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",

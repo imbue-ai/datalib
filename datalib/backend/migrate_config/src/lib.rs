@@ -313,8 +313,9 @@ pub fn upgrade_backup_secrets(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
-/// Add `check` to `datalib-step`'s verbs (`check_verb.rs`). Refused,
-/// naming the program, when its `verbs` spans lines.
+/// Add `check` and `describe` to `datalib-step`'s verbs
+/// (`check_verb.rs`). Refused, naming the program, when its `verbs`
+/// spans lines.
 pub fn upgrade_check_verb(text: &str) -> Result<Option<String>> {
     if !check_verb::is_retired(text).unwrap_or(false) {
         return Ok(None);
@@ -573,9 +574,11 @@ pub const UNATTENDED: [Rewrite; 17] = [
         run: upgrade_backup_secrets,
     },
     Rewrite {
-        why: "has a datalib-step `[[programs]]` entry whose verbs leave out `check`",
-        what: "datalib-step takes the `check` verb, so a save and `datalib-pipeline check` \
-               ask each of its steps whether a sync would accept its params",
+        why: "has a datalib-step `[[programs]]` entry whose verbs leave out `check` or \
+              `describe`",
+        what: "datalib-step takes the `check` and `describe` verbs, so a save and \
+               `datalib-pipeline check` ask each of its steps whether a sync would accept its \
+               params, and \"Add source\" offers the sources it describes",
         run: upgrade_check_verb,
     },
 ];

@@ -226,7 +226,7 @@ export type ConfiguredPackage = {
 export const DATALIB_STEP = "datalib-step";
 
 /// The verbs `datalib-step` takes, as its `[[programs]]` entry lists them.
-export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect", "check"];
+export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect", "check", "describe"];
 
 /// The first word of a command, split shell-style as the runner splits
 /// it: the program it starts, which a `[[programs]]` entry names.
@@ -967,16 +967,29 @@ export function buildStep(opts: {
   values: FieldValues;
 }): string {
   const { entry, group, phase, values } = opts;
-  const command = entry.package?.commands[functionOf(phase)];
+  const fn = functionOf(phase);
+  const packaged = entry.package?.commands[fn];
   return stepToml({
     group,
-    fn: functionOf(phase),
+    fn,
     type: entry.type,
     inputs: opts.inputs,
-    command: entry.package && command ? inPackage(entry.package.dir, command.command) : undefined,
-    scheduling: command,
+    command: commandOf(entry, fn),
+    scheduling: packaged,
     params: paramsToml(entry, values, phase),
   });
+}
+
+/// What the step for `fn` of a source of `entry` runs: a package's
+/// program inside its directory, or a program's word and the words its
+/// description gives. `undefined` when neither has a command for it.
+export function commandOf(entry: CatalogEntry, fn: string): string | undefined {
+  const packaged = entry.package?.commands[fn];
+  if (entry.package) return packaged ? inPackage(entry.package.dir, packaged.command) : undefined;
+  const described = entry.program?.commands[fn];
+  return entry.program && described
+    ? `${entry.program.command} ${described.command.trim()}`
+    : undefined;
 }
 
 /// The functions whose `datalib-step` reads its inputs' files as they
@@ -1071,7 +1084,8 @@ export function stepToml(opts: {
 /// person answered (`wanted`). A download-only provider always does; a
 /// package source whose package has no `render_markdown` program cannot.
 export function writesRenderStep(entry: CatalogEntry, wanted?: boolean): boolean {
-  if (entry.package && !entry.package.commands.render_markdown) return false;
+  const origin = entry.package ?? entry.program;
+  if (origin && !origin.commands.render_markdown) return false;
   return entry.rendersDocuments === false || wanted !== false;
 }
 

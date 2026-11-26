@@ -71,4 +71,4 @@ would be silently ignored.
 3. Add a test that a record upstream drops is kept, and that switching
    back deletes it.
 4. Name the source in the list above, and offer the choice in its
-   wizard entry (`datalib/ui/src/config/catalog.ts`).
+   wizard entry (`datalib/backend/datalib_step/src/sources.toml`).

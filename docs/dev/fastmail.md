@@ -43,7 +43,7 @@ are in [`latchkey.md`](latchkey.md#accounts-who-names-them)).
 Contacts and calendar share `fastmail-dav`, so their two read-only
 passwords need two names. The wizard suggests `<address> contacts` and
 `<address> calendar` (`credentialPaste.accountSuffix` in
-`datalib/ui/src/config/catalog.ts`); from a terminal:
+`datalib/backend/datalib_step/src/sources.toml`); from a terminal:
 
 ```sh
 latchkey --account "you@fastmail.com contacts" auth set fastmail-dav -u "you@fastmail.com:$(pbpaste)"

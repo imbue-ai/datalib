@@ -741,7 +741,7 @@ for the vendor or the way it is reached**: `claude` (api or export),
 `chatgpt` not `openai`, `contacts` whether CardDAV or `.vcf`. Write
 **Anthropic** only where you mean the company or something it issues (an
 org in Anthropic's account system, the UUIDs it mints). The one
-survivor is the `anthropic` search keyword in `ui/src/config/catalog.ts`.
+survivor is the `anthropic` search keyword in `datalib/backend/datalib_step/src/sources.toml`.
 
 ## A source's id is not its name
 

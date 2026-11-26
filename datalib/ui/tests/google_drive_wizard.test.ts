@@ -2,7 +2,7 @@
 // services, a question about which files, and the export lists, which a
 // config may also write as a table per kind the form has no field for.
 import { describe, expect, it } from "vitest";
-import { CATALOG } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import { listed, servicesToSignIn, signInLabel, targetAccount } from "../src/config/multiSignIn";
 import {
   buildStep,

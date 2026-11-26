@@ -27,7 +27,6 @@
 // that is a spelling test.
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import {
-  CATALOG,
   KIND_LABELS,
   entryKey,
   filterCatalog,
@@ -105,6 +104,7 @@ import { PATH_GLYPHS, STATUS_GLYPHS } from "@/config/glyphs";
 import { copyToClipboard } from "@/clipboard";
 import PackageReview from "@/components/PackageReview.vue";
 import { refreshPackages } from "@/config/packages";
+import { refreshPrograms } from "@/config/programs";
 import type { PackageLookup } from "@/api";
 
 const {
@@ -474,7 +474,7 @@ async function afterPackage(lookup: PackageLookup) {
   if (added.length === 1) choose(added[0]);
 }
 
-if (!props.editing) void refreshPackages();
+if (!props.editing) void Promise.all([refreshPackages(), refreshPrograms()]);
 
 function choose(entry: CatalogEntry) {
   if (!entry.wizard) return;

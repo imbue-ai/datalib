@@ -11,7 +11,7 @@ import {
   filterApps,
   setApplet,
 } from "../src/config/builtinApplets";
-import { CATALOG } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import { listSteps } from "../src/config/sourceSteps";
 
 const BASE = `[[groups]]

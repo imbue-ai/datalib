@@ -1,28 +1,8 @@
 //! Where the server finds the binaries it runs: `datalib-pipeline`, the
-//! runner it keeps as a child; `datalib-step`, for the connect flow; and
-//! the directory every step's `PATH` starts with.
+//! runner it keeps as a child, and the directory every step's `PATH`
+//! starts with, where a config's programs are looked for first.
 
 use std::path::PathBuf;
-
-/// `$DATALIB_STEP_BIN` (how `dev.sh` wires it from Bazel runfiles), else
-/// `datalib-step` in [`resolve_binary_dir`], else a sibling of this
-/// executable.
-pub fn resolve_step_bin() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("DATALIB_STEP_BIN") {
-        let p = PathBuf::from(p);
-        if p.is_file() {
-            return Some(p);
-        }
-        tracing::warn!("$DATALIB_STEP_BIN={} is not a file", p.display());
-    }
-    let dirs = resolve_binary_dir()
-        .into_iter()
-        .chain(own_dir())
-        .collect::<Vec<_>>();
-    dirs.iter()
-        .flat_map(|dir| ["datalib-step", "datalib_step"].map(|name| dir.join(name)))
-        .find(|cand| cand.is_file())
-}
 
 /// `$DATALIB_PIPELINE_BIN`, else `datalib-pipeline` in
 /// [`resolve_binary_dir`], else a sibling of this executable, else on
@@ -48,7 +28,7 @@ pub fn resolve_pipeline_bin() -> Option<PathBuf> {
 /// The step-binary directory the loop puts first on every step's `PATH`:
 /// `$DATALIB_BINARY_DIR` (how `dev.sh` / `serve_dev.sh` wire a shim dir
 /// from Bazel runfiles), else this executable's own directory when
-/// `datalib-step` sits next to it (how a packaged release lays the
+/// `datalib-pipeline` sits next to it (how a packaged release lays the
 /// binaries out side by side).
 pub fn resolve_binary_dir() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("DATALIB_BINARY_DIR") {
@@ -58,7 +38,7 @@ pub fn resolve_binary_dir() -> Option<PathBuf> {
         }
         tracing::warn!("$DATALIB_BINARY_DIR={} is not a directory", p.display());
     }
-    own_dir().filter(|dir| dir.join("datalib-step").is_file())
+    own_dir().filter(|dir| dir.join("datalib-pipeline").is_file())
 }
 
 fn own_dir() -> Option<PathBuf> {

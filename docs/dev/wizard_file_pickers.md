@@ -6,7 +6,7 @@ user is expected to type a path into. The typed box stays, as a
 fallback and a paste target; it is not the primary way in.
 
 In the desktop app every `kind: "path"` field in
-[`catalog.ts`](../../datalib/ui/src/config/catalog.ts) renders a
+[`sources.toml`](../../datalib/backend/datalib_step/src/sources.toml) renders a
 **Choose folder… / Choose file…** button wired to a real OS dialog,
 with the path it picked beside it and the typed input behind "Type the
 path instead". In a plain browser the button is absent and the typed
@@ -93,7 +93,7 @@ is not built. Until it is, a browser user types the path, and
 ## Checklist for a new path field
 
 When you add a `kind: "path"` entry to
-[`catalog.ts`](../../datalib/ui/src/config/catalog.ts), the button
+[`sources.toml`](../../datalib/backend/datalib_step/src/sources.toml), the button
 comes for free. What you owe it:
 
 - **`picks: "file" | "dir"`**, correct. It decides which dialog opens,

@@ -1335,8 +1335,8 @@ fn accept_programs(
                 None => diags.push(Diagnostic::new(
                     Severity::Warning,
                     format!(
-                        "[[programs]] {command:?}: {word:?} is not a verb this runner sends \
-                         (reset, prepare, compact, collect, check); it is ignored"
+                        "[[programs]] {command:?}: {word:?} is not a verb this build knows \
+                         (reset, prepare, compact, collect, check, describe); it is ignored"
                     ),
                 )),
             }

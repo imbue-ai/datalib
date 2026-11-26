@@ -10,6 +10,7 @@ mod append;
 mod check;
 mod compact;
 mod config_backup;
+mod describe;
 mod dispatch;
 mod embed_prompts;
 mod embedding_map;
@@ -456,6 +457,11 @@ const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[tokio::main]
 async fn main() {
+    // The app asks a program for what it offers with this one word
+    // (`docs/dev/step_protocol.md` §"Describe").
+    if std::env::args().skip(1).eq(["--describe"]) {
+        describe::print();
+    }
     let cli = Cli::parse();
     match &cli.cmd {
         Cmd::Help { topic } => std::process::exit(print_help(topic)),

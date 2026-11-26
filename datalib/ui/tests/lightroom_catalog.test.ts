@@ -1,7 +1,8 @@
 // One Lightroom form writes a catalog, a folder of backups, or both:
 // the backend replays the backups and mirrors the catalog on top.
 import { describe, expect, it } from "vitest";
-import { CATALOG, catalogForStep } from "../src/config/catalog";
+import { catalogForStep } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import { buildStep, seedFieldValues } from "../src/config/sourceSteps";
 import methods from "../src/config/ingestMethods.json";
 

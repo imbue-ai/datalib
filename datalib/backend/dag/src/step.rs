@@ -48,6 +48,10 @@ pub enum Verb {
     /// Before anything runs: say whether the step would run its params as
     /// written, and write nothing.
     Check,
+    /// Never sent by the runner, and sent to the program rather than a
+    /// step: the app asks what it offers "Add source"
+    /// (`docs/dev/step_protocol.md` §"Describe").
+    Describe,
 }
 
 impl Verb {

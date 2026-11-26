@@ -8,7 +8,7 @@ import {
   loginAccount,
   nameLeftToService,
 } from "../src/config/accountNaming";
-import { CATALOG } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import { fieldsFor } from "../src/config/sourceSteps";
 
 describe("loginAccount", () => {

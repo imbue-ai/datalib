@@ -540,6 +540,16 @@ genrule(
     cmd = "$(location //datalib/backend/etl/hostile_samples:render_hostile_samples) $@ >/dev/null",
 )
 
+# What `datalib-step --describe` prints, the built-in sources the app
+# reads from `GET /api/programs`, for every unit test to start with in
+# its catalog (`tests/builtinCatalog.ts`). It lands beside the tests.
+genrule(
+    name = "builtin_sources",
+    srcs = ["//datalib/backend/datalib_step:datalib_step"],
+    outs = ["tests/builtin_sources.json"],
+    cmd = "$(location //datalib/backend/datalib_step:datalib_step) --describe > $@",
+)
+
 vitest_bin.vitest_test(
     name = "unit_test",
     args = [
@@ -548,6 +558,7 @@ vitest_bin.vitest_test(
     ],
     chdir = package_name(),
     data = [
+        ":builtin_sources",
         ":hostile_samples",
         ":node_modules",
         ":vendor_vs_tree",

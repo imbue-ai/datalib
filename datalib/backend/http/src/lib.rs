@@ -49,6 +49,7 @@ pub mod oauth_client;
 pub mod packages;
 pub mod plugins;
 pub mod probe;
+pub mod programs;
 pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
@@ -231,6 +232,7 @@ fn routes(state: AppState) -> Router {
             get(connect::connect_status),
         )
         .route("/api/packages", get(packages::list))
+        .route("/api/programs", get(programs::list))
         .route("/api/packages/lookup", post(packages::lookup))
         .route("/api/packages/fetch", post(packages::fetch))
         .route("/api/probe", post(probe::start_probe))

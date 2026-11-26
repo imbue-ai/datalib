@@ -2,7 +2,7 @@
 
 The "Add source" dialog is filled in by people who do not know what an
 ingest step is. This is how a form for them is put together. The forms
-in [`catalog.ts`](../../datalib/ui/src/config/catalog.ts) are the
+in [`sources.toml`](../../datalib/backend/datalib_step/src/sources.toml) are the
 worked examples: Slack for a connected account, WhatsApp for a backup
 that needs a secret, Apple Messages for a folder macOS guards. Read one
 of those beside this before adding or changing an entry.

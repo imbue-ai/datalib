@@ -1163,6 +1163,26 @@ export type PackageApplet = {
   params?: Record<string, unknown> | null;
 };
 
+/// What a program offers "Add source", as it answers `--describe`.
+/// Mirrors `Description` in datalib/backend/packages/src/manifest.rs.
+export type ProgramDescription = {
+  sources: PackageSource[];
+  locks?: Record<string, number>;
+};
+
+/// A `[[programs]]` entry that lists `describe`, and what it said.
+export type ProgramView = {
+  command: string;
+  description: ProgramDescription | null;
+  error: string | null;
+};
+
+export type ProgramsResponse = { programs: ProgramView[] };
+
+export function fetchPrograms(signal?: AbortSignal): Promise<ProgramsResponse> {
+  return getJson<ProgramsResponse>("/api/programs", signal, { toast: false });
+}
+
 /// `datalib-package.toml`, as the server parsed it.
 export type PackageManifest = {
   schema: number;

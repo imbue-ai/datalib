@@ -8,6 +8,7 @@ import {
   type PackageApplet,
   type PackageLookup,
   type PackageManifest,
+  type PackageSource,
   type PackagesResponse,
 } from "@/api";
 import { setPackageEntries, type CatalogEntry } from "./catalog";
@@ -34,33 +35,41 @@ export function catalogEntriesFrom(res: PackagesResponse): CatalogEntry[] {
 }
 
 export function entriesOfManifest(id: string, sha256: string, m: PackageManifest): CatalogEntry[] {
-  return m.sources.map((s) => {
-    const wizard = s.wizard as Partial<CatalogEntry>;
-    const label = typeof wizard.label === "string" ? wizard.label : s.type;
-    return {
-      keywords: [],
-      icon: null,
-      defaultName: s.type,
-      nameHint: label,
-      blurb: m.description ?? "",
-      ...wizard,
-      label,
-      type: s.type,
-      kind: "package",
-      wizard: true,
-      canProbe: !!s.probe,
-      rendersDocuments: "render_markdown" in s.commands,
-      package: {
-        id,
-        name: m.name,
-        version: m.version,
-        dir: packageDir(sha256),
-        commands: s.commands,
-        locks: m.locks ?? {},
-        applets: s.applets ?? [],
-      },
-    } as CatalogEntry;
-  });
+  return m.sources.map((s) => ({
+    ...entryOfSource(s, m.description ?? ""),
+    kind: "package",
+    wizard: true,
+    rendersDocuments: "render_markdown" in s.commands,
+    package: {
+      id,
+      name: m.name,
+      version: m.version,
+      dir: packageDir(sha256),
+      commands: s.commands,
+      locks: m.locks ?? {},
+      applets: s.applets ?? [],
+    },
+  }));
+}
+
+/// A source as a catalog entry: its form, with what a form leaves out
+/// filled in, its type, and whether it can be probed.
+export function entryOfSource(s: PackageSource, blurb: string): CatalogEntry {
+  const wizard = s.wizard as Partial<CatalogEntry>;
+  const label = typeof wizard.label === "string" ? wizard.label : s.type;
+  return {
+    keywords: [],
+    icon: null,
+    defaultName: s.type,
+    nameHint: label,
+    blurb,
+    kind: "local",
+    wizard: false,
+    ...wizard,
+    label,
+    type: s.type,
+    canProbe: !!s.probe,
+  } as CatalogEntry;
 }
 
 /// The id a new package gets: its name, made path-safe, unless taken.

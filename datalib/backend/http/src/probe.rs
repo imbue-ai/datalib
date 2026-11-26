@@ -1,7 +1,8 @@
-//! `POST /api/probe` and `GET /api/probe/{id}`: a provider's probe
-//! (`datalib-step probe`) as a job the wizard polls, so a list that
-//! pages for a minute can say how far it has got. "Check connection"
-//! asks for the account alone; a picker's "Load" asks for one list.
+//! `POST /api/probe` and `GET /api/probe/{id}`: the probe of a source
+//! type (`docs/dev/step_protocol.md` §"Probe") as a job the wizard
+//! polls, so a list that pages for a minute can say how far it has got.
+//! "Check connection" asks for the account alone; a picker's "Load" asks
+//! for one list.
 
 use std::collections::HashMap;
 use std::process::Stdio;
@@ -81,7 +82,7 @@ pub async fn start_probe(
     Json(req): Json<ProbeRequest>,
 ) -> Result<Json<ProbeStatus>, (StatusCode, Json<Value>)> {
     let source_type = validated_type(&req.source_type)?;
-    let mut cmd = probe_command(&s.root, &source_type)?;
+    let mut cmd = probe_command(&s.root, &source_type).await?;
     if let Some(list) = req.list {
         cmd.arg("--list").arg(list.as_str());
     }
@@ -120,71 +121,93 @@ pub async fn start_probe(
     Ok(Json(status))
 }
 
-/// The probe of `source_type`: the `probe` command of the package in the
-/// config that offers the type, when one does, as "Add source" draws a
-/// package's form before a built-in one; else `datalib-step`'s.
-fn probe_command(
+/// The probe of `source_type`, from whoever offers the type: the config's
+/// packages first, as "Add source" draws a package's form before a
+/// program's, then the programs that describe their sources.
+async fn probe_command(
     root: &std::path::Path,
     source_type: &str,
 ) -> Result<Command, (StatusCode, Json<Value>)> {
     let text =
         std::fs::read_to_string(datalib_dag::config::root_config_path(root)).unwrap_or_default();
-    let installed: Vec<(String, datalib_packages::Manifest)> =
+    let packages: Vec<(String, datalib_packages::Manifest)> =
         datalib_dag::config::check_text(&text)
             .cfg
             .packages
             .iter()
             .filter_map(|p| Some((p.dir_rel(), datalib_packages::installed(root, &p.sha256)?)))
             .collect();
-    if let Some(command) = package_probe(&installed, source_type)? {
-        let argv = shlex::split(&command)
-            .filter(|a| !a.is_empty())
-            .ok_or_else(|| {
-                err(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    &format!("the probe command {command:?} has unbalanced quoting"),
-                )
-            })?;
-        let mut cmd = Command::new(root.join(&argv[0]));
-        cmd.args(&argv[1..]);
-        return Ok(cmd);
-    }
-    let step_bin = crate::binaries::resolve_step_bin().ok_or_else(|| {
+    let programs = crate::programs::described(root).await;
+    let offers = packages
+        .iter()
+        .map(|(dir, m)| Offer {
+            by: format!("the package {:?}", m.name),
+            prefix: format!("{dir}/"),
+            sources: &m.sources,
+        })
+        .chain(programs.iter().filter_map(|p| {
+            Some(Offer {
+                by: format!("the program {:?}", p.command),
+                prefix: format!("{} ", p.command),
+                sources: &p.description.as_ref()?.sources,
+            })
+        }));
+    let command = probe_of(offers, source_type)?;
+    let argv = shlex::split(&command)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| {
+            err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("the probe command {command:?} has unbalanced quoting"),
+            )
+        })?;
+    let program = crate::programs::resolve(root, &argv[0]).ok_or_else(|| {
         err(
             StatusCode::SERVICE_UNAVAILABLE,
-            "no `datalib-step` binary found (set $DATALIB_STEP_BIN or $DATALIB_BINARY_DIR). \
-             Checking a connection runs the provider's own probe, so it needs the step binary \
-             the pipeline uses.",
+            &format!("the probe's program {:?} is not there", argv[0]),
         )
     })?;
-    let mut cmd = Command::new(step_bin);
-    cmd.arg("probe").arg(source_type);
+    let mut cmd = Command::new(program);
+    cmd.args(&argv[1..]);
     Ok(cmd)
 }
 
-/// The probe command, relative to the data root, of the first package of
-/// `installed` (each with its directory) that offers `source_type`;
-/// `None` when none does. A package that offers the type with no probe is
-/// refused rather than handed to the built-in probe of the same name,
-/// which would ask a service that package's steps may never reach.
-fn package_probe(
-    installed: &[(String, datalib_packages::Manifest)],
+/// Sources one package or program offers, and what its commands follow:
+/// a package's directory, or a program's own word.
+struct Offer<'a> {
+    by: String,
+    prefix: String,
+    sources: &'a [datalib_packages::manifest::SourceTemplate],
+}
+
+/// The probe command of the first offer of `source_type`. Refused when
+/// nothing offers the type, and when the first offer has no probe, rather
+/// than asking a later one: that would ask a service the steps of the
+/// source being added never reach.
+fn probe_of<'a>(
+    offers: impl IntoIterator<Item = Offer<'a>>,
     source_type: &str,
-) -> Result<Option<String>, (StatusCode, Json<Value>)> {
-    let offer = installed.iter().find_map(|(dir, m)| {
-        let source = m.sources.iter().find(|s| s.source_type == source_type)?;
-        Some((dir, m, source))
+) -> Result<String, (StatusCode, Json<Value>)> {
+    let found = offers.into_iter().find_map(|o| {
+        let source = o.sources.iter().find(|s| s.source_type == source_type)?;
+        Some((o, source))
     });
-    let Some((dir, m, source)) = offer else {
-        return Ok(None);
+    let Some((offer, source)) = found else {
+        return Err(err(
+            StatusCode::NOT_FOUND,
+            &format!(
+                "nothing in this library's config offers {source_type:?} sources: no package, and \
+                 no `[[programs]]` entry that lists `describe`"
+            ),
+        ));
     };
     match source.probe.as_deref() {
-        Some(probe) => Ok(Some(format!("{dir}/{}", probe.trim_start()))),
+        Some(probe) => Ok(format!("{}{}", offer.prefix, probe.trim_start())),
         None => Err(err(
             StatusCode::NOT_FOUND,
             &format!(
-                "the package {:?} offers {source_type:?} sources and has no probe for them",
-                m.name
+                "{} offers {source_type:?} sources and has no probe for them",
+                offer.by
             ),
         )),
     }

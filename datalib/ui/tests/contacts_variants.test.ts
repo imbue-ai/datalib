@@ -3,7 +3,8 @@
 // Written the wrong way, a step names no method and `datalib-step`
 // refuses it; read back the wrong way, it loses its form.
 import { describe, expect, it } from "vitest";
-import { CATALOG, catalogForStep, entryKey } from "../src/config/catalog";
+import { catalogForStep, entryKey } from "../src/config/catalog";
+import { CATALOG } from "./builtinCatalog";
 import { buildStep, listSteps, seedFieldValues } from "../src/config/sourceSteps";
 import methods from "../src/config/ingestMethods.json";
 

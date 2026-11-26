@@ -1,8 +1,8 @@
 //! What a source type is called and which mark it gets, resolved before
 //! the row is sent — by whichever producer serves rows about sources:
 //! the Manage rows and the search grid both. The wizard's descriptors —
-//! fields, pickers, probes — stay in the browser
-//! (`ui/src/config/catalog.ts`); this is only the part a row needs. A
+//! fields, pickers, probes — are `datalib-step`'s to describe
+//! (`datalib_step/src/sources.toml`); this is only the part a row needs. A
 //! type with variants (`email` is Gmail, Fastmail or Apple Mail by the method table
 //! on its ingest step) is narrowed by which table the params carry.
 
