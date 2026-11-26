@@ -726,9 +726,8 @@ verbs to give back the disk its store holds, once each: with
 `--compact` appended when old versions of derived data are to be
 dropped (`--drop-old-versions-on-derived-data`,
 `"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
-that reads a store may be reading it while it is rewritten: the command line needs the root to
-itself, as `reset` does, and the app's loop holds the steps it asks
-and every step that reads them until it is done (`dag/README.md`
+that reads a store may be reading it while it is rewritten: the loop
+holds the steps it asks and every step that reads them until it is done (`dag/README.md`
 §"Resets and purges"). The step decides what the verb means for what it
 wrote, runs nothing else, and reports its version as a run would; the
 runner records it, so a step that kept its content and reports a

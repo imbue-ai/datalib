@@ -312,11 +312,13 @@ of four ways:
 3. **`needs_rerun`.** What the step wrote can only be rebuilt by running
    it. The record keeps the flag (`steps.needs_rerun`), the tick holds
    the step due until it next succeeds (rule 5), and
-   `round::rerun_offer` lists it. Once the pass is over, the loop opens
-   one request rooted at that list, by `upgrade`
-   (`serve::UPGRADE_REQUESTER`), unless one it opened is still open:
-   nothing reads a store in another shape, and none of these steps
-   downloads, so there is nothing to ask. A `datalib-step` render
+   `round::rerun_offer` lists it. Once the pass is over, a host's loop
+   (`Runner::run_forever`) opens one request rooted at that list, by
+   `upgrade` (`serve::UPGRADE_REQUESTER`), unless one it opened is still
+   open: nothing reads a store in another shape, and none of these steps
+   downloads, so there is nothing to ask. A `datalib-pipeline` verb
+   running the loop on its own does what it was asked and names each
+   such step on stderr instead. A `datalib-step` render
    store or the grid index in another shape answers this way, and so
    does `unified_grid_and_search_index` when a source it reads was drawn
    into the search index by another version of the index text or its
@@ -599,10 +601,11 @@ naming no step) looks exactly like one it did.
   row in `system/supervisor.sqlite`, so it writes its row and follows it
   while whoever holds the lock runs it, trying the lock again whenever
   anything is announced, its release included, in case that loop ends
-  first. Only `reset`, which empties stores, and `free-disk-space`,
-  which rewrites them, need the root to themselves and is refused while a loop runs —
-  always, with the app up; the app's resets are rows whichever loop
-  holds the lock carries out (§"Resets and purges").
+  first. `reset` and `free-disk-space` do the same with a job (§"Resets
+  and purges"), which whichever loop holds the lock carries out, the
+  app's included. With no other loop, each runs one in its own process
+  (`serve::run_until_idle`, the host `datalib-pipeline serve` runs) until
+  nothing is open, and exits.
 - **One server per data root** (`system/lock`), which `datalib-http`
   takes for its own reasons (the API token, the disk-stats and
   remote-media stores).
@@ -845,10 +848,12 @@ collection opens nothing downstream: each keeps every store's content, so
 no version moves.
 
 From the command line, `datalib-pipeline free-disk-space` (with
-`--drop-old-versions-on-derived-data`, a compaction) takes `runner-lock`
-itself, as `reset` does, so it is refused while the app or another `datalib-pipeline` runs the loop. `Runner::shrink` asks the same steps and
-records the same versions; the binary measures each step's tree as a
-directory before and after, never its store, and prints what it gave
+`--drop-old-versions-on-derived-data`, a compaction) writes the same job
+as the app's button, and `datalib-pipeline reset` a reset's, so a reset
+from the command line also runs what reads what it emptied. Each follows
+its job while another loop runs, the app's included, or runs the loop
+itself until nothing is open. `free-disk-space` measures each step's tree
+as a directory before and after, never its store, and prints what it gave
 back.
 
 ## The record

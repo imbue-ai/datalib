@@ -340,7 +340,7 @@ impl Runner {
     /// own environment and its events its own sink. The caller holds
     /// `runner-lock`.
     pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
-        let report = self.drive(graph, store, None).await?;
+        let report = self.drive(graph, store, None, true).await?;
         Ok(report.expect("a loop that serves until idle ends the period it opened"))
     }
 
@@ -354,16 +354,32 @@ impl Runner {
         store: &Store,
         host: &dyn LoopHost,
     ) -> Result<()> {
-        self.drive(graph, store, Some(host)).await.map(|_| ())
+        self.drive(graph, store, Some(host), false)
+            .await
+            .map(|_| ())
+    }
+
+    /// [`Runner::run_forever`] until nothing is open and nothing runs: what
+    /// a `datalib-pipeline` verb runs when no other process holds the lock.
+    /// The last busy period's report.
+    pub async fn run_until_idle(
+        &self,
+        graph: &Graph,
+        store: &Store,
+        host: &dyn LoopHost,
+    ) -> Result<Option<RunReport>> {
+        self.drive(graph, store, Some(host), true).await
     }
 
     /// `host` is `None` for [`Runner::serve`], which opens one period
-    /// at once and returns its report when it ends.
+    /// at once and returns its report when it ends. `until_idle` returns
+    /// once nothing is open and nothing runs.
     async fn drive(
         &self,
         graph: &Graph,
         store: &Store,
         host: Option<&dyn LoopHost>,
+        until_idle: bool,
     ) -> Result<Option<RunReport>> {
         let mut mailbox = Mailbox {
             store,
@@ -582,7 +598,10 @@ impl Runner {
                 }
                 if let Some(pass) = prepare.take_if(|p| p.asking.is_none() && p.to_ask.is_empty()) {
                     store.close_job(&pass.job, None).await?;
-                    if self.open_the_reruns(graph, store, &state).await? {
+                    // A verb run from the command line does what it was
+                    // asked and says what needs to run again; the app's
+                    // loop runs it.
+                    if !until_idle && self.open_the_reruns(graph, store, &state).await? {
                         mailbox.seen = None;
                         continue;
                     }
@@ -840,12 +859,12 @@ impl Runner {
                             .await?,
                         );
                         mailbox.started = false;
-                        taking &= host.is_some();
+                        taking &= !until_idle;
                         // The next tick, with nothing open, is the record
                         // at rest.
                         continue;
                     }
-                    if !taking {
+                    if !taking || until_idle {
                         break;
                     }
                 }

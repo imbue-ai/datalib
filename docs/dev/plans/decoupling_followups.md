@@ -491,8 +491,10 @@ Each step ships alone, and the harness stays green throughout.
    pass runs inside the loop and holds only what it has not reached
    (open question 3); `wipes` are `jobs`, and the pass is one, with its
    progress in `job_steps`, which the server reads instead of
-   `ServeEvent` lines. Still to do: make the CLI's reset and shrink write
-   jobs, and put both hosts on `supervisor::run`.
+   `ServeEvent` lines. The CLI's `sync`, `reset` and `free-disk-space`
+   write their request or job and follow it; with no loop running, each
+   runs the same host as `datalib-pipeline serve`
+   (`serve::run_until_idle`) until nothing is open. **(done)**
 4. **Invocations and requests replace runs** in the run store, the
    record, the server's routes and the UI. This is the largest step.
    The run store is history, not data a person built, so the old rows
