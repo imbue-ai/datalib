@@ -442,7 +442,7 @@ describe("a grid grouped by a column of any type", () => {
       const { groups, grouping } = groupsOf(type, cells);
       expect(groups.map((g) => String(g.value)).sort()).toEqual(want);
       for (const g of groups) {
-        const title = (grouping.formatter as (g: SlickGroup) => HTMLElement)(g);
+        const title = (grouping.formatter as (g: unknown) => unknown)(g) as HTMLElement;
         expect(title.textContent).not.toContain("[object Object]");
         expect(title.textContent).toMatch(/^Cell: .+ \(\d+\)$/);
       }
