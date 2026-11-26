@@ -19,7 +19,7 @@ import {
   listPackages,
   listSteps,
   packageDir,
-  setTimeSeriesStep,
+  setSourceSteps,
   type ConfiguredStep,
 } from "./sourceSteps";
 
@@ -269,13 +269,13 @@ describe("a package source", () => {
         },
       ],
     })[0];
-    const text = setTimeSeriesStep(`${pinned}\n${CONFIG}`, "sfo", "weather", ts.package);
+    const text = setSourceSteps(`${pinned}\n${CONFIG}`, "sfo", ts);
     const step = listSteps(text).find((s) => s.id === "sfo/render_time_series");
     expect(step).toMatchObject({ package: "weather", command: `${DIR}/bin/weather-ts` });
     const index = listSteps(text).find(
       (s) => s.id === "unified_time_series_index/time_series_index",
     );
     expect(index?.inputs).toEqual(["sfo/render_time_series"]);
-    expect(setTimeSeriesStep(CONFIG, "sfo", "weather", entry.package)).toBe(CONFIG);
+    expect(setSourceSteps(CONFIG, "sfo", entry)).toBe(CONFIG);
   });
 });

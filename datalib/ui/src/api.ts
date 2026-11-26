@@ -1144,6 +1144,9 @@ export type PackageCommand = {
   command: string;
   reads?: "pinned" | "files" | null;
   locks?: string[];
+  /// A function of the same source, or a step id or pattern. None is
+  /// the source's `ingest`.
+  inputs?: string[];
 };
 
 /// A source type a package adds: its group `type`, the command each
@@ -1168,6 +1171,18 @@ export type PackageApplet = {
 export type ProgramDescription = {
   sources: PackageSource[];
   locks?: Record<string, number>;
+  fan_ins?: FanIn[];
+};
+
+/// A step that reads one function of every source by a pattern in its
+/// `inputs`. Mirrors `FanIn` in datalib/backend/packages/src/manifest.rs.
+export type FanIn = {
+  group: string;
+  name: string;
+  function: string;
+  command: PackageCommand;
+  applet?: string | null;
+  added_with_a_source?: boolean;
 };
 
 /// A `[[programs]]` entry that lists `describe`, and what it said.

@@ -69,10 +69,14 @@ command = "bin/weather-chart"
   unpacked archive. What each program must do is the step protocol
   (`step_protocol.md`). A command is either the command alone or a
   table: `command`, `reads` (`"pinned"` or `"files"`, as in a
-  `[[steps]]` entry, `config_model.md`) and `locks`, the names of the
-  locks the step holds. The wizard writes `reads` and `locks` on the
+  `[[steps]]` entry, `config_model.md`), `locks`, the names of the
+  locks the step holds, and `inputs`, each a function of the same source
+  (`ingest`) or a step id. The wizard writes `reads` and `locks` on the
   step as the table gives them; with no `reads`, a step that has inputs
-  gets `reads = "pinned"`.
+  gets `reads = "pinned"`, and with no `inputs` a step other than
+  `ingest` reads the source's `ingest`. `render_occurrences` and `embed`
+  are functions a source may have too, as Datalib's own do; an `embed`
+  is written only when the person asks for search by meaning.
 - **`locks`**: each lock a command names, with its slots. A lock a
   command names and `locks` does not is refused. Adding a source writes
   a `[[locks]]` entry with these slots for each lock its steps hold that
@@ -193,7 +197,7 @@ write what Datalib's own render steps write, in the same place:
 `unified_grid_and_search_index`, `embedding_map` and `time_series_index` read these
 steps by pattern (`*/render_markdown` and the like), as they read a
 built-in source's; where a config names its inputs one by one, the
-wizard adds them (`setTimeSeriesStep` in `config/sourceSteps.ts`). Nothing in
+wizard adds them (`setSourceSteps` in `config/sourceSteps.ts`). Nothing in
 the indexes asks a store which type or provider wrote it.
 
 These stores are Datalib's own formats, not a published interface. A

@@ -49,9 +49,8 @@ instead from `bazel run //:precommit` and as a plain step in
      it gives datalib's own step program nothing another program could
      not ask for with the same config keys.
  24. The server's code outside its tests names `datalib-step` only in
-     the files `_SERVER_STEP_PROGRAM_FILES` lists, each for an open item
-     of `docs/dev/plans/decoupling_followups.md`; a listed file that no
-     longer names it must leave the list.
+     the files `_SERVER_STEP_PROGRAM_FILES` lists, each with its reason;
+     a listed file that no longer names it must leave the list.
 
 Checks 4, 5 and 6 — a render read must be pinned, a reader must not
 open writably, a download takes its store rather than opening one —
@@ -1783,15 +1782,15 @@ def _check_runner_names_no_step_program(root: Path) -> int:
 #
 # `datalib-http` should give `datalib-step` nothing a package's program
 # could not get the same way (docs/dev/plans/decoupling_followups.md).
-# It still does in a few places, each an open item of that plan; this is
-# the list of them, and it only shrinks: a file that no longer names the
+# One file names it, the starter config, with the reason beside it; the
+# list only shrinks: a file that no longer names the
 # program has to leave it, and a file not on it may not start.
 _SERVER_SRC = "datalib/backend/http/src/"
 _SERVER_STEP_PROGRAM_FILES = {
-    # Item 3: the app writes datalib-step's steps; the starter config is
-    # one of them.
-    "datalib/backend/http/src/starter.rs": "item 3",
-    "datalib/backend/http/src/step_program.rs": "item 3",
+    # The starter config a new library gets is Datalib's own config, and
+    # it names the program Datalib ships: its `[[programs]]` entry is how
+    # the app learns that program's sources at all.
+    "datalib/backend/http/src/starter.rs": "the starter config",
 }
 
 
@@ -1806,7 +1805,7 @@ def server_step_program_problems(mentions: dict[str, list[int]]) -> list[str]:
         for line in lines
     ]
     problems += [
-        f"  {rel}: no longer names {_STEP_PROGRAM} ({why} is done there); take it off "
+        f"  {rel}: no longer names {_STEP_PROGRAM}, listed for {why}; take it off "
         "_SERVER_STEP_PROGRAM_FILES"
         for rel, why in sorted(_SERVER_STEP_PROGRAM_FILES.items())
         if not mentions.get(rel)

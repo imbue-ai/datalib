@@ -746,7 +746,26 @@ prints one JSON object on stdout and exits 0:
 Each source has the shape of a package manifest's `[[sources]]`
 (`packages.md` §"The manifest"), with one difference: a command, and
 the probe, are the words that follow the program's own word, not a path
-inside a package. The wizard writes a source's step for `ingest` as
+inside a package. A command may give the step's `reads`, `locks` and
+`inputs`; `locks` gives each lock's slots, as a manifest's does. A
+description may also list `fan_ins`, the steps that read one function
+of every source by a pattern:
+
+```json
+{
+  "group": "unified_time_series_index",
+  "name": "Time Series Index",
+  "function": "time_series_index",
+  "command": { "command": "run time_series_index", "reads": "pinned", "locks": ["index"], "inputs": ["*/render_time_series"] },
+  "applet": "datalib-applet unified_time_series_index",
+  "added_with_a_source": true
+}
+```
+
+The wizard adds a source's step into each fan-in whose `inputs` reads
+its function, where that fan-in names its inputs one by one, and writes
+the fan-in itself (its group, its step and its applet) when it is
+`added_with_a_source` and the config has none. The wizard writes a source's step for `ingest` as
 `command = "<program> run ingest tide"`, spelling the program as the
 `[[programs]]` entry does, and the probe route runs `<program> probe
 tide`. Sources come in the order the program lists them; a package's

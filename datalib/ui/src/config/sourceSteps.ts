@@ -25,9 +25,17 @@ import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 import { NAME_IT_HELP } from "./accountNaming";
 import { formatBytes, parseByteSize } from "./byteSize";
 import { expandInputs, namesStep, patternFunction } from "./inputPattern";
-import { catalogForStep, packageLockSlots } from "./catalog";
-import type { Answer, CatalogEntry, Field, FieldPhase, PackageOrigin, Preset } from "./catalog";
-import type { PackageCommand } from "@/api";
+import { catalogFor, catalogForStep, fanIns, lockSlots } from "./catalog";
+import type {
+  Answer,
+  CatalogEntry,
+  Field,
+  FieldPhase,
+  PackageOrigin,
+  Preset,
+  ProgramOrigin,
+} from "./catalog";
+import type { FanIn, PackageCommand } from "@/api";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
@@ -221,12 +229,10 @@ export type ConfiguredPackage = {
   end: number;
 };
 
-/// The program every built-in step runs, told what to do by its
-/// arguments (`datalibStepCommand`).
-export const DATALIB_STEP = "datalib-step";
-
-/// The verbs `datalib-step` takes, as its `[[programs]]` entry lists them.
-export const DATALIB_STEP_VERBS = ["reset", "prepare", "compact", "collect", "check", "describe"];
+/// The program a comparison's steps run (`datalibStepCommand`). A
+/// comparison is not a source a program describes, so its command is
+/// still spelled here.
+const DATALIB_STEP = "datalib-step";
 
 /// The first word of a command, split shell-style as the runner splits
 /// it: the program it starts, which a `[[programs]]` entry names.
@@ -255,16 +261,9 @@ export function programOf(command: string): string {
   return word;
 }
 
-/// Whether a step's `command` runs `datalib-step`.
-export function isDatalibStep(command: string | null | undefined): boolean {
-  const program = programOf(command ?? "");
-  return program === DATALIB_STEP || program.endsWith(`/${DATALIB_STEP}`);
-}
-
-/// The command a built-in step runs: `datalib-step run <function>`, then
-/// its group's `type` when the group has one, then, under a comparison,
-/// the type of the source it compares.
-export function datalibStepCommand(
+/// The command a comparison's step runs: `datalib-step run <function>`,
+/// then its group's `type`, then the type of the source it compares.
+function datalibStepCommand(
   fn: string,
   type: string | null | undefined,
   sourceType?: string | null,
@@ -968,16 +967,30 @@ export function buildStep(opts: {
 }): string {
   const { entry, group, phase, values } = opts;
   const fn = functionOf(phase);
-  const packaged = entry.package?.commands[fn];
   return stepToml({
     group,
     fn,
     type: entry.type,
     inputs: opts.inputs,
     command: commandOf(entry, fn),
-    scheduling: packaged,
+    scheduling: originOf(entry)?.commands[fn],
     params: paramsToml(entry, values, phase),
   });
+}
+
+/// Where an entry's steps come from: its package, or its program.
+function originOf(entry: CatalogEntry): ProgramOrigin | PackageOrigin | undefined {
+  return entry.package ?? entry.program;
+}
+
+/// A command's `inputs` as step ids under `group`: a function of the
+/// source is its step there, and anything else is as written. None given
+/// is the source's `ingest`.
+function inputsUnder(group: string, command: PackageCommand): string[] {
+  const named = command.inputs ?? [];
+  return named.length
+    ? named.map((i) => (i.includes("/") ? i : `${group}/${i}`))
+    : [`${group}/ingest`];
 }
 
 /// What the step for `fn` of a source of `entry` runs: a package's
@@ -992,51 +1005,15 @@ export function commandOf(entry: CatalogEntry, fn: string): string | undefined {
     : undefined;
 }
 
-/// The functions whose `datalib-step` reads its inputs' files as they
-/// are, so no producer of an input may run beside it.
-const READS_FILES = new Set(["embed", "embedding_map"]);
-
-/// The lock a `datalib-step` function holds: every embed loads the model
-/// and writes the search index's vectors, so one runs at a time.
-const LOCK_OF_FUNCTION: Record<string, string> = {
-  embed: "embedder",
-};
-
-/// The locks a step the wizard writes may hold, and the slots each
-/// `[[locks]]` entry declares.
-export const LOCK_SLOTS: Record<string, number> = { embedder: 1, index: 2 };
-
-/// `reads` and `locks` for a step. A package's step takes what its
-/// manifest's command says, and `reads = "pinned"` once it has inputs
-/// where the manifest says nothing. A `datalib-step` step follows the
-/// rules `datalib-http`'s config upgrade writes (docs/dev/config_model.md
-/// §"The retired shapes"): one other than `ingest` gets both whether or
-/// not its inputs are empty yet (a fan-in's are, until a source is
-/// added); any other step only once it has inputs.
-function schedulingLines(opts: {
-  fn: string;
-  type: string | null;
-  inputs: string[] | undefined;
-  builtin: boolean;
-  scheduling?: PackageCommand;
-}): string[] {
-  const { fn, type, inputs, builtin, scheduling } = opts;
-  if (scheduling) {
-    const reads = scheduling.reads ?? ((inputs ?? []).length > 0 ? "pinned" : null);
-    const locks = scheduling.locks ?? [];
-    return [
-      ...(reads ? [`reads = ${quote(reads)}`] : []),
-      ...(locks.length ? [`locks = [${locks.map(quote).join(", ")}]`] : []),
-    ];
-  }
-  const reads = builtin ? fn !== "ingest" : (inputs ?? []).length > 0;
-  if (!reads) return [];
-  const readsFiles =
-    builtin && (READS_FILES.has(fn) || (fn === "render_markdown" && type === "perseus"));
-  const lock = builtin ? LOCK_OF_FUNCTION[fn] : undefined;
-  const locks = lock ? [lock] : type ? [] : ["index"];
+/// `reads` and `locks` for a step: what the command its package's
+/// manifest or its program's description gives says, and
+/// `reads = "pinned"` where it names inputs and says nothing of how it
+/// reads them.
+function schedulingLines(inputs: string[] | undefined, scheduling?: PackageCommand): string[] {
+  const reads = scheduling?.reads ?? ((inputs ?? []).length > 0 ? "pinned" : null);
+  const locks = scheduling?.locks ?? [];
   return [
-    `reads = ${quote(readsFiles ? "files" : "pinned")}`,
+    ...(reads ? [`reads = ${quote(reads)}`] : []),
     ...(locks.length ? [`locks = [${locks.map(quote).join(", ")}]`] : []),
   ];
 }
@@ -1056,8 +1033,8 @@ export function stepToml(opts: {
   inputs?: string[];
   /// What it runs; `datalib-step run …` when absent.
   command?: string;
-  /// A package step's command as its manifest has it, whose `reads` and
-  /// `locks` the step takes.
+  /// The step's command as its manifest or description has it, whose
+  /// `reads` and `locks` the step takes.
   scheduling?: PackageCommand;
   params?: string;
 }): string {
@@ -1068,13 +1045,7 @@ export function stepToml(opts: {
     `id = ${quote(`${opts.group}/${fn}`)}`,
     `command = ${quote(command)}`,
     ...(inputs !== undefined ? [`inputs = [${inputs.map(quote).join(", ")}]`] : []),
-    ...schedulingLines({
-      fn,
-      type,
-      inputs,
-      builtin: isDatalibStep(command),
-      scheduling: opts.scheduling,
-    }),
+    ...schedulingLines(inputs, opts.scheduling),
   ];
   const params = opts.params ?? "";
   return `${lines.join("\n")}${params ? `\n${params}` : ""}`.trimEnd();
@@ -1084,7 +1055,7 @@ export function stepToml(opts: {
 /// person answered (`wanted`). A download-only provider always does; a
 /// package source whose package has no `render_markdown` program cannot.
 export function writesRenderStep(entry: CatalogEntry, wanted?: boolean): boolean {
-  const origin = entry.package ?? entry.program;
+  const origin = originOf(entry);
   if (origin && !origin.commands.render_markdown) return false;
   return entry.rendersDocuments === false || wanted !== false;
 }
@@ -1205,18 +1176,19 @@ function setGroupLine(text: string, groupId: string, key: string, line: string |
   return text.slice(0, group.start) + edited + text.slice(group.end);
 }
 
-/// The fan-in steps, by function: the SQL index the grid reads, which
-/// consumes rendered markdown; the map, which reads every source's
-/// `embed`; and the time-series index, which reads each source's time
-/// series. A source can be in one and not another.
-export type FanInFunction = "unified_grid_and_search_index" | "embedding_map" | "time_series_index";
+/// A fan-in's function, as the description names it: the grid and search
+/// index, the map, the time-series index.
+export type FanInFunction = string;
 
-/// The groups the fan-ins are filed under: the document index and the
-/// time-series index.
-const FAN_IN_GROUPS = ["unified_grid_and_search_index", "unified_time_series_index"];
+/// The groups the fan-ins are filed under.
+function fanInGroups(): string[] {
+  return [...new Set(fanIns().map((f) => f.group))];
+}
 
-/// The fan-ins a render step feeds.
-const RENDER_FAN_INS: FanInFunction[] = ["unified_grid_and_search_index"];
+/// The fan-ins that read every source's `fn` by pattern.
+function fanInsReading(fn: string | null): FanIn[] {
+  return fn === null ? [] : fanIns().filter((f) => (f.command.inputs ?? []).includes(`*/${fn}`));
+}
 
 /// One `[[steps]]` table and its body: up to the next line opening a
 /// table — its own `[steps.params…]` sub-table, or the next entry.
@@ -1227,13 +1199,13 @@ const STEP_TABLE = /(\[\[steps\]\])([\s\S]*?)(?=\n[ \t]*\[|$)/g;
 
 const INPUTS_OPEN = /^[ \t]*inputs[ \t]*=[ \t]*\[/m;
 
-/// Is this step body a fan-in — its id under one of `FAN_IN_GROUPS` —
-/// and, when `only` names some, one of those?
+/// Is this step body a fan-in — its id under a fan-in's group — and,
+/// when `only` names some functions, one of those?
 function isFanIn(body: string, only?: FanInFunction[]): boolean {
   const id = /^[ \t]*id[ \t]*=[ \t]*"([^"]*)"/m.exec(body)?.[1];
   const { group, fn } = splitStepId(id ?? "");
-  if (group === null || !FAN_IN_GROUPS.includes(group)) return false;
-  return !only || only.includes(fn as FanInFunction);
+  if (group === null || !fanInGroups().includes(group)) return false;
+  return !only || only.includes(fn ?? "");
 }
 
 /// Rewrite the `inputs` of the fan-ins `only` selects — all of them
@@ -1254,16 +1226,18 @@ function editFanInInputs(
   });
 }
 
-/// Wire a step into fan-ins: a render step into the two that consume
-/// rendered markdown, or into just the one `only` names — which is how
-/// an embed step reaches the map.
+/// Wire a step into the fan-ins that read its function (a render step
+/// into the grid and search index, an embed into the map), or into just
+/// the one `only` names.
 ///
 /// A fan-in that reads by pattern (`*/render_markdown`) already names the
 /// step and is left as it is. One that names its inputs by id needs this,
 /// or the source renders happily and is never indexed — invisible in
 /// search, with nothing on screen to say why.
 export function wireIntoFanIns(text: string, stepId: string, only?: FanInFunction): string {
-  return editFanInInputs(text, only ? [only] : RENDER_FAN_INS, (ids) =>
+  const readers = only ? [only] : fanInsReading(splitStepId(stepId).fn).map((f) => f.function);
+  if (readers.length === 0) return text;
+  return editFanInInputs(text, readers, (ids) =>
     ids.some((i) => namesStep(i, stepId)) ? ids : [...ids, stepId],
   );
 }
@@ -1277,95 +1251,81 @@ export function unwireFromFanIns(text: string, stepId: string, only?: FanInFunct
 }
 
 /// Which fan-in a step is, or null for a step that is not one: the
-/// function of a step whose group is one of `FAN_IN_GROUPS`.
+/// function of a step whose group is a fan-in's.
 export function fanInFunctionOf(step: ConfiguredStep): string | null {
-  return step.kind === "step" && step.group !== null && FAN_IN_GROUPS.includes(step.group)
+  return step.kind === "step" && step.group !== null && fanInGroups().includes(step.group)
     ? step.function
     : null;
 }
 
-/// The source types whose data is also time series. Mirrors
-/// `SourceType::renders_time_series` in datalib-step; hand-kept in step with it.
-export const TIME_SERIES_TYPES = ["garmin", "yolink", "airvisual"];
-
-const TIME_SERIES_GROUP = "unified_time_series_index";
-
-/// Whether a source of `type` may have an `embed` step. A time-series
-/// source's markdown is daily summaries of numbers: the keyword index
-/// finds everything in it, and embedding it costs minutes and gigabytes
-/// for nothing. Mirrors `datalib_migrate_config`'s
-/// `upgrade_time_series_embeds`, which takes the step out of a config
-/// that has one.
-export function embedAllowed(type: string | null | undefined): boolean {
-  return !type || !TIME_SERIES_TYPES.includes(type);
+/// The command a source of `type` runs for `fn`, as its catalog entry's
+/// package or program gives it.
+function sourceCommand(type: string | null | undefined, fn: string): PackageCommand | undefined {
+  if (!type) return undefined;
+  const entry = catalogFor(type);
+  return entry ? originOf(entry)?.commands[fn] : undefined;
 }
 
-/// Give a source of a time-series type its `render_time_series` step and
-/// a place in the time-series index's inputs, adding the index and the
-/// applet that serves it when the config has none. A package source is
-/// one when its package has a `render_time_series` program, which its
-/// step then runs. A source of any other type is left as it is.
-export function setTimeSeriesStep(
-  text: string,
-  group: string,
-  type: string,
-  pkg?: PackageOrigin,
-): string {
-  const command = pkg?.commands.render_time_series;
-  if (pkg ? !command : !TIME_SERIES_TYPES.includes(type)) return text;
-  const id = `${group}/render_time_series`;
+/// Whether a source of `type` may have an `embed` step: its description
+/// gives one, or it is a comparison of a source that may. A time-series
+/// source's gives none: its markdown is daily summaries of numbers, which
+/// the keyword index finds whole.
+export function embedAllowed(type: string | null | undefined, sourceType?: string | null): boolean {
+  return !!sourceCommand(type === DIFF_TYPE ? sourceType : type, "embed");
+}
+
+/// Give a source the steps its entry has beyond `ingest`, its render and
+/// `embed` (a time-series render, the occurrences of a calendar), each
+/// wired into the fan-ins that read it. A fan-in its description adds
+/// with a source comes with its group and its applet when the config has
+/// none. A step the config already has is left as it is.
+export function setSourceSteps(text: string, group: string, entry: CatalogEntry): string {
+  const origin = originOf(entry);
+  if (!origin) return text;
   let next = text;
-  if (!listSteps(next).some((s) => s.id === id)) {
-    next = insertEntries(
-      next,
-      stepToml({
-        group,
-        fn: "render_time_series",
-        type,
-        command: pkg && command ? inPackage(pkg.dir, command.command) : undefined,
-        scheduling: command,
-        inputs: [stepIdFor(group, "download")],
-      }),
-    );
+  for (const [fn, command] of Object.entries(origin.commands)) {
+    if (["ingest", "render_markdown", "embed"].includes(fn)) continue;
+    const id = `${group}/${fn}`;
+    if (!listSteps(next).some((s) => s.id === id)) {
+      next = insertEntries(
+        next,
+        stepToml({
+          group,
+          fn,
+          type: entry.type,
+          command: commandOf(entry, fn),
+          scheduling: command,
+          inputs: inputsUnder(group, command),
+        }),
+      );
+    }
+    for (const fanIn of fanInsReading(fn)) {
+      if (!fanIn.added_with_a_source) continue;
+      if (listSteps(next).some((s) => s.id === `${fanIn.group}/${fanIn.function}`)) continue;
+      next = withDeclarations(`${next.replace(/\s*$/, "")}\n\n${fanInEntries(fanIn)}\n`);
+    }
+    next = wireIntoFanIns(next, id);
   }
-  if (!listSteps(next).some((s) => fanInFunctionOf(s) === "time_series_index")) {
-    const index = stepToml({
-      group: TIME_SERIES_GROUP,
-      fn: "time_series_index",
-      type: null,
-      inputs: ["*/render_time_series"],
-    });
-    next = withDeclarations(
-      `${next.replace(/\s*$/, "")}\n\n[[groups]]\nid = ${quote(TIME_SERIES_GROUP)}\n` +
-        `name = "Time Series Index"\n\n${index}\n\n[[applets]]\n` +
-        `group = ${quote(TIME_SERIES_GROUP)}\nid = ${quote(TIME_SERIES_GROUP)}\n` +
-        `command = ${quote(`datalib-applet ${TIME_SERIES_GROUP}`)}\n`,
-    );
-  }
-  return wireIntoFanIns(next, id, "time_series_index");
+  return next;
 }
 
-/// The source types whose events have occurrences. Mirrors
-/// `datalib_step::source_type::SourceType::renders_occurrences`;
-/// hand-kept in step with it.
-export const OCCURRENCE_TYPES = ["calendar"];
-
-/// Give a source of a type with occurrences its `render_occurrences`
-/// step, which lists every occurrence in a window of days. Its rows are
-/// read by the person or the agent who asks; no index reads it.
-export function setOccurrencesStep(text: string, group: string, type: string): string {
-  if (!OCCURRENCE_TYPES.includes(type)) return text;
-  const id = `${group}/render_occurrences`;
-  if (listSteps(text).some((s) => s.id === id)) return text;
-  return insertEntries(
-    text,
-    stepToml({
-      group,
-      fn: "render_occurrences",
-      type,
-      inputs: [stepIdFor(group, "download")],
-    }),
-  );
+/// A fan-in's group, its step and its applet, as the wizard writes them
+/// into a config that has none.
+function fanInEntries(fanIn: FanIn): string {
+  const group = `[[groups]]\nid = ${quote(fanIn.group)}\nname = ${quote(fanIn.name)}`;
+  const step = stepToml({
+    group: fanIn.group,
+    fn: fanIn.function,
+    type: null,
+    command: fanIn.command.command,
+    scheduling: fanIn.command,
+    inputs: fanIn.command.inputs ?? [],
+  });
+  const applet = fanIn.applet
+    ? `\n\n[[applets]]\ngroup = ${quote(fanIn.group)}\nid = ${quote(fanIn.group)}\n` +
+      `command = ${quote(fanIn.applet)}`
+    : "";
+  return `${group}\n\n${step}${applet}`;
 }
 
 /// The step that puts every source it reads in the keyword search.
@@ -1373,14 +1333,17 @@ const UNIFIED_GRID_AND_SEARCH_INDEX_STEP =
   "unified_grid_and_search_index/unified_grid_and_search_index";
 
 /// A source's own search step, as a `[[steps]]` block: its embeddings,
-/// which read the `unified_grid_and_search_index` step, whose keyword pass
-/// cuts what they embed. `type` is the group's, and `sourceType` the
-/// compared source's for a comparison.
+/// which read what its description says (the `unified_grid_and_search_index`
+/// step, whose keyword pass cuts what they embed). `type` is the group's,
+/// and `sourceType` the compared source's for a comparison, whose embed
+/// is the compared source's run under the comparison's type.
 export function buildEmbedStep(
   group: string,
   type: string | null,
   sourceType?: string | null,
 ): { id: string; body: string } {
+  const command = sourceCommand(type === DIFF_TYPE ? sourceType : type, "embed");
+  const entry = type && type !== DIFF_TYPE ? catalogFor(type) : undefined;
   return {
     id: `${group}/embed`,
     body: stepToml({
@@ -1388,7 +1351,9 @@ export function buildEmbedStep(
       fn: "embed",
       type,
       sourceType,
-      inputs: [UNIFIED_GRID_AND_SEARCH_INDEX_STEP],
+      command: entry ? commandOf(entry, "embed") : undefined,
+      scheduling: command,
+      inputs: command ? inputsUnder(group, command) : [UNIFIED_GRID_AND_SEARCH_INDEX_STEP],
     }),
   };
 }
@@ -1448,23 +1413,21 @@ function setNotSearched(text: string, group: string, out: boolean): string {
 /// it.
 export function setSearchSteps(text: string, group: string, asked: SearchIndexing): string {
   const type = listGroups(text).find((g) => g.id === group)?.type;
-  const indexing = asked === "keyword_and_embed" && !embedAllowed(type) ? "keyword" : asked;
+  const compared = type === DIFF_TYPE ? sourceTypeIn(listSteps(text), group) : null;
+  const allowed = embedAllowed(type, compared);
+  const indexing = asked === "keyword_and_embed" && !allowed ? "keyword" : asked;
   let next = setNotSearched(text, group, indexing === "none");
   const steps = listSteps(next);
   const hasIndexStep = steps.some(
     (s) => s.kind === "step" && s.id === UNIFIED_GRID_AND_SEARCH_INDEX_STEP,
   );
-  const embed = buildEmbedStep(
-    group,
-    type ?? null,
-    type === DIFF_TYPE ? sourceTypeIn(steps, group) : null,
-  );
+  const embed = buildEmbedStep(group, type ?? null, compared);
   const has = steps.some((s) => s.id === embed.id);
   if (hasIndexStep && indexing === "keyword_and_embed") {
-    if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id, "embedding_map");
+    if (!has) next = wireIntoFanIns(insertEntries(next, embed.body), embed.id);
   } else if (has) {
     const gone = [...steps.filter((s) => s.id === embed.id), ...readersOf([embed.id], steps)];
-    next = unwireFromFanIns(removeSteps(next, gone), embed.id, "embedding_map");
+    next = unwireFromFanIns(removeSteps(next, gone), embed.id);
   }
   return next;
 }
@@ -1528,15 +1491,14 @@ export function insertEntries(text: string, body: string): string {
   );
 }
 
-/// `text` with the top-level entries its steps need and it lacks: a
-/// `[[programs]]` entry for each spelling of `datalib-step` a step runs,
-/// listing the verbs it takes, and a `[[locks]]` entry for each lock of
-/// `LOCK_SLOTS` or of a package's manifest (`packageLockSlots`) a step
-/// holds. Without the first the runner sends
-/// `datalib-step` no verb; without the second it refuses the step. They
-/// go after the file's last `[[packages]]`, `[[programs]]` or `[[locks]]`
-/// entry, else above its first table. Unchanged text when nothing is
-/// missing.
+/// `text` with a `[[locks]]` entry for each lock a step holds that the
+/// config does not declare and a package's manifest or a program's
+/// description gives the slots of (`lockSlots`): without one the runner
+/// refuses the step. A program's own `[[programs]]` entry is not written
+/// here: the wizard learns a program's sources from that entry, so it is
+/// there already. They go after the file's last `[[packages]]`,
+/// `[[programs]]` or `[[locks]]` entry, else above its first table.
+/// Unchanged text when nothing is missing.
 export function withDeclarations(text: string): string {
   const { ast, root } = parseConfig(text);
   const entries = (v: unknown) =>
@@ -1544,25 +1506,10 @@ export function withDeclarations(text: string): string {
       (e): e is Record<string, unknown> => e !== null && typeof e === "object",
     );
   const steps = entries(root.steps);
-  const programs = new Set(
-    entries(root.programs).map((p) => (typeof p.command === "string" ? p.command.trim() : "")),
-  );
   const locks = new Set(entries(root.locks).map((l) => l.name));
-  const slots: Record<string, number> = { ...packageLockSlots(), ...LOCK_SLOTS };
+  const slots = lockSlots();
   const blocks: string[] = [];
   const seen = new Set<string>();
-  for (const step of steps) {
-    const command = typeof step.command === "string" ? step.command : "";
-    const program = programOf(command);
-    // A `[[programs]]` entry names one word, so a path with a space in it
-    // cannot be declared.
-    if (!isDatalibStep(command) || /\s/.test(program)) continue;
-    if (programs.has(program) || seen.has(program)) continue;
-    seen.add(program);
-    blocks.push(
-      `[[programs]]\ncommand = ${quote(program)}\nverbs = [${DATALIB_STEP_VERBS.map(quote).join(", ")}]`,
-    );
-  }
   for (const step of steps) {
     for (const name of Array.isArray(step.locks) ? step.locks : []) {
       if (typeof name !== "string" || !(name in slots)) continue;

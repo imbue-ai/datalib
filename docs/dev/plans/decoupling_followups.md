@@ -5,8 +5,8 @@ The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 2, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
-own tool. Items 3 and 9 are half done. Untouched: item 8 (decided), and
-the reconciler in section 10.
+own tool. Item 3 is done but for comparisons, and item 9 is half done.
+Untouched: item 8 (decided), and the reconciler in section 10.
 
 ## The end state
 
@@ -57,24 +57,33 @@ offers the type (`probe_command` in
 `datalib/backend/http/src/probe.rs`), and finds a program by its
 `[[programs]]` entry, never by name.
 
-### 3. Adding a source writes datalib-step's steps (half done)
+### 3. Adding a source writes datalib-step's steps (done, but for comparisons)
 
-Done: the sources are no longer compiled into the UI. `datalib-step
+The sources are no longer compiled into the UI. `datalib-step
 --describe` prints them, in a package manifest's shape, from
-`datalib/backend/datalib_step/src/sources.toml`; the server serves
-every describing program's at `GET /api/programs`
-(`datalib/backend/http/src/programs.rs`); the wizard draws them beside
-the packages' and writes a source's `ingest` and `render_markdown`
-steps from the description's commands. What follows is what is left.
+`datalib/backend/datalib_step/src/sources.toml`, with every step each
+source gets, how each reads and what it locks (from
+`datalib/backend/datalib_step/src/step_entry.rs`, which `examples
+--append` writes by too), the slots of those locks, and the fan-ins
+that read them (`datalib/backend/datalib_step/src/describe.rs`). The
+server serves every describing program's at `GET /api/programs`
+(`datalib/backend/http/src/programs.rs`), and the wizard writes a
+built-in source's steps from that exactly as it writes a package's
+(`setSourceSteps` and `withDeclarations` in
+`datalib/ui/src/config/sourceSteps.ts`).
 
-The source wizard knows `datalib-step`'s source types, their params and
-the steps each one needs, and writes `command = "datalib-step"`
-(`datalib/ui/src/config/sourceSteps.ts:225`,
-`datalib/ui/src/config/catalog.ts`). A package already supplies its
-own programs to the wizard (`datalib/ui/src/config/catalog.ts:243-245`).
-The end state treats `datalib-step` the same way: a program that
-describes what it offers, which the wizard reads, with no list of
-Datalib's sources compiled into the UI.
+Left in the UI, because no description offers them yet:
+
+- **A comparison** ("Compare…", `buildDiffSource`): its steps run
+  `datalib-step run render_markdown diff --source-type <type>`, spelled
+  in `sourceSteps.ts`. A comparison is not a source a person adds, and
+  the description has no shape for "a step made from another source's".
+- **The map's step**, which the Map card writes from its own stanza
+  (`datalib/ui/src/cards/embeddingMap.ts`).
+- **Which step a source's search setting edits**: `not_searched` on the
+  `unified_grid_and_search_index` step is that step's own param.
+- The display names and phases of Datalib's functions
+  (`PHASE_BY_FUNCTION`, `DEFAULT_NAMES` in `sourceSteps.ts`).
 
 ### 4. The config upgrade rewrites datalib-step's steps (closed: kept as Datalib's tool)
 
@@ -209,10 +218,14 @@ reads it. The text:
 Add the check that keeps it true at the same time: `//:lint_repo`
 refuses the string `datalib-step` in `datalib/backend/dag/src` and in
 `datalib/backend/http/src` outside tests. The runner's half is check 23
-in `scripts/lint_repo.py`. The server's is check 24, which for now lets
-the string stand in the files of the items still open (item 3), named
-in `_SERVER_STEP_PROGRAM_FILES`, and refuses a listed file that no
-longer needs it; the list empties as those items land.
+in `scripts/lint_repo.py`. The server's is check 24, which lets the
+string stand only in the files `_SERVER_STEP_PROGRAM_FILES` names, and
+refuses a listed file that no longer needs it. One file is left:
+`datalib/backend/http/src/starter.rs`, the config a new library starts
+with, which names `datalib-step` in its `[[programs]]` entry and its
+index step. That entry is how the app learns `datalib-step`'s sources
+at all, so a library with no config needs it from somewhere; it is
+Datalib's default config, not a protocol only `datalib-step` gets.
 
 ## 10. The runner's runtime model
 

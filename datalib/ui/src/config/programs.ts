@@ -5,7 +5,7 @@
 
 import { shallowRef } from "vue";
 import { fetchPrograms, type ProgramDescription, type ProgramsResponse } from "@/api";
-import { setProgramEntries, type CatalogEntry } from "./catalog";
+import { setProgramDeclarations, setProgramEntries, type CatalogEntry } from "./catalog";
 import { entryOfSource } from "./packages";
 
 /// A program's sources as catalog entries, each writing its steps as the
@@ -23,6 +23,27 @@ export function catalogEntriesOf(res: ProgramsResponse): CatalogEntry[] {
   );
 }
 
+/// Put every program's sources, fan-ins and locks in the catalog. A fan-in
+/// or a lock two programs both describe is the first one's.
+export function useDescriptions(res: ProgramsResponse): void {
+  setProgramEntries(catalogEntriesOf(res));
+  const described = res.programs.flatMap((p) =>
+    p.description ? [{ command: p.command, d: p.description }] : [],
+  );
+  const fanIns = described.flatMap(({ command, d }) =>
+    (d.fan_ins ?? []).map((f) => ({
+      ...f,
+      command: { ...f.command, command: `${command} ${f.command.command.trim()}` },
+      applet: f.applet ?? null,
+    })),
+  );
+  const unique = fanIns.filter(
+    (f, i) => fanIns.findIndex((g) => g.group === f.group && g.function === f.function) === i,
+  );
+  const locks = Object.assign({}, ...described.map(({ d }) => d.locks ?? {}).reverse());
+  setProgramDeclarations(unique, locks);
+}
+
 /// The programs as the server last described them; `null` before the
 /// first answer.
 export const programsState = shallowRef<ProgramsResponse | null>(null);
@@ -32,7 +53,7 @@ export async function refreshPrograms(): Promise<ProgramsResponse | null> {
   try {
     const res = await fetchPrograms();
     programsState.value = res;
-    setProgramEntries(catalogEntriesOf(res));
+    useDescriptions(res);
     return res;
   } catch {
     return programsState.value;

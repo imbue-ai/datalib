@@ -6,7 +6,7 @@
 // datalib/backend/datalib_step/src/sources.toml.
 
 import { shallowRef } from "vue";
-import type { PackageApplet, PackageCommand } from "@/api";
+import type { FanIn, PackageApplet, PackageCommand } from "@/api";
 
 /// A form field, mapped onto a dotted path into a step's `params` tree
 /// (`api.channels` → `[steps.params.api] channels`).
@@ -311,9 +311,30 @@ export function setProgramEntries(entries: CatalogEntry[]): void {
   programEntries.value = entries;
 }
 
-/// The slots of every lock a package's steps hold, by lock name.
-export function packageLockSlots(): Record<string, number> {
-  return Object.assign({}, ...packageEntries.value.map((e) => e.package?.locks ?? {}));
+/// The fan-ins and the lock slots the config's programs describe.
+const described = shallowRef<{ fanIns: FanIn[]; locks: Record<string, number> }>({
+  fanIns: [],
+  locks: {},
+});
+
+export function setProgramDeclarations(fanIns: FanIn[], locks: Record<string, number>): void {
+  described.value = { fanIns, locks };
+}
+
+/// The steps that read one function of every source, as the config's
+/// programs describe them.
+export function fanIns(): FanIn[] {
+  return described.value.fanIns;
+}
+
+/// The slots of every lock a package's or a program's steps hold, by
+/// lock name.
+export function lockSlots(): Record<string, number> {
+  return Object.assign(
+    {},
+    described.value.locks,
+    ...packageEntries.value.map((e) => e.package?.locks ?? {}),
+  );
 }
 
 function allEntries(): CatalogEntry[] {

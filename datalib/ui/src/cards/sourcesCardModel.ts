@@ -36,8 +36,7 @@ import {
   sourceStepsOf,
   removedWith,
   setSearchSteps,
-  setTimeSeriesStep,
-  setOccurrencesStep,
+  setSourceSteps,
   searchIndexingOf,
   type SearchIndexing,
   unwireFromFanIns,
@@ -823,8 +822,7 @@ export function useSourcesCard(ctx: CardCtx) {
     } else {
       next = setSearchSteps(next, payload.id, "none");
     }
-    next = setTimeSeriesStep(next, payload.id, payload.entry.type, payload.entry.package);
-    next = setOccurrencesStep(next, payload.id, payload.entry.type);
+    next = setSourceSteps(next, payload.id, payload.entry);
     // A package source's applets come with it, and leave with its group.
     const pkg = payload.entry.package;
     if (!current && pkg) next = addSourceApplets(next, payload.id, pkg.dir, pkg.applets);

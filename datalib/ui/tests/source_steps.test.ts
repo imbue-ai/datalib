@@ -32,8 +32,7 @@ import {
   readersOf,
   removedWith,
   setSearchSteps,
-  setTimeSeriesStep,
-  setOccurrencesStep,
+  setSourceSteps,
   searchIndexingOf,
   unwireFromFanIns,
   wireIntoFanIns,
@@ -1323,9 +1322,9 @@ command = "datalib-applet unified_grid_and_search_index"
     const next = addSource(scaffold, "extra");
     expect(listGroups(next).map((g) => g.id)).toEqual(["extra", "unified_grid_and_search_index"]);
     expect(flowsDown(next)).toEqual([]);
-    // The scaffold declares no `[[programs]]` entry, so the one the new
-    // steps need goes first, above the source's divider.
-    expect(next.startsWith('[[programs]]\ncommand = "datalib-step"')).toBe(true);
+    // The wizard writes no `[[programs]]` entry: it learned the source
+    // from the one the config has.
+    expect(next).not.toContain("[[programs]]");
     expect(next.indexOf("# ── extra")).toBeLessThan(
       next.indexOf("# ── the unified grid and search index"),
     );
@@ -1595,7 +1594,7 @@ id = "riker/ingest"
   /// index renders documents happily and never reaches the time-series
   /// index, with nothing on screen to say why.
   it("adds the step, the time-series index and the edge between them, once", () => {
-    const added = setTimeSeriesStep(WATCH, "riker", "garmin");
+    const added = setSourceSteps(WATCH, "riker", catalogFor("garmin")!);
     expect(inputsOf(added, "riker/render_time_series")).toEqual(["riker/ingest"]);
     expect(inputsOf(added, "unified_time_series_index/time_series_index")).toEqual([
       "riker/render_time_series",
@@ -1607,16 +1606,16 @@ id = "riker/ingest"
     expect(
       listSteps(added).some((s) => s.kind === "applet" && s.id === "unified_time_series_index"),
     ).toBe(true);
-    expect(setTimeSeriesStep(added, "riker", "garmin")).toBe(added);
+    expect(setSourceSteps(added, "riker", catalogFor("garmin")!)).toBe(added);
     expect(added).toContain("── slack");
   });
 
   it("joins an index that is already there", () => {
-    const one = setTimeSeriesStep(WATCH, "riker", "garmin");
-    const two = setTimeSeriesStep(
+    const one = setSourceSteps(WATCH, "riker", catalogFor("garmin")!);
+    const two = setSourceSteps(
       `${one}\n[[groups]]\nid = "troi"\ntype = "garmin"\n\n[[steps]]\nid = "troi/ingest"\n`,
       "troi",
-      "garmin",
+      catalogFor("garmin")!,
     );
     expect(inputsOf(two, "unified_time_series_index/time_series_index")).toEqual([
       "riker/render_time_series",
@@ -1626,13 +1625,13 @@ id = "riker/ingest"
   });
 
   it("leaves a source with no time series alone", () => {
-    expect(setTimeSeriesStep(PAIR, "slack", "slack")).toBe(PAIR);
+    expect(setSourceSteps(PAIR, "slack", catalogFor("slack")!)).toBe(PAIR);
   });
 
   /// The index it adds reads every source's time series by pattern, so it
   /// stops reading this one when the step goes, with no edge to take out.
   it("is unwired from the time-series index when the source goes", () => {
-    const added = setTimeSeriesStep(WATCH, "riker", "garmin");
+    const added = setSourceSteps(WATCH, "riker", catalogFor("garmin")!);
     expect(added).toContain('inputs = ["*/render_time_series"]');
     const step = listSteps(added).find((s) => s.id === "riker/render_time_series")!;
     const gone = unwireFromFanIns(removeSteps(added, [step]), step.id);
@@ -1653,21 +1652,21 @@ id = "bridge/ingest"
 `;
 
   it("adds the step reading the source's download, once", () => {
-    const added = setOccurrencesStep(CAL, "bridge", "calendar");
+    const added = setSourceSteps(CAL, "bridge", catalogFor("calendar")!);
     const step = listSteps(added).find((s) => s.id === "bridge/render_occurrences");
     expect(step?.inputs).toEqual(["bridge/ingest"]);
     expect(step?.phase).toBe("render");
-    expect(setOccurrencesStep(added, "bridge", "calendar")).toBe(added);
+    expect(setSourceSteps(added, "bridge", catalogFor("calendar")!)).toBe(added);
   });
 
   it("leaves a source of another type alone", () => {
-    expect(setOccurrencesStep(PAIR, "slack", "slack")).toBe(PAIR);
+    expect(setSourceSteps(PAIR, "slack", catalogFor("slack")!)).toBe(PAIR);
   });
 
   /// Its problems are read in its own store, so wiring it into the index
   /// step would only run that step again after every occurrences run.
   it("is not wired into the index step", () => {
-    const added = setOccurrencesStep(`${PAIR}\n${CAL}`, "bridge", "calendar");
+    const added = setSourceSteps(`${PAIR}\n${CAL}`, "bridge", catalogFor("calendar")!);
     const index = listSteps(added).find(
       (s) => s.id === "unified_grid_and_search_index/unified_grid_and_search_index",
     );
@@ -1677,7 +1676,7 @@ id = "bridge/ingest"
   /// The wizard edits a source's render step; written first, the
   /// occurrences step must not be taken for it.
   it("is not the render step the wizard edits", () => {
-    const first = setOccurrencesStep(CAL, "bridge", "calendar");
+    const first = setSourceSteps(CAL, "bridge", catalogFor("calendar")!);
     const both = `${first}\n[[steps]]\nid = "bridge/render_markdown"\ninputs = ["bridge/ingest"]\n`;
     expect(sourceStepsOf("bridge", listSteps(both)).render?.function).toBe("render_markdown");
   });

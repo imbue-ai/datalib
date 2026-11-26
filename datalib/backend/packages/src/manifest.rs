@@ -14,10 +14,17 @@ use crate::platform::{ANY, TARGETS};
 /// The manifest shape this build reads.
 pub const SCHEMA: u32 = 1;
 
-/// The functions a package source may run. `ingest` is required; each of
-/// the others is a step reading the ingest's tree, written only when the
-/// package has a program for it.
-pub const SOURCE_FUNCTIONS: &[&str] = &["ingest", "render_markdown", "render_time_series"];
+/// The functions a source may run. `ingest` is required; each of the
+/// others is a step reading its `inputs`, the ingest's tree unless they
+/// say otherwise, written only when the source has a command for it.
+/// `embed` is written only when the person asks for search by meaning.
+pub const SOURCE_FUNCTIONS: &[&str] = &[
+    "ingest",
+    "render_markdown",
+    "render_time_series",
+    "render_occurrences",
+    "embed",
+];
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -90,6 +97,11 @@ pub struct StepCommand {
     pub reads: Option<Reads>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub locks: Vec<String>,
+    /// What the step reads, each a function of the same source (`ingest`)
+    /// or a step id (`<group>/<function>`), or a pattern (`*/embed`).
+    /// Empty: a source's step other than `ingest` reads its `ingest`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -107,6 +119,8 @@ struct StepCommandTable {
     reads: Option<Reads>,
     #[serde(default)]
     locks: Vec<String>,
+    #[serde(default)]
+    inputs: Vec<String>,
 }
 
 impl From<StepCommandSpelling> for StepCommand {
@@ -116,11 +130,13 @@ impl From<StepCommandSpelling> for StepCommand {
                 command,
                 reads: None,
                 locks: Vec::new(),
+                inputs: Vec::new(),
             },
             StepCommandSpelling::Table(t) => StepCommand {
                 command: t.command,
                 reads: t.reads,
                 locks: t.locks,
+                inputs: t.inputs,
             },
         }
     }
@@ -192,12 +208,54 @@ pub struct Description {
     pub sources: Vec<SourceTemplate>,
     #[serde(default)]
     pub locks: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub fan_ins: Vec<FanIn>,
+}
+
+/// A step that reads one function of every source, by a pattern in its
+/// `inputs` (`*/render_markdown`), filed under a group of its own: the
+/// grid and search index, the map, the time-series index. The wizard
+/// wires a source's step into the fan-ins that read its function where
+/// a fan-in names its inputs one by one, and writes the fan-in itself
+/// (its group, its step and its applet) where `added_with_a_source` says
+/// so and the config has none yet.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FanIn {
+    pub group: String,
+    /// The group's name, written when the wizard writes the group.
+    pub name: String,
+    /// The step's function: its id is `<group>/<function>`.
+    pub function: String,
+    pub command: StepCommand,
+    /// The command of the applet that shows what it holds, filed under
+    /// the group with the group's id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applet: Option<String>,
+    #[serde(default)]
+    pub added_with_a_source: bool,
 }
 
 impl Description {
     pub fn parse(json: &str) -> Result<Description> {
         let d: Description = serde_json::from_str(json).context("the description")?;
         check_offer(&d.sources, &d.locks)?;
+        for f in &d.fan_ins {
+            if !f.command.inputs.iter().any(|i| i.starts_with("*/")) {
+                bail!(
+                    "fan-in {}/{}: `inputs` names no pattern",
+                    f.group,
+                    f.function
+                );
+            }
+            if let Some(lock) = f.command.locks.iter().find(|l| !d.locks.contains_key(*l)) {
+                bail!(
+                    "fan-in {}/{}: holds lock {lock:?}, which `locks` does not declare",
+                    f.group,
+                    f.function
+                );
+            }
+        }
         Ok(d)
     }
 }
