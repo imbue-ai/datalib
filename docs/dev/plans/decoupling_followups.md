@@ -4,8 +4,9 @@
 The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
-constant; item 5 is closed as not a coupling. Untouched: items 2 to 4
-and 8, and the reconciler in section 10. Item 9 is half done.
+constant; item 5 is closed as not a coupling, and item 4 as Datalib's
+own tool. Untouched: items 2, 3 and 8 (item 8 is decided), and the
+reconciler in section 10. Item 9 is half done.
 
 ## The end state
 
@@ -63,7 +64,7 @@ The end state treats `datalib-step` the same way: a program that
 describes what it offers, which the wizard reads, with no list of
 Datalib's sources compiled into the UI.
 
-### 4. The config upgrade rewrites datalib-step's steps
+### 4. The config upgrade rewrites datalib-step's steps (closed: kept as Datalib's tool)
 
 `datalib-http` rewrites retired config shapes when it reads a config
 (`datalib/backend/http/src/config_upgrade.rs:1-12`), through
@@ -74,6 +75,16 @@ step `command`). The redesign adds more: `[[programs]]`, `reads`,
 an old `datalib-step` step should become is `datalib-step`'s knowledge,
 so the end state needs a way for a program to rewrite its own steps'
 entries.
+
+**Decided:** the rewrites stay in `datalib-migrate-config`, which is
+Datalib's own migration tool and may know `datalib-step`
+(`docs/dev/config_model.md` §"The retired shapes"). Many of them need
+the whole file, not one program's entries: the time-series rewrite adds
+a group and its steps, and the lock rename edits `[[locks]]`. A
+protocol where a program rewrites only its own entries could not
+express those. Lint check 24 covers only `datalib/backend/http/src`,
+so it never reaches this crate. Revisit if packages start needing
+rewrites of their own.
 
 ### 5. Every step's metrics are named `datalib_step_…` (closed: not a coupling)
 
