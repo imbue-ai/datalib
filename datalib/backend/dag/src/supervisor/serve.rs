@@ -151,10 +151,21 @@ async fn hold(
         open: Mutex::new(None),
         first_run_id: Mutex::new(opts.run_id.clone()),
     };
+    let mut said_no_pass = false;
     loop {
         let ran = match load_config_at(&opts.config_path()) {
             Ok(checked) => run_the_loop(opts, &checked, store, &periods, stop, until).await,
-            Err(why) => Err(why),
+            Err(why) => {
+                // With no config there is no step to ask: the pass is over,
+                // and a root waiting for its first config is not waiting
+                // on it. A closed job with no steps says so.
+                if !std::mem::replace(&mut said_no_pass, true) {
+                    if let Err(e) = no_pass(store).await {
+                        tracing::error!("supervisor: could not record the empty pass: {e:#}");
+                    }
+                }
+                Err(why)
+            }
         };
         let why = match ran {
             Ok(report) => return Ok(report),
@@ -179,6 +190,18 @@ async fn hold(
             return Ok(None);
         }
     }
+}
+
+/// A prepare pass with nothing to ask, open and closed at once.
+async fn no_pass(store: &Store) -> anyhow::Result<()> {
+    let job = store
+        .open_job(
+            crate::supervisor::store::JobKind::Prepare,
+            &[],
+            crate::supervisor::round::LOOP_OPENER,
+        )
+        .await?;
+    store.close_job(&job, None).await
 }
 
 /// The loop on `checked`'s graph, until `stop` or an error it cannot go
