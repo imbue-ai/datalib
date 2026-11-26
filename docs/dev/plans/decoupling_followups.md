@@ -5,8 +5,8 @@ The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
-own tool. Untouched: items 2, 3 and 8 (item 8 is decided). Of the
-reconciler in section 10, step 1 is done. Item 9 is half done.
+own tool. Items 2 and 9 are half done. Untouched: items 3 and 8 (item 8
+is decided). Of the reconciler in section 10, step 1 is done.
 
 ## The end state
 
@@ -45,13 +45,18 @@ with the step that can see the problem, as a warning when it runs.
 `datalib-step check-params`, which did the same for a whole file, is
 gone; `datalib-pipeline check` is the one way to ask.
 
-### 2. Checking a connection
+### 2. Checking a connection (half done)
 
-The wizard's "Check connection" and a picker's "Load" run
-`datalib-step probe <type>` (`datalib/backend/http/src/probe.rs:1-4`,
-`:84-108`), found by name next to the server
-(`datalib/backend/http/src/binaries.rs:10-25`). A package's program
-cannot offer a probe.
+The wizard's "Check connection" and a picker's "Load" run the probe of
+the source's type, a command that gets the source's params in
+`DATALIB_DAG_PARAMS` and prints one report (`docs/dev/step_protocol.md`
+§"Probe"). A package names one in its manifest (`sources.probe`,
+`docs/dev/packages.md`), and the server runs it for a type the
+package offers (`probe_command` in `datalib/backend/http/src/probe.rs`).
+Any other type still runs `datalib-step probe <type>`, found by name
+next to the server (`datalib/backend/http/src/binaries.rs`). That goes
+once `datalib-step` describes its sources the way a manifest does, with
+their probes (item 3).
 
 ### 3. Adding a source writes datalib-step's steps
 
@@ -170,11 +175,9 @@ takes `config`, `diagnostics`, `written` and `config_order`. The two
 options it was chosen over were the runner skipping `[[applets]]` while
 the server parses it, and applets moving to a file of their own.
 
-An applet now gets its params in `DATALIB_DAG_PARAMS`, as a step does,
-rather than in a file named by `--params-file`. The helper that writes
-that file, which only the probe still uses, has moved out of the runner's
-crate to `datalib/backend/http/src/params_file.rs`, and goes once the
-probe takes its params the same way (items 2 and 3). `applet_type`
+An applet and a probe now get their params in `DATALIB_DAG_PARAMS`, as
+a step does, rather than in a file named by `--params-file`, and the
+helper that wrote that file is gone. `applet_type`
 (`datalib/backend/dag/src/written.rs`), which knows that
 `datalib-applet <type>` names an applet's type, moves with the rest of
 the config file's lenient reading.

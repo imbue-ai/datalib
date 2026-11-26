@@ -12,8 +12,10 @@ import {
   removePackage,
   updatePackage,
 } from "./packages";
+import { setPackageEntries } from "./catalog";
 import {
   buildSource,
+  insertEntries,
   listPackages,
   listSteps,
   packageDir,
@@ -35,7 +37,7 @@ const MANIFEST: PackageManifest = {
   sources: [
     {
       type: "weather",
-      commands: { ingest: "bin/fetch-weather" },
+      commands: { ingest: { command: "bin/fetch-weather" } },
       wizard: {
         label: "Weather station",
         fields: [{ kind: "text", target: "station", label: "Station", required: true }],
@@ -159,7 +161,9 @@ describe("updatePackage and removePackage", () => {
   it("an update runs the command the new version has for each function", () => {
     const v2 = {
       ...MANIFEST,
-      sources: [{ ...MANIFEST.sources[0], commands: { ingest: "bin/weather ingest" } }],
+      sources: [
+        { ...MANIFEST.sources[0], commands: { ingest: { command: "bin/weather ingest" } } },
+      ],
     };
     const next = updatePackage(withSource(added), "weather", lookup(SHA2, v2));
     const ingest = listSteps(next).find((s) => s.id === "sfo/ingest");
@@ -188,8 +192,52 @@ describe("a package source", () => {
       kind: "package",
       wizard: true,
       rendersDocuments: false,
+      canProbe: false,
       package: { id: "weather", version: "1.2.0", dir: DIR },
     });
+  });
+
+  it("offers Check connection when its manifest names a probe", () => {
+    const probing = entriesOfManifest("weather", SHA, {
+      ...MANIFEST,
+      sources: [{ ...MANIFEST.sources[0], probe: "bin/probe-weather" }],
+    })[0];
+    expect(probing.canProbe).toBe(true);
+  });
+
+  it("writes the reads and locks its manifest gives each command, and the lock's entry", () => {
+    const locking = entriesOfManifest("weather", SHA, {
+      ...MANIFEST,
+      locks: { noaa: 3 },
+      sources: [
+        {
+          ...MANIFEST.sources[0],
+          commands: {
+            ingest: { command: "bin/fetch-weather", locks: ["noaa"] },
+            render_markdown: { command: "bin/render-weather", reads: "files" },
+          },
+        },
+      ],
+    })[0];
+    setPackageEntries([locking]);
+    try {
+      const src = buildSource({
+        entry: locking,
+        group: "sfo",
+        name: "SFO",
+        values: { station: "KSFO" },
+        withGroup: true,
+      });
+      const text = insertEntries(pinned, `${src.groupBody}\n\n${src.stepsBody}`);
+      expect(text).toContain('[[locks]]\nname = "noaa"\nslots = 3');
+      const [ingest, render] = text.split("[[steps]]").slice(1);
+      expect(ingest).toContain('locks = ["noaa"]');
+      expect(ingest).not.toContain("reads =");
+      expect(render).toContain('reads = "files"');
+      expect(render).not.toContain("locks =");
+    } finally {
+      setPackageEntries([]);
+    }
   });
 
   it("writes steps that run the package's command from its directory", () => {
@@ -214,7 +262,10 @@ describe("a package source", () => {
       sources: [
         {
           ...MANIFEST.sources[0],
-          commands: { ...MANIFEST.sources[0].commands, render_time_series: "bin/weather-ts" },
+          commands: {
+            ...MANIFEST.sources[0].commands,
+            render_time_series: { command: "bin/weather-ts" },
+          },
         },
       ],
     })[0];
