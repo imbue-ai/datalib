@@ -1,5 +1,6 @@
-//! How the server hands `datalib-step probe` the params it was asked
-//! with: in a file only its owner can read, named on its command line.
+//! How the server hands the probe behind "Check connection" the params it
+//! was asked with: in a file only its owner can read, named on its
+//! command line.
 //! Never on argv itself: params carry tokens, and argv is readable by
 //! every user on the machine. A step and an applet get theirs in
 //! `DATALIB_DAG_PARAMS` instead.
