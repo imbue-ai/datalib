@@ -49,7 +49,7 @@ test("a set-only chatgpt service is shown the token-capture conversion", async (
   await expect(commands).toContainText('--login-url="https://chatgpt.com/auth/login"');
   await expect(commands).toContainText("--login-flow=token-capture");
   await expect(commands).toContainText(
-    '--login-flow-params=\'{"tokenUrl":"https://chatgpt.com/api/auth/session","tokenField":"accessToken"}\'',
+    '--login-flow-params=\'{"tokenField":"accessToken","tokenUrl":"https://chatgpt.com/api/auth/session"}\'',
   );
   expect(connectCalls).toBe(0);
 });

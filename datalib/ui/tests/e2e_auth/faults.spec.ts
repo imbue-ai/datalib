@@ -51,7 +51,7 @@ const SOURCES: Record<string, Source> = {
         "--base-api-url=https://chatgpt.com/",
         "--login-url=https://chatgpt.com/auth/login",
         "--login-flow=token-capture",
-        '--login-flow-params={"tokenUrl":"https://chatgpt.com/api/auth/session","tokenField":"accessToken"}',
+        '--login-flow-params={"tokenField":"accessToken","tokenUrl":"https://chatgpt.com/api/auth/session"}',
       );
       w.latchkey("auth", "set", "chatgpt", "-H", `Authorization: Bearer ${TNG.chatgptAccessToken}`);
     },
