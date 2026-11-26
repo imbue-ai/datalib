@@ -5,13 +5,12 @@
 
 use std::ffi::{c_char, CString};
 use std::ops::Range;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 use datalib_env::DATALIB_EMBED_THREADS;
-use datalib_runtime::cuda_module;
 
 mod ffi {
     use std::ffi::c_char;
@@ -200,12 +199,28 @@ pub fn can_load(name: &str) -> bool {
     unsafe { ffi::dl_embedder_can_load(name.as_ptr()) != 0 }
 }
 
+/// Where a process finds `libggml-cuda.so`, or why it has none, asking
+/// [`can_load`] about the libraries the module needs. The one there is,
+/// `datalib_runtime::cuda_module::find`, knows the release's layout; it
+/// is handed in rather than linked so the embedder depends on no layout,
+/// and `//tests/fixtures:ingested_tng_vectors`, which links the embedder
+/// alone, does not embed again when that layout changes.
+pub type FindCudaModule = fn(can_load: fn(&str) -> bool) -> Result<PathBuf, String>;
+
+static FIND_CUDA_MODULE: OnceLock<FindCudaModule> = OnceLock::new();
+
+/// Let [`Device::Best`] run on CUDA, with the module `find` names. Called
+/// once, early, by a binary that embeds on a GPU, before its first open;
+/// a second call is ignored.
+pub fn look_for_cuda_module(find: FindCudaModule) {
+    let _ = FIND_CUDA_MODULE.set(find);
+}
+
 /// What became of the CUDA module, decided once per process on the first
 /// [`Device::Best`] open: `None` on a build that does not look for one
-/// (macOS, musl). The module is the one beside the binary, else the one
-/// the release names, fetched where there is an NVIDIA driver
-/// (`datalib_runtime::cuda_module`); never one on the loader's search
-/// path, which would run whatever library it found first.
+/// (macOS, musl). The module is the one [`look_for_cuda_module`]'s
+/// `find` names; never one on the loader's search path, which would run
+/// whatever library it found first.
 pub fn cuda_module_report() -> Option<&'static str> {
     static REPORT: OnceLock<Option<String>> = OnceLock::new();
     REPORT
@@ -213,8 +228,10 @@ pub fn cuda_module_report() -> Option<&'static str> {
             if !cfg!(all(target_os = "linux", target_env = "gnu")) {
                 return None;
             }
-            let driver = can_load(cuda_module::DRIVER_LIBRARY);
-            Some(match cuda_module::find(driver) {
+            let Some(find) = FIND_CUDA_MODULE.get() else {
+                return Some("no CUDA module: this program does not look for one".into());
+            };
+            Some(match find(can_load) {
                 Err(why) => why,
                 Ok(path) => match load_gpu_module(&path) {
                     Ok(n) => format!("loaded {}: {n} CUDA device(s)", path.display()),
@@ -561,8 +578,7 @@ pub fn fit(mut tokens: Vec<i32>, context: usize) -> (Vec<i32>, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{can_load, cuda_module, fit, load_gpu_module, pack, threads_to_use, Batching};
-    use std::path::Path;
+    use super::{can_load, fit, load_gpu_module, pack, threads_to_use, Batching};
 
     /// The tests' cap reaches an embedder whose caller left the count to
     /// llama.cpp, never one that asked for its own, and a typo fails.
@@ -586,14 +602,6 @@ mod tests {
         assert_eq!(pack(&[150, 10], b), vec![0..1, 1..2], "too long runs alone");
         assert_eq!(pack(&[1, 1, 1], Batching::ONE), vec![0..1, 1..2, 2..3]);
         assert!(pack(&[], b).is_empty());
-    }
-
-    #[test]
-    fn the_cuda_module_is_looked_for_in_lib_beside_the_binary() {
-        assert_eq!(
-            cuda_module::beside(Path::new("/opt/datalib/datalib-step")).unwrap(),
-            Path::new("/opt/datalib/lib/libggml-cuda.so")
-        );
     }
 
     /// How the embedder asks whether there is an NVIDIA driver to fetch
