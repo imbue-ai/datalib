@@ -252,12 +252,15 @@ The rows a loop visited are SQLite's scan statistics
 (`SQLITE_ENABLE_STMT_SCANSTATUS`, in `third-party/doltlite/BUILD.bazel`),
 which time each opcode too: a scan bound by SQLite's own loop ran some 5%
 slower for them on an M-series mac, and a store's pages cost far more
-than the loop on any real statement. What a statement's work was most
-of, once a sync is over:
+than the loop on any real statement. A metric's `labels` column is its
+labels as one string, `k=v` pairs joined by `,` in key order, so a
+statement's series is labelled `sql=<name>` and a loop's
+`loop=<loop>,sql=<name>`. What a statement's work was most of, once a
+sync is over:
 
 ```sh
 sqlite3 -readonly <root>/system/runs/runs.sqlite \
-  "SELECT step, json_extract(labels, '$.sql') AS statement, value AS microseconds
+  "SELECT step, substr(labels, length('sql=') + 1) AS statement, value AS microseconds
      FROM metrics WHERE name = 'sql_microseconds_total'
     ORDER BY value DESC LIMIT 20"
 ```
