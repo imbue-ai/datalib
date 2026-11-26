@@ -272,6 +272,38 @@ about 2 KB came back as 5,000 vectors from two T4 Sandboxes: 4,096 in
 132.8 s and 904 in 96.2 s. Against a Mac's Metal on 50 of them, the
 worst cosine was 0.99833.
 
+**"The Sandbox is unavailable" was a running Sandbox.** On 2026-11-25 one
+embed of 10,747 chunks started 65 T4 Sandboxes and 26 of them failed with
+"The Sandbox is unavailable. This Sandbox may have already shut down.",
+some seconds after their start, and 768 chunks were left over. Modal's own
+list of the app's Sandboxes (`SandboxList` with the finished ones, which
+costs nothing to read) says what happened to each: it was placed, it was
+running about a second later, and it ended 10.3 to 11.3 s after that,
+"cancelled by user", which was our driver. Eight failures on 2026-11-19
+look the same. Ten seconds is the SDK's retry budget for one call to a Sandbox: ten
+retries from 10 ms, doubling, 10.23 s in all. Its file calls then throw
+that message for every code they retried (`UNAVAILABLE`, `CANCELLED`,
+`UNKNOWN`, `DEADLINE_EXCEEDED`) and drop the code, so a Sandbox that does
+not answer yet reads as one that is gone, and the driver ended it.
+
+- **Modal did not refuse so many at once.** Of six runs of 100 Sandboxes
+  or more, five had no such failure and one had one. A Sandbox that waits
+  for a GPU waits inside `create`, which returns once it is placed (up to
+  56 s later in this run), so no call is made to one still queued.
+- **Why they were silent past 10 s is not known**, since the code was
+  dropped: the container may still have been starting, or the host it was
+  on could not be reached. It was 26 of 65 here and 8 of 753 over
+  2026-11-18 to 20, on the release before. The driver's first call is now
+  an `exec`, whose error carries the code, and it logs it, so the next run
+  that meets it says.
+- **What Modal bills starts when a Sandbox is placed.** The driver counted
+  from before that: 29 min for this run, of which 18 min were placed. It
+  counts from there now.
+- **On 2026-11-24 the laptop's lid closed** as 42 Sandboxes started. Awake
+  for a moment 6 minutes later and with no network, the driver called all
+  42 unavailable, could not end them either, and spent every second attempt
+  on a `create` that found no network. All 42 ran their full 15 minutes.
+
 ## How the step drives Modal
 
 `datalib-step` is Rust, Modal has no Rust SDK, and its Python SDK, the
@@ -304,7 +336,7 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   with `filesystem.writeText`, runs `/opt/datalib/datalib-step
   embed-prompts --models-dir /root/.cache/qmd/models` (the model the
   image bakes in) with `exec`, its stdin and stdout on files, and reads
-  `out.jsonl` once it has exited. Nothing crosses the Sandbox's own
+  its output file once it has exited. Nothing crosses the Sandbox's own
   stdin or stdout, which on a GPU lost answers (§ "Measured on Modal").
   `DATALIB_MODAL_IMAGE`, `DATALIB_MODAL_GPU` and
   `DATALIB_MODAL_SANDBOXES` change the image, the GPU and how many run
@@ -315,10 +347,23 @@ into `datalib-step` and run with `node --eval`; it imports npm's `modal`
   prompt of its slice is kept, each prompt once. The prompts still
   missing go to a second Sandbox, and what is missing after that is
   reported, and the step counts it.
+- **A Sandbox that does not answer is asked again, not replaced.** Each
+  call to one is made again, after pauses of 1 s doubling to 30 s, while
+  Modal says it is running (`poll`), for about two minutes; a Sandbox
+  Modal says has ended is replaced at once. While Modal itself cannot be
+  asked, which is a laptop with no network, the calls go on until the
+  Sandbox's 15 minutes are over, and a `create` that finds no network is
+  tried for ten minutes of waiting before it counts as a failure. The
+  waits are added up by their length, not the clock, so a laptop that
+  sleeps for an hour has not used them up. A Sandbox is ended the same
+  way, so one is not left running because the network was gone. A sleep
+  longer than a Sandbox's life still loses its slice; the second Sandbox
+  does it again (#1815).
 - **Each Sandbox asks only for its GPU**, so Modal reserves its minimum
   CPU and memory and bills whatever more the run uses. The driver
-  reports each Sandbox as it ends: how long it lived, from its creation to
-  its end, and whether its slice came back. A failed attempt ran, so it
+  reports each Sandbox as it ends: how long it lived, from when Modal
+  placed it (the wait for a GPU is not billed) to its end, and whether
+  its slice came back. A failed attempt ran, so it
   is counted too.
 - **What the run spent is reported as it goes**, as running totals the
   sync dashboard draws and `/metrics` exports: `modal_chunks_total`,
