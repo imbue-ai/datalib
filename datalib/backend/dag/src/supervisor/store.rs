@@ -988,6 +988,8 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
             .connect_with(options(&path))
             .await
             .unwrap();
