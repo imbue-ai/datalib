@@ -2,7 +2,7 @@
 //! that write their frontend components into the store.
 //!
 //! An applet is run **once**, as
-//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id> [--params-file …]`,
+//! `<command> -p 0 --frontend-dir <root>/system/frontend/<id>`, its params in `DATALIB_DAG_PARAMS`,
 //! and owes three things in that order: write its components, bind a port,
 //! then print `DATALIB_APPLET_PORT=<port>` to stdout. The gateway waits for
 //! that line and only then scans the store, so **the line is the signal that
@@ -668,9 +668,6 @@ fn load_entries(
 struct Running {
     port: u16,
     child: Child,
-    /// The applet's params, in a file only this user can read. Kept
-    /// for as long as the child runs; dropping it deletes the file.
-    _params_file: Option<tempfile::NamedTempFile>,
 }
 
 /// The applet servers, all of them, started at boot and kept running.
@@ -711,27 +708,21 @@ impl Supervisor {
             .arg("0")
             .arg("--frontend-dir")
             .arg(frontend_dir);
-        // Params go in an owner-only file, the same way the runner hands
-        // a step its params: they can hold tokens, and argv is public.
-        let params_file = match entry
+        // In the environment, as the runner hands a step its params:
+        // they can hold tokens, and argv is readable by every user.
+        match entry
             .params_json()
             .map_err(|e| format!("applet {:?}: params: {e:#}", entry.id))?
         {
             Some(params) => {
                 let json = serde_json::to_string(&params)
                     .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?;
-                let file = datalib_dag::subprocess::write_params_file(
-                    data_root,
-                    &format!("applet_{}", entry.id),
-                    &json,
-                )
-                .map_err(|e| format!("applet {:?}: params file: {e:#}", entry.id))?;
-                cmd.arg(datalib_dag::subprocess::PARAMS_FILE_FLAG)
-                    .arg(file.path());
-                Some(file)
+                cmd.env(datalib_env::DATALIB_DAG_PARAMS, json);
             }
-            None => None,
-        };
+            None => {
+                cmd.env_remove(datalib_env::DATALIB_DAG_PARAMS);
+            }
+        }
         // stdin is not an input channel — nothing is ever written to it. It is
         // a liveness pipe: whatever ends us, including a SIGKILL that runs no
         // code at all, the kernel closes the write end and the applet's read
@@ -855,14 +846,7 @@ impl Supervisor {
 
         self.memory.track(&entry.id, child.id());
         if let Ok(mut map) = self.running.lock() {
-            map.insert(
-                entry.id.clone(),
-                Running {
-                    port,
-                    child,
-                    _params_file: params_file,
-                },
-            );
+            map.insert(entry.id.clone(), Running { port, child });
         }
         Ok(port)
     }
@@ -1508,5 +1492,41 @@ mod tests {
         supervisor.stop_all();
 
         assert_eq!(rss(), None, "a stopped applet keeps no reading");
+    }
+
+    /// An applet's `params` reach it as JSON in `DATALIB_DAG_PARAMS`, as
+    /// a step's do, and nothing names them on its command line.
+    #[cfg(unix)]
+    #[test]
+    fn an_applets_params_arrive_in_the_environment() {
+        let root = tempfile::tempdir().unwrap();
+        let seen = root.path().join("seen.txt");
+        let script = format!(
+            "printf '%s|%s' \"$*\" \"${{DATALIB_DAG_PARAMS-unset}}\" > '{}'; \
+             echo {APPLET_PORT_LINE}1; sleep 30",
+            seen.display(),
+        );
+        let entry = AppletEntry {
+            id: "p".into(),
+            group: None,
+            command: format!("/bin/sh -c {} sh", shlex::try_quote(&script).unwrap()),
+            params: Some(
+                serde_json::from_value(serde_json::json!({"workspace": "enterprise"})).unwrap(),
+            ),
+            env: BTreeMap::new(),
+        };
+        let supervisor = Supervisor::default();
+        supervisor
+            .start(&entry, root.path(), None, root.path())
+            .expect("the applet announced its port");
+        supervisor.stop_all();
+        let seen = std::fs::read_to_string(&seen).unwrap();
+        let (args, params) = seen.split_once('|').unwrap();
+        assert!(!args.contains("enterprise"), "params on argv: {args}");
+        assert!(!args.contains("--params-file"), "{args}");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(params).unwrap(),
+            serde_json::json!({"workspace": "enterprise"})
+        );
     }
 }

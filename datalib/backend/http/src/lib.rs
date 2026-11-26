@@ -47,6 +47,7 @@ pub mod loop_guard;
 pub mod manage;
 pub mod oauth_client;
 pub mod packages;
+pub mod params_file;
 pub mod plugins;
 pub mod probe;
 pub mod prometheus;
