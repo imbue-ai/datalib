@@ -956,8 +956,9 @@ async fn a_product_missing_from_the_export_deletes_nothing() {
     }
 }
 
-/// Holding the deletions back keeps the cursor, so a product that comes
-/// back smaller still loses what it dropped.
+/// A run over an export missing a product deletes nothing and keeps that
+/// product's stamps, so when it comes back smaller the next run still
+/// deletes what it dropped.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_product_that_returns_smaller_loses_what_it_dropped() {
     let e = Export::new();
@@ -1184,7 +1185,7 @@ async fn a_voice_attachment_not_in_the_export_is_tried_again() {
     assert_eq!(s.voice_messages, 0, "stamped once it read whole: {s:?}");
 }
 
-/// A run that holds deletions back must leave the rewritten file looking
+/// A run that deletes nothing must leave the rewritten file looking
 /// rewritten, or the next run reads only what changed, deletes nothing,
 /// and the record the rewrite dropped stays for good.
 #[tokio::test(flavor = "multi_thread")]
@@ -1268,9 +1269,9 @@ async fn a_feed_that_fails_is_a_problem_row_and_the_rest_land() {
     assert!(rows[0].2.starts_with("parse Saved Places.json"), "{rows:?}");
 }
 
-/// An entry read and not stored once reached only the log, one identical
-/// `warn!` per entry: 321 saved places with no key, 36 watch-history
-/// entries that are not videos. Each is now a `problems` row.
+/// An entry read and not stored is a `problems` row, not only a `warn!`
+/// per entry in the log, where 321 saved places with no key and 36
+/// watch-history entries that are not videos reached nobody.
 #[tokio::test(flavor = "multi_thread")]
 async fn entries_read_and_not_stored_are_problem_rows() {
     let (_work, summary, db_path) = run_all().await;
@@ -1397,11 +1398,11 @@ struct Rewrite {
     edit: Edit,
 }
 
-/// A newer export in a layout this reader does not know used to read as
-/// a file that lists nothing — every watch, subscription, review or
-/// Gemini activity deleted — or, for a Maps file with no `features`,
-/// as a quiet `warn!` with the file marked read.
-/// Now it deletes nothing and fails its feed where a person sees it.
+/// A newer export in a layout this reader does not know deletes nothing
+/// and fails its feed where a person sees it. Read as a file that lists
+/// nothing, it deleted every watch, subscription, review or Gemini
+/// activity; a Maps file with no `features` was a quiet `warn!` with the
+/// file marked read.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_file_in_a_layout_this_reader_does_not_know_deletes_nothing_and_says_so() {
     let reviews = |edit| Rewrite {
@@ -1516,7 +1517,7 @@ impl Export {
 
 /// An unchanged file is not read again, so a store an earlier build
 /// synced would never meet the fixed Maps, YouTube and Gemini readers.
-/// Rung 1 of the ladder forgets those feeds' files, and only theirs.
+/// Rung 1 of the ladder deletes those feeds' stamps, and only theirs.
 #[tokio::test(flavor = "multi_thread")]
 async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     let e = Export::new();
@@ -1551,7 +1552,8 @@ async fn rung_1_reads_the_feeds_whose_reader_changed_again() {
     );
 }
 
-/// Rung 2 forgets the files whose timestamps name a zone, and only those.
+/// Rung 2 deletes the stamps of the files whose timestamps name a zone,
+/// and only those.
 #[tokio::test(flavor = "multi_thread")]
 async fn rung_2_reads_the_feeds_with_zoned_timestamps_again() {
     let e = Export::new();
@@ -1579,9 +1581,9 @@ async fn rung_2_reads_the_feeds_with_zoned_timestamps_again() {
     );
 }
 
-/// Rung 3 forgets the Chat files, whose reader now stores the files a
-/// message's earlier versions name, and only those. Without it a store
-/// synced before keeps an earlier version's file unstored.
+/// Rung 3 deletes the stamps of the Chat files, whose reader now stores
+/// the files a message's earlier versions name, and only those. Without
+/// it a store synced before keeps an earlier version's file unstored.
 #[tokio::test(flavor = "multi_thread")]
 async fn rung_3_reads_the_chat_files_again() {
     let e = Export::new();
@@ -1600,8 +1602,8 @@ async fn rung_3_reads_the_chat_files_again() {
     );
 }
 
-/// Rung 4 forgets the Voice files, whose reader now reads a call whose
-/// name leaves its type out by its markup, and only those.
+/// Rung 4 deletes the stamps of the Voice files, whose reader now reads
+/// a call whose name leaves its type out by its markup, and only those.
 #[tokio::test(flavor = "multi_thread")]
 async fn rung_4_reads_the_voice_files_again() {
     let e = Export::new();

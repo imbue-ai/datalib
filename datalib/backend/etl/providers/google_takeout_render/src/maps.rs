@@ -1,5 +1,5 @@
 //! Google Maps: the places the account reviewed, saved and photographed,
-//! one feed with a document per year.
+//! one feed in one document.
 
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl_chat_common::findings::{noted, shape_of, unread_keys};
