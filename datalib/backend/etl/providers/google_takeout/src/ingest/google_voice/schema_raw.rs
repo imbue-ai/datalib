@@ -35,7 +35,9 @@ fn hex8(bytes: &[u8]) -> String {
 #[wire_payload_row(table = "voice_messages")]
 pub struct VoiceMessageRow {
     pub id_and_payload: WirePayload,
-    /// Channel key — the other party (E.164 or contact label).
+    /// Channel key, from `derive_channel`: the other party's number,
+    /// `label:<name>` when the file names no number, `group:<hash>` for
+    /// several numbers, or `unknown`.
     pub conversation_key: Option<String>,
     /// RFC3339 (millis) event time, for sorting + month bucketing.
     pub when_ts: Option<String>,

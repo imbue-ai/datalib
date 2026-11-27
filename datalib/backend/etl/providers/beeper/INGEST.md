@@ -105,14 +105,17 @@ ids.
 ## When part of a run fails
 
 The step fails when `index.db` is missing (before the store is opened,
-so a source that never downloaded has no store to render) or will not
-mirror. Everything else is a `problems` row, and the next run tries again.
+so a source that never downloaded has no store to render) or a read of
+it fails. Everything else is a `problems` row, and the next run tries
+again.
 
 | what failed | its row |
 |---|---|
+| an `index.db` with no table to copy, or with a table named like one the store keeps | `phase:source`; the store keeps what it had |
+| the data directory, which will not list | `phase:megabridge` |
 | a `megabridge.db` that will not read | `phase:megabridge local-<bridge>`; its earlier rows stay |
 | `media/` entries that will not list | `phase:media` |
-| a cached file that will not read | `beeper_media_files:<path>` |
+| a cached file that will not read | `record:beeper_media_files:<path>` |
 
 ## Three Beeper runtimes, two covered
 

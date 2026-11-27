@@ -7,6 +7,7 @@
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl_garmin::ingest::{db_path_for, RawDb};
 use datalib_etl_web::owed::{self, Listed};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const BEFORE_ANY_STAMP: &[&str] = &[
     "CREATE TABLE garmin_daily (id TEXT PRIMARY KEY, payload TEXT NULL, \
@@ -63,7 +64,8 @@ async fn earlier_store(
     let pool = dr::open(&path, shape).await.unwrap();
     for sql in rows {
         // Audited: the test's own literals.
-        sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+        Sql::dynamic(test_sql_id!(), sql)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -75,9 +77,11 @@ async fn earlier_store(
 
 async fn held(db: &RawDb, table: &'static str) -> Vec<(String, Option<String>)> {
     // Audited: `table` is a literal of the test.
-    sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT id, held_version FROM {table}_bookkeeping ORDER BY id"
-    )))
+    Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT id, held_version FROM {table}_bookkeeping ORDER BY id"),
+    )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap()
@@ -108,11 +112,11 @@ async fn a_store_from_before_any_stamp_opens_with_its_rows_holding_nothing() {
         "garmin_wellness_files",
     ] {
         // Audited: `table` is a literal of the list above.
-        let rows: i64 =
-            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let rows: i64 = Sql::dynamic(test_sql_id!(), format!("SELECT COUNT(*) FROM {table}"))
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(rows, 1, "{table} kept its row");
     }
     let listed = vec![Listed::new("sleep#2369-04-14", Some("2369-04-21"))];
@@ -187,7 +191,8 @@ async fn a_store_with_the_stamps_on_its_rows_carries_them_into_the_sidecars() {
         ("garmin_activity_files", "listing_hash"),
         ("garmin_wellness_files", "fetched_on"),
     ] {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+        let n: i64 = test_sql!("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+            .query_scalar()
             .bind(table)
             .bind(column)
             .fetch_one(db.pool())

@@ -14,6 +14,7 @@ use datalib_time::IsoOffsetTimestamp;
 use super::schema_raw::{
     document_is_renderable, full_ddl, PdfDocumentRow, PdfPathRow, PdfScanMetaRow, DATA_TABLES,
 };
+use datalib_sql::{sql, sql_id, Sql};
 
 /// The part of a scan's `skipped:` rows that says which documents never
 /// render.
@@ -49,7 +50,8 @@ impl RawDb {
     pub async fn load_prev(&self) -> Result<PrevCache> {
         let mut cache = PrevCache::default();
 
-        let rows = sqlx::query("SELECT id, blake3 FROM pdf_paths")
+        let rows = sql!("pdf.list_paths", "SELECT id, blake3 FROM pdf_paths")
+            .query()
             .fetch_all(self.pool())
             .await
             .context("load pdf_paths")?;
@@ -59,10 +61,14 @@ impl RawDb {
                 .insert(r.get("id"), r.get::<String, _>("blake3"));
         }
 
-        let docs = sqlx::query("SELECT blake3 FROM pdf_documents")
-            .fetch_all(self.pool())
-            .await
-            .context("load pdf_documents ids")?;
+        let docs = sql!(
+            "pdf.list_document_hashes",
+            "SELECT blake3 FROM pdf_documents"
+        )
+        .query()
+        .fetch_all(self.pool())
+        .await
+        .context("load pdf_documents ids")?;
         for r in docs {
             cache.known_docs.insert(r.get::<String, _>("blake3"));
         }
@@ -78,10 +84,14 @@ impl RawDb {
         for table in DATA_TABLES {
             // Audited: `table` iterates a `&'static str` const array of our own table
             // names; no runtime data reaches the statement.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("truncate {table}"))?;
+            Sql::dynamic(
+                sql_id!("pdf.clear_data_table"),
+                format!("DELETE FROM {table}"),
+            )
+            .query()
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("truncate {table}"))?;
         }
         tx.commit().await.context("commit truncate tx")?;
         Ok(())
@@ -98,11 +108,12 @@ impl RawDb {
             .context("begin document prune tx")?;
         let mut removed = 0;
         for sql in [
-            "DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)",
-            "DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)",
-            "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)",
+            sql!("pdf.prune_unnamed.delete_pdf_paths_bookkeeping", "DELETE FROM pdf_paths_bookkeeping WHERE id NOT IN (SELECT id FROM pdf_paths)"),
+            sql!("pdf.prune_unnamed.delete_pdf_documents_bookkeeping", "DELETE FROM pdf_documents_bookkeeping WHERE id NOT IN (SELECT blake3 FROM pdf_paths)"),
+            sql!("pdf.prune_unnamed.delete_pdf_documents", "DELETE FROM pdf_documents WHERE blake3 NOT IN (SELECT blake3 FROM pdf_paths)"),
         ] {
-            removed = sqlx::query(sql)
+            removed = sql
+                .query()
                 .execute(&mut *tx)
                 .await
                 .context("prune unnamed documents")?
@@ -131,10 +142,14 @@ impl RawDb {
     /// every rendered document reads, since its `source_url` is an
     /// absolute path under that root.
     pub async fn scan_root(&self) -> Result<Option<(String, PathBuf)>> {
-        let row = sqlx::query("SELECT id, abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("read pdf_scan_meta")?;
+        let row = sql!(
+            "pdf.read_scan_root",
+            "SELECT id, abs_root FROM pdf_scan_meta ORDER BY id LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("read pdf_scan_meta")?;
         Ok(row.map(|r| {
             (
                 r.get::<String, _>("id"),
@@ -164,13 +179,15 @@ impl RawDb {
     /// One, whatever the count: a folder of scans is thousands of them, and
     /// what a person needs is that they are not searchable.
     pub async fn documents_without_text(&self) -> Result<Option<SkippedRecord>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "pdf.list_documents_without_text",
             "SELECT d.page_count, d.ocr_page_count, d.has_encoding_issues, MIN(p.id) AS rel_path
                FROM pdf_documents d
                JOIN pdf_paths p ON p.blake3 = d.blake3
               GROUP BY d.blake3
-              ORDER BY rel_path",
+              ORDER BY rel_path"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select the documents that do not render")?;
@@ -207,7 +224,8 @@ impl RawDb {
     }
 
     pub async fn convertible_documents(&self, root: &Path) -> Result<Vec<RenderTarget>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "pdf.list_convertible_documents",
             "SELECT d.blake3      AS blake3,
                     d.title       AS title,
                     d.author      AS author,
@@ -223,8 +241,9 @@ impl RawDb {
               WHERE d.has_encoding_issues = 0
                 AND d.page_count > d.ocr_page_count
               GROUP BY d.blake3
-              ORDER BY d.blake3",
+              ORDER BY d.blake3"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select convertible documents")?;

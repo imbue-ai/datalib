@@ -14,6 +14,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, put_gmail_all_mail, Mirror,
 };
+use datalib_sql::test_sql;
 
 const SEPTEMBER: &str = "2026-09-01T00:00:00+00:00";
 const AUGUST: &str = "2026-08-01T00:00:00+00:00";
@@ -234,7 +235,8 @@ async fn a_section_of_labels_that_do_not_exist_takes_nothing() {
     assert_eq!(m.gmail_ids().await, ids(&[OLD_IN_INBOX]));
     let problems: Vec<String> = m
         .read(|db| async move {
-            sqlx::query_scalar("SELECT scope_key FROM problems")
+            test_sql!("SELECT scope_key FROM problems")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .unwrap()

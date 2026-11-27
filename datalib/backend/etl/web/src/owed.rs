@@ -29,6 +29,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use datalib_etl::raw_store::{Batch, Sealer};
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl::stop::StopFlag;
+use datalib_sql::{sql_id, Sql};
 
 /// A record upstream lists, at the version it lists it at. `None` is a
 /// listing with no version: the record only has to have been fetched.
@@ -105,12 +106,15 @@ pub async fn held_versions_in<'k>(
     for chunk in keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
         // Audited: `table` is a provider's `&'static str`; the
         // placeholders are one `?` per key, every key bound.
-        let sql = format!(
-            "SELECT id, fetched_at_utc IS NOT NULL, held_version \
+        let sql = Sql::dynamic(
+            sql_id!("etl.web.owed.list_held_versions_of_keys"),
+            format!(
+                "SELECT id, fetched_at_utc IS NOT NULL, held_version \
              FROM {table}_bookkeeping WHERE id IN ({})",
-            vec!["?"; chunk.len()].join(",")
+                vec!["?"; chunk.len()].join(",")
+            ),
         );
-        let mut q = sqlx::query_as::<_, (String, bool, Option<String>)>(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query_as::<(String, bool, Option<String>)>();
         for key in chunk {
             q = q.bind(*key);
         }
@@ -149,8 +153,11 @@ pub async fn set_held_version(
     version: Option<&str>,
 ) -> Result<()> {
     // Audited: `table` is a provider's `&'static str`; values bound.
-    let sql = format!("UPDATE {table}_bookkeeping SET held_version = ? WHERE id = ?");
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("etl.web.owed.update_held_version"),
+        format!("UPDATE {table}_bookkeeping SET held_version = ? WHERE id = ?"),
+    );
+    sql.query()
         .bind(version)
         .bind(key)
         .execute(&mut **tx)
@@ -163,8 +170,11 @@ pub async fn set_held_version(
 /// go, in the transaction that removes its content.
 pub async fn forget(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &str) -> Result<()> {
     // Audited: `table` is a provider's `&'static str`; the key is bound.
-    let sql = format!("DELETE FROM {table}_bookkeeping WHERE id = ?");
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("etl.web.owed.delete_bookkeeping_of_key"),
+        format!("DELETE FROM {table}_bookkeeping WHERE id = ?"),
+    );
+    sql.query()
         .bind(key)
         .execute(&mut **tx)
         .await
@@ -608,6 +618,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
+    use datalib_sql::test_sql;
     const T: &str = "things";
 
     async fn store_at(dir: &tempfile::TempDir) -> SqlitePool {
@@ -626,14 +637,16 @@ mod tests {
     }
 
     async fn bodies(pool: &SqlitePool) -> Vec<(String, Option<String>)> {
-        sqlx::query_as("SELECT id, body FROM things ORDER BY id")
+        test_sql!("SELECT id, body FROM things ORDER BY id")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap()
     }
 
     async fn problems(pool: &SqlitePool) -> Vec<(String, String)> {
-        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap()
@@ -737,14 +750,15 @@ mod tests {
             for f in batch {
                 match &f.outcome {
                     Outcome::Got(body) | Outcome::Unusable(body, ..) => {
-                        sqlx::query("INSERT INTO things (id, body) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body")
+                        test_sql!("INSERT INTO things (id, body) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET body = excluded.body").query()
                             .bind(&f.listed.key)
                             .bind(body)
                             .execute(&mut **tx)
                             .await?;
                     }
                     Outcome::Gone => {
-                        sqlx::query("DELETE FROM things WHERE id = ?")
+                        test_sql!("DELETE FROM things WHERE id = ?")
+                            .query()
                             .bind(&f.listed.key)
                             .execute(&mut **tx)
                             .await?;

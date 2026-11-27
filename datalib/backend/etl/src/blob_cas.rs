@@ -17,6 +17,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow, SqliteSyn
 use sqlx::{Row, SqlitePool};
 
 use crate::doltlite_raw::NotFetched;
+use datalib_sql::{sql, sql_id, Sql};
 
 // Schema
 
@@ -186,18 +187,24 @@ async fn copy_doltlite_cas(old: &Path, cas_path: &Path) -> Result<()> {
         .await
         .with_context(|| format!("open {}", old.display()))?;
     let copied = async {
-        sqlx::raw_sql(sqlx::AssertSqlSafe(conversion_sql(&tmp)))
-            .execute(&pool)
-            .await
-            .context("copy the blobs")?;
+        Sql::dynamic(
+            sql_id!("etl.blob_cas.copy_into_plain_sqlite"),
+            conversion_sql(&tmp),
+        )
+        .raw()
+        .execute(&pool)
+        .await
+        .context("copy the blobs")?;
         // Totals of `length(bytes)` on the new side, not the copied
         // `byte_len`, so a truncated value cannot pass.
-        let (rows_old, rows_new, bytes_old, bytes_new): (i64, i64, i64, i64) = sqlx::query_as(
+        let (rows_old, rows_new, bytes_old, bytes_new): (i64, i64, i64, i64) = sql!(
+            "etl.blob_cas.compare_copy_totals",
             "SELECT (SELECT count(*) FROM main.cas_objects), \
                     (SELECT count(*) FROM out.cas_objects), \
                     (SELECT coalesce(sum(byte_len), 0) FROM main.cas_objects), \
-                    (SELECT coalesce(sum(length(bytes)), 0) FROM out.cas_objects)",
+                    (SELECT coalesce(sum(length(bytes)), 0) FROM out.cas_objects)"
         )
+        .query_as()
         .fetch_one(&pool)
         .await
         .context("count the copy")?;
@@ -247,10 +254,14 @@ impl BlobCas {
         convert_a_doltlite_cas(cas_path).await?;
         let pool = connect(cas_path).await?;
         let ready = async {
-            sqlx::query(CAS_OBJECTS_DDL)
-                .execute(&pool)
-                .await
-                .context("create cas_objects")?;
+            Sql::ddl(
+                sql_id!("etl.blob_cas.create_objects_table"),
+                CAS_OBJECTS_DDL,
+            )
+            .query()
+            .execute(&pool)
+            .await
+            .context("create cas_objects")?;
             run_one_time_passes(&pool).await
         }
         .await;
@@ -335,7 +346,7 @@ impl BlobCas {
             // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `sql` is a
             // `&'static str` prefix plus a `(?,?,?),...` run that `push_placeholders`
             // builds from `chunk.len()`. Every value is bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut q = Sql::dynamic(sql_id!("etl.blob_cas.insert_objects_batch"), sql).query();
             for ((it, key), content_type) in chunk.iter().zip(chunk_keys).zip(chunk_types) {
                 q = q
                     .bind(key)
@@ -357,9 +368,11 @@ impl BlobCas {
     }
 
     pub async fn get(&self, blake3_hash: &str) -> Result<Option<CasObject>> {
-        let row = sqlx::query(
-            "SELECT blake3, byte_len, content_type, bytes FROM cas_objects WHERE blake3 = ?",
+        let row = sql!(
+            "etl.blob_cas.read_object_by_hash",
+            "SELECT blake3, byte_len, content_type, bytes FROM cas_objects WHERE blake3 = ?"
         )
+        .query()
         .bind(blake3_hash)
         .fetch_optional(&self.pool)
         .await
@@ -395,7 +408,8 @@ async fn run_one_time_passes(pool: &SqlitePool) -> Result<()> {
         .begin_with("BEGIN IMMEDIATE")
         .await
         .context("lock the blob cas to check its passes")?;
-    let passes: i64 = sqlx::query_scalar("PRAGMA user_version")
+    let passes: i64 = sql!("etl.blob_cas.read_passes_version", "PRAGMA user_version")
+        .query_scalar()
         .fetch_one(&mut *tx)
         .await
         .context("read the blob cas's user_version")?;
@@ -404,9 +418,11 @@ async fn run_one_time_passes(pool: &SqlitePool) -> Result<()> {
     }
     let retyped = retype_from_bytes(&mut tx).await?;
     // Audited: an integer constant, not input.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA user_version = {PASSES_RUN}"
-    )))
+    Sql::dynamic(
+        sql_id!("etl.blob_cas.stamp_passes_version"),
+        format!("PRAGMA user_version = {PASSES_RUN}"),
+    )
+    .query()
     .execute(&mut *tx)
     .await
     .context("stamp the blob cas's user_version")?;
@@ -423,12 +439,15 @@ async fn run_one_time_passes(pool: &SqlitePool) -> Result<()> {
 }
 
 async fn retype_from_bytes(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<usize> {
-    let rows: Vec<(String, Option<String>, Vec<u8>)> =
-        sqlx::query_as("SELECT blake3, content_type, substr(bytes, 1, ?) FROM cas_objects")
-            .bind(crate::sniff::SIGNATURE_LEN as i64)
-            .fetch_all(&mut **tx)
-            .await
-            .context("read the stored blob types")?;
+    let rows: Vec<(String, Option<String>, Vec<u8>)> = sql!(
+        "etl.blob_cas.list_object_signatures",
+        "SELECT blake3, content_type, substr(bytes, 1, ?) FROM cas_objects"
+    )
+    .query_as()
+    .bind(crate::sniff::SIGNATURE_LEN as i64)
+    .fetch_all(&mut **tx)
+    .await
+    .context("read the stored blob types")?;
     let fixes: Vec<(&str, &str)> = rows
         .iter()
         .filter_map(|(key, declared, head)| {
@@ -437,12 +456,16 @@ async fn retype_from_bytes(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Resu
         })
         .collect();
     for (key, content_type) in &fixes {
-        sqlx::query("UPDATE cas_objects SET content_type = ? WHERE blake3 = ?")
-            .bind(*content_type)
-            .bind(*key)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("retype blob {key}"))?;
+        sql!(
+            "etl.blob_cas.update_object_content_type",
+            "UPDATE cas_objects SET content_type = ? WHERE blake3 = ?"
+        )
+        .query()
+        .bind(*content_type)
+        .bind(*key)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("retype blob {key}"))?;
     }
     Ok(fixes.len())
 }
@@ -769,13 +792,15 @@ impl BlobBundle {
         // ALL does); each gets the whole list.
         let ref_ids = serde_json::to_string(&keys_by_ref.keys().collect::<Vec<_>>())?;
         let occurrences = projection_sql_template.matches("{placeholders}").count();
-        let sql =
-            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)");
+        let sql = Sql::dynamic(
+            sql_id!("etl.blob_cas.resolve_refs_to_blobs"),
+            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)"),
+        );
         // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: the template is
         // caller-supplied, but every caller passes a module-level `const &str`
         // literal (`*_PROJECTION*` in the providers); the only substitution is
         // `{placeholders}` -> a fixed `json_each` over one bound parameter.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query();
         for _ in 0..occurrences {
             q = q.bind(&ref_ids);
         }
@@ -810,20 +835,24 @@ impl BlobBundle {
         // Stage 2: what the CAS holds of them, a chunk at a time, each
         // handed out before the next is read. `blake3` is `cas_objects`'
         // key, so a chunk is an index lookup, not a scan.
-        let sql = if with_bytes {
-            "SELECT blake3, byte_len, content_type, bytes FROM cas_objects \
+        let sql = Sql::dynamic(
+            sql_id!("etl.blob_cas.load_objects_by_hashes"),
+            if with_bytes {
+                "SELECT blake3, byte_len, content_type, bytes FROM cas_objects \
               WHERE blake3 IN (SELECT value FROM json_each(?))"
-        } else {
-            "SELECT blake3, byte_len, content_type FROM cas_objects \
+            } else {
+                "SELECT blake3, byte_len, content_type FROM cas_objects \
               WHERE blake3 IN (SELECT value FROM json_each(?))"
-        };
+            },
+        );
         let hashes: Vec<String> = pending_by_blake3.keys().cloned().collect();
         let chunks = cas
             .map(|cas| hashes.chunks(crate::bulk::SQL_CHUNK).map(move |c| (cas, c)))
             .into_iter()
             .flatten();
         for (cas, chunk) in chunks {
-            let cas_rows = sqlx::query(sql)
+            let cas_rows = sql
+                .query()
                 .bind(serde_json::to_string(chunk)?)
                 .fetch_all(&cas.pool)
                 .await
@@ -899,11 +928,13 @@ impl BlobBundle {
         };
         let ref_ids = serde_json::to_string(&all_refs.iter().collect::<Vec<_>>())?;
         let occurrences = projection_sql_template.matches("{placeholders}").count();
-        let sql =
-            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)");
+        let sql = Sql::dynamic(
+            sql_id!("etl.blob_cas.resolve_refs_for_sizes"),
+            projection_sql_template.replace("{placeholders}", "SELECT value FROM json_each(?)"),
+        );
         // Audited: as in `load_many` — a module-level `const` template, the
         // one substitution a `json_each` over one bound parameter.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query();
         for _ in 0..occurrences {
             q = q.bind(&ref_ids);
         }
@@ -929,10 +960,12 @@ impl BlobBundle {
             .collect();
         let mut len_of: HashMap<String, u64> = HashMap::with_capacity(hashes.len());
         for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
-            let lens: Vec<(String, i64)> = sqlx::query_as(
+            let lens: Vec<(String, i64)> = sql!(
+                "etl.blob_cas.read_sizes_by_hashes",
                 "SELECT blake3, byte_len FROM cas_objects \
-                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+                  WHERE blake3 IN (SELECT value FROM json_each(?))"
             )
+            .query_as()
             .bind(serde_json::to_string(chunk)?)
             .fetch_all(&cas.pool)
             .await
@@ -992,12 +1025,15 @@ pub struct Described {
 impl BlobCas {
     /// What the CAS holds under `blake3`, without reading the bytes.
     pub async fn describe(&self, blake3: &str) -> Result<Option<Described>> {
-        let row =
-            sqlx::query("SELECT blake3, byte_len, content_type FROM cas_objects WHERE blake3 = ?")
-                .bind(blake3)
-                .fetch_optional(&self.pool)
-                .await
-                .with_context(|| format!("cas describe {blake3}"))?;
+        let row = sql!(
+            "etl.blob_cas.describe_object_by_hash",
+            "SELECT blake3, byte_len, content_type FROM cas_objects WHERE blake3 = ?"
+        )
+        .query()
+        .bind(blake3)
+        .fetch_optional(&self.pool)
+        .await
+        .with_context(|| format!("cas describe {blake3}"))?;
         row.map(|r| {
             Ok(Described {
                 blake3: r.try_get("blake3")?,
@@ -1013,10 +1049,12 @@ impl BlobCas {
     pub async fn describe_many(&self, hashes: &[&str]) -> Result<HashMap<String, Described>> {
         let mut out = HashMap::new();
         for chunk in hashes.chunks(crate::bulk::SQL_CHUNK) {
-            let rows = sqlx::query(
+            let rows = sql!(
+                "etl.blob_cas.describe_objects_by_hashes",
                 "SELECT blake3, byte_len, content_type FROM cas_objects
-                  WHERE blake3 IN (SELECT value FROM json_each(?))",
+                  WHERE blake3 IN (SELECT value FROM json_each(?))"
             )
+            .query()
             .bind(serde_json::to_string(chunk)?)
             .fetch_all(&self.pool)
             .await
@@ -1118,15 +1156,19 @@ pub async fn load_blake3_index(
     table: &str,
     ref_id_column: &str,
 ) -> Result<HashMap<String, String>> {
-    let sql = format!(
-        "SELECT {ref_id_column} AS ref_id, blake3 FROM {table} \
+    let sql = Sql::dynamic(
+        sql_id!("etl.blob_cas.list_edge_hashes_by_ref"),
+        format!(
+            "SELECT {ref_id_column} AS ref_id, blake3 FROM {table} \
           WHERE blake3 IS NOT NULL"
+        ),
     );
     // Audited for injection per sqlx 0.9's `SqlSafeStr` bound: `table` and
     // `ref_id_column` are interpolated as bare identifiers, so they must stay
     // literals. All three callers pass `&'static str` (claude/slack/chatgpt
     // attachment tables); do not pass user input here.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .with_context(|| format!("load_blake3_index {table}.{ref_id_column}"))?;
@@ -1420,13 +1462,16 @@ async fn edges_holding_bytes<T: crate::bulk::BulkUpsertable>(
     for chunk in ids.chunks(crate::bulk::SQL_CHUNK) {
         let mut placeholders = String::new();
         crate::bulk::push_placeholder_list(&mut placeholders, chunk.len());
-        let sql = format!(
-            "SELECT id FROM {} WHERE blake3 IS NOT NULL AND id IN ({placeholders})",
-            T::TABLE
+        let sql = Sql::dynamic(
+            sql_id!("etl.blob_cas.find_edges_holding_bytes"),
+            format!(
+                "SELECT id FROM {} WHERE blake3 IS NOT NULL AND id IN ({placeholders})",
+                T::TABLE
+            ),
         );
         // Audited: the table is the row type's `&'static str`; the IN-list
         // is a `?,?,?` run sized from the chunk and every id is bound.
-        let mut q = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query_scalar::<String>();
         for id in chunk {
             q = q.bind(*id);
         }
@@ -1448,6 +1493,7 @@ mod tests {
 
     use tempfile::tempdir;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// The CAS is a stock SQLite file, not doltlite's format: that is the
     /// whole of why it no longer grows with every checkpoint.
     #[tokio::test]
@@ -1468,7 +1514,8 @@ mod tests {
             .await
             .unwrap();
         let hash = blake3_hex(bytes);
-        sqlx::query("INSERT INTO cas_objects VALUES (?, ?, 'text/plain', ?)")
+        test_sql!("INSERT INTO cas_objects VALUES (?, ?, 'text/plain', ?)")
+            .query()
             .bind(&hash)
             .bind(bytes.len() as i64)
             .bind(bytes)
@@ -1596,7 +1643,8 @@ mod tests {
         assert_eq!(keys["a"], blake3_hex(b"AAAA"));
         assert_eq!(keys["b"], blake3_hex(b"BBBB"));
         let stored: Vec<(String, Vec<u8>)> =
-            sqlx::query_as("SELECT blake3, bytes FROM cas_objects ORDER BY bytes")
+            test_sql!("SELECT blake3, bytes FROM cas_objects ORDER BY bytes")
+                .query_as()
                 .fetch_all(cas.pool())
                 .await
                 .unwrap();
@@ -1648,7 +1696,11 @@ mod tests {
         let d = tempdir().unwrap();
         let path = d.path().join("blobs.sqlite");
         let pool = connect(&path).await.unwrap();
-        sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await.unwrap();
+        Sql::ddl(test_sql_id!(), CAS_OBJECTS_DDL)
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
         let rows: [(&[u8], Option<&str>); 4] = [
             (JPEG, Some("image/png")),
             (PNG, Some("image/png")),
@@ -1656,7 +1708,8 @@ mod tests {
             (b"plain words", Some("text/plain")),
         ];
         for (bytes, ct) in rows {
-            sqlx::query("INSERT INTO cas_objects VALUES (?, ?, ?, ?)")
+            test_sql!("INSERT INTO cas_objects VALUES (?, ?, ?, ?)")
+                .query()
                 .bind(blake3_hex(bytes))
                 .bind(bytes.len() as i64)
                 .bind(ct)
@@ -1689,7 +1742,8 @@ mod tests {
         // A row the pass would correct, written behind its back after it
         // ran: a second open leaves it, so the scan is paid once.
         let gif: &[u8] = b"GIF89a\x01\0\x01\0";
-        sqlx::query("INSERT INTO cas_objects VALUES (?, ?, 'image/png', ?)")
+        test_sql!("INSERT INTO cas_objects VALUES (?, ?, 'image/png', ?)")
+            .query()
             .bind(blake3_hex(gif))
             .bind(gif.len() as i64)
             .bind(gif)
@@ -1940,13 +1994,14 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "CREATE TABLE attachments (
                 file_id TEXT PRIMARY KEY,
                 blake3 TEXT NOT NULL,
                 upstream_name TEXT
-            )",
+            )"
         )
+        .query()
         .execute(&refs_pool)
         .await
         .unwrap();
@@ -1956,15 +2011,14 @@ mod tests {
             ("b", h2.as_str(), Some("beta.pdf")),
             ("lost", gone.as_str(), None),
         ] {
-            sqlx::query(
-                "INSERT INTO attachments (file_id, blake3, upstream_name) VALUES (?, ?, ?)",
-            )
-            .bind(ref_id)
-            .bind(blake3)
-            .bind(name)
-            .execute(&refs_pool)
-            .await
-            .unwrap();
+            test_sql!("INSERT INTO attachments (file_id, blake3, upstream_name) VALUES (?, ?, ?)")
+                .query()
+                .bind(ref_id)
+                .bind(blake3)
+                .bind(name)
+                .execute(&refs_pool)
+                .await
+                .unwrap();
         }
 
         // `{placeholders}` twice, as email's UNION ALL has it: each gets
@@ -2111,18 +2165,19 @@ mod tests {
         acc.add_known("w3", "f", stored["f"].clone());
         flush_widget_blobs(&pool, &cas, &acc).await;
 
-        let edges: Vec<Option<String>> =
-            sqlx::query_scalar("SELECT blake3 FROM widget_blobs ORDER BY id")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let edges: Vec<Option<String>> = test_sql!("SELECT blake3 FROM widget_blobs ORDER BY id")
+            .query_scalar()
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         assert_eq!(edges, vec![Some(stored["f"].clone()); 3]);
         cas.close().await;
         pool.close().await;
     }
 
     async fn fetch_problem(pool: &SqlitePool, id: &str) -> (String, String) {
-        sqlx::query_as("SELECT severity, outcome FROM problems WHERE scope_key = ?")
+        test_sql!("SELECT severity, outcome FROM problems WHERE scope_key = ?")
+            .query_as()
             .bind(format!("widget_blobs:{id}"))
             .fetch_one(pool)
             .await
@@ -2157,7 +2212,8 @@ mod tests {
             ("warning".to_string(), "ok".to_string())
         );
         let kept: Option<String> =
-            sqlx::query_scalar("SELECT blake3 FROM widget_blobs WHERE id = 'w1#landed'")
+            test_sql!("SELECT blake3 FROM widget_blobs WHERE id = 'w1#landed'")
+                .query_scalar()
                 .fetch_one(&pool)
                 .await
                 .unwrap();

@@ -7,6 +7,7 @@ use datalib_etl_slack::recorded::{record_call, History, DEFAULT_SINCE_TS};
 use serde_json::json;
 
 use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
+use datalib_sql::test_sql;
 
 const A: &str = "1735689600.000100";
 const B: &str = "1735689600.000200";
@@ -67,9 +68,10 @@ async fn a_walk_that_fails_after_its_first_page_is_finished_from_under_it() {
     assert_eq!(stored_ts(&first.out), [A, B, C]);
 
     let db = RawDb::open(&db_path_for(&first.out)).await.unwrap();
-    let problems: Vec<String> = sqlx::query_scalar(
-        "SELECT scope_key FROM problems WHERE scope_key LIKE 'listing:conversations.history%'",
+    let problems: Vec<String> = test_sql!(
+        "SELECT scope_key FROM problems WHERE scope_key LIKE 'listing:conversations.history%'"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await
     .unwrap();

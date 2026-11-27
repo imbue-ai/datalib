@@ -16,8 +16,8 @@ pub const DATA_TABLES: &[&str] = &[
     "pr_review_comments",
 ];
 
-/// `self_identity` — exactly one row holding the authenticated user's
-/// `GET /user` response.
+/// `self_identity` — the authenticated user's `GET /user` response, one
+/// row per account the source has signed in as. Nothing removes a row.
 ///
 /// PK choice: upstream GitHub user id (numeric, stringified). One row
 /// per authenticated account.

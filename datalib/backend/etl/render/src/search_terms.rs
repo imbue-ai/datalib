@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use datalib_schema::search_terms::{
     decode_supplied, search_terms_of, stored_value, SearchTerm, SearchTermSource,
 };
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::SqliteConnection;
 
 /// Rewrite the terms of the grid rows `uuids` names, as `grid_rows` holds
@@ -34,15 +35,27 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     // which a removed row may have held. `dropped` holds the values the
     // cleared rows used: the only ones that can have lost their last term.
     for sql in [
-        "CREATE TEMP TABLE IF NOT EXISTS incoming (row_id INTEGER NOT NULL, \
-             kind INTEGER NOT NULL, value TEXT NOT NULL)",
-        "CREATE TEMP TABLE IF NOT EXISTS cleared (row_id INTEGER PRIMARY KEY)",
-        "CREATE TEMP TABLE IF NOT EXISTS dropped (val_id INTEGER PRIMARY KEY)",
-        "DELETE FROM temp.incoming",
-        "DELETE FROM temp.cleared",
-        "DELETE FROM temp.dropped",
+        sql!(
+            "etl.render.terms.write_part.create_incoming",
+            "CREATE TEMP TABLE IF NOT EXISTS incoming (row_id INTEGER NOT NULL, \
+             kind INTEGER NOT NULL, value TEXT NOT NULL)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.create_cleared",
+            "CREATE TEMP TABLE IF NOT EXISTS cleared (row_id INTEGER PRIMARY KEY)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.create_dropped",
+            "CREATE TEMP TABLE IF NOT EXISTS dropped (val_id INTEGER PRIMARY KEY)"
+        ),
+        sql!(
+            "etl.render.terms.empty_incoming",
+            "DELETE FROM temp.incoming"
+        ),
+        sql!("etl.render.terms.empty_cleared", "DELETE FROM temp.cleared"),
+        sql!("etl.render.terms.empty_dropped", "DELETE FROM temp.dropped"),
     ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        sql.query().execute(&mut *conn).await?;
     }
     for chunk in uuids.chunks(CHUNK) {
         let p = placeholders(chunk.len(), 1);
@@ -55,7 +68,7 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
             ),
         ] {
             // Audited: a placeholder per value, every value bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut q = Sql::dynamic(sql_id!("etl.render.terms.stage_cleared_rows"), sql).query();
             for uuid in chunk {
                 q = q.bind(uuid);
             }
@@ -63,22 +76,34 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
         }
     }
     for sql in [
-        "INSERT OR IGNORE INTO temp.dropped SELECT t.val_id FROM terms t \
-             WHERE t.row_id IN (SELECT row_id FROM temp.cleared)",
-        "DELETE FROM terms WHERE row_id IN (SELECT row_id FROM temp.cleared)",
-        "DELETE FROM rows WHERE row_id IN (SELECT row_id FROM temp.cleared)",
+        sql!(
+            "etl.render.terms.write_part.insert_temp",
+            "INSERT OR IGNORE INTO temp.dropped SELECT t.val_id FROM terms t \
+             WHERE t.row_id IN (SELECT row_id FROM temp.cleared)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.delete_terms",
+            "DELETE FROM terms WHERE row_id IN (SELECT row_id FROM temp.cleared)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.delete_rows",
+            "DELETE FROM rows WHERE row_id IN (SELECT row_id FROM temp.cleared)"
+        ),
     ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        sql.query().execute(&mut *conn).await?;
     }
     for chunk in uuids.chunks(CHUNK) {
         // Audited: a placeholder per value, every value bound.
-        let sql = format!(
-            "INSERT INTO rows (row_id, uuid, doc_row_id, is_document) \
+        let sql = Sql::dynamic(
+            sql_id!("etl.render.terms.insert_rows_from_grid"),
+            format!(
+                "INSERT INTO rows (row_id, uuid, doc_row_id, is_document) \
              SELECT g.rowid, g.uuid, d.rowid, g.is_document FROM grid_rows g \
              LEFT JOIN grid_rows d ON d.uuid = g.markdown_uuid WHERE g.uuid IN ({})",
-            placeholders(chunk.len(), 1)
+                placeholders(chunk.len(), 1)
+            ),
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query();
         for uuid in chunk {
             q = q.bind(uuid);
         }
@@ -87,11 +112,14 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     let terms = every_term(&rows)?;
     for chunk in terms.chunks(CHUNK) {
         // Audited: three placeholders per term, every value bound.
-        let sql = format!(
-            "INSERT INTO temp.incoming (row_id, kind, value) VALUES {}",
-            placeholders(chunk.len(), 3)
+        let sql = Sql::dynamic(
+            sql_id!("etl.render.terms.stage_incoming_terms"),
+            format!(
+                "INSERT INTO temp.incoming (row_id, kind, value) VALUES {}",
+                placeholders(chunk.len(), 3)
+            ),
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query();
         for (row, term) in chunk {
             q = q
                 .bind(row.row_id)
@@ -102,34 +130,61 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
     }
     // New values take keys above every one there now, so the index
     // picks up exactly these.
-    let floor: i64 = sqlx::query_scalar("SELECT coalesce(max(val_id), 0) FROM vals")
-        .fetch_one(&mut *conn)
-        .await?;
-    // `WHERE true`: an upsert's SELECT needs a WHERE to parse.
-    sqlx::query(
-        "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true \
-         ON CONFLICT (value) DO NOTHING",
+    let floor: i64 = sql!(
+        "etl.render.terms.read_max_val_id",
+        "SELECT coalesce(max(val_id), 0) FROM vals"
     )
+    .query_scalar()
+    .fetch_one(&mut *conn)
+    .await?;
+    // `WHERE true`: an upsert's SELECT needs a WHERE to parse.
+    sql!(
+        "etl.render.terms.insert_new_vals",
+        "INSERT INTO vals (value) SELECT DISTINCT value FROM temp.incoming WHERE true \
+         ON CONFLICT (value) DO NOTHING"
+    )
+    .query()
     .execute(&mut *conn)
     .await?;
     for sql in [
-        "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
-        "INSERT INTO vals_tri (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?",
+        sql!(
+            "etl.render.terms.write_part.insert_vals_fts",
+            "INSERT INTO vals_fts (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?"
+        ),
+        sql!(
+            "etl.render.terms.write_part.insert_vals_tri",
+            "INSERT INTO vals_tri (rowid, value) SELECT val_id, value FROM vals WHERE val_id > ?"
+        ),
     ] {
-        sqlx::query(sql).bind(floor).execute(&mut *conn).await?;
+        sql.query().bind(floor).execute(&mut *conn).await?;
     }
     for sql in [
-        "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
+        sql!(
+            "etl.render.terms.write_part.insert_terms",
+            "INSERT OR IGNORE INTO terms (val_id, kind, row_id) \
              SELECT v.val_id, i.kind, i.row_id FROM temp.incoming i \
-             JOIN vals v ON v.value = i.value",
+             JOIN vals v ON v.value = i.value"
+        ),
         // Seeks `terms`' key: `val_id IN (SELECT …)` reads every term.
-        "DELETE FROM temp.dropped WHERE EXISTS \
-             (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)",
-        "DELETE FROM vals_fts WHERE rowid IN (SELECT val_id FROM temp.dropped)",
-        "DELETE FROM vals_tri WHERE rowid IN (SELECT val_id FROM temp.dropped)",
-        "DELETE FROM vals WHERE val_id IN (SELECT val_id FROM temp.dropped)",
+        sql!(
+            "etl.render.terms.keep_dropped_values_still_used",
+            "DELETE FROM temp.dropped WHERE EXISTS \
+             (SELECT 1 FROM terms t WHERE t.val_id = dropped.val_id)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.delete_vals_fts",
+            "DELETE FROM vals_fts WHERE rowid IN (SELECT val_id FROM temp.dropped)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.delete_vals_tri",
+            "DELETE FROM vals_tri WHERE rowid IN (SELECT val_id FROM temp.dropped)"
+        ),
+        sql!(
+            "etl.render.terms.write_part.delete_vals",
+            "DELETE FROM vals WHERE val_id IN (SELECT val_id FROM temp.dropped)"
+        ),
     ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        sql.query().execute(&mut *conn).await?;
     }
     Ok(terms.len())
 }
@@ -137,10 +192,13 @@ async fn write_part(conn: &mut SqliteConnection, uuids: &[String]) -> Result<usi
 /// Every `(handle, author)` pair the grid shows, read from
 /// `grid_index::AUTHORS_INDEX` alone. Pinned, so a dropped or renamed
 /// index fails the pass instead of scanning every row's text (#1803).
-const AUTHORS: &str = "SELECT DISTINCT author_handle, author \
+const AUTHORS: Sql = sql!(
+    "etl.render.terms.list_authors",
+    "SELECT DISTINCT author_handle, author \
      FROM grid_rows INDEXED BY grid_rows_by_author \
      WHERE author_handle IS NOT NULL AND author_handle != '' \
-     AND author IS NOT NULL AND author != ''";
+     AND author IS NOT NULL AND author != ''"
+);
 
 /// Each handle with every name it was seen under: the author a grid row
 /// shows beside its handle, and every name a source's record of a person
@@ -149,46 +207,63 @@ const AUTHORS: &str = "SELECT DISTINCT author_handle, author \
 /// thousand rows, read from a few thousand.
 pub(crate) async fn write_people(conn: &mut SqliteConnection) -> Result<PeopleWritten> {
     let started = std::time::Instant::now();
-    let authors: Vec<(String, String)> = sqlx::query_as(AUTHORS)
+    let authors: Vec<(String, String)> = AUTHORS
+        .query_as()
         .fetch_all(&mut *conn)
         .await
         .context("read the grid's authors")?;
     let authors_ms = millis_since(started);
     crate::grid_index::contact_records::sweep(conn).await?;
-    let contacts: Vec<(String, String)> = sqlx::query_as(
+    let contacts: Vec<(String, String)> = sql!(
+        "etl.render.terms.list_contact_handles_with_json",
         "SELECT h.handle, r.contact_json FROM contact_record_handles h \
-         JOIN contact_records r ON r.record_id = h.record_id",
+         JOIN contact_records r ON r.record_id = h.record_id"
     )
+    .query_as()
     .fetch_all(&mut *conn)
     .await
     .context("read the source contacts")?;
     let contacts_ms = millis_since(started) - authors_ms;
     let accounts = account_handles(&contacts);
     let names = names_seen_under(authors, &contacts);
-    sqlx::query("DELETE FROM names").execute(&mut *conn).await?;
+    sql!("etl.render.terms.clear_names", "DELETE FROM names")
+        .query()
+        .execute(&mut *conn)
+        .await?;
     let pairs: Vec<&(String, String)> = names.iter().collect();
     for chunk in pairs.chunks(CHUNK) {
         // Audited: a placeholder pair per name, every value bound.
-        let sql = format!(
-            "INSERT INTO names (handle, name) VALUES {}",
-            placeholders(chunk.len(), 2)
+        let sql = Sql::dynamic(
+            sql_id!("etl.render.terms.insert_names"),
+            format!(
+                "INSERT INTO names (handle, name) VALUES {}",
+                placeholders(chunk.len(), 2)
+            ),
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query();
         for (handle, name) in chunk {
             q = q.bind(handle).bind(name);
         }
         q.execute(&mut *conn).await.context("write the names")?;
     }
-    sqlx::query("DELETE FROM account_handles")
-        .execute(&mut *conn)
-        .await?;
+    sql!(
+        "etl.render.terms.clear_account_handles",
+        "DELETE FROM account_handles"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await?;
     for (handle, source_id) in &accounts {
-        sqlx::query("INSERT INTO account_handles (handle, source_id) VALUES (?, ?)")
-            .bind(handle)
-            .bind(source_id)
-            .execute(&mut *conn)
-            .await
-            .context("write the account handles")?;
+        sql!(
+            "etl.render.terms.insert_account_handle",
+            "INSERT INTO account_handles (handle, source_id) VALUES (?, ?)"
+        )
+        .query()
+        .bind(handle)
+        .bind(source_id)
+        .execute(&mut *conn)
+        .await
+        .context("write the account handles")?;
     }
     Ok(PeopleWritten {
         authors_ms,
@@ -274,12 +349,15 @@ async fn rows_by_uuid(
     let mut out = Vec::new();
     for chunk in uuids.chunks(CHUNK) {
         // Audited: a placeholder per value, every value bound.
-        let sql = format!(
-            "SELECT {} FROM grid_rows WHERE uuid IN ({})",
-            SearchTermSource::COLUMNS,
-            placeholders(chunk.len(), 1)
+        let sql = Sql::dynamic(
+            sql_id!("etl.render.terms.read_grid_rows_for_terms"),
+            format!(
+                "SELECT {} FROM grid_rows WHERE uuid IN ({})",
+                SearchTermSource::COLUMNS,
+                placeholders(chunk.len(), 1)
+            ),
         );
-        let mut q = sqlx::query_as::<_, SearchTermSource>(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query_as::<SearchTermSource>();
         for uuid in chunk {
             q = q.bind(uuid);
         }
@@ -337,6 +415,7 @@ mod tests {
     use datalib_schema::providers::Provider;
     use datalib_schema::search_terms::SearchTermKind;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// The account's handles are those of the source contacts marked as
     /// the account, every handle each ties to them; no other record's.
     #[test]
@@ -463,10 +542,11 @@ mod tests {
 
         /// The `(uuid, kind)` of every term matching `value` exactly.
         async fn matching(&self, value: &str) -> Vec<(String, String)> {
-            let coded: Vec<(String, i64)> = sqlx::query_as(
+            let coded: Vec<(String, i64)> = test_sql!(
                 "SELECT r.uuid, t.kind FROM vals_fts JOIN terms t ON t.val_id = vals_fts.rowid \
-                 JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?",
+                 JOIN rows r ON r.row_id = t.row_id WHERE vals_fts MATCH ?"
             )
+            .query_as()
             .bind(format!("\"{value}\""))
             .fetch_all(&self.pool)
             .await
@@ -484,7 +564,8 @@ mod tests {
 
         /// Whether the dictionary still holds `value` at all.
         async fn holds(&self, value: &str) -> bool {
-            let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM vals WHERE value = ?")
+            let n: i64 = test_sql!("SELECT COUNT(*) FROM vals WHERE value = ?")
+                .query_scalar()
                 .bind(value)
                 .fetch_one(&self.pool)
                 .await
@@ -504,7 +585,8 @@ mod tests {
         let g = Grid::new().await;
         // Audited: a constant statement of ours.
         let rows: Vec<(i64, i64, i64, String)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {AUTHORS}")))
+            Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {AUTHORS}"))
+                .query_as()
                 .fetch_all(&g.pool)
                 .await
                 .unwrap();
@@ -534,12 +616,12 @@ mod tests {
         let mut bare = doc("c-b", q, "Orders");
         bare.rows[0].author = Some("q@continuum.test".into());
         g.seal(&[forged, own, bare], &[]).await;
-        let names: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM names WHERE handle = ? ORDER BY name")
-                .bind(q)
-                .fetch_all(&g.pool)
-                .await
-                .unwrap();
+        let names: Vec<String> = test_sql!("SELECT name FROM names WHERE handle = ? ORDER BY name")
+            .query_scalar()
+            .bind(q)
+            .fetch_all(&g.pool)
+            .await
+            .unwrap();
         assert_eq!(names, ["Q", "q@continuum.test"]);
     }
 

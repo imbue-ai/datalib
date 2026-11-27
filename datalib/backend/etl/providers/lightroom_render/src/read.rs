@@ -9,6 +9,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use datalib_photo_schema::{Person, Place, Rect};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// The tables render reads, all of them whole: a change to any one
 /// renders the catalog again.
@@ -159,10 +160,12 @@ pub async fn load(pool: &SqlitePool) -> Result<Catalog> {
         load_video(pool, &mut images).await?;
     }
     let catalog_path = if has("Adobe_variablesTable") {
-        sqlx::query_scalar(
+        sql!(
+            "lightroom_render.read_last_scanned_catalog_path",
             "SELECT CAST(value AS TEXT) FROM Adobe_variablesTable \
-              WHERE name = 'Adobe_lastScannedCatalogPath' LIMIT 1",
+              WHERE name = 'Adobe_lastScannedCatalogPath' LIMIT 1"
         )
+        .query_scalar()
         .fetch_optional(pool)
         .await
         .context("read where the catalog was last opened")?
@@ -179,10 +182,14 @@ pub async fn load(pool: &SqlitePool) -> Result<Catalog> {
 
 /// Each table's `CREATE TABLE`, by name.
 async fn table_sql(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows = sqlx::query("SELECT name, sql FROM sqlite_master WHERE type = 'table'")
-        .fetch_all(pool)
-        .await
-        .context("list the mirror's tables")?;
+    let rows = sql!(
+        "lightroom_render.list_table_sql",
+        "SELECT name, sql FROM sqlite_master WHERE type = 'table'"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("list the mirror's tables")?;
     Ok(rows
         .into_iter()
         .map(|r| {
@@ -195,7 +202,8 @@ async fn table_sql(pool: &SqlitePool) -> Result<HashMap<String, String>> {
 }
 
 async fn load_images(pool: &SqlitePool) -> Result<BTreeMap<i64, ImageRow>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_images",
         "SELECT CAST(i.id_local AS INTEGER) AS id_local, CAST(i.id_global AS TEXT) AS id_global, \
                 CAST(i.captureTime AS TEXT) AS capture_time, \
                 CAST(i.touchTime AS REAL) AS touch_time, CAST(i.rating AS REAL) AS rating, \
@@ -213,8 +221,9 @@ async fn load_images(pool: &SqlitePool) -> Result<BTreeMap<i64, ImageRow>> {
            FROM Adobe_images i \
            JOIN AgLibraryFile f ON f.id_local = i.rootFile \
            LEFT JOIN AgLibraryFolder fo ON fo.id_local = f.folder \
-           LEFT JOIN AgLibraryRootFolder rf ON rf.id_local = fo.rootFolder",
+           LEFT JOIN AgLibraryRootFolder rf ON rf.id_local = fo.rootFolder"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read Adobe_images")?;
@@ -253,11 +262,13 @@ async fn load_images(pool: &SqlitePool) -> Result<BTreeMap<i64, ImageRow>> {
 /// catalog keeps one per folder it knows, keyed by its root and its path
 /// under it (`2369/`, `2369/Risa/`).
 async fn load_folder_ids(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_folder_ids",
         "SELECT CAST(rootFolder AS INTEGER) AS root, CAST(pathFromRoot AS TEXT) AS path, \
                 CAST(id_global AS TEXT) AS id \
-           FROM AgLibraryFolder",
+           FROM AgLibraryFolder"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgLibraryFolder")?;
@@ -300,11 +311,13 @@ pub fn folder_levels(folder: Option<&str>) -> impl Iterator<Item = (&str, String
 }
 
 async fn load_iptc(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_iptc_captions",
         "SELECT CAST(image AS INTEGER) AS image, CAST(caption AS TEXT) AS caption, \
                 CAST(copyright AS TEXT) AS copyright \
-           FROM AgLibraryIPTC",
+           FROM AgLibraryIPTC"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgLibraryIPTC")?;
@@ -318,7 +331,8 @@ async fn load_iptc(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> R
 }
 
 async fn load_exif(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_exif",
         "SELECT CAST(e.image AS INTEGER) AS image, CAST(e.hasGPS AS INTEGER) AS has_gps, \
                 CAST(e.gpsLatitude AS REAL) AS lat, CAST(e.gpsLongitude AS REAL) AS lng, \
                 CAST(e.isoSpeedRating AS REAL) AS iso, CAST(e.shutterSpeed AS REAL) AS shutter, \
@@ -326,8 +340,9 @@ async fn load_exif(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> R
                 CAST(cm.value AS TEXT) AS camera, CAST(l.value AS TEXT) AS lens \
            FROM AgHarvestedExifMetadata e \
            LEFT JOIN AgInternedExifCameraModel cm ON cm.id_local = e.cameraModelRef \
-           LEFT JOIN AgInternedExifLens l ON l.id_local = e.lensRef",
+           LEFT JOIN AgInternedExifLens l ON l.id_local = e.lensRef"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgHarvestedExifMetadata")?;
@@ -352,7 +367,8 @@ async fn load_exif(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> R
 }
 
 async fn load_place(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_iptc_places",
         "SELECT CAST(h.image AS INTEGER) AS image, \
                 CAST(ci.value AS TEXT) AS city, CAST(st.value AS TEXT) AS state, \
                 CAST(co.value AS TEXT) AS country, CAST(lo.value AS TEXT) AS location, \
@@ -362,8 +378,9 @@ async fn load_place(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> 
            LEFT JOIN AgInternedIptcState st ON st.id_local = h.stateRef \
            LEFT JOIN AgInternedIptcCountry co ON co.id_local = h.countryRef \
            LEFT JOIN AgInternedIptcLocation lo ON lo.id_local = h.locationRef \
-           LEFT JOIN AgInternedIptcCreator cr ON cr.id_local = h.creatorRef",
+           LEFT JOIN AgInternedIptcCreator cr ON cr.id_local = h.creatorRef"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgHarvestedIptcMetadata")?;
@@ -394,11 +411,13 @@ async fn load_keywords(
     images: &mut BTreeMap<i64, ImageRow>,
     faces: bool,
 ) -> Result<()> {
-    let tree: HashMap<i64, Keyword> = sqlx::query(
+    let tree: HashMap<i64, Keyword> = sql!(
+        "lightroom_render.list_keywords",
         "SELECT CAST(id_local AS INTEGER) AS id, CAST(name AS TEXT) AS name, \
                 CAST(parent AS INTEGER) AS parent, CAST(keywordType AS TEXT) AS kind \
-           FROM AgLibraryKeyword",
+           FROM AgLibraryKeyword"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgLibraryKeyword")?
@@ -421,15 +440,17 @@ async fn load_keywords(
     };
 
     if faces {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "lightroom_render.list_face_regions",
             "SELECT CAST(f.image AS INTEGER) AS image, CAST(kf.tag AS INTEGER) AS tag, \
                     CAST(f.tl_x AS REAL) AS left_, CAST(f.tl_y AS REAL) AS top, \
                     CAST(f.br_x AS REAL) AS right_, CAST(f.br_y AS REAL) AS bottom \
                FROM AgLibraryFace f JOIN AgLibraryKeywordFace kf ON kf.face = f.id_local \
               WHERE COALESCE(CAST(kf.userPick AS REAL), 0) = 1 \
                 AND COALESCE(CAST(kf.userReject AS REAL), 0) = 0 \
-              ORDER BY f.image, f.id_local",
+              ORDER BY f.image, f.id_local"
         )
+        .query()
         .fetch_all(pool)
         .await
         .context("read AgLibraryFace")?;
@@ -462,10 +483,12 @@ async fn load_keywords(
         }
     }
 
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_image_keywords",
         "SELECT CAST(image AS INTEGER) AS image, CAST(tag AS INTEGER) AS tag \
-           FROM AgLibraryKeywordImage ORDER BY image, tag",
+           FROM AgLibraryKeywordImage ORDER BY image, tag"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgLibraryKeywordImage")?;
@@ -543,13 +566,17 @@ async fn load_albums(
     tables: CollectionTables,
 ) -> Result<()> {
     // Both table names are the constants above.
-    let tree: HashMap<i64, Collection> = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT CAST(id_local AS INTEGER) AS id, CAST(name AS TEXT) AS name, \
+    let tree: HashMap<i64, Collection> = Sql::dynamic(
+        sql_id!("lightroom_render.list_collections"),
+        format!(
+            "SELECT CAST(id_local AS INTEGER) AS id, CAST(name AS TEXT) AS name, \
                 CAST(parent AS INTEGER) AS parent, \
                 COALESCE(CAST(systemOnly AS REAL), 0.0) AS system \
            FROM {}",
-        tables.collections
-    )))
+            tables.collections
+        ),
+    )
+    .query()
     .fetch_all(pool)
     .await
     .with_context(|| format!("read {}", tables.collections))?
@@ -577,11 +604,15 @@ async fn load_albums(
             tree.get(&id).map(|c| (c.name.as_deref(), c.parent))
         })
     };
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT DISTINCT CAST(image AS INTEGER) AS image, \
+    let rows = Sql::dynamic(
+        sql_id!("lightroom_render.list_collection_members"),
+        format!(
+            "SELECT DISTINCT CAST(image AS INTEGER) AS image, \
                 CAST(collection AS INTEGER) AS collection FROM {}",
-        tables.members
-    )))
+            tables.members
+        ),
+    )
+    .query()
     .fetch_all(pool)
     .await
     .with_context(|| format!("read {}", tables.members))?;
@@ -636,10 +667,12 @@ fn named_path<'t>(
 }
 
 async fn load_xmp(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_xmp",
         "SELECT CAST(image AS INTEGER) AS image, xmp FROM Adobe_AdditionalMetadata \
-          WHERE xmp IS NOT NULL",
+          WHERE xmp IS NOT NULL"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read Adobe_AdditionalMetadata")?;
@@ -654,10 +687,12 @@ async fn load_xmp(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Re
 }
 
 async fn load_video(pool: &SqlitePool, images: &mut BTreeMap<i64, ImageRow>) -> Result<()> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "lightroom_render.list_video_durations",
         "SELECT CAST(image AS INTEGER) AS image, CAST(duration AS TEXT) AS duration \
-           FROM AgVideoInfo",
+           FROM AgVideoInfo"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read AgVideoInfo")?;
@@ -677,6 +712,7 @@ fn non_empty(s: Option<String>) -> Option<String> {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// A collection inside a set is named by its path; the quick
     /// collection is one; a smart collection, with no members, and any
     /// other system collection are not; a publish service's collections
@@ -691,22 +727,30 @@ mod tests {
             .await
             .unwrap();
         for table in ["AgLibraryCollection", "AgLibraryPublishedCollection"] {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "CREATE TABLE {table} (id_local INTEGER PRIMARY KEY, creationId, \
+            Sql::dynamic(
+                test_sql_id!(),
+                format!(
+                    "CREATE TABLE {table} (id_local INTEGER PRIMARY KEY, creationId, \
                  name, parent INTEGER, systemOnly)"
-            )))
+                ),
+            )
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "CREATE TABLE {table}Image (id_local INTEGER PRIMARY KEY, \
+            Sql::dynamic(
+                test_sql_id!(),
+                format!(
+                    "CREATE TABLE {table}Image (id_local INTEGER PRIMARY KEY, \
                  collection INTEGER, image INTEGER)"
-            )))
+                ),
+            )
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         }
-        sqlx::query(
+        test_sql!(
             "INSERT INTO AgLibraryCollection VALUES \
                (1, 'com.adobe.ag.library.group', 'Shore leave', NULL, '0.0'), \
                (2, 'com.adobe.ag.library.collection', 'Risa', 1, '0.0'), \
@@ -717,8 +761,9 @@ mod tests {
              INSERT INTO AgLibraryPublishedCollection VALUES \
                (1, 'com.adobe.ag.library.group', 'Flickr', NULL, '0.0'), \
                (2, 'com.adobe.ag.library.collection', 'Photostream', 1, '0.0'); \
-             INSERT INTO AgLibraryPublishedCollectionImage VALUES (1, 2, 10), (2, 2, 10);",
+             INSERT INTO AgLibraryPublishedCollectionImage VALUES (1, 2, 10), (2, 2, 10);"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -757,6 +802,7 @@ mod folder_tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
 
+    use datalib_sql::test_sql;
     /// Each level of a photo's folder is found by its root and its path
     /// from it, and a level with no row is none.
     #[tokio::test]
@@ -769,18 +815,20 @@ mod folder_tests {
             .connect("sqlite::memory:")
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "CREATE TABLE AgLibraryFolder (id_local INTEGER, id_global TEXT, \
-             pathFromRoot TEXT, rootFolder INTEGER)",
+             pathFromRoot TEXT, rootFolder INTEGER)"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO AgLibraryFolder VALUES \
              (1, 'F-ROOT', '', 10), (2, 'F-2369', '2369/', 10), \
-             (3, 'F-RISA', '2369/Risa/', 10), (4, 'F-ELSEWHERE', '2369/', 11)",
+             (3, 'F-RISA', '2369/Risa/', 10), (4, 'F-ELSEWHERE', '2369/', 11)"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();

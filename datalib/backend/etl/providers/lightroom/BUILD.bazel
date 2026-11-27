@@ -17,6 +17,7 @@ rust_library(
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/lightroom_config:datalib_etl_lightroom_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
         "@datalib_crates//:sqlx",
@@ -54,6 +55,7 @@ rust_test(
         ":datalib_etl_lightroom",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/files:datalib_etl_files",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -110,6 +112,7 @@ rust_test(
     deps = [
         ":datalib_etl_lightroom",
         "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

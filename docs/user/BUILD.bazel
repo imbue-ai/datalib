@@ -5,6 +5,7 @@
 # published image.
 exports_files([
     "applets.md",
+    "backing_up.md",
     "building_on_datalib.md",
     "contacts_app.md",
     "docker.md",

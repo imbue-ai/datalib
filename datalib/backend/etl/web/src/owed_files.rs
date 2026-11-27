@@ -8,9 +8,10 @@ use std::sync::Mutex;
 use anyhow::Result;
 use datalib_etl::blob_cas::{BlobCas, CasEdgeRow, CasInsert};
 use datalib_problems::Reason;
-use sqlx::{AssertSqlSafe, Sqlite, Transaction};
+use sqlx::{Sqlite, Transaction};
 
 use crate::owed::{Fetched, Outcome};
+use datalib_sql::{sql_id, Sql};
 
 /// `ref id → blake3` of every file held, under any record. A file's bytes
 /// never change, so one held is not fetched again.
@@ -86,14 +87,21 @@ pub async fn store<E: CasEdgeRow>(
     let landed = inserts.len();
     let stored = cas.put_many(inserts).await?;
     // Audited: the table is a provider's `&'static str`; values are bound.
-    let update = format!("UPDATE {} SET blake3 = ? WHERE id = ?", E::TABLE);
-    let delete = format!("DELETE FROM {} WHERE id = ?", E::TABLE);
+    let update = Sql::dynamic(
+        sql_id!("etl.web.owed_files.update_edge_blake3"),
+        format!("UPDATE {} SET blake3 = ? WHERE id = ?", E::TABLE),
+    );
+    let delete = Sql::dynamic(
+        sql_id!("etl.web.owed_files.delete_edge"),
+        format!("DELETE FROM {} WHERE id = ?", E::TABLE),
+    );
     for (key, file) in files {
         let blake3 = match &file.got {
             Got::Held(held) => held.clone(),
             Got::Fetched { .. } | Got::FetchedAbove => stored[file.ref_id.as_str()].clone(),
         };
-        sqlx::query(AssertSqlSafe(update.clone()))
+        update
+            .query()
             .bind(&blake3)
             .bind(key)
             .execute(&mut **tx)
@@ -101,7 +109,8 @@ pub async fn store<E: CasEdgeRow>(
         held.lock().unwrap().insert(file.ref_id.clone(), blake3);
     }
     for f in batch.iter().filter(|f| matches!(f.outcome, Outcome::Gone)) {
-        sqlx::query(AssertSqlSafe(delete.clone()))
+        delete
+            .query()
             .bind(&f.listed.key)
             .execute(&mut **tx)
             .await?;

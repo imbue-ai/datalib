@@ -171,8 +171,10 @@ pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
     let path = crate::config::root_config_path(root);
     if !path.is_file() {
         return Err(format!(
-            "no config at {} — create one from the Setup tab before syncing",
-            path.display()
+            "no config at {} — create one before syncing: in the app's Setup tab, or from \
+             a shell with `datalib-pipeline init {}`, then add a source to it",
+            path.display(),
+            root.display()
         ));
     }
     let (checked, _) = crate::config::load_graded(&path).map_err(|e| format!("{e:#}"))?;
@@ -425,7 +427,31 @@ impl RunPeriods for Periods<'_> {
             run_id: run_id.to_string(),
         });
         tracing::info!(run = %run_id, "supervisor: the sync is over");
+        say_runner_statements(run_id);
     }
+}
+
+/// What the runner's own statements did during the sync that just ended,
+/// by name, as one line: the runner never ends, so its work is reported
+/// a sync at a time rather than as a step's metrics are.
+fn say_runner_statements(run_id: &str) {
+    static LAST: std::sync::Mutex<datalib_sql_work::ByTag> =
+        std::sync::Mutex::new(std::collections::BTreeMap::new());
+    let now = datalib_sql_work::totals();
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    let ran = datalib_sql_work::since(&now, &last);
+    *last = now;
+    if ran.is_empty() {
+        return;
+    }
+    let statements = datalib_sql_work::header_value(&ran);
+    tracing::debug!(
+        target: datalib_sql_work::TARGET,
+        run = %run_id,
+        statements = %statements,
+        "the runner's statements this sync: {} names",
+        ran.len()
+    );
 }
 
 /// Close every open request: the loop cannot run them, for `why`.

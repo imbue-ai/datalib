@@ -23,6 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_etl::doltlite_raw;
 use datalib_etl::pin::Pin;
+use datalib_sql::{sql, sql_id, Sql};
 use serde_json::{json, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
@@ -178,9 +179,13 @@ async fn read(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
     for _ in 0..args.num("samples", 12) {
-        match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
-            .fetch_one(pool)
-            .await
+        match sql!(
+            "etl.two_process.count_entities_sample",
+            "SELECT COUNT(*) FROM entities"
+        )
+        .query_scalar::<i64>()
+        .fetch_one(pool)
+        .await
         {
             Ok(n) => samples.push(json!({ "count": n, "at_ms": now_ms() })),
             Err(e) => errors.push(format!("{e:#}")),
@@ -231,9 +236,13 @@ async fn churn(args: &Args) -> Result<Value> {
         };
         opened += 1;
         if args.flag("dolt-status") {
-            if let Err(e) = sqlx::query("SELECT * FROM dolt_status")
-                .fetch_all(reader.pool())
-                .await
+            if let Err(e) = sql!(
+                "etl.two_process.read_status_during_churn",
+                "SELECT * FROM dolt_status"
+            )
+            .query()
+            .fetch_all(reader.pool())
+            .await
             {
                 errors.push(format!("round {round}: dolt_status: {e:#}"));
             }
@@ -301,13 +310,19 @@ async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) ->
         "no _datalib_meta at {}",
         pin.commit()
     );
-    let _rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
-        .fetch_one(pool)
-        .await?;
-    let _changed: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM dolt_diff_entities \
-          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
+    let _rows: i64 = sql!(
+        "etl.two_process.count_entities_pinned",
+        "SELECT COUNT(*) FROM entities"
     )
+    .query_scalar()
+    .fetch_one(pool)
+    .await?;
+    let _changed: i64 = sql!(
+        "etl.two_process.count_changed_entities_pinned",
+        "SELECT COUNT(*) FROM dolt_diff_entities \
+          WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'"
+    )
+    .query_scalar()
     .bind(cursor.unwrap_or(pin.commit()))
     .bind(pin.commit())
     .fetch_one(pool)
@@ -402,29 +417,39 @@ async fn hang(args: &Args) -> Result<Value> {
         .ok_or_else(|| anyhow!("the seed commit committed nothing"))?;
 
     let mut conn = pool.acquire().await.context("acquire")?;
-    sqlx::query("BEGIN")
+    sql!("etl.two_process.begin_hung_write", "BEGIN")
+        .query()
         .execute(&mut *conn)
         .await
         .context("BEGIN")?;
     for i in 0..args.num("rows", 5) {
-        sqlx::query("INSERT INTO entities (id, body) VALUES (?, ?)")
-            .bind(format!("in-flight-{i}"))
-            .bind("x")
-            .execute(&mut *conn)
-            .await
-            .context("insert in-flight row")?;
+        sql!(
+            "etl.two_process.insert_in_flight_entity",
+            "INSERT INTO entities (id, body) VALUES (?, ?)"
+        )
+        .query()
+        .bind(format!("in-flight-{i}"))
+        .bind("x")
+        .execute(&mut *conn)
+        .await
+        .context("insert in-flight row")?;
     }
     if args.flag("commit") {
-        sqlx::query("COMMIT")
+        sql!("etl.two_process.commit_hung_write", "COMMIT")
+            .query()
             .execute(&mut *conn)
             .await
             .context("COMMIT")?;
     }
     if args.flag("dolt-commit") {
-        sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', 'stranded')")
-            .fetch_one(&mut *conn)
-            .await
-            .context("dolt_commit on the writer's branch")?;
+        sql!(
+            "etl.two_process.dolt_commit_stranded",
+            "SELECT dolt_commit('-Am', 'stranded')"
+        )
+        .query_scalar::<Option<String>>()
+        .fetch_one(&mut *conn)
+        .await
+        .context("dolt_commit on the writer's branch")?;
     }
     write_atomic(&args.path("ready-out")?, b"ready")?;
     std::future::pending::<()>().await;
@@ -439,14 +464,22 @@ async fn reopen(args: &Args) -> Result<Value> {
     let pool = doltlite_raw::open(&db, &[TABLE_DDL])
         .await
         .context("reopen read-write")?;
-    let working_set: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM entities")
-        .fetch_one(&pool)
-        .await
-        .context("count the working set")?;
-    let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
+    let working_set: i64 = sql!(
+        "etl.two_process.count_entities_on_reopen",
+        "SELECT COUNT(*) FROM entities"
+    )
+    .query_scalar()
+    .fetch_one(&pool)
+    .await
+    .context("count the working set")?;
+    let messages: Vec<String> = sql!(
+        "etl.two_process.list_log_messages_on_reopen",
+        "SELECT message FROM dolt_log()"
+    )
+    .query_scalar()
+    .fetch_all(&pool)
+    .await
+    .unwrap_or_default();
     let committed = committed_rows(&pool).await;
     pool.close().await;
     Ok(json!({
@@ -497,31 +530,41 @@ async fn hold(args: &Args) -> Result<Value> {
     let mut step = |name: &str, own: i64| steps.push(json!({ "step": name, "working": own }));
 
     await_file(&args.path("delete-when")?)?;
-    sqlx::query("BEGIN")
+    sql!("etl.two_process.begin_held_reload", "BEGIN")
+        .query()
         .execute(&mut *conn)
         .await
         .context("BEGIN")?;
-    sqlx::query("DELETE FROM entities")
-        .execute(&mut *conn)
-        .await
-        .context("DELETE")?;
+    sql!(
+        "etl.two_process.delete_entities_in_reload",
+        "DELETE FROM entities"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await
+    .context("DELETE")?;
     step("deleted", count_on(&mut conn).await?);
     write_atomic(&args.path("deleted-out")?, b"deleted")?;
 
     await_file(&args.path("reload-when")?)?;
     for i in 0..RELOAD_ROWS {
-        sqlx::query("INSERT INTO entities (id, body) VALUES (?, ?)")
-            .bind(format!("reload-{i}"))
-            .bind("y")
-            .execute(&mut *conn)
-            .await
-            .context("insert reload row")?;
+        sql!(
+            "etl.two_process.insert_reloaded_entity",
+            "INSERT INTO entities (id, body) VALUES (?, ?)"
+        )
+        .query()
+        .bind(format!("reload-{i}"))
+        .bind("y")
+        .execute(&mut *conn)
+        .await
+        .context("insert reload row")?;
     }
     step("reloaded", count_on(&mut conn).await?);
     write_atomic(&args.path("reloaded-out")?, b"reloaded")?;
 
     await_file(&args.path("sql-commit-when")?)?;
-    sqlx::query("COMMIT")
+    sql!("etl.two_process.commit_held_reload", "COMMIT")
+        .query()
         .execute(&mut *conn)
         .await
         .context("COMMIT")?;
@@ -548,10 +591,14 @@ async fn hold(args: &Args) -> Result<Value> {
 }
 
 async fn count_on(conn: &mut sqlx::SqliteConnection) -> Result<i64> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM entities")
-        .fetch_one(conn)
-        .await
-        .context("count on the writer's connection")
+    sql!(
+        "etl.two_process.count_entities_on_writer",
+        "SELECT COUNT(*) FROM entities"
+    )
+    .query_scalar()
+    .fetch_one(conn)
+    .await
+    .context("count on the writer's connection")
 }
 
 /// A long-lived read-only handle -- the shape the search applet holds --
@@ -580,21 +627,32 @@ async fn watch(args: &Args) -> Result<Value> {
     while !until.exists() {
         let phase = std::fs::read_to_string(&phase_file).unwrap_or_default();
         let started = Instant::now();
-        let working = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
-            .fetch_one(&pool)
-            .await
-            .map_err(|e| e.to_string());
-        let head = sqlx::query_scalar::<_, Option<String>>("SELECT dolt_hashof('HEAD')")
-            .fetch_one(&pool)
-            .await
-            .map_err(|e| e.to_string());
+        let working = sql!(
+            "etl.two_process.count_entities_watched",
+            "SELECT COUNT(*) FROM entities"
+        )
+        .query_scalar::<i64>()
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string());
+        let head = sql!(
+            "etl.two_process.read_head_watched",
+            "SELECT dolt_hashof('HEAD')"
+        )
+        .query_scalar::<Option<String>>()
+        .fetch_one(&pool)
+        .await
+        .map_err(|e| e.to_string());
         let pinned = match &head {
             Ok(Some(h)) => match Pin::at(h.clone()) {
                 Ok(pin) => {
                     // Audited: `Pin::at` checked the hash is 40 hex characters;
                     // the table name is a literal.
-                    let sql = format!("SELECT COUNT(*) FROM dolt_at_entities('{}')", pin.commit());
-                    sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+                    let sql = Sql::dynamic(
+                        sql_id!("etl.two_process.count_entities_at_watched_head"),
+                        format!("SELECT COUNT(*) FROM dolt_at_entities('{}')", pin.commit()),
+                    );
+                    sql.query_scalar::<i64>()
                         .fetch_one(&pool)
                         .await
                         .map_err(|e| e.to_string())
@@ -651,7 +709,8 @@ async fn txn_read(args: &Args) -> Result<Value> {
     let mut samples: Vec<Value> = Vec::new();
     let mut txn = 0u64;
     while !until.exists() {
-        sqlx::query("BEGIN")
+        sql!("etl.two_process.begin_read_txn", "BEGIN")
+            .query()
             .execute(&mut *conn)
             .await
             .context("BEGIN")?;
@@ -664,7 +723,8 @@ async fn txn_read(args: &Args) -> Result<Value> {
             samples.push(s);
             tokio::time::sleep(interval).await;
         }
-        sqlx::query("COMMIT")
+        sql!("etl.two_process.end_read_txn", "COMMIT")
+            .query()
             .execute(&mut *conn)
             .await
             .context("COMMIT")?;
@@ -704,10 +764,14 @@ async fn branch_read(args: &Args) -> Result<Value> {
         .await
         .context("open read-write")?;
     let mut conn = pool.acquire().await.context("acquire")?;
-    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_branches WHERE name = ?")
-        .bind(&branch)
-        .fetch_one(&mut *conn)
-        .await?;
+    let exists: i64 = sql!(
+        "etl.two_process.count_reader_branch",
+        "SELECT COUNT(*) FROM dolt_branches WHERE name = ?"
+    )
+    .query_scalar()
+    .bind(&branch)
+    .fetch_one(&mut *conn)
+    .await?;
     let retry_for = Duration::from_millis(args.num("retry-ms", 30_000));
     let refresh_budget = Duration::from_millis(args.num("refresh-retry-ms", 0));
     if exists == 0 {
@@ -717,13 +781,21 @@ async fn branch_read(args: &Args) -> Result<Value> {
             .0
             .context("create the reader's branch")?;
     }
-    sqlx::query("SELECT dolt_connect_branch(?)")
-        .bind(&branch)
-        .execute(&mut *conn)
-        .await?;
-    let active: String = sqlx::query_scalar("SELECT active_branch()")
-        .fetch_one(&mut *conn)
-        .await?;
+    sql!(
+        "etl.two_process.connect_reader_branch",
+        "SELECT dolt_connect_branch(?)"
+    )
+    .query()
+    .bind(&branch)
+    .execute(&mut *conn)
+    .await?;
+    let active: String = sql!(
+        "etl.two_process.verify_reader_branch_active",
+        "SELECT active_branch()"
+    )
+    .query_scalar()
+    .fetch_one(&mut *conn)
+    .await?;
     if active != branch {
         bail!("connected to {active:?}, not {branch:?}");
     }
@@ -769,10 +841,14 @@ async fn branch_read(args: &Args) -> Result<Value> {
         }
         txn += 1;
     }
-    let dirty: Vec<String> = sqlx::query_scalar("SELECT table_name FROM dolt_status")
-        .fetch_all(&mut *conn)
-        .await
-        .unwrap_or_default();
+    let dirty: Vec<String> = sql!(
+        "etl.two_process.list_reader_branch_dirty",
+        "SELECT table_name FROM dolt_status"
+    )
+    .query_scalar()
+    .fetch_all(&mut *conn)
+    .await
+    .unwrap_or_default();
     drop(conn);
     pool.close().await;
     Ok(json!({
@@ -797,20 +873,27 @@ async fn seal_existing(args: &Args) -> Result<Value> {
     let column = identifier(args.str("column")?)?;
     let rows = args.num("rows", 1000) as i64;
     let pool = writer_pool(&db).await.context("open the writer branch")?;
-    let total: i64 =
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
-            .fetch_one(&pool)
-            .await?;
+    let total: i64 = Sql::dynamic(
+        sql_id!("etl.two_process.count_rows_to_seal"),
+        format!("SELECT COUNT(*) FROM {table}"),
+    )
+    .query_scalar()
+    .fetch_one(&pool)
+    .await?;
     // Audited: `table` and `column` passed `identifier`, so they are bare
     // lowercase names; every value is bound.
-    let update = format!(
-        "UPDATE {table} SET {column} = CASE WHEN {column} IS NULL THEN 'x' ELSE NULL END \
+    let update = Sql::dynamic(
+        sql_id!("etl.two_process.toggle_column_in_row_window"),
+        format!(
+            "UPDATE {table} SET {column} = CASE WHEN {column} IS NULL THEN 'x' ELSE NULL END \
           WHERE rowid IN (SELECT rowid FROM {table} ORDER BY rowid LIMIT ? OFFSET ?)"
+        ),
     );
     let mut commits: Vec<Value> = Vec::new();
     for i in 0..args.num("seals", 20) as i64 {
         let started = Instant::now();
-        sqlx::query(sqlx::AssertSqlSafe(update.clone()))
+        update
+            .query()
             .bind(rows)
             .bind((i * rows) % total.max(1))
             .execute(&pool)
@@ -841,18 +924,26 @@ async fn writer_pool(db: &Path) -> Result<SqlitePool> {
         .max_lifetime(None)
         .after_connect(|conn, _meta| {
             Box::pin(async move {
-                sqlx::query("SELECT dolt_connect_branch(?)")
-                    .bind(doltlite_raw::WRITER_BRANCH)
-                    .execute(&mut *conn)
-                    .await?;
+                sql!(
+                    "etl.two_process.connect_writer_pool_branch",
+                    "SELECT dolt_connect_branch(?)"
+                )
+                .query()
+                .bind(doltlite_raw::WRITER_BRANCH)
+                .execute(&mut *conn)
+                .await?;
                 Ok(())
             })
         })
         .connect_with(opts)
         .await?;
-    let active: String = sqlx::query_scalar("SELECT active_branch()")
-        .fetch_one(&pool)
-        .await?;
+    let active: String = sql!(
+        "etl.two_process.verify_writer_pool_branch",
+        "SELECT active_branch()"
+    )
+    .query_scalar()
+    .fetch_one(&pool)
+    .await?;
     if active != doltlite_raw::WRITER_BRANCH {
         bail!(
             "connected to {active:?}, not {:?}",
@@ -867,13 +958,20 @@ async fn writer_pool(db: &Path) -> Result<SqlitePool> {
 /// the file (`datalib_pin::head`).
 async fn sample_on(conn: &mut sqlx::SqliteConnection, table: &str) -> Result<Value> {
     // Audited: `table` passed `identifier`.
-    let count: i64 =
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table}")))
-            .fetch_one(&mut *conn)
-            .await?;
-    let head: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
-        .fetch_one(&mut *conn)
-        .await?;
+    let count: i64 = Sql::dynamic(
+        sql_id!("etl.two_process.count_table_sample"),
+        format!("SELECT COUNT(*) FROM {table}"),
+    )
+    .query_scalar()
+    .fetch_one(&mut *conn)
+    .await?;
+    let head: Option<String> = sql!(
+        "etl.two_process.read_head_sample",
+        "SELECT dolt_hashof('HEAD')"
+    )
+    .query_scalar()
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(json!({ "at_ms": now_ms(), "count": count, "head": head }))
 }
 
@@ -920,7 +1018,8 @@ async fn rev_probe(args: &Args) -> Result<Value> {
     ];
     for (name, sql) in probes {
         // Audited: `rev` and `other` are hashes the test read from the store.
-        let got = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let got = Sql::dynamic(sql_id!("etl.two_process.run_revision_probe"), sql)
+            .query()
             .fetch_all(&pool)
             .await
             .map(|rows| {
@@ -953,7 +1052,10 @@ async fn rev_probe(args: &Args) -> Result<Value> {
 
 /// The shape of the time-series applet's read (`store::chunks`): the rows
 /// of a range over the key, blobs and all, in key order.
-const RANGE_READ: &str = "SELECT id, body FROM entities WHERE id BETWEEN ? AND ? ORDER BY id";
+const RANGE_READ: Sql = sql!(
+    "etl.two_process.list_entities_in_id_range",
+    "SELECT id, body FROM entities WHERE id BETWEEN ? AND ? ORDER BY id"
+);
 
 /// The reader that needs no branch: look up `main`'s tip on a read-only
 /// connection, open `<db>@<tip>` read-only and detached, read it for
@@ -1013,9 +1115,13 @@ async fn rev_read(args: &Args) -> Result<Value> {
         };
         let opened = Instant::now();
         while opened.elapsed() < hold && !until.exists() {
-            match sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM entities")
-                .fetch_one(&pool)
-                .await
+            match sql!(
+                "etl.two_process.count_entities_at_revision",
+                "SELECT COUNT(*) FROM entities"
+            )
+            .query_scalar::<i64>()
+            .fetch_one(&pool)
+            .await
             {
                 Ok(count) => samples.push(json!({
                     "txn": txn, "at_ms": now_ms(), "count": count, "head": tip,
@@ -1023,7 +1129,8 @@ async fn rev_read(args: &Args) -> Result<Value> {
                 Err(e) => errors.push(format!("sample in window {txn}: {e:#}")),
             }
             if args.flag("range") {
-                if let Err(e) = sqlx::query(RANGE_READ)
+                if let Err(e) = RANGE_READ
+                    .query()
                     .bind("")
                     .bind("zzzz")
                     .fetch_all(&pool)
@@ -1090,9 +1197,13 @@ fn guarded_reads(reader: &mut datalib_sql_guard::Reader) -> Result<()> {
 
 async fn main_tip(db: &Path) -> Result<String> {
     let pool = datalib_pin::open_reader(db).await?;
-    let tip = sqlx::query_scalar::<_, String>("SELECT hash FROM dolt_branches WHERE name = 'main'")
-        .fetch_one(&pool)
-        .await;
+    let tip = sql!(
+        "etl.two_process.read_main_tip",
+        "SELECT hash FROM dolt_branches WHERE name = 'main'"
+    )
+    .query_scalar::<String>()
+    .fetch_one(&pool)
+    .await;
     pool.close().await;
     Ok(tip?)
 }
@@ -1120,7 +1231,8 @@ async fn retry_busy(
     loop {
         attempts += 1;
         // Audited: every caller passes a literal or a branch name the test chose.
-        match sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+        match Sql::dynamic(sql_id!("etl.two_process.run_until_not_busy"), sql)
+            .query()
             .execute(&mut *conn)
             .await
         {
@@ -1162,12 +1274,16 @@ fn await_file(path: &Path) -> Result<()> {
 // ── store helpers ───────────────────────────────────────────────────
 
 async fn insert(pool: &sqlx::SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("INSERT OR REPLACE INTO entities (id, body) VALUES (?, ?)")
-        .bind(id)
-        .bind("x")
-        .execute(pool)
-        .await
-        .with_context(|| format!("insert {id}"))?;
+    sql!(
+        "etl.two_process.replace_entity",
+        "INSERT OR REPLACE INTO entities (id, body) VALUES (?, ?)"
+    )
+    .query()
+    .bind(id)
+    .bind("x")
+    .execute(pool)
+    .await
+    .with_context(|| format!("insert {id}"))?;
     Ok(())
 }
 
@@ -1188,20 +1304,26 @@ async fn commit_a_chunk_in_a_held_transaction(
     hold: Duration,
 ) -> Result<String> {
     let mut conn = pool.acquire().await.context("acquire")?;
-    sqlx::query("BEGIN")
+    sql!("etl.two_process.begin_chunk_txn", "BEGIN")
+        .query()
         .execute(&mut *conn)
         .await
         .context("BEGIN")?;
     for row in 0..2 {
-        sqlx::query("INSERT OR REPLACE INTO entities (id, body) VALUES (?, ?)")
-            .bind(format!("chunk-{chunk}-{row}"))
-            .bind("x")
-            .execute(&mut *conn)
-            .await
-            .with_context(|| format!("chunk {chunk}: insert"))?;
+        sql!(
+            "etl.two_process.replace_chunk_entity",
+            "INSERT OR REPLACE INTO entities (id, body) VALUES (?, ?)"
+        )
+        .query()
+        .bind(format!("chunk-{chunk}-{row}"))
+        .bind("x")
+        .execute(&mut *conn)
+        .await
+        .with_context(|| format!("chunk {chunk}: insert"))?;
     }
     tokio::time::sleep(hold).await;
-    sqlx::query("COMMIT")
+    sql!("etl.two_process.commit_chunk_txn", "COMMIT")
+        .query()
         .execute(&mut *conn)
         .await
         .with_context(|| format!("chunk {chunk}: COMMIT"))?;
@@ -1222,11 +1344,11 @@ async fn committed_rows(pool: &sqlx::SqlitePool) -> Value {
     };
     // Audited: the hash came from `dolt_log` and `Pin::at` re-checked it is 40
     // hex characters; the table name is a literal.
-    let sql = format!("SELECT COUNT(*) FROM dolt_at_entities('{}')", pin.commit());
-    match sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
-        .fetch_one(pool)
-        .await
-    {
+    let sql = Sql::dynamic(
+        sql_id!("etl.two_process.count_committed_entities"),
+        format!("SELECT COUNT(*) FROM dolt_at_entities('{}')", pin.commit()),
+    );
+    match sql.query_scalar::<i64>().fetch_one(pool).await {
         Ok(n) => json!(n),
         Err(_) => Value::Null,
     }

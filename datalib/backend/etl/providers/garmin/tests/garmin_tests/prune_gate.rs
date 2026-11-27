@@ -19,6 +19,7 @@ use datalib_etl_web::http::HttpResponse;
 use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
+use datalib_sql::{test_sql, Sql};
 use serde_json::{json, Value};
 
 /// The day every run but a `run_on` believes it is.
@@ -141,11 +142,11 @@ impl Account {
         summary.unwrap()
     }
 
-    pub(crate) async fn count(&self, sql: &'static str) -> i64 {
+    pub(crate) async fn count(&self, sql: Sql) -> i64 {
         let pool = datalib_pin::open_reader(&db_path_for(&self.raw))
             .await
             .unwrap();
-        let n: i64 = sqlx::query_scalar(sql).fetch_one(&pool).await.unwrap();
+        let n: i64 = sql.query_scalar().fetch_one(&pool).await.unwrap();
         pool.close().await;
         n
     }
@@ -155,9 +156,10 @@ impl Account {
         let pool = datalib_pin::open_reader(&db_path_for(&self.raw))
             .await
             .unwrap();
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT scope_key, sample FROM problems WHERE stage = 'fetch' ORDER BY scope_key",
+        let rows: Vec<(String, String)> = test_sql!(
+            "SELECT scope_key, sample FROM problems WHERE stage = 'fetch' ORDER BY scope_key"
         )
+        .query_as()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -166,20 +168,20 @@ impl Account {
     }
 
     /// `(id, blake3)` pairs, as `sql` selects them.
-    pub(crate) async fn pairs(&self, sql: &'static str) -> Vec<(String, Option<String>)> {
+    pub(crate) async fn pairs(&self, sql: Sql) -> Vec<(String, Option<String>)> {
         let pool = datalib_pin::open_reader(&db_path_for(&self.raw))
             .await
             .unwrap();
-        let rows = sqlx::query_as(sql).fetch_all(&pool).await.unwrap();
+        let rows = sql.query_as().fetch_all(&pool).await.unwrap();
         pool.close().await;
         rows
     }
 
     /// One statement against the store, the way an earlier build would
     /// have left it.
-    pub(crate) async fn exec(&self, sql: &'static str) {
+    pub(crate) async fn exec(&self, sql: Sql) {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
-        sqlx::query(sql).execute(db.pool()).await.unwrap();
+        sql.query().execute(db.pool()).await.unwrap();
         db.commit_all("test").await.unwrap();
         db.close().await;
     }
@@ -220,8 +222,10 @@ async fn a_wrapped_listing_with_no_array_does_not_prune() {
     let s1 = a.run().await;
     assert_eq!(s1.errors, 0, "{}", s1.line());
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'badges'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'badges'"
+        ))
+        .await,
         1
     );
 
@@ -231,8 +235,10 @@ async fn a_wrapped_listing_with_no_array_does_not_prune() {
     );
     let s2 = a.run().await;
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'badges'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'badges'"
+        ))
+        .await,
         1,
         "a listing with no array inside must not prune: {}",
         s2.line()
@@ -252,8 +258,10 @@ async fn a_wrapped_listing_with_no_array_does_not_prune() {
     assert_eq!(s3.errors, 0, "{}", s3.line());
     assert!(a.problems().await.is_empty());
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'badges'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'badges'"
+        ))
+        .await,
         1
     );
 }
@@ -306,7 +314,11 @@ async fn a_listed_thing_with_no_id_is_a_row() {
 async fn a_listing_answering_nothing_does_not_prune() {
     let a = Account::tng();
     a.run().await;
-    assert_eq!(a.count("SELECT COUNT(*) FROM garmin_devices").await, 1);
+    assert_eq!(
+        a.count(test_sql!("SELECT COUNT(*) FROM garmin_devices"))
+            .await,
+        1
+    );
 
     for (label, nothing) in [
         ("204", status(204, "")),
@@ -317,14 +329,17 @@ async fn a_listing_answering_nothing_does_not_prune() {
         a.answer(DEVICES, nothing);
         let s = a.run().await;
         assert_eq!(
-            a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'personal_records'")
-                .await,
+            a.count(test_sql!(
+                "SELECT COUNT(*) FROM garmin_items WHERE kind = 'personal_records'"
+            ))
+            .await,
             1,
             "{label}: a listing answering nothing must not prune: {}",
             s.line()
         );
         assert_eq!(
-            a.count("SELECT COUNT(*) FROM garmin_devices").await,
+            a.count(test_sql!("SELECT COUNT(*) FROM garmin_devices"))
+                .await,
             1,
             "{label}: a device listing answering nothing must not prune: {}",
             s.line()
@@ -355,12 +370,16 @@ async fn a_listing_answering_nothing_does_not_prune() {
 async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green() {
     let a = Account::tng();
     a.run().await;
-    assert_eq!(a.count("SELECT COUNT(*) FROM garmin_weigh_ins").await, 4);
+    assert_eq!(
+        a.count(test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins"))
+            .await,
+        4
+    );
 
-    a.exec(
+    a.exec(test_sql!(
         "CREATE TRIGGER no_weigh_ins BEFORE INSERT ON garmin_weigh_ins \
-         BEGIN SELECT RAISE(ABORT, 'the scale is offline'); END",
-    )
+         BEGIN SELECT RAISE(ABORT, 'the scale is offline'); END"
+    ))
     .await;
     let s = a.run().await;
     assert_eq!(s.errors, 1, "{}", s.line());
@@ -370,7 +389,11 @@ async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green(
         "the phases after the failed one still ran: {}",
         s.line()
     );
-    assert_eq!(a.count("SELECT COUNT(*) FROM garmin_weigh_ins").await, 4);
+    assert_eq!(
+        a.count(test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins"))
+            .await,
+        4
+    );
     let problems = a.problems().await;
     assert_eq!(
         problems.keys().collect::<Vec<_>>(),
@@ -382,7 +405,7 @@ async fn a_phase_that_fails_wholesale_is_a_problems_row_and_the_run_stays_green(
         "the sample carries the error: {problems:?}"
     );
 
-    a.exec("DROP TRIGGER no_weigh_ins").await;
+    a.exec(test_sql!("DROP TRIGGER no_weigh_ins")).await;
     let s = a.run().await;
     assert_eq!(s.errors, 0, "{}", s.line());
     assert!(a.problems().await.is_empty());
@@ -403,8 +426,10 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
     let s1 = a.run().await;
     assert_eq!(s1.errors, 0, "{}", s1.line());
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'"
+        ))
+        .await,
         (ITEM_PAGE + 1) as i64,
         "the walk reached the second page: {}",
         s1.line()
@@ -414,8 +439,10 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
     a.answer(&page_two, status(500, "upstream fell over"));
     let s2 = a.run().await;
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'"
+        ))
+        .await,
         (ITEM_PAGE + 1) as i64,
         "a walk whose second page failed must not prune: {}",
         s2.line()
@@ -450,8 +477,10 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
     );
     assert_eq!(s2b.items_pruned, 0, "{}", s2b.line());
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'"
+        ))
+        .await,
         (ITEM_PAGE + 1) as i64,
         "a walk that saw the same page twice must not prune: {}",
         s2b.line()
@@ -470,8 +499,10 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
     assert_eq!(s3.errors, 0, "{}", s3.line());
     assert_eq!(s3.items_pruned, 1, "{}", s3.line());
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_items WHERE kind = 'workouts'"
+        ))
+        .await,
         ITEM_PAGE as i64
     );
     assert!(a.problems().await.is_empty());
@@ -496,7 +527,7 @@ async fn a_user_settings_failure_is_a_listing_row_and_the_stored_row_stays() {
         ["listing:user_settings"]
     );
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_account WHERE id = 'user_settings' AND payload IS NOT NULL")
+        a.count(test_sql!("SELECT COUNT(*) FROM garmin_account WHERE id = 'user_settings' AND payload IS NOT NULL"))
             .await,
         1
     );

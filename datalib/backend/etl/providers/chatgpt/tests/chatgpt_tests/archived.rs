@@ -14,6 +14,7 @@ use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
+use datalib_sql::test_sql;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -197,7 +198,8 @@ impl Account {
 
     async fn stored(&self) -> Vec<String> {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
-        let ids = sqlx::query_scalar("SELECT id FROM conversations ORDER BY id")
+        let ids = test_sql!("SELECT id FROM conversations ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();

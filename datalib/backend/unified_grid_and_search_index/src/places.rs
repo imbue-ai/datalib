@@ -3,6 +3,7 @@
 //! Every read is off `nodes_places`. What else is in a place is searched,
 //! by [`crate::at_node`].
 
+use datalib_sql::{sql, Sql};
 use serde::Serialize;
 
 /// Where a place sorts in its level. Also a cursor: the last place of a
@@ -104,6 +105,9 @@ pub fn level_sql(parent: &Parent) -> String {
 }
 
 /// The sources that hold places at their top.
-pub const SOURCES_WITH_PLACES_SQL: &str = "SELECT DISTINCT source_id \
+pub const SOURCES_WITH_PLACES_SQL: Sql = sql!(
+    "unified_grid_and_search_index.list_sources_with_places",
+    "SELECT DISTINCT source_id \
      FROM nodes INDEXED BY nodes_places WHERE parent_uuid IS NULL AND is_place = 1 \
-     ORDER BY source_id";
+     ORDER BY source_id"
+);

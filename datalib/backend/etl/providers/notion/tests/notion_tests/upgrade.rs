@@ -15,6 +15,7 @@ use datalib_etl_web::owed;
 use serde_json::json;
 
 use crate::support::*;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const OLD_PAGE_MARKDOWN_DDL: &str = "CREATE TABLE IF NOT EXISTS page_markdown (
     id TEXT PRIMARY KEY, markdown TEXT NULL, truncated INTEGER NOT NULL DEFAULT 0,
@@ -35,11 +36,8 @@ const RIKER: &str = "1701d000-0000-4000-8000-00000000aa02";
 const SLOT_A: &str = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/a.png";
 const SLOT_B: &str = "https://prod-files-secure.s3.us-west-2.amazonaws.com/ws/b.png";
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -68,37 +66,40 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         "properties": {"Name": {"type": "title", "title": [{"plain_text": "Bridge"}]}},
         "created_by": {"object": "user", "id": PICARD},
         "last_edited_by": {"object": "user", "id": RIKER}});
-    sqlx::query("INSERT INTO pages (id, last_edited_time, payload) VALUES (?, ?, jsonb(?))")
+    test_sql!("INSERT INTO pages (id, last_edited_time, payload) VALUES (?, ?, jsonb(?))")
+        .query()
         .bind(BRIDGE)
         .bind(EDITED)
         .bind(bridge.to_string())
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO page_markdown (id, markdown, source_last_edited_time) VALUES (?, ?, ?)",
-    )
-    .bind(BRIDGE)
-    .bind("Captain's log.\n")
-    .bind(EDITED)
-    .execute(&pool)
-    .await
-    .unwrap();
-    sqlx::query("INSERT INTO pages (id, last_edited_time, payload) VALUES (?, ?, jsonb(?))")
+    test_sql!("INSERT INTO page_markdown (id, markdown, source_last_edited_time) VALUES (?, ?, ?)")
+        .query()
+        .bind(BRIDGE)
+        .bind("Captain's log.\n")
+        .bind(EDITED)
+        .execute(&pool)
+        .await
+        .unwrap();
+    test_sql!("INSERT INTO pages (id, last_edited_time, payload) VALUES (?, ?, jsonb(?))")
+        .query()
         .bind(SICKBAY)
         .bind(EDITED)
         .bind(json!({"id": SICKBAY, "object": "page"}).to_string())
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO users (id, name, payload) VALUES (?, ?, jsonb(?))")
+    test_sql!("INSERT INTO users (id, name, payload) VALUES (?, ?, jsonb(?))")
+        .query()
         .bind(PICARD)
         .bind("Jean-Luc Picard")
         .bind(json!({"id": PICARD}).to_string())
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO notion_attachments (id, page_id, ref_id, blake3) VALUES (?, ?, ?, ?)")
+    test_sql!("INSERT INTO notion_attachments (id, page_id, ref_id, blake3) VALUES (?, ?, ?, ?)")
+        .query()
         .bind(&edge_a)
         .bind(BRIDGE)
         .bind(SLOT_A)
@@ -106,7 +107,8 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO notion_attachments (id, page_id, ref_id) VALUES (?, ?, ?)")
+    test_sql!("INSERT INTO notion_attachments (id, page_id, ref_id) VALUES (?, ?, ?)")
+        .query()
         .bind(&edge_b)
         .bind(BRIDGE)
         .bind(SLOT_B)
@@ -145,13 +147,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         .await
         .unwrap();
     // The table an older build declared, and its record.
-    sqlx::query("CREATE TABLE IF NOT EXISTS sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)")
+    test_sql!("CREATE TABLE IF NOT EXISTS sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)").query()
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO sync_scope_config VALUES ('notion:download', '{\"refresh_window_days\":0}', '2369-04-15T00:00:00Z', NULL)",
-    )
+    test_sql!("INSERT INTO sync_scope_config VALUES ('notion:download', '{\"refresh_window_days\":0}', '2369-04-15T00:00:00Z', NULL)").query()
     .execute(&pool)
     .await
     .unwrap();
@@ -163,10 +163,14 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     let held = |table: &'static str| {
         let pool = pool.clone();
         async move {
-            sqlx::query_as::<_, (String, bool, Option<String>)>(sqlx::AssertSqlSafe(format!(
-                "SELECT id, fetched_at_utc IS NOT NULL, held_version \
+            Sql::dynamic(
+                test_sql_id!(),
+                format!(
+                    "SELECT id, fetched_at_utc IS NOT NULL, held_version \
                  FROM {table}_bookkeeping ORDER BY id"
-            )))
+                ),
+            )
+            .query_as::<(String, bool, Option<String>)>()
             .fetch_all(&pool)
             .await
             .unwrap()
@@ -179,7 +183,7 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         "a stub whose object never came goes; the rest are held at their stamp"
     );
     assert_eq!(
-        strings(pool, "SELECT id FROM pages ORDER BY id").await,
+        strings(pool, test_sql!("SELECT id FROM pages ORDER BY id")).await,
         [BRIDGE, SICKBAY]
     );
     assert_eq!(
@@ -192,10 +196,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         [at(BRIDGE, EDITED)],
         "a listing that failed is not held"
     );
-    let has_column: bool = sqlx::query_scalar(
+    let has_column: bool = test_sql!(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('page_markdown') \
-         WHERE name = 'source_last_edited_time')",
+         WHERE name = 'source_last_edited_time')"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .unwrap();
@@ -236,7 +241,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         [edge_b.as_str()]
     );
     assert_eq!(
-        strings(pool, "SELECT scope_key FROM problems ORDER BY scope_key").await,
+        strings(
+            pool,
+            test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        )
+        .await,
         [
             format!("notion_attachments:{edge_b}"),
             format!("page_markdown:{SICKBAY}"),
@@ -244,13 +253,18 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         ],
         "the marks on page rows go; what is still owed keeps its row"
     );
-    assert!(strings(pool, "SELECT scope FROM coverage").await.is_empty());
-    assert!(strings(pool, "SELECT scope FROM sync_scope_state")
+    assert!(strings(pool, test_sql!("SELECT scope FROM coverage"))
         .await
         .is_empty());
-    let retired: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
+    assert!(
+        strings(pool, test_sql!("SELECT scope FROM sync_scope_state"))
+            .await
+            .is_empty()
+    );
+    let retired: i64 = test_sql!(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .unwrap();
@@ -258,7 +272,7 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     assert_eq!(
         strings(
             pool,
-            "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
         )
         .await,
         ["3"]
@@ -266,7 +280,9 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     assert_eq!(
         strings(
             pool,
-            "SELECT id || ' ' || kind || ' ' || coalesce(title, '-') FROM tree ORDER BY id"
+            test_sql!(
+                "SELECT id || ' ' || kind || ' ' || coalesce(title, '-') FROM tree ORDER BY id"
+            )
         )
         .await,
         [format!("{BRIDGE} page Bridge"), format!("{SICKBAY} page -")],

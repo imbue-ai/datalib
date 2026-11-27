@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 
 use anyhow::{Context, Result};
+use datalib_sql::{sql_id, Sql};
 use sqlx::SqlitePool;
 
 /// How much a render holds at once: `render units` per page of rows, and
@@ -97,24 +98,27 @@ impl RenderUnitPages {
                 let KeyColumn { table, column } = *key;
                 let keys: Vec<String> = match after {
                     None => {
-                        let sql = format!(
-                            "SELECT DISTINCT {column} FROM {table}
+                        let sql = Sql::dynamic(
+                            sql_id!("etl.render.first_page_of_keys"),
+                            format!(
+                                "SELECT DISTINCT {column} FROM {table}
                               WHERE {column} IS NOT NULL ORDER BY {column} LIMIT ?1"
+                            ),
                         );
                         // Audited: `table` and `column` are `&'static str`
                         // at every callsite; the limit is bound.
-                        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-                            .bind(page as i64)
-                            .fetch_all(pool)
-                            .await
+                        sql.query_scalar().bind(page as i64).fetch_all(pool).await
                     }
                     Some(last) => {
-                        let sql = format!(
-                            "SELECT DISTINCT {column} FROM {table}
+                        let sql = Sql::dynamic(
+                            sql_id!("etl.render.next_page_of_keys"),
+                            format!(
+                                "SELECT DISTINCT {column} FROM {table}
                               WHERE {column} > ?1 ORDER BY {column} LIMIT ?2"
+                            ),
                         );
                         // Audited: as above; the last key is bound.
-                        sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+                        sql.query_scalar()
                             .bind(last.as_str())
                             .bind(page as i64)
                             .fetch_all(pool)
@@ -162,6 +166,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
+    use datalib_sql::test_sql;
     #[test]
     fn batches_stay_under_the_budget_and_lose_nothing() {
         assert_eq!(batches(&[], 10), Vec::<Range<usize>>::new());
@@ -180,12 +185,14 @@ mod tests {
             .connect_with(SqliteConnectOptions::from_str("sqlite::memory:").unwrap())
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY, k TEXT)")
+        test_sql!("CREATE TABLE t (id INTEGER PRIMARY KEY, k TEXT)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         for k in keys {
-            sqlx::query("INSERT INTO t (k) VALUES (?)")
+            test_sql!("INSERT INTO t (k) VALUES (?)")
+                .query()
                 .bind(k)
                 .execute(&pool)
                 .await

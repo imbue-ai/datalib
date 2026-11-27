@@ -27,7 +27,7 @@ use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
 use datalib_contact_schema::{Medium, NormalizedContact};
 use datalib_contacts::add_people::{AddedPeople, NewPerson};
 use datalib_contacts::drafts::ContactEdit;
-use datalib_contacts::{ContactKind, Store};
+use datalib_contacts::{ContactKind, Store, WhenHeld};
 use datalib_handle::Handle;
 use serde::Deserialize;
 use serde_json::json;
@@ -99,8 +99,8 @@ fn api() -> Api {
             Post,
             "/resolve",
             Read,
-            "`{handles}`: `{resolved: {<handle>: contact}}`, each handle's contact; a handle \
-             nobody holds is absent",
+            "`{handles}`: `{resolved: {<handle>: [contact]}}`, the contacts each handle is on, by \
+             name; a handle nobody holds is absent",
             resolve,
         )
         .add(
@@ -128,9 +128,11 @@ fn api() -> Api {
             Post,
             "/contacts/add",
             Person,
-            "`{people: [{name, handles}]}`: each a contact, in one commit; one whose handle is \
-             on a contact is that contact, which gets the rest. Answers `{created, added_to, \
-             already, skipped: [{what, why}]}`",
+            "`{people: [{name, handles, held?}]}`: each a contact, in one commit; one whose \
+             handle is on a contact of the same name is that contact, which gets the rest, and \
+             one on a contact of another name is skipped. `held`, `{<handle>: \
+             \"share\" | \"move\"}`, names handles other contacts have that are theirs too or \
+             theirs alone. Answers `{created, added_to, already, skipped: [{what, why}]}`",
             add_people,
         )
         .add(
@@ -158,21 +160,25 @@ fn api() -> Api {
             Post,
             "/link",
             Person,
-            "`{handle, contact_id}`: link a handle to a contact, as the person's own link",
+            "`{handle, contact_id, held?}`: link a handle to a contact, as the person's own \
+             link. One another contact has is refused unless `held` is `share` (both have it) \
+             or `move` (it comes off the others as not theirs)",
             link,
         )
         .add(
             Post,
             "/unlink",
             Person,
-            "`{handle}`: take a handle off its contact, remembering it is not theirs",
+            "`{handle, contact_id}`: take a handle off the contact, remembering it is not \
+             theirs; anyone else who has it keeps it",
             unlink,
         )
         .add(
             Post,
             "/stopped_working",
             Person,
-            "`{handle, by}`: the date by which it stopped working; `by: null`, it works again",
+            "`{handle, contact_id, by}`: the date by which it stopped working for the contact; \
+             `by: null`, it works again",
             stopped_working,
         )
         .add(
@@ -451,6 +457,8 @@ struct AddBody {
 struct PersonBody {
     name: String,
     handles: Vec<String>,
+    #[serde(default)]
+    held: std::collections::BTreeMap<String, WhenHeld>,
 }
 
 async fn add_people(
@@ -462,9 +470,11 @@ async fn add_people(
         .into_iter()
         .map(|p| {
             let handles = p.handles.iter().map(|h| handle(h));
+            let held = p.held.iter().map(|(h, when)| Ok((handle(h)?, *when)));
             Ok(NewPerson {
                 name: p.name,
                 handles: handles.collect::<Result<_, ApiError>>()?,
+                held: held.collect::<Result<_, ApiError>>()?,
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -519,6 +529,8 @@ async fn merge(
 struct LinkBody {
     handle: String,
     contact_id: String,
+    #[serde(default)]
+    held: WhenHeld,
 }
 
 async fn link(
@@ -526,23 +538,24 @@ async fn link(
     Json(body): Json<LinkBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     store
-        .link(&handle(&body.handle)?, &body.contact_id)
+        .link(&handle(&body.handle)?, &body.contact_id, body.held)
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
-struct HandleBody {
+struct UnlinkBody {
     handle: String,
+    contact_id: String,
 }
 
 async fn unlink(
     State(store): AppState,
-    Json(body): Json<HandleBody>,
+    Json(body): Json<UnlinkBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let was_linked = store
-        .unlink(&handle(&body.handle)?)
+        .unlink(&handle(&body.handle)?, &body.contact_id)
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "was_linked": was_linked })))
@@ -551,6 +564,7 @@ async fn unlink(
 #[derive(Deserialize)]
 struct StoppedBody {
     handle: String,
+    contact_id: String,
     by: Option<String>,
 }
 
@@ -559,7 +573,7 @@ async fn stopped_working(
     Json(body): Json<StoppedBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let found = store
-        .set_stopped_working(&handle(&body.handle)?, body.by.as_deref())
+        .set_stopped_working(&handle(&body.handle)?, &body.contact_id, body.by.as_deref())
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "found": found })))
@@ -982,7 +996,10 @@ mod tests {
             )
             .await
             .unwrap();
-        store.set_stopped_working(&old, Some("2369")).await.unwrap();
+        store
+            .set_stopped_working(&old, &will, Some("2369"))
+            .await
+            .unwrap();
         store.create("Q", ContactKind::Person, &[]).await.unwrap();
         store
             .create("Away team", ContactKind::Group, &[])
@@ -1220,6 +1237,64 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (_, body) = call(&app, "POST", "/resolve", json!({"handles": [tel.as_str()]})).await;
         assert_eq!(body["resolved"], json!({}));
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
+    }
+
+    /// The page's "This is on Robert Picard. Both or Move it here": a
+    /// handle another contact has is refused until the person says which,
+    /// and once both have it each is named for it.
+    #[tokio::test]
+    async fn a_held_handle_is_refused_until_the_person_says_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+        let vineyard = "email:vineyard@labarre.earth";
+        call(
+            &app,
+            "POST",
+            "/contacts",
+            json!({"name": "Robert Picard", "handles": [vineyard]}),
+        )
+        .await;
+        let (_, marie) = call(&app, "POST", "/contacts", json!({"name": "Marie Picard"})).await;
+        let link = |held: Option<&str>| {
+            let mut body = json!({"handle": vineyard, "contact_id": marie["contact_id"]});
+            if let Some(h) = held {
+                body["held"] = json!(h);
+            }
+            body
+        };
+        let (status, err) = call(&app, "POST", "/link", link(None)).await;
+        assert_eq!(status, StatusCode::CONFLICT, "{err}");
+        assert!(
+            err["error"].as_str().unwrap().contains("Robert Picard"),
+            "{err}"
+        );
+        let (status, body) = call(&app, "POST", "/link", link(Some("share"))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, body) = call(&app, "POST", "/resolve", json!({"handles": [vineyard]})).await;
+        let names: Vec<&str> = body["resolved"][vineyard]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["names"][0].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["Marie Picard", "Robert Picard"]);
+        let (status, _) = call(&app, "POST", "/link", link(Some("both"))).await;
+        assert_eq!(
+            status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "a word that is not one of the three"
+        );
 
         drop(app);
         Arc::try_unwrap(store)

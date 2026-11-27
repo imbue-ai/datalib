@@ -305,8 +305,9 @@ shared writers apply it for every source:
   writes one (calendar-common, contact-common, forge-render-common,
   Notion, Todoist, Google Drive, PDF, Lightroom; chat-common settles
   its chat and items first);
-- in the store: `grid_index::apply_one`, which every write of a
-  document into a render store or the grid index goes through
+- in the store: `grid_index::apply_page` (`apply_one` is a page of one),
+  which every write of a document into a render store or the grid index
+  goes through
   (`IndexedMarkdownStore::put_document` included), takes it through
   `names::settled`. That strips the rows' kind, source label, author,
   contact, email, phone, account, project, org, channel, subject and

@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 const SCOPE: &str = "author:@me";
 
@@ -65,7 +66,7 @@ fn below(hi: &str) -> String {
 async fn spans(out: &Path) -> Vec<(String, String)> {
     query(
         out,
-        "SELECT scope, lo || '..' || hi FROM coverage ORDER BY scope, lo",
+        test_sql!("SELECT scope, lo || '..' || hi FROM coverage ORDER BY scope, lo"),
     )
     .await
 }
@@ -178,7 +179,11 @@ async fn a_capped_search_that_gets_no_further_ends_with_a_warning_not_a_loop() {
         [row("listing:search author:@me", "warning")],
         "nothing failed, so it is not an error"
     );
-    let said = query(out.as_path(), "SELECT scope_key, sample FROM problems").await;
+    let said = query(
+        out.as_path(),
+        test_sql!("SELECT scope_key, sample FROM problems"),
+    )
+    .await;
     assert!(said[0].1.contains(T2), "{}", said[0].1);
     assert!(said[0].1.contains("not listed"), "{}", said[0].1);
     assert_eq!(

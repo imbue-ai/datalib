@@ -10,6 +10,7 @@
 use datalib_h3::{
     ancestor, finest_range, locate, neighbourhood_ranges, stored, CellIndex, Resolution, FINEST,
 };
+use datalib_sql::test_sql;
 
 const POINTS: usize = 20_000;
 
@@ -190,15 +191,16 @@ async fn sqlite_serves_a_range_from_the_index() {
         .await
         .unwrap();
     for sql in [
-        "CREATE TABLE rows (uuid TEXT PRIMARY KEY, h3 INTEGER)",
-        "CREATE INDEX rows_by_h3 ON rows (h3)",
+        test_sql!("CREATE TABLE rows (uuid TEXT PRIMARY KEY, h3 INTEGER)"),
+        test_sql!("CREATE INDEX rows_by_h3 ON rows (h3)"),
     ] {
-        sqlx::query(sql).execute(&mut db).await.unwrap();
+        sql.query().execute(&mut db).await.unwrap();
     }
     let finest = locate(37.8199, -122.4783).unwrap();
     let range = finest_range(ancestor(finest, Resolution::Six).unwrap());
     let plan: Vec<String> =
-        sqlx::query("EXPLAIN QUERY PLAN SELECT uuid FROM rows WHERE h3 BETWEEN ? AND ?")
+        test_sql!("EXPLAIN QUERY PLAN SELECT uuid FROM rows WHERE h3 BETWEEN ? AND ?")
+            .query()
             .bind(range.start())
             .bind(range.end())
             .fetch_all(&mut db)

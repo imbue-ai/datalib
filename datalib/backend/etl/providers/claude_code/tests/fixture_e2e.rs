@@ -14,6 +14,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::section::join;
+use datalib_sql::{test_sql, Sql};
 
 const STANZA: &str = "claude-code";
 const SESSION_1: &str = "91ad7d3f-2915-5956-995d-cba3754abadc";
@@ -27,8 +28,8 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/claude_code_tng")
 }
 
-async fn count(pool: &sqlx::SqlitePool, sql: &'static str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+async fn count(pool: &sqlx::SqlitePool, sql: Sql) -> i64 {
+    sql.query_scalar().fetch_one(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -59,13 +60,16 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(s.malformed_lines, 1, "the non-JSON line is stepped over");
     assert_eq!((s.not_transcripts, s.unreadable), (0, 0));
     let pool = db.pool();
-    assert_eq!(count(pool, "SELECT COUNT(*) FROM transcripts").await, 3);
+    assert_eq!(
+        count(pool, test_sql!("SELECT COUNT(*) FROM transcripts")).await,
+        3
+    );
     // Every content record is a row; the bookkeeping records are not.
     // The record's type is read off the payload: nothing promotes it.
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records WHERE payload->>'$.type' = 'system'"
+            test_sql!("SELECT COUNT(*) FROM records WHERE payload->>'$.type' = 'system'")
         )
         .await,
         1
@@ -73,14 +77,17 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records \
+            test_sql!(
+                "SELECT COUNT(*) FROM records \
              WHERE payload->>'$.type' NOT IN ('user','assistant','system')"
+            )
         )
         .await,
         0
     );
     let (title, cwd, agent): (Option<String>, Option<String>, Option<String>) =
-        sqlx::query_as("SELECT title, cwd, agent_id FROM transcripts WHERE id = ?")
+        test_sql!("SELECT title, cwd, agent_id FROM transcripts WHERE id = ?")
+            .query_as()
             .bind(SESSION_1)
             .fetch_one(pool)
             .await
@@ -92,7 +99,8 @@ async fn the_tng_fixture_ingests_and_renders() {
     );
     assert_eq!(cwd.as_deref(), Some("/Users/picard/src/enterprise"));
     assert_eq!(agent, None);
-    let (title2,): (Option<String>,) = sqlx::query_as("SELECT title FROM transcripts WHERE id = ?")
+    let (title2,): (Option<String>,) = test_sql!("SELECT title FROM transcripts WHERE id = ?")
+        .query_as()
         .bind(SESSION_2)
         .fetch_one(pool)
         .await
@@ -103,10 +111,11 @@ async fn the_tng_fixture_ingests_and_renders() {
         "an unnamed session is titled by its first real prompt, not the harness caveat"
     );
     let agent_tid = format!("{SESSION_1}#{AGENT_1}");
-    let (agent_session, agent_records): (String, i64) = sqlx::query_as(
+    let (agent_session, agent_records): (String, i64) = test_sql!(
         "SELECT t.session_id, (SELECT COUNT(*) FROM records r WHERE r.transcript_id = t.id) \
-         FROM transcripts t WHERE t.id = ?",
+         FROM transcripts t WHERE t.id = ?"
     )
+    .query_as()
     .bind(&agent_tid)
     .fetch_one(pool)
     .await
@@ -114,7 +123,8 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(agent_session, SESSION_1);
     assert_eq!(agent_records, 4);
     // Payloads are JSONB; `json()` gives the text back.
-    let meta: (String,) = sqlx::query_as("SELECT json(payload) FROM transcripts WHERE id = ?")
+    let meta: (String,) = test_sql!("SELECT json(payload) FROM transcripts WHERE id = ?")
+        .query_as()
         .bind(SESSION_1)
         .fetch_one(pool)
         .await

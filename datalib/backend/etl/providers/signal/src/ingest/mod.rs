@@ -25,6 +25,7 @@ use serde::Serialize;
 use tracing::info;
 
 use backups::{Found, Top, LEDGER};
+use datalib_sql::sql;
 pub use db::{db_path_for, RawDb};
 pub use schema_raw::{AccountRow, ChatItemRow, ChatRow, RecipientRow};
 
@@ -46,8 +47,8 @@ pub struct FetchOptions {
     /// Directory holding the encrypted attachment blobs (the shared
     /// `files/XX/<media_name>` tree). When `None`, defaults to
     /// `snapshot_root.join("files")` — the layout Signal Android
-    /// produces. Override exists so a user can point at a separated
-    /// files tree (e.g. on a different volume) without symlinking.
+    /// produces. The config has no key for it, so the processor always
+    /// passes `None`.
     pub files_root: Option<PathBuf>,
     /// The account entropy pool the backup is encrypted under.
     pub aep: String,
@@ -410,7 +411,7 @@ async fn read_snapshot(
                 });
             }
             // StickerPack, AdHocCall, NotificationProfile, ChatFolder: not
-            // modelled yet.
+            // modelled yet, and not stored; only counted.
             Some(other) => not_shown.frame(other),
             None => {}
         }
@@ -454,7 +455,8 @@ async fn read_snapshot(
             summary.pruned += gone.len();
         }
         let marked: HashSet<&str> = marks.iter().map(|m| m.id.as_str()).collect();
-        let held: Vec<String> = sqlx::query_scalar("SELECT id FROM read_marks")
+        let held: Vec<String> = sql!("signal.list_read_marks", "SELECT id FROM read_marks")
+            .query_scalar()
             .fetch_all(&mut *tx)
             .await
             .context("read the marks held")?;
@@ -553,9 +555,11 @@ struct Held {
 
 impl Held {
     async fn load(db: &RawDb) -> Result<Self> {
-        let rows: Vec<(String, String, String)> = sqlx::query_as(
-            "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL",
+        let rows: Vec<(String, String, String)> = sql!(
+            "signal.list_stored_attachments",
+            "SELECT id, ref_id, blake3 FROM chat_item_attachments WHERE blake3 IS NOT NULL"
         )
+        .query_as()
         .fetch_all(db.pool())
         .await
         .context("preload the attachments already stored")?;

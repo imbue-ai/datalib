@@ -5,6 +5,7 @@ use datalib_schema::grid_rows::{GridRow, GridRowColumn, INDEXES as GRID_INDEXES}
 use datalib_schema::nodes::PLACE_INDEX;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Stage};
 use datalib_schema::providers::Provider;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use datalib_table::BulkUpsertable;
 use datalib_unified_grid_and_search_index::at_node::Arms;
 use datalib_unified_grid_and_search_index::db::{
@@ -34,7 +35,8 @@ pub(crate) async fn writer(root: &Path) -> sqlx::SqlitePool {
 /// What the step does at the end of each transaction that changed what a
 /// reader sees: raise the generation.
 pub(crate) async fn commit(writer: &sqlx::SqlitePool, _what: &str) {
-    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+    test_sql!("UPDATE store_generation SET generation = generation + 1")
+        .query()
         .execute(writer)
         .await
         .expect("raise the generation");
@@ -48,12 +50,15 @@ pub(crate) async fn insert_rows(writer: &sqlx::SqlitePool, rows: &[GridRow]) {
         .chain(GridRow::TYPED_COLUMNS.iter().copied())
         .collect::<Vec<_>>();
     let placeholders = vec!["?"; columns.len()].join(", ");
-    let sql = format!(
-        "INSERT INTO grid_rows ({}) VALUES ({placeholders})",
-        columns.join(", ")
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!(
+            "INSERT INTO grid_rows ({}) VALUES ({placeholders})",
+            columns.join(", ")
+        ),
     );
     for row in rows {
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+        row.bind_into(sql.query())
             .execute(writer)
             .await
             .expect("insert grid row");
@@ -139,7 +144,8 @@ async fn an_index_reads_as_empty_until_filled_and_is_refused_in_another_shape() 
         .unwrap()
         .is_empty());
 
-    sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+    test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        .query()
         .execute(&writer)
         .await
         .unwrap();
@@ -213,11 +219,12 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         .build()
         .unwrap();
     insert_rows(&writer, &[chat_row("c-1", "chats"), message]).await;
-    sqlx::query(
+    test_sql!(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, \
          renderer_version, title, searchable) \
-         VALUES ('c-1','test','claude','chat','test-v1','Test conv',1)",
+         VALUES ('c-1','test','claude','chat','test-v1','Test conv',1)"
     )
+    .query()
     .execute(&writer)
     .await
     .expect("insert markdown row");
@@ -266,18 +273,23 @@ async fn dolt_repo_round_trip_search_and_chat_meta() {
         async move { repo.document_stores(&uuids).await.unwrap() }
     };
     for (_t, ddl) in datalib_schema::source_cursors::DDL {
-        sqlx::query(*ddl).execute(&writer).await.unwrap();
+        Sql::dynamic(test_sql_id!(), *ddl)
+            .query()
+            .execute(&writer)
+            .await
+            .unwrap();
     }
     commit(&writer, "no cursor yet").await;
     assert!(
         kept(&["c-1"]).await.is_empty(),
         "the index has not read the source"
     );
-    sqlx::query(
+    test_sql!(
         "INSERT INTO source_cursors (source_id, store_commit, store_tree, indexed_at_utc, \
          tz_offset, documents_applied) VALUES ('test', 'abc123', NULL, '2026-01-01T00:00:00Z', \
-         '+00:00', 1)",
+         '+00:00', 1)"
     )
+    .query()
     .execute(&writer)
     .await
     .expect("insert the source's cursor");
@@ -461,16 +473,17 @@ async fn a_row_the_step_has_not_committed_is_not_served() {
     let columns = std::iter::once(GridRow::ID_COLUMN)
         .chain(GridRow::TYPED_COLUMNS.iter().copied())
         .collect::<Vec<_>>();
-    let sql = format!(
-        "INSERT INTO grid_rows ({}) VALUES ({})",
-        columns.join(", "),
-        vec!["?"; columns.len()].join(", ")
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!(
+            "INSERT INTO grid_rows ({}) VALUES ({})",
+            columns.join(", "),
+            vec!["?"; columns.len()].join(", ")
+        ),
     );
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
-        .execute(&mut *tx)
-        .await
-        .unwrap();
-    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+    row.bind_into(sql.query()).execute(&mut *tx).await.unwrap();
+    test_sql!("UPDATE store_generation SET generation = generation + 1")
+        .query()
         .execute(&mut *tx)
         .await
         .unwrap();
@@ -704,7 +717,11 @@ async fn every_filter_key_is_served_by_an_index() {
     // all: the children's indexes too.
 
     for (_t, ddl) in GRID_INDEXES.iter() {
-        sqlx::query(*ddl).execute(&writer).await.expect("create");
+        Sql::dynamic(test_sql_id!(), *ddl)
+            .query()
+            .execute(&writer)
+            .await
+            .expect("create");
     }
     let key_queries: Vec<(String, bool)> = GridRow::KEYS
         .iter()
@@ -870,11 +887,16 @@ async fn beside_a_key_a_source_is_tested_never_walked() {
             let made = GRID_INDEXES.iter().map(|(_t, ddl)| *ddl);
             for ddl in made.chain([PLACE_INDEX]).rev() {
                 let name = ddl.split_whitespace().nth(5).expect("an index name");
-                sqlx::query(sqlx::AssertSqlSafe(format!("DROP INDEX {name}")))
+                Sql::dynamic(test_sql_id!(), format!("DROP INDEX {name}"))
+                    .query()
                     .execute(&writer)
                     .await
                     .expect("drop");
-                sqlx::query(ddl).execute(&writer).await.expect("create");
+                Sql::dynamic(test_sql_id!(), ddl)
+                    .query()
+                    .execute(&writer)
+                    .await
+                    .expect("create");
             }
         }
         // Dropping an index drops what the planner was told of it; the
@@ -1006,7 +1028,7 @@ async fn plan_of(db: &sqlx::SqlitePool, q: &str) -> Vec<String> {
 }
 
 pub(crate) async fn explain(db: &sqlx::SqlitePool, sql: &str, params: &[String]) -> Vec<String> {
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+    let mut query = Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}")).query();
     for p in params {
         query = query.bind(p.clone());
     }
@@ -1046,12 +1068,17 @@ async fn a_narrowing_to_documents_reads_their_index_alone() {
         .map(|(_t, ddl)| *ddl)
         .chain(datalib_schema::search_terms::TERMS_DDL.iter().copied())
     {
-        sqlx::query(ddl).execute(&writer).await.expect("create");
+        Sql::dynamic(test_sql_id!(), ddl)
+            .query()
+            .execute(&writer)
+            .await
+            .expect("create");
     }
     let plan_of = |sql: String, params: Vec<String>| {
         let writer = writer.clone();
         async move {
-            let mut explain = sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")));
+            let mut explain =
+                Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}")).query();
             for p in &params {
                 explain = explain.bind(p.clone());
             }
@@ -1113,11 +1140,12 @@ async fn a_committed_problem_is_read_back_by_query_and_by_document() {
     let root = Arc::new(db_path.parent().unwrap().to_path_buf());
     let repo = DoltRepo::open(root.clone()).await.unwrap();
     let writer = writer(&root).await;
-    sqlx::query(
+    test_sql!(
         "INSERT INTO markdowns (markdown_uuid, source_id, provider, kind, \
          renderer_version, title, searchable) \
-         VALUES ('md-1','slack','slack','thread','test-v1','Away team',1)",
+         VALUES ('md-1','slack','slack','thread','test-v1','Away team',1)"
     )
+    .query()
     .execute(&writer)
     .await
     .expect("insert markdown row");
@@ -1160,7 +1188,7 @@ async fn insert_problems(writer: &sqlx::SqlitePool, rows: &[ProblemRow]) {
         vec!["?"; columns.len()].join(", ")
     );
     for row in rows {
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
+        row.bind_into(Sql::dynamic(test_sql_id!(), sql.clone()).query())
             .execute(writer)
             .await
             .unwrap();

@@ -17,6 +17,7 @@ pub use datalib_etl::doltlite_raw::db_path_for;
 
 use super::photo::{self, CardPhoto};
 pub use super::schema_raw::{addressbook_pk, contact_pk, AccountRow, AddressbookRow, ContactRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Photos per blob-store transaction when copying the cards a store
 /// already holds: a few MB at a time, rather than every photo at once.
@@ -166,11 +167,15 @@ impl RawDb {
     /// The token the last `sync-collection` page of this address book
     /// left; `None` lists it whole.
     pub async fn sync_token(&self, addressbook_id: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT sync_token FROM addressbooks WHERE id = ?")
-            .bind(addressbook_id)
-            .fetch_optional(&self.pool)
-            .await
-            .context("select sync_token")?;
+        let row = sql!(
+            "contacts.read_addressbook_sync_token",
+            "SELECT sync_token FROM addressbooks WHERE id = ?"
+        )
+        .query()
+        .bind(addressbook_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("select sync_token")?;
         Ok(row.and_then(|r| r.try_get::<Option<String>, _>("sync_token").ok().flatten()))
     }
 
@@ -179,12 +184,16 @@ impl RawDb {
         addressbook_id: &str,
         token: Option<&str>,
     ) -> Result<()> {
-        sqlx::query("UPDATE addressbooks SET sync_token = ? WHERE id = ?")
-            .bind(token)
-            .bind(addressbook_id)
-            .execute(&mut **tx)
-            .await
-            .context("update sync_token")?;
+        sql!(
+            "contacts.update_addressbook_sync_token",
+            "UPDATE addressbooks SET sync_token = ? WHERE id = ?"
+        )
+        .query()
+        .bind(token)
+        .bind(addressbook_id)
+        .execute(&mut **tx)
+        .await
+        .context("update sync_token")?;
         Ok(())
     }
 
@@ -207,9 +216,11 @@ impl RawDb {
     /// written again.
     /// Returns how many photos the cards carry.
     pub async fn put_photos_of_held_cards(&self) -> Result<usize> {
-        let mut rows = sqlx::query_scalar::<_, Option<String>>(
-            "SELECT json_extract(payload, '$.vcard') FROM contacts ORDER BY id",
+        let mut rows = sql!(
+            "contacts.list_stored_vcards",
+            "SELECT json_extract(payload, '$.vcard') FROM contacts ORDER BY id"
         )
+        .query_scalar::<Option<String>>()
         .fetch(&self.pool);
         let (mut batch, mut total) = (Vec::new(), 0);
         while let Some(vcard) = futures::TryStreamExt::try_next(&mut rows)
@@ -289,10 +300,16 @@ impl RawDb {
         for row in rows {
             let id = &row.id_and_payload.id;
             for sql in [
-                "DELETE FROM contact_group_members WHERE group_id = ?",
-                "DELETE FROM contact_categories WHERE contact_id = ?",
+                sql!(
+                    "contacts.upsert_contacts_in_tx.delete_contact_group_members",
+                    "DELETE FROM contact_group_members WHERE group_id = ?"
+                ),
+                sql!(
+                    "contacts.upsert_contacts_in_tx.delete_contact_categories",
+                    "DELETE FROM contact_categories WHERE contact_id = ?"
+                ),
             ] {
-                sqlx::query(sql)
+                sql.query()
                     .bind(id)
                     .execute(&mut **tx)
                     .await
@@ -318,21 +335,36 @@ impl RawDb {
         addressbook_id: &str,
         href: &str,
     ) -> Result<u64> {
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM contacts WHERE addressbook_id = ? AND href = ?")
-                .bind(addressbook_id)
-                .bind(href)
-                .fetch_all(&mut **tx)
-                .await
-                .context("select contact id for delete")?;
+        let ids: Vec<String> = sql!(
+            "contacts.find_contact_ids_by_href",
+            "SELECT id FROM contacts WHERE addressbook_id = ? AND href = ?"
+        )
+        .query_scalar()
+        .bind(addressbook_id)
+        .bind(href)
+        .fetch_all(&mut **tx)
+        .await
+        .context("select contact id for delete")?;
         for id in &ids {
             for sql in [
-                "DELETE FROM contacts WHERE id = ?",
-                "DELETE FROM contacts_bookkeeping WHERE id = ?",
-                "DELETE FROM contact_group_members WHERE group_id = ?",
-                "DELETE FROM contact_categories WHERE contact_id = ?",
+                sql!(
+                    "contacts.delete_contact.delete_contacts",
+                    "DELETE FROM contacts WHERE id = ?"
+                ),
+                sql!(
+                    "contacts.delete_contact.delete_contacts_bookkeeping",
+                    "DELETE FROM contacts_bookkeeping WHERE id = ?"
+                ),
+                sql!(
+                    "contacts.delete_contact.delete_contact_group_members",
+                    "DELETE FROM contact_group_members WHERE group_id = ?"
+                ),
+                sql!(
+                    "contacts.delete_contact.delete_contact_categories",
+                    "DELETE FROM contact_categories WHERE contact_id = ?"
+                ),
             ] {
-                sqlx::query(sql)
+                sql.query()
                     .bind(id)
                     .execute(&mut **tx)
                     .await
@@ -360,21 +392,35 @@ impl RawDb {
             .context("begin delete contacts tx")?;
         for uid in uids {
             let id = contact_pk(addressbook_id, uid);
-            sqlx::query("DELETE FROM contacts WHERE id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("delete contact")?;
-            sqlx::query("DELETE FROM contacts_bookkeeping WHERE id = ?")
-                .bind(&id)
-                .execute(&mut *tx)
-                .await
-                .context("delete contact bookkeeping")?;
+            sql!(
+                "contacts.delete_contact_by_uid",
+                "DELETE FROM contacts WHERE id = ?"
+            )
+            .query()
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .context("delete contact")?;
+            sql!(
+                "contacts.delete_contact_bookkeeping_by_uid",
+                "DELETE FROM contacts_bookkeeping WHERE id = ?"
+            )
+            .query()
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .context("delete contact bookkeeping")?;
             for sql in [
-                "DELETE FROM contact_group_members WHERE group_id = ?",
-                "DELETE FROM contact_categories WHERE contact_id = ?",
+                sql!(
+                    "contacts.delete_contacts_by_uid.delete_contact_group_members",
+                    "DELETE FROM contact_group_members WHERE group_id = ?"
+                ),
+                sql!(
+                    "contacts.delete_contacts_by_uid.delete_contact_categories",
+                    "DELETE FROM contact_categories WHERE contact_id = ?"
+                ),
             ] {
-                sqlx::query(sql)
+                sql.query()
                     .bind(&id)
                     .execute(&mut *tx)
                     .await
@@ -415,12 +461,15 @@ impl RawDb {
         account_id: &str,
         listed: &[String],
     ) -> Result<usize> {
-        let stored: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM addressbooks WHERE account_id = ?")
-                .bind(account_id)
-                .fetch_all(&self.pool)
-                .await
-                .context("select addressbooks")?;
+        let stored: Vec<String> = sql!(
+            "contacts.list_account_addressbook_ids",
+            "SELECT id FROM addressbooks WHERE account_id = ?"
+        )
+        .query_scalar()
+        .bind(account_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("select addressbooks")?;
         let gone: Vec<&String> = stored.iter().filter(|id| !listed.contains(id)).collect();
         if gone.is_empty() {
             return Ok(0);
@@ -451,24 +500,35 @@ impl RawDb {
             "DELETE FROM contacts_bookkeeping WHERE id IN \
              (SELECT id FROM contacts WHERE addressbook_id = ?)",
         ] {
-            sqlx::query(sql)
+            Sql::dynamic(sql_id!("contacts.delete_addressbook_derived_rows"), sql)
+                .query()
                 .bind(addressbook_id)
                 .execute(&mut **tx)
                 .await
                 .context("delete the addressbook's contact edges")?;
         }
-        let contacts = sqlx::query("DELETE FROM contacts WHERE addressbook_id = ?")
-            .bind(addressbook_id)
-            .execute(&mut **tx)
-            .await
-            .context("delete the addressbook's contacts")?
-            .rows_affected();
+        let contacts = sql!(
+            "contacts.delete_addressbook_contacts",
+            "DELETE FROM contacts WHERE addressbook_id = ?"
+        )
+        .query()
+        .bind(addressbook_id)
+        .execute(&mut **tx)
+        .await
+        .context("delete the addressbook's contacts")?
+        .rows_affected();
         let people = Self::delete_google_addressbook(tx, addressbook_id).await?;
         for sql in [
-            "DELETE FROM addressbooks WHERE id = ?",
-            "DELETE FROM addressbooks_bookkeeping WHERE id = ?",
+            sql!(
+                "contacts.delete_addressbook.delete_addressbooks",
+                "DELETE FROM addressbooks WHERE id = ?"
+            ),
+            sql!(
+                "contacts.delete_addressbook.delete_addressbooks_bookkeeping",
+                "DELETE FROM addressbooks_bookkeeping WHERE id = ?"
+            ),
         ] {
-            sqlx::query(sql)
+            sql.query()
                 .bind(addressbook_id)
                 .execute(&mut **tx)
                 .await
@@ -483,7 +543,8 @@ impl RawDb {
     /// whether the row landed via CardDAV sync-collection or
     /// [`super::vcf_dir::fetch`].
     pub async fn load_all_for_render_and_index_md(&self) -> Result<Vec<LoadedRawContact>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "contacts.load_contacts_with_addressbook_label",
             "SELECT c.id AS id,
                     c.addressbook_id AS addressbook_id,
                     c.uid AS uid,
@@ -492,8 +553,9 @@ impl RawDb {
                     COALESCE(a.display_name, a.href) AS addressbook_label
              FROM contacts c
              LEFT JOIN addressbooks a ON a.id = c.addressbook_id
-             ORDER BY c.addressbook_id, c.id",
+             ORDER BY c.addressbook_id, c.id"
         )
+        .query()
         .fetch_all(&self.pool)
         .await
         .context("select contacts for render")?;
@@ -523,11 +585,15 @@ impl RawDb {
     /// Every `uid` the addressbook holds: how the `.vcf` path tells a
     /// new contact from an update, since a file carries no etag.
     pub async fn contact_uids(&self, addressbook_id: &str) -> Result<HashSet<String>> {
-        let rows = sqlx::query("SELECT uid FROM contacts WHERE addressbook_id = ?")
-            .bind(addressbook_id)
-            .fetch_all(&self.pool)
-            .await
-            .context("select contact uids")?;
+        let rows = sql!(
+            "contacts.list_addressbook_contact_uids",
+            "SELECT uid FROM contacts WHERE addressbook_id = ?"
+        )
+        .query()
+        .bind(addressbook_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("select contact uids")?;
         let mut out = HashSet::with_capacity(rows.len());
         for r in rows {
             let uid: String = r.try_get("uid").unwrap_or_default();
@@ -554,6 +620,7 @@ mod tests {
     use super::*;
     use crate::ingest::schema_raw::DATA_TABLES;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// Deleting an address book deletes its cards' derived rows through
     /// the cards' index, so a folder of `.vcf` files that lost many walks
     /// neither table once per file.
@@ -566,7 +633,8 @@ mod tests {
         for sql in [ADDRESSBOOK_GROUP_MEMBERS, ADDRESSBOOK_CATEGORIES] {
             // Audited: a constant statement of this module.
             let plan: Vec<String> =
-                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"))
+                    .query()
                     .bind("ab")
                     .fetch_all(db.pool())
                     .await
@@ -630,9 +698,11 @@ mod tests {
         for t in DATA_TABLES {
             let bk = format!("{t}_bookkeeping");
             // Test: `bk` derives from the `DATA_TABLES` const.
-            let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name = '{bk}'"
-            )))
+            let row = Sql::dynamic(
+                test_sql_id!(),
+                format!("SELECT name FROM sqlite_master WHERE type='table' AND name = '{bk}'"),
+            )
+            .query()
             .fetch_optional(db.pool())
             .await
             .unwrap();
@@ -674,7 +744,8 @@ mod tests {
         db.upsert_contact(&row).await.unwrap();
 
         let id = contact_pk(&ab_id, "8a4d-7c1f");
-        let r = sqlx::query("SELECT display_name FROM contacts WHERE id = ?")
+        let r = test_sql!("SELECT display_name FROM contacts WHERE id = ?")
+            .query()
             .bind(&id)
             .fetch_one(db.pool())
             .await
@@ -682,9 +753,7 @@ mod tests {
         let dn: String = r.try_get("display_name").unwrap();
         assert_eq!(dn, "Pat Q");
 
-        let r = sqlx::query(
-            "SELECT attempt_count, fetched_at_utc, last_error FROM contacts_bookkeeping WHERE id = ?",
-        )
+        let r = test_sql!("SELECT attempt_count, fetched_at_utc, last_error FROM contacts_bookkeeping WHERE id = ?").query()
         .bind(&id)
         .fetch_one(db.pool())
         .await
@@ -732,9 +801,10 @@ mod tests {
     }
 
     async fn members(db: &RawDb) -> Vec<(String, Option<String>)> {
-        sqlx::query_as(
-            "SELECT group_id, member_id FROM contact_group_members ORDER BY group_id, member_id",
+        test_sql!(
+            "SELECT group_id, member_id FROM contact_group_members ORDER BY group_id, member_id"
         )
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap()
@@ -773,7 +843,8 @@ mod tests {
     }
 
     async fn categories(db: &RawDb) -> Vec<String> {
-        sqlx::query_scalar("SELECT category FROM contact_categories ORDER BY category")
+        test_sql!("SELECT category FROM contact_categories ORDER BY category")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -860,9 +931,10 @@ mod tests {
             vec![("ab#bridge".to_string(), Some("ab#tng-picard".to_string()))]
         );
         assert_eq!(categories(&db).await, vec!["Away Team", "myContacts"]);
-        let photo_tables: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'contact_photos'",
+        let photo_tables: i64 = test_sql!(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'contact_photos'"
         )
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();

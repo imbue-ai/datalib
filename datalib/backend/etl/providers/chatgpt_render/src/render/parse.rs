@@ -1,4 +1,4 @@
-//! Port of `src/ingest/providers/openai/parse.py`. Reads the doltlite
+//! Reads the doltlite
 //! database written by [`datalib_etl_chatgpt::ingest`] (or, when no DB is present,
 //! the legacy JSON tree under
 //! `me.json` + `conversations.json` + `conversations/<id>.json`) and
@@ -23,6 +23,7 @@ use super::sentinels::clean_text;
 use datalib_etl_chatgpt::ingest::db::{db_path_for, LoadedConversation, LoadedRaw};
 use datalib_etl_chatgpt::ingest::image_asset_file_id;
 use datalib_etl_chatgpt::ingest::schema_raw::ConversationAttachmentRow;
+use datalib_sql::sql;
 
 /// SQL projection that maps a ChatGPT `file_id` to its CAS blake3.
 /// Render reads a batch of conversations' bytes through it.
@@ -664,10 +665,14 @@ fn collect_attachment_ref_ids(payload: &Value) -> Vec<String> {
 
 /// The `me` row's primary key and payload, or neither.
 async fn load_me_payload(pool: &SqlitePool) -> Result<(Option<String>, Option<Value>)> {
-    let row = sqlx::query("SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("select me")?;
+    let row = sql!(
+        "chatgpt_render.read_me",
+        "SELECT id, json(payload) AS payload FROM me ORDER BY id LIMIT 1"
+    )
+    .query()
+    .fetch_optional(pool)
+    .await
+    .context("select me")?;
     let Some(row) = row else {
         return Ok((None, None));
     };
@@ -680,13 +685,15 @@ async fn load_conversations(
     pool: &SqlitePool,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<Vec<LoadedConversation>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "chatgpt_render.load_conversations",
         "SELECT c.id, json(c.payload) AS payload, b.fetched_at_utc
            FROM conversations c
            LEFT JOIN conversations_bookkeeping b ON b.id = c.id
           WHERE c.payload IS NOT NULL
-          ORDER BY c.id",
+          ORDER BY c.id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("select conversations")?;

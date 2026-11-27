@@ -25,6 +25,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 
 use datalib_etl::stop::StopFlag;
+use datalib_sql::{sql_id, Sql};
 
 /// How a run is cut off at its chosen request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -245,8 +246,12 @@ pub async fn dump_tables(pool: &sqlx::SqlitePool, tables: &[&str]) -> Result<Str
     for table in tables {
         out.push_str(&format!("== {table}\n"));
         // Audited: `table` is a name the calling test wrote, never data.
-        let sql = format!("SELECT * FROM \"{table}\"");
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let sql = Sql::dynamic(
+            sql_id!("etl.web.interrupt.dump_table_rows"),
+            format!("SELECT * FROM \"{table}\""),
+        );
+        let rows = sql
+            .query()
             .fetch_all(pool)
             .await
             .with_context(|| format!("read {table}"))?;
@@ -285,6 +290,7 @@ pub async fn dump_tables(pool: &sqlx::SqlitePool, tables: &[&str]) -> Result<Str
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// A toy download in the shape the bugs had: it stores an item's
     /// "have it" row in one transaction and the item's detail in a later
     /// one, and skips an item it has a row for. Cut between the two, it
@@ -320,12 +326,14 @@ mod tests {
             get("items").await?;
             for id in ["picard", "riker"] {
                 let have: Option<String> = if self.detail_with_the_row {
-                    sqlx::query_scalar("SELECT id FROM details WHERE id = ?")
+                    test_sql!("SELECT id FROM details WHERE id = ?")
+                        .query_scalar()
                         .bind(id)
                         .fetch_optional(pool)
                         .await?
                 } else {
-                    sqlx::query_scalar("SELECT id FROM items WHERE id = ?")
+                    test_sql!("SELECT id FROM items WHERE id = ?")
+                        .query_scalar()
                         .bind(id)
                         .fetch_optional(pool)
                         .await?
@@ -333,12 +341,14 @@ mod tests {
                 if have.is_some() {
                     continue;
                 }
-                sqlx::query("INSERT OR IGNORE INTO items VALUES (?)")
+                test_sql!("INSERT OR IGNORE INTO items VALUES (?)")
+                    .query()
                     .bind(id)
                     .execute(pool)
                     .await?;
                 get(&format!("items/{id}")).await?;
-                sqlx::query("INSERT OR REPLACE INTO details VALUES (?, 'log')")
+                test_sql!("INSERT OR REPLACE INTO details VALUES (?, 'log')")
+                    .query()
                     .bind(id)
                     .execute(pool)
                     .await?;

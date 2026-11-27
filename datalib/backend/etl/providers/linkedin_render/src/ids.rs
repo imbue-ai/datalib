@@ -40,7 +40,7 @@ pub fn connection_without_url(source_id: &str, name: &str, company: &str) -> Ide
     )
 }
 
-/// `table` is the export feed (`messages`, `inmail`, …), whose
+/// `table` is the export feed (`messages`, `guide_messages`, …), whose
 /// conversation ids are their own sequences.
 pub fn conversation(source_id: &str, table: &str, conversation_id: &str) -> Identity {
     IDS.mint(
