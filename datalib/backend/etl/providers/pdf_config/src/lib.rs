@@ -116,7 +116,8 @@ mod tests {
             ..Default::default()
         };
         let err = c.validate().unwrap_err().to_string();
-        // It once said "omit it for no limit"; omitting it gives 512 MiB.
+        // Omitting it gives 512 MiB, so the message must not say "omit
+        // it for no limit".
         assert!(err.contains("512 MiB"), "{err}");
     }
 

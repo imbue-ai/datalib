@@ -306,7 +306,7 @@ mod tests {
             page_count,
             pdf_type: PdfKind::Mixed,
             confidence: 0.7,
-            // Set the way `identify` now sets it: inclusive, so this
+            // Set the way `identify` sets it: inclusive, so this
             // column cannot be what the gate keys on.
             needs_ocr: ocr_page_count > 0,
             ocr_page_count,

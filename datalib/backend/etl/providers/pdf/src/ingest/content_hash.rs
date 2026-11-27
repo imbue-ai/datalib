@@ -8,8 +8,9 @@ use lopdf::{Dictionary, Document, Object, ObjectId, StringFormat};
 /// Bumped when the hashing rule changes — a different traversal, a
 /// different strip list, a different encoding. Stored values from a
 /// previous rule are not comparable with values from this one, so the
-/// version rides *inside* the hash rather than beside it: an old row
-/// and a new row simply never match, instead of matching wrongly.
+/// version is hashed in with the content rather than stored beside it:
+/// an old row and a new row simply never match, instead of matching
+/// wrongly.
 const HASH_RULE_VERSION: &[u8] = b"datalib.pdf.content.v1\n";
 
 /// The key stripped from every dictionary before hashing: the XMP
@@ -353,7 +354,8 @@ pub(super) mod tests {
         // An incremental update that writes the new Info under a *fresh*
         // object number leaves the old one live in the xref but
         // unreferenced. Hashing "every object except the metadata ones"
-        // would fold that corpse in as content; reachability drops it.
+        // would hash that unreferenced object as content; hashing only
+        // what is reachable from the catalog leaves it out.
         let base = doc("body", "Old Title", "01", Some("uuid:i1"));
         let before = compute(&base).unwrap();
 

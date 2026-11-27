@@ -40,8 +40,7 @@ pub const PDF_DOCUMENTS_DDL: &str = "CREATE TABLE IF NOT EXISTS pdf_documents (
 /// are at document scale (thousands of rows, not tens of millions), so
 /// the index-size argument that rules them out there does not apply.
 pub const PDF_DOCUMENTS_INDEXES: &[&str] = &[
-    // The Ship-of-Theseus lookup this table now actually supports:
-    // every byte-variant of one document. Unlike the two below it, this
+    // Finds every byte-variant of one document by its content hash. Unlike the two below it, this
     // column is populated for every parseable PDF, so the index earns
     // its keep rather than covering the 3-in-20 that carry XMP.
     "CREATE INDEX IF NOT EXISTS idx_pdf_documents_content \
@@ -148,8 +147,8 @@ pub struct PdfDocumentRow {
     /// the catalog, metadata stripped — so retitling a PDF or letting a
     /// tool regenerate its trailer `/ID` does not read as a new
     /// document. `None` when the file is encrypted or unparseable. See
-    /// [`super::content_hash`], and §"Ship of Theseus" below for why it
-    /// is still a hint and not the key.
+    /// [`super::content_hash`], and `INGEST.md` §"What the metadata is
+    /// actually worth" for why it is still a hint and not the key.
     pub content_blake3: Option<String>,
     pub pdf_id_permanent: Option<String>,
     pub xmp_document_id: Option<String>,

@@ -256,8 +256,9 @@ async fn scan(root: &Path, raw: &Path) -> Vec<(String, String)> {
 
 /// A small PDF could make the scan or the render hold gigabytes: its streams
 /// inflated without limit, or its object stream's index had a parser read one
-/// array hundreds of times. Now each is refused for what it would cost, at a
-/// cost that does not grow with what it asks for, and a person sees why.
+/// array hundreds of times. Each is refused for what it would cost, at a
+/// cost that does not grow with what it would allocate, and a person sees
+/// why.
 #[tokio::test]
 async fn a_crafted_pdf_is_refused_before_it_costs_what_it_asks_for() {
     let dir = tempfile::tempdir().unwrap();

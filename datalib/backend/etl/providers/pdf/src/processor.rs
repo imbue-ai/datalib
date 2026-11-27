@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `pdf` source.
+//! The download `DataProcessor`s for the `pdf` source.
 
 use std::path::PathBuf;
 
