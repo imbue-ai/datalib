@@ -290,7 +290,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
         .unwrap_or_default();
     // Oldest first, the way a channel reads. Ties break on the uuid so
     // the order is identical on every request over unchanged data (the
-    // directory walk itself is unordered).
+    // query that reads the rows has no `ORDER BY`).
     threads.sort_by(|a, b| {
         when_key(&a.created_at)
             .cmp(&when_key(&b.created_at))
@@ -761,8 +761,8 @@ mod tests {
         assert!(channel_response(tmp.path(), "#nope").threads.is_empty());
     }
 
-    /// Thread order must not depend on the directory walk, which is a
-    /// LIFO stack over unordered `read_dir`.
+    /// Thread order must not depend on the order the store returns rows
+    /// in: the query that reads them has no `ORDER BY`.
     #[tokio::test(flavor = "multi_thread")]
     async fn thread_order_is_stable_across_runs() {
         let mut seen = std::collections::HashSet::new();

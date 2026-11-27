@@ -794,7 +794,8 @@ async fn embed_batch<E: EmbedPrompt>(
 
 /// The `unified_grid_and_search_index` step's sweep, after its keyword
 /// passes: deletes the filed chunks of every source it does not search,
-/// then every vector no filed chunk names. Returns how many vectors went.
+/// then every vector of another model than the pinned one and every
+/// vector no filed chunk names. Returns how many vectors went.
 /// Touches nothing that does not exist yet.
 pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
     let cache_path = layout::inference_cache_db(root);
