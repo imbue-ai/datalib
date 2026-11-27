@@ -58,8 +58,8 @@ impl RawDb {
         Ok(())
     }
 
-    /// Drop the note a file that is gone was, with its sidecar and its
-    /// problems, and forget the file's stamp — in one transaction, so a
+    /// Delete the note of a file that is gone, with its sidecar row, its
+    /// problems and its row in `ingested_files` — in one transaction, so a
     /// crash leaves the file stamped and the next run retries.
     pub async fn delete_file(&self, scope: &str, rel: &str) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin delete tx")?;

@@ -62,11 +62,13 @@ pub fn convert(bytes: &[u8], path: &Path) -> Result<Converted> {
         // We split on these markers to build per-page sections, so they
         // are required, not cosmetic.
         include_page_numbers: true,
-        // See §"Why post-process at all" item 2.
+        // Its `<u>` tags around every link are not markdown and clutter
+        // the text of every grid row; the link is kept as a markdown
+        // link without them.
         detect_underline: false,
         // Left on because it does remove *some* running heads, but it
-        // is not sufficient on its own — see the module docs and
-        // `strip_repeated_chrome` below.
+        // is not sufficient on its own: `strip_repeated_chrome` below
+        // removes the rest that sit on a line of their own.
         strip_headers_footers: true,
         ..pdf_inspector::MarkdownOptions::default()
     };

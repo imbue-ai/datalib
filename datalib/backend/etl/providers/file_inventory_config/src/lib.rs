@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `file_inventory` source (Program A goal #1).
+//! Provider-owned config schema for the `file_inventory` source.
 //! Schema-only (serde + anyhow), so the orchestrator can name [`FileInventoryConfig`]
 //! without linking the provider.
 

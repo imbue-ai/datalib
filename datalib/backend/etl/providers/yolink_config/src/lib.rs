@@ -146,8 +146,8 @@ fn is_hex32(s: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
+/// Params for the render step: it has no knobs of its own, so this is
+/// the shared `BareRenderConfig`.
 pub type YolinkRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for YolinkConfig {

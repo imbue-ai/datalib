@@ -139,8 +139,7 @@ mod tests {
         // 1 US gallon is 3.785411784 L exactly.
         assert!(((s.to_si)(1.0) - 3.785_411_784).abs() < 1e-12);
         assert!(((s.to_si)(0.0)).abs() < 1e-12);
-        // The value that motivated the whole exercise: the live store's
-        // max meter reading, 52704.385 gal.
+        // The largest meter reading seen on a live store, 52704.385 gal.
         assert!(((s.to_si)(52_704.385) - 199_507.800_047_47).abs() < 1e-6);
     }
 

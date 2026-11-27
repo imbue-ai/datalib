@@ -1079,9 +1079,7 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     // are read. Everything else is skipped without a read.
     //
     // Five, not four: the shortened playlist from (6) is a file whose
-    // bytes changed like any other. It was always being hashed — the
-    // playlist pass did it separately — but did not use to be counted
-    // here, and is now hashed once by the scan rather than twice.
+    // bytes changed like any other, so the scan hashes it.
     assert_eq!(
         second.hashed, 5,
         "retagged + touched + copied + new + the edited playlist: {second:?}"
@@ -1156,7 +1154,7 @@ async fn a_rescan_after_edits_changes_exactly_what_it_should() -> Result<()> {
     .get("n");
     assert_eq!(n, 1, "a shortened playlist loses its tail");
 
-    // ── Scan 3: settled ──────────────────────────────────────────────
+    // ── Scan 3: nothing changed since scan 2 ─────────────────────────
     let third = h.scan().await?;
     assert_eq!(third.hashed, 0, "nothing left to read: {third:?}");
     assert_eq!(third.items, 0);
@@ -1237,7 +1235,7 @@ async fn a_file_that_would_not_open_is_a_row_until_it_does() -> Result<()> {
     h.scan().await?;
     let media = h.root.join("music/untagged_hum.mp3");
     let playlist = h.root.join("playlists/bridge_ambience.m3u");
-    // Forget the item, so the next scan must open the file again; the
+    // Delete the item's row, so the next scan must open the file again; the
     // walk itself does not, once the cache vouches for the new mode.
     let hash = files(&h.db).await?["music/untagged_hum.mp3"].clone();
     test_sql!("DELETE FROM media_items WHERE blake3 = ?")

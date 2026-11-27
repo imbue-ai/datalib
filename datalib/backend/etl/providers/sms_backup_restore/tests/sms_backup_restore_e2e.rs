@@ -559,10 +559,11 @@ fn mms_parts_with_no_data_are_one_row_a_file() -> Result<()> {
     })
 }
 
-/// A run that held deletions back stamped the rewritten file anyway, so
-/// the next run saw nothing rewritten, read only the new file, deleted
-/// nothing, and cleared the held-back row: what left the rewritten file
-/// was never deleted.
+/// A run that deletes nothing because a file would not parse must not
+/// stamp the rewritten file. If it did, the next run would see nothing
+/// rewritten, read only the new file, delete nothing and drop the
+/// `listing:removed_records` row: what left the rewritten file would
+/// never be deleted.
 #[test]
 fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
     let tmp = tempfile::tempdir()?;
@@ -815,9 +816,8 @@ fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
 }
 
 /// A backup that will not open may hold any message, so a run that reads
-/// every other file deletes nothing while it is unread: before, an
-/// unopenable file was a walk error, and once it was not, the prune took
-/// every record only it held.
+/// every other file deletes nothing while it is unread. Otherwise the
+/// prune would take every record only that file holds.
 #[cfg(unix)]
 #[test]
 fn a_backup_that_will_not_open_holds_deletions_back() -> Result<()> {
@@ -994,9 +994,9 @@ fn conversation_of(doc: &RenderedMarkdown) -> &str {
         .unwrap_or_default()
 }
 
-/// A message's read flag sat in its payload, so a read rewrote the whole
-/// message. It is a row of its own in `read_marks` now and the payload
-/// keeps none; a backup that says nothing leaves no mark, and a message
+/// A message's read flag in its payload would make a read rewrite the
+/// whole message, so it is a row of its own in `read_marks` and the
+/// payload keeps none; a backup that says nothing leaves no mark, and a message
 /// that goes takes its mark with it. Only a message someone else sent
 /// that the backup says is unread draws unread.
 #[test]
@@ -1063,9 +1063,8 @@ fn a_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
 }
 
 /// A newer backup that says only that Picard's order was read changes
-/// no message, so it moved no version and nothing re-rendered: the order
-/// stayed unread. The mark moves the store's version, and the next render
-/// redraws Picard's conversation and no other.
+/// no message. The mark alone still moves the store's version, so the
+/// next render redraws Picard's conversation, now read, and no other.
 #[test]
 fn a_read_alone_moves_the_version_and_redraws_its_conversation() -> Result<()> {
     let tmp = tempfile::tempdir()?;

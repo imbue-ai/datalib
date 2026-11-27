@@ -46,8 +46,8 @@ A project's and a section's names are plain text and escaped as such.
 
 A task can be in `items` (from `/sync`), in `completed_items` (from
 the completed-tasks endpoint), or both. The `items` row wins when there
-is one: it is the newer word, and it says when a completed task was
-opened again (`checked: false`). A task is completed when its `items`
+is one: it is the more recent of the two, and it says when a completed
+task was opened again (`checked: false`). A task is completed when its `items`
 row says `checked`, or when only the completed list has it. A task
 whose winning row marks `is_deleted` is left out. A task is filed under the
 project its winning row names, so a task moved since it was completed

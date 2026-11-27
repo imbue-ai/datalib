@@ -1,6 +1,6 @@
-//! Provider-owned config schema for the `whatsapp` source (Program A
-//! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
-//! `WhatsappConfig` without linking the provider.
+//! Provider-owned config schema for the `whatsapp` source. Schema-only
+//! (serde + anyhow), so the orchestrator can name `WhatsappConfig`
+//! without linking the provider.
 
 use std::path::PathBuf;
 
@@ -105,8 +105,8 @@ pub struct WhatsAppSync {
     pub key_env_var: Option<String>,
 }
 
-/// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
+/// Params for the render step: it has no knobs of its own, so this is
+/// the shared `BareRenderConfig`.
 pub type WhatsappRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl WhatsAppSync {

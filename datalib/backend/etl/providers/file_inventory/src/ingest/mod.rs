@@ -94,7 +94,7 @@ pub struct FetchSummary {
     /// Fingerprints written back — one per entry the walk visited.
     pub cache_entries_written: u64,
     /// Cache entries dropped because their paths are gone from disk.
-    pub cache_entries_forgotten: u64,
+    pub cache_entries_deleted: u64,
     /// The cache's on-disk footprint before this scan, in bytes —
     /// database plus its `-wal` / `-shm` sidecars.
     pub cache_bytes_before: u64,
@@ -108,7 +108,11 @@ pub struct FetchSummary {
     pub bytes_skipped: u64,
 }
 
-async fn forget_deleted(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Result<(u64, u64)> {
+async fn delete_gone_cache_entries(
+    cache: &FingerprintCache,
+    root: &Path,
+    db: &RawDb,
+) -> Result<(u64, u64)> {
     let cached = cache.load_under(root).await?;
     let visited = db.all_entry_ids().await?;
 
@@ -149,8 +153,8 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     }
 
     // Canonicalize the root before anything keys off it. The
-    // fingerprint cache is keyed by ABSOLUTE path — that is what makes
-    // it one chain per host rather than one per root — so a relative
+    // fingerprint cache is keyed by ABSOLUTE path — that is what lets
+    // every root on the host share one cache — so a relative
     // `--root` would store relative keys, and the same relative name
     // used from two directories would have two unrelated trees fighting
     // over one key. It also collapses `.`, `..`, a trailing slash and a
@@ -165,7 +169,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     let cache_bytes_before = opts.cache.disk_bytes();
     // Loading the rescan cache for a large tree can take a while, and
     // it happens before the walk's per-entry progress bar exists — so
-    // announce it (start log + live message) so it's clearly working,
+    // log a start line and set a live message, so it's clearly working,
     // not hung, on both a TTY and the NDJSON log sink.
     info!(
         event = "file_inventory_load_cache_start",
@@ -224,7 +228,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     let prune_start = Instant::now();
     let held: Vec<&str> = walker_errors
         .iter()
-        .filter(|e| e.holds)
+        .filter(|e| e.keeps_rows)
         .map(|e| e.id.as_str())
         .collect();
     db.prune_unseen(&seen, &held).await?;
@@ -250,18 +254,18 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         }
     }
 
-    // ── forget what the filesystem forgot ─────────────────────────────
+    // ── drop cache entries whose paths are gone from disk ────────────
     // Cache entries under this root that the walk did not write a row
     // for are *candidates*, not casualties: the walk may simply have
     // filtered them out, and this cache is shared with consumers whose
-    // filters differ. One `lstat` settles it — a path that is really
+    // filters differ. One `lstat` decides — a path that is really
     // gone is dropped, and anything still on disk is kept whatever this
     // scan thought of it.
-    let mut cache_entries_forgotten = 0u64;
-    match forget_deleted(&opts.cache, &opts.root, &db).await {
+    let mut cache_entries_deleted = 0u64;
+    match delete_gone_cache_entries(&opts.cache, &opts.root, &db).await {
         Ok((0, _)) => {}
         Ok((gone, kept)) => {
-            cache_entries_forgotten = gone;
+            cache_entries_deleted = gone;
             info!(
                 event = "file_inventory_cache_forgot_deleted",
                 removed = gone,
@@ -275,7 +279,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
                         "could not tidy the fingerprint cache: {e}"),
     }
 
-    // Settle the WAL before measuring, or the footprint depends on
+    // Checkpoint the WAL before measuring, or the footprint depends on
     // when SQLite last checkpointed rather than on what we wrote.
     opts.cache.checkpoint().await;
     summary.cache_path = opts.cache.path().to_path_buf();
@@ -283,7 +287,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     summary.cache_bytes_after = opts.cache.disk_bytes();
     summary.cache_entries_loaded = cache_entries_loaded;
     summary.cache_entries_written = cache_entries_written;
-    summary.cache_entries_forgotten = cache_entries_forgotten;
+    summary.cache_entries_deleted = cache_entries_deleted;
 
     // ── scan_meta ────────────────────────────────────────────────────
     let root_cascade = build_root_cascade(&opts.root);
@@ -666,7 +670,7 @@ fn stamp_error(id: &str, e: anyhow::Error) -> walker::WalkerError {
         table: "dirs",
         id: id.to_string(),
         message: format!("could not stamp: {e:#}"),
-        holds: false,
+        keeps_rows: false,
     }
 }
 

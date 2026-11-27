@@ -2,12 +2,11 @@
 
 pub mod align;
 pub mod parse;
-// `render/render.rs` inside `render/` is the repo-wide stage layout, not
-// an accident: the directory is the pipeline STAGE (mirroring
-// `download/`), and the file is the rendering step within it, beside
-// `parse.rs`. Renaming it would break the symmetry in all twelve
-// providers. Allowed here rather than repo-wide so an unintentional
-// inception elsewhere still fails the build.
+// `render/render.rs` inside `render/` is the layout several render crates
+// share, not an accident: the directory is the render stage, and the
+// file is the rendering step within it, beside `parse.rs`. Allowed
+// here rather than repo-wide so an unintentional inception elsewhere
+// still fails the build.
 #[allow(clippy::module_inception)]
 pub mod render;
 mod tree;
@@ -49,4 +48,9 @@ mod tree;
 /// v15: ids are minted through `datalib_id` under `Content`, edges
 /// through `datalib_id::edge_id`, and every row carries its
 /// backpointer. Every uuid moved.
+/// v16: a row's Contents cell is its body as plain text
+///      (`datalib_schema::plain_text`), not the markdown.
+/// v17: an edition's title and text are escaped as markdown, so markup
+///      in them shows as typed.
+/// v18: the front matter's values are JSON-quoted (`yaml_scalar`).
 pub const RENDER_VERSION: u32 = 18;

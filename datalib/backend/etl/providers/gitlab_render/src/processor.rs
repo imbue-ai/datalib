@@ -1,4 +1,4 @@
-//! The render wave for the gitlab source: its planner and the
+//! The render step for the gitlab source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -8,7 +8,7 @@ use datalib_etl_gitlab_config::GitlabRenderConfig;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// One render processor, always (it renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: GitlabRenderConfig,

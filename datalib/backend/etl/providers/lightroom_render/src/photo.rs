@@ -231,7 +231,7 @@ fn grid_row(
 /// its name, the sets above it and its whole path; its place names; its
 /// caption, title and Lightroom's own id. Its location is the row's own
 /// column, which `place:<cell>` reads. Keywords, people and albums are
-/// labels too, which is how `label:` found them first.
+/// labels too, so `label:` finds them.
 pub fn terms(photo: &NormalizedPhoto, image: &ImageRow) -> Vec<SearchTerm> {
     let term = |kind, value: &str| SearchTerm::new(kind, value);
     let label = |v: &str| term(SearchTermKind::Label, v);
@@ -480,7 +480,7 @@ mod tests {
 
     /// `keyword:`, `with:`/`pictured:`, `rating:` and `collection:` each
     /// read a kind of their own, and `label:` still finds all but the
-    /// rating, as it did before they had one.
+    /// rating.
     #[test]
     fn a_photo_answers_to_its_keywords_people_rating_and_collections() {
         let image = ImageRow {

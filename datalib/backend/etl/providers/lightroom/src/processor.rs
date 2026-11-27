@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor` for the `lightroom` source.
+//! The download `DataProcessor` for the `lightroom` source.
 
 use std::path::PathBuf;
 

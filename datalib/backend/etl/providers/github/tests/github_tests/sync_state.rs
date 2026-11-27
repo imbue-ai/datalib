@@ -1,7 +1,9 @@
 //! What is owed is what the searches listed minus what the store holds
-//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). Each test here was written against
-//! the old code and watched failing before the mechanism it names was
-//! replaced.
+//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
+//! These tests cover a search GitHub cuts off at its result cap: it
+//! carries on below its oldest result in the same run, stops at the
+//! floor, ends with a warning when it gets no further, and keeps the
+//! spans it covered when it fails part-way.
 
 use std::fs;
 use std::path::Path;
@@ -76,10 +78,10 @@ fn the_scope_whole() -> Vec<(String, String)> {
 }
 
 /// GitHub's search answers at most 1000 results, newest first. A scope
-/// with more than that used to list the newest 1000, leave an error row
-/// on the Manage screen, and wait for the next run to list the rest. The
-/// search carries on below its oldest result instead, as many times as
-/// the scope needs, and nothing failed, so no row says it did.
+/// with more than that must not stop at the newest 1000, leave an error
+/// row on the Manage screen, and wait for the next run to list the rest.
+/// The search carries on below its oldest result, as many times as the
+/// scope needs, and nothing failed, so no row says it did.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_search_cut_off_at_githubs_cap_carries_on_in_the_same_run() {
     let d = tempdir().unwrap();

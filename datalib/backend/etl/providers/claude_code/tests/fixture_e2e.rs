@@ -134,7 +134,7 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(meta["pr_links"][0]["prNumber"], 1701);
     assert_eq!(meta["title_source"], "custom");
 
-    // A second pass reads nothing.
+    // A second run reads nothing.
     let again = fetch(opts()).await.unwrap();
     assert_eq!((again.files, again.files_read), (3, 0));
 
@@ -237,11 +237,11 @@ impl ProgressSink for Counts {
     }
 }
 
-/// The Manage screen's ETA is the announced total less what was counted
-/// done, over the pace it was counted. The download announced nothing,
+/// The Manage screen's ETA is the reported total less what was counted
+/// done, over the pace it was counted. The download reported no total,
 /// so a Claude Code sync showed no ETA however long it ran.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_sync_announces_the_files_it_reads_and_counts_them_done() {
+async fn a_sync_reports_the_files_it_reads_and_counts_them_done() {
     let td = tempfile::tempdir().unwrap();
     let raw_path = td.path().join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();

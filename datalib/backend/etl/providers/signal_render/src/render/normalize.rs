@@ -1,9 +1,8 @@
 //! Signal's parsed render units, in the shape `chat-common` renders.
 //!
-//! Signal used to write its own markdown — a bulleted list with a raw
-//! ISO stamp per line — and its own grid rows. Everything below turns
-//! its parse output into the normalized types instead, so one renderer
-//! serves it and the seven other chat sources alike.
+//! Everything below turns Signal's parse output into the normalized
+//! types, so one renderer serves it and the seven other chat sources
+//! alike.
 
 use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_handle::Handle;
@@ -342,8 +341,8 @@ mod tests {
     use super::*;
     use crate::render::parse::DocRenderUnit;
 
-    /// A render unit whose chat the parse did not read was skipped with a
-    /// log line; its document now carries why it was not rendered. A
+    /// A render unit whose chat the parse did not read is not skipped with
+    /// a log line: its document carries why it was not rendered. A
     /// render unit beside it whose chat is there renders.
     #[test]
     fn a_render_unit_with_no_chat_is_unrendered() {

@@ -436,8 +436,8 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     Ok(())
 }
 
-/// The Ship-of-Theseus case: two distinct content identities that are
-/// the same conceptual document, joinable by the lineage column.
+/// Two revisions of one document: two distinct content identities,
+/// joinable by the lineage column (`xmp_document_id`).
 #[tokio::test(flavor = "multi_thread")]
 async fn revisions_are_distinct_documents_joined_by_lineage() -> Result<()> {
     let h = Harness::new();
@@ -928,7 +928,7 @@ async fn a_document_the_scan_misjudged_is_named_by_what_was_read() -> Result<()>
     let cache = FingerprintCache::open(&h.raw_dir.join("fingerprints.sqlite")).await?;
     cache.restamp_for_test(&path).await?;
     cache.pool().close().await;
-    // Forget the document, so the scan reads the file rather than taking
+    // Delete the document's row, so the scan reads the file rather than taking
     // the stored document for it.
     let db = h.db().await;
     test_sql!("DELETE FROM pdf_documents WHERE blake3 = ?")

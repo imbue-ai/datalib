@@ -153,7 +153,7 @@ pub fn plan(src: &mut Src) -> Result<Option<Plan>> {
     let (endian, ifds) = collect_ifds(src)?;
 
     // Two passes: preferred IFDs, then every image-bearing one as the
-    // fallback described in the module docs.
+    // fallback INGEST.md §"Recipe notes worth knowing" describes.
     let mut preferred: Vec<Vec<Range>> = Vec::new();
     let mut all: Vec<Vec<Range>> = Vec::new();
     for ifd in ifds {

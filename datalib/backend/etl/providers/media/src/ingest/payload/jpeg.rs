@@ -34,7 +34,7 @@ pub fn plan(src: &mut Src) -> Result<Option<Plan>> {
             continue;
         }
         if marker == 0xd9 {
-            break; // EOI. Whatever follows is a passenger.
+            break; // EOI. Whatever follows is not part of the image.
         }
         // Standalone markers carry no length field.
         if marker == 0x01 || (0xd0..=0xd7).contains(&marker) {

@@ -1074,9 +1074,9 @@ mod walk_tests {
     const FIVE_MIN: i64 = 300_000;
 
     /// A window that failed is a gap, asked for again next run while
-    /// the rest of the device's range is held. YoLink forgets history
-    /// after about two months, so that it is asked again at all is what
-    /// matters.
+    /// the rest of the device's range is held. YoLink stops serving
+    /// history after about two months, so that it is asked again at
+    /// all is what matters.
     #[tokio::test]
     async fn a_failed_window_is_a_gap_and_is_fetched_again() {
         let st = Store::new().await;

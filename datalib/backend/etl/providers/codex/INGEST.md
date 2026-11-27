@@ -115,7 +115,7 @@ The **title** is a sub-agent's nickname, else the first typed prompt
 characters. Codex's own
 `threads.title` in `state_5.sqlite` is the same first prompt on every
 thread measured here; reading that database (and its `archived` flag)
-is open, and the reason `path` is the home rather than `sessions/`.
+is not done yet, and is the reason `path` is the home rather than `sessions/`.
 
 A sync that cannot read part of the home goes on and leaves a
 `problems` row, the same way `claude_code` does (its INGEST.md

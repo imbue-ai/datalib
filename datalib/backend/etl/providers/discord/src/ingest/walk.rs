@@ -1,7 +1,7 @@
-//! What is left to read of one conversation, and what each page of it
-//! settles: pure decisions over message ids. A conversation's messages
-//! come newest first, so a walk goes down each stretch it owes, newest
-//! stretch first.
+//! What is left to read of one conversation, and which stretch of it
+//! each page shows read whole: pure decisions over message ids. A
+//! conversation's messages come newest first, so a walk goes down each
+//! stretch it owes, newest stretch first.
 
 use std::collections::VecDeque;
 
@@ -30,17 +30,18 @@ pub struct Walk {
     /// The oldest id read of the current stretch; the next page is what
     /// is older.
     before: Option<u64>,
-    /// How far down the current stretch is settled.
-    settled: Option<u64>,
+    /// How far down the current stretch has been read whole.
+    read_down_to: Option<u64>,
     /// Where the refresh window starts, until everything from there up has
     /// been read by this walk: what a first read of it leaves nothing to
     /// refresh of.
     window: Option<u64>,
 }
 
-/// What a page of messages settled.
+/// What a page of messages showed: the stretch it read whole, and what
+/// follows from that.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Settled {
+pub struct PageRead {
     /// The stretch read whole, as `coverage` takes it.
     pub span: Span,
     /// Where a stored message this page lacks is gone: from `0` up to,
@@ -106,7 +107,7 @@ impl Walk {
             channel_id: channel_id.to_string(),
             stretches: stretches.into(),
             before: None,
-            settled: None,
+            read_down_to: None,
             window,
         }
     }
@@ -131,17 +132,17 @@ impl Walk {
     }
 
     /// A page came back holding `ids`. `None` when nothing was owed.
-    pub fn page(&mut self, ids: &[u64]) -> Option<Settled> {
+    pub fn page(&mut self, ids: &[u64]) -> Option<PageRead> {
         let s = self.stretches.front()?.clone();
         let newest = ids.iter().copied().max();
         let oldest = ids.iter().copied().min();
         let top = self
-            .settled
+            .read_down_to
             .unwrap_or_else(|| newest.map_or(s.hi, |n| n.max(s.hi)));
         let bottom = match oldest {
             Some(oldest) if oldest > s.lo => oldest,
             // An empty page: nothing older is there at all, so what is
-            // left below is settled too.
+            // left below counts as read too.
             None => self.stretches.back().map_or(s.lo, |last| last.lo),
             Some(_) => s.lo,
         };
@@ -150,7 +151,7 @@ impl Walk {
         if read_window {
             self.window = None;
         }
-        let settled = Settled {
+        let page_read = PageRead {
             span: Span::new(snowflake::key(bottom), snowflake::key(top)),
             reread: s.reread.then_some((bottom.max(s.lo), self.before)),
             refreshed: read_window || (s.reread && done),
@@ -160,7 +161,7 @@ impl Walk {
             self.stretches.clear();
         } else if done {
             self.stretches.pop_front();
-            self.settled = None;
+            self.read_down_to = None;
             // The stretch below starts where this one ended, so it goes on
             // from the oldest message read of this one.
             let adjoins = self.stretches.front().is_some_and(|next| next.hi == s.lo);
@@ -168,9 +169,9 @@ impl Walk {
             self.before = if adjoins { above.or(self.before) } else { None };
         } else {
             self.before = Some(bottom);
-            self.settled = Some(bottom);
+            self.read_down_to = Some(bottom);
         }
-        Some(settled)
+        Some(page_read)
     }
 }
 
@@ -218,10 +219,11 @@ mod tests {
         assert_eq!(ends, [(70, 99, true), (10, 50, false)]);
     }
 
-    /// Each page settles down to its oldest message; the last reaches the
-    /// bottom of the stretch, whether it is past it or empty.
+    /// Each page shows the stretch read whole down to its oldest message;
+    /// the last reaches the bottom of the stretch, whether it is past it
+    /// or empty.
     #[test]
-    fn pages_settle_the_stretch_from_the_top_down() {
+    fn pages_read_the_stretch_whole_from_the_top_down() {
         let mut w = Walk::new("c", owed(10, 90, &[], None), None);
         assert_eq!((w.next_before(), w.next_key()), (None, Some(90)));
         // A message came in after the listing named 90 the newest.
@@ -236,10 +238,10 @@ mod tests {
     }
 
     /// The newest message listed was deleted: what is above the newest
-    /// one that came back is settled all the same, so it is not asked
-    /// for again.
+    /// one that came back counts as read all the same, so it is not
+    /// requested again.
     #[test]
-    fn a_deleted_newest_message_is_settled_by_the_page_that_lacks_it() {
+    fn a_deleted_newest_message_is_covered_by_the_page_that_lacks_it() {
         let mut w = Walk::new("c", owed(10, 90, &[span(10, 60)], None), None);
         let s = w.page(&[60, 55]).unwrap();
         assert_eq!(s.span, span(60, 90));
@@ -248,7 +250,7 @@ mod tests {
 
     /// An empty page says there is nothing older anywhere.
     #[test]
-    fn an_empty_page_settles_every_stretch_below_it() {
+    fn an_empty_page_covers_every_stretch_below_it() {
         let mut w = Walk::new("c", owed(10, 90, &[span(40, 50)], Some(70)), None);
         let s = w.page(&[]).unwrap();
         assert_eq!(s.span, span(10, 90));

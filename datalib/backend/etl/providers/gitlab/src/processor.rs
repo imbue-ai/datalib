@@ -21,7 +21,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`.
+/// One download processor when `api` is set, none otherwise.
 pub fn plan_ingest(ctx: PlanContext, config: GitlabConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();

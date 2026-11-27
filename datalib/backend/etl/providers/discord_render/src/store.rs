@@ -187,7 +187,7 @@ async fn open_async(db_path: &Path, source_id: &str, range: RawRange<'_>) -> Res
 }
 
 /// Each conversation, found by a seek past the one before it: there are few
-/// beside the messages, and this is asked on every render.
+/// beside the messages, and this runs on every render.
 const CONVERSATIONS_SQL: Sql = sql!(
     "discord_render.list_conversations",
     "

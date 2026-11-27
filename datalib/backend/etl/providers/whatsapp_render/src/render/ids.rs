@@ -2,7 +2,7 @@
 //! key_id, from_me)` are unique within one account, and msgstore's
 //! `chat.account_jid_row_id` is nullable (the fixture leaves it so), so
 //! the account is not a scope this can rely on: the ids are scoped to
-//! the configured source instead, which is what the old recipe did.
+//! the configured source instead.
 
 use datalib_id::{composite_key, IdNamespace, Identity, Minter};
 use datalib_time::RecordStampPrecision;

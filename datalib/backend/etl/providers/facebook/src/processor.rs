@@ -1,4 +1,4 @@
-//! The ingest wave for the `facebook` source: its planner and the
+//! The download step for the `facebook` source: its planner and the
 //! `DataProcessor` it plans.
 
 use std::path::PathBuf;

@@ -78,7 +78,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     let db = opts.db.clone();
 
     // One scan answers what `.xml` files are there and which have
-    // changed since the last pass — walk, hash, and the decision not
+    // changed since the last run — walk, hash, and the decision not
     // to re-hash what the host cache can vouch for, all in the utility.
     let scan = file_changes_scan::scan(
         &opts.cache,
@@ -352,7 +352,8 @@ async fn prune_unseen(
 /// it says nothing.
 type Read = (String, Option<bool>);
 
-/// The marks to write and the ids to forget. A message is in several
+/// The marks to write, and the ids whose marks to delete
+/// (`read_marks::forget`). A message is in several
 /// backups; the file read last has the last word, as it does on the
 /// message's row.
 fn last_word_on_each(reads: &[Read]) -> (Vec<ReadMarkRow>, Vec<String>) {

@@ -152,7 +152,7 @@ impl Container {
         )
     }
 
-    /// Class when the container alone settles it. `Bmff` and `Riff`
+    /// Class when the container alone decides it. `Bmff` and `Riff`
     /// do not — an `.m4a` and an `.mp4` are the same container — so
     /// those come back `None` and the caller falls back to the
     /// extension.
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn sniffed_container_overrides_a_lying_extension_for_class_too() {
-        // `.jpg` holding PNG bytes: the container settles the class,
+        // `.jpg` holding PNG bytes: the container decides the class,
         // and both agree here — the point is that the container is
         // consulted first.
         assert_eq!(
