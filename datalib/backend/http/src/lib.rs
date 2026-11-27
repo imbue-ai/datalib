@@ -1209,8 +1209,9 @@ pub struct DagStepInfo {
     /// What this step did the last time a request reached it, from the
     /// runner's own state. `None` when it has never been reached.
     pub last_run: Option<DagStepRun>,
-    /// What this step is doing for the sync `run` names: `running`,
-    /// `succeeded`, `blocked`, … `None` when that sync has not reached it.
+    /// What this step is doing, or did, for the syncs open now (with none
+    /// open, the one `run` names): `running`, `succeeded`, `blocked`, …
+    /// `None` when none of them has reached it.
     pub current_state: Option<String>,
     /// What the step's newest invocation has reported. `None` when it has
     /// reported nothing — which is not the same as zero, and should be
@@ -1385,7 +1386,8 @@ pub struct DagSnapshot {
     /// The requests open now: a step whose last invocation served one has
     /// run in this sync.
     pub open_requests: BTreeSet<String>,
-    /// step id → what it is doing, or did, for the request `run` names.
+    /// step id → what it is doing, or did, for the syncs open now (with
+    /// none open, the one `run` names).
     pub states: std::collections::BTreeMap<String, String>,
     /// step id → its row in the loop's `steps` table: its state now, what
     /// it did the last time a request reached it, when it last succeeded.
@@ -1444,10 +1446,13 @@ pub async fn dag_snapshot(
         live: live && r.closed_at.is_none(),
     });
     let open_requests: BTreeSet<String> = open.iter().map(|r| r.id.clone()).collect();
-    let states = run
-        .as_ref()
-        .map(|run| states_for(&state, &run.run_id))
-        .unwrap_or_default();
+    // Every sync open now; with none, the one that closed last.
+    let shown: BTreeSet<String> = match (&open_requests, &run) {
+        (open, _) if !open.is_empty() => open.clone(),
+        (_, Some(run)) => BTreeSet::from([run.run_id.clone()]),
+        _ => BTreeSet::new(),
+    };
+    let states = states_for(&state, &shown);
 
     let loop_store = started.elapsed();
     let progress = live_progress(root).await?;
@@ -1518,12 +1523,13 @@ async fn record_and_requests(
     Ok((record, open, newest))
 }
 
-/// What each step is doing, or last did, for `request`: running or
-/// blocked now, or how its last outcome ended when that outcome was for
-/// this request. A step the request has not reached has no entry.
+/// What each step is doing, or last did, for the syncs in `requests` (the
+/// open ones, or the one that closed last): running or blocked now, or how
+/// its last outcome ended when that outcome was for one of them. A step
+/// none of them has reached has no entry.
 fn states_for(
     record: &datalib_dag::supervisor::record::LoopState,
-    request: &str,
+    requests: &BTreeSet<String>,
 ) -> std::collections::BTreeMap<String, String> {
     use datalib_dag::supervisor::tick::StateKind;
     record
@@ -1531,8 +1537,8 @@ fn states_for(
         .iter()
         .filter_map(|(id, st)| {
             let last = st.last_invocation.as_ref();
-            let for_it = last.is_some_and(|l| l.requests.iter().any(|r| r == request))
-                || st.requests.iter().any(|r| r == request);
+            let for_it = last.is_some_and(|l| l.requests.iter().any(|r| requests.contains(r)))
+                || st.requests.iter().any(|r| requests.contains(r));
             if !for_it {
                 return None;
             }
