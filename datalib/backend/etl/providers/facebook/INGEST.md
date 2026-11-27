@@ -3,7 +3,7 @@
 The `facebook` source mirrors the export Facebook produces under
 **Accounts Center → Your information and permissions → Download your
 information**, in its **JSON** format. It is file-backed: the one
-knob is `export.path`, the directory the zips were unpacked into. The
+setting is `export.path`, the directory the zips were unpacked into. The
 HTML format of the same export is not read — the two carry the same
 records, and JSON is the one a program can trust.
 
@@ -136,8 +136,8 @@ then every row of each table the export no longer holds is deleted. A
 commit landing at any point therefore sees last run's table or this
 run's, never an emptied one — the rule in `docs/dev/step_protocol.md`
 §"The rules you must follow".
-What holds the deletions back is under "When part of a run fails"
-below.
+What stops a table's deletions for a run is under "When part of a
+run fails" below.
 
 After the rows are committed, every `uri` in every record is read off
 disk once and stored in the sibling `blobs.sqlite`, with one
@@ -147,9 +147,10 @@ found through the edge table's `blake3` and not re-read; a `uri` no file
 answers to (the export left it out, as it does for some videos) is a
 `not_found` warning on its edge, `media_blobs:<record>#<uri>`, and a
 `media_missing` count, never a failed run. A file that is there and
-will not read is an error on its edge instead. Either clears the run
-the file reads. The bytes are held in memory only up to 32 MB between
-flushes, since a real export's media runs to gigabytes.
+will not read is an error on its edge instead. Either row is deleted by
+the next run that reads the file. The bytes are held in memory only
+up to 32 MB between flushes, since a real export's media runs to
+gigabytes.
 
 Every run reads the whole export, so an edge's `_bookkeeping` sidecar
 is stamped the first time it lands and left alone after, and a chunk
@@ -161,8 +162,8 @@ again commits nothing (`reading_an_unchanged_export_again_commits_nothing`).
 An edge follows its record. In the transaction that prunes the records,
 a deleted record's edges go, and so do those of a record read this run,
 in a table that pruned, to a `uri` it no longer names
-(`media_edges_removed` in the step summary). A record in a table held
-back this run (below) keeps its edges, as it keeps its row.
+(`media_edges_removed` in the step summary). A record in a table not
+pruned this run (below) keeps its edges, as it keeps its row.
 
 Files nothing renders — ad preferences, login history, search history,
 notification settings — are mirrored all the same. They are the record
@@ -184,8 +185,8 @@ that the next run which reads the thing clears:
   table prunes only while every one of them is there. A table none of
   whose files is in the export was left out of it, and keeps its rows.
   An export that really has fewer parts of a table than the last one
-  looks the same as a partial unpack; resetting the source clears the
-  record.
+  looks the same as a partial unpack; resetting the source empties
+  the store, those `ingested_files` rows with it.
 - **A directory the walk could not list** (or an entry it could not
   stat) is a `listing:files` row, and no table is pruned that run.
 - **An export path with nothing at it** fails the run: there is nothing
@@ -194,7 +195,7 @@ that the next run which reads the thing clears:
 
 ## What render does
 
-One open of the store per pass, loading the fourteen tables
+One open of the store per render run, loading the fourteen tables
 `ALL_TABLES` names (`facebook_render/src/processor.rs`) and diffing
 them against the render cursor, then six feeds:
 

@@ -1,4 +1,4 @@
-//! The render wave for the `facebook` source: one read of the raw store,
+//! The render step for the `facebook` source: one read of the raw store,
 //! then six feeds — posts, albums, comments, reactions, Messenger,
 //! friends — each rendered through the shared chat or contact renderer.
 
@@ -129,7 +129,7 @@ pub struct Source<'a> {
     pub blob_bytes: u64,
 }
 
-/// What one render pass did: every render unit it looked at, and the commit
+/// What one render run did: every render unit it looked at, and the commit
 /// it read.
 #[derive(Debug, Default)]
 pub struct Outcome {
@@ -166,7 +166,7 @@ const ALL_TABLES: &[&str] = &[
     GROUPS_JOINED_TABLE,
 ];
 
-/// Everything one pass reads off the store, built and narrowed. Media
+/// Everything one render run reads off the store, built and narrowed. Media
 /// bytes are not among it: render reads those a batch at a time.
 struct Loaded {
     owner: Owner,
@@ -462,10 +462,10 @@ mod tests {
         render_source(&source, &Progress::noop(), &mut |_| Ok(()))
     }
 
-    /// A table that failed to load read as one the export did not carry,
-    /// so its documents were rendered from nothing and the render's sweep
-    /// deleted them, with the step reporting success. Only a table that
-    /// does not exist is "no rows".
+    /// A table that fails to load must not read as one the export did not
+    /// carry: its documents would be rendered from nothing and the
+    /// render's sweep would delete them, with the step reporting success.
+    /// Only a table that does not exist is "no rows".
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_table_that_will_not_load_fails_the_render() {
         let d = tempfile::tempdir().unwrap();

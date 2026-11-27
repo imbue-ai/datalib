@@ -698,7 +698,7 @@ mod tests {
 
     /// A life event's words are its description, and its edits are
     /// versions of it: two edit records of one life event, each the text
-    /// it has now give or take the mention markup, used to land as two
+    /// it has now give or take the mention markup, must not land as two
     /// posts "the export no longer has", each repeating the event.
     #[test]
     fn edits_of_a_life_event_are_its_versions() {
