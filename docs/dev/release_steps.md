@@ -128,7 +128,8 @@ rewrites all four from what GitHub reports, which needs `gh` to hold
 successful `release.yml` run on its tag's commit. It then downloads the five
 tarballs, about 450 MB, and refuses any of them, and the image, that
 `gh attestation verify` does not pass for `release.yml` at that tag and
-commit, so a hash it writes always names attested bytes. Until that PR lands, people
+commit, so a hash it writes always names attested bytes. Until a PR with those
+rewrites lands, people
 get the previous release, which still works, and CI stays on the previous image.
 
 ### What one failed job costs
@@ -428,7 +429,7 @@ What holds it:
   its runtime, so a missing shared library fails as well as a missing
   version, then `--version` from the binaries and from Node. The musl
   prebuilds npm ships beside the glibc ones are left to musl hosts.
-- **`scripts/install.sh`** asks `getconf GNU_LIBC_VERSION` and, on a
+- **`scripts/install.sh`** runs `getconf GNU_LIBC_VERSION` and, on a
   glibc older than the floor, says so and installs the musl build; when
   it cannot tell, it installs the gnu build and names
   `DATALIB_LIBC=musl` as the way out. `DATALIB_LIBC` set by hand is
