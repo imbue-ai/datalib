@@ -153,7 +153,7 @@ async fn hold(
     };
     let mut said_no_pass = false;
     loop {
-        let ran = match load_config_at(&opts.config_path()) {
+        let ran = match load_config_at(&opts.root, &opts.config_path()) {
             Ok(checked) => run_the_loop(opts, &checked, store, &periods, stop, until).await,
             Err(why) => {
                 // With no config there is no step to ask: the pass is over,
@@ -242,11 +242,11 @@ async fn run_the_loop(
 
 /// The config as the loop would run it, or why it cannot.
 pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
-    load_config_at(&crate::config::root_config_path(root))
+    load_config_at(root, &crate::config::root_config_path(root))
 }
 
-/// The config at `path` as the loop would run it, or why it cannot.
-fn load_config_at(path: &Path) -> Result<ConfigCheck, String> {
+/// The config at `path`, for the library at `root`, as the loop would run it, or why it cannot.
+fn load_config_at(root: &Path, path: &Path) -> Result<ConfigCheck, String> {
     if !path.is_file() {
         return Err(format!(
             "no config at {} — create one before syncing: in the app's Setup tab, or from \
@@ -359,7 +359,7 @@ impl Periods<'_> {
 impl LoopHost for Periods<'_> {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let root = self.opts.root.as_path();
-        let checked = load_config_at(&self.opts.config_path())?;
+        let checked = load_config_at(&self.opts.root, &self.opts.config_path())?;
         let run_id = self
             .first_run_id
             .lock()
