@@ -1,7 +1,7 @@
 //! A CalDAV account shaped like Fastmail's, as measured live: the bare
-//! host answers 404, `/.well-known/caldav` redirects
-//! to the DAV root, every value is CDATA, and the home lists scheduling
-//! boxes beside the calendars.
+//! host answers 404, `/.well-known/caldav` redirects to the DAV root,
+//! every value is CDATA, and the home lists scheduling boxes beside the
+//! calendars.
 
 use datalib_probe::{ProbeAsk, ProbeList};
 use std::collections::BTreeMap;
@@ -419,9 +419,9 @@ fn first_listing(root: &Path) {
 /// The stored token has expired, so the calendar is listed whole again;
 /// the server stops that listing short and then will not move past the
 /// point it stopped. Absence from a listing that never finished says
-/// nothing, so the reception it never reached stays. The next run carries on from the token the cut-short one kept;
-/// when that listing reaches its end, the reception it never named is
-/// gone.
+/// nothing, so the reception it never reached stays. The next run
+/// carries on from the token the cut-short one kept; when that listing
+/// reaches its end, the reception it never named is gone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_whole_listing_cut_short_prunes_only_once_a_later_run_finishes_it() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -620,11 +620,11 @@ async fn a_server_without_sync_collection_fails_the_calendar() {
 }
 
 /// An object the listing named without its data and the `multiget` did
-/// not return was noted as "could not store" while the token advanced,
-/// so in token mode no later run asked for it: the listing never named
-/// it again. It is owed until it is held at the etag it was listed at,
-/// so the next run asks for it although its listing says nothing
-/// changed.
+/// not return. Guards against noting it as "could not store" while the
+/// token advanced: in token mode no later run requested it, since the
+/// listing never named it again. It is owed until it is held at the
+/// etag it was listed at, so the next run requests it although its
+/// listing says nothing changed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_object_the_multiget_did_not_return_is_asked_for_again_next_run() {
     let d = tempfile::tempdir().expect("tempdir");

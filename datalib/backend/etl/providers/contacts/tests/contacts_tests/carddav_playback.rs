@@ -425,9 +425,9 @@ async fn an_expired_token_lists_the_book_whole_again() {
 }
 
 /// A card with no UID cannot be stored, and an address book whose sync
-/// fails is not synced; each was only a `warn!`, so nothing reached the
-/// Manage row. Each is a `problems` row now: the card is held at its
-/// etag with a warning on its listing row. The warning stays through a
+/// fails is not synced. Guards against each being only a `warn!`, which
+/// reached no Manage row: each is a `problems` row, and the card is held
+/// at its etag with a warning on its listing row. The warning stays through a
 /// failed run and a clean incremental one that does not mention it — it
 /// is still not stored — and goes once the card is listed at a new etag
 /// with a UID, which the mirror then holds for that href.
@@ -520,10 +520,10 @@ async fn what_a_sync_could_not_store_is_a_problem_row_until_it_is_stored() {
     );
 }
 
-/// A configured `addressbooks` name no address book has was passed over
-/// in silence, so a typo mirrored less than was asked for and said
-/// nothing; and with every name wrong the run synced nothing and
-/// reported success.
+/// Guards against passing over in silence a configured `addressbooks`
+/// name no address book has, so that a typo mirrored less than was asked
+/// for and said nothing, and with every name wrong the run synced
+/// nothing and reported success.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_configured_name_no_address_book_has_is_a_problem_row() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -589,10 +589,11 @@ async fn a_configured_name_no_address_book_has_is_a_problem_row() {
 }
 
 /// A card the listing named without its data and the `multiget` did not
-/// return was noted as "could not store" while the token advanced, so in
-/// token mode no later run asked for it: the listing never named it
-/// again. It is owed until it is held at the etag it was listed at, so
-/// the next run asks for it although its listing says nothing changed.
+/// return. Guards against noting it as "could not store" while the token
+/// advanced: in token mode no later run requested it, since the listing
+/// never named it again. It is owed until it is held at the etag it was
+/// listed at, so the next run requests it although its listing says
+/// nothing changed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_card_the_multiget_did_not_return_is_asked_for_again_next_run() {
     let d = tempfile::tempdir().expect("tempdir");

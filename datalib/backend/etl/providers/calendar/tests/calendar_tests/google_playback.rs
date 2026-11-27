@@ -88,8 +88,8 @@ async fn try_run_in(
 }
 
 /// A latchkey gateway whose permissions leave out `calendarList` answers
-/// with its own 403. The download said "the service did not accept the
-/// credential" and to log in again, which cannot help.
+/// with its own 403. Guards against reading it as a refused credential
+/// and telling the person to log in again, which cannot help.
 #[tokio::test]
 async fn a_request_latchkey_does_not_permit_is_not_a_refused_credential() {
     let dir = tempfile::tempdir().unwrap();
@@ -437,10 +437,10 @@ async fn severities(store: &Path) -> Vec<String> {
     severities
 }
 
-/// An event with no `id` cannot be stored. A sync that moved its token
-/// past one never asked for it again, and a listing of changes alone did
-/// not say it had met one. A listing that meets one, whole or not, says
-/// so and leaves the token where it was.
+/// An event with no `id` cannot be stored. Guards against a sync moving
+/// its token past one, which never requested it again, and against a
+/// listing of changes not saying it had met one. A listing that meets
+/// one, whole or not, says so and leaves the token where it was.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_event_with_no_id_is_asked_for_again() {
     let d = tempfile::tempdir().expect("tempdir");

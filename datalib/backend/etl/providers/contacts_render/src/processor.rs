@@ -1,5 +1,5 @@
-//! The render step's processor for the contacts source: its planner and the
-//! [`RenderProcessor`] it plans.
+//! The render step's processor for the contacts source: its planner and
+//! the [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
