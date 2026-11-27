@@ -60,20 +60,3 @@ export function ingestReach(
   if (selected.some((m) => m.reach === "origin")) return "origin";
   return selected.length ? "local" : null;
 }
-
-/// The word the Manage row uses for an ingest step: "Download" for a
-/// method that reaches an origin, "Import" for one that reads files on
-/// disk. Null when the params name no method the provider declares.
-export function ingestLabel(
-  type: string | null | undefined,
-  params: Record<string, unknown>,
-): string | null {
-  switch (ingestReach(type, params)) {
-    case "origin":
-      return "Download";
-    case "local":
-      return "Import";
-    default:
-      return null;
-  }
-}

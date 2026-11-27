@@ -388,6 +388,19 @@ describe("identifierLook", () => {
     expect(loose.text).toBe("+15550123456");
     expect(loose.classes).toContain("handle-unresolved");
   });
+
+  it("names an id a service minted as that service does, keeping the id in the tooltip", () => {
+    const SLACK = "slack:T1701D/U0WORF";
+    const mine = contact("datalib_contacts", "Worf", [[SLACK, null]]);
+    const slack = contact("slack", "worf.of.mogh", [[SLACK, null]]);
+    const look = identifierLook(SLACK, "T1701D/U0WORF", { mine: [mine], sourceContacts: [slack] });
+    expect([look.text, look.icon]).toEqual(["worf.of.mogh", "slack"]);
+    expect(look.title).toContain("T1701D/U0WORF");
+    expect(identifierLook("facebook:name/Worf", "name/Worf", NOBODY).text).toBe("Worf");
+    expect(identifierLook("discord:170100000000000005", "", NOBODY).text).toBe(
+      "170100000000000005",
+    );
+  });
 });
 
 describe("the card's edit calls", () => {
