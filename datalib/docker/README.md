@@ -23,8 +23,9 @@ This README is for working on the image itself.
 |------------------|--------------------------------------------------------------------------------------------------|
 | `Dockerfile`     | Multi-arch Ubuntu 26.04 image, run as uid 1000 (`datalib`). Reads `ARG TARGETARCH` (set by `buildx`) to pick the right tarball, and `ARG CUDA` (`none` or `12`) for the CUDA variant. |
 | `entrypoint.sh`  | Bootstraps `LATCHKEY_ENCRYPTION_KEY` from a per-bind-mount key file. PID 1 wrapper under tini.   |
-| `demo/config.toml` | The demo data library baked into the image at `/opt/datalib/demo`. |
-| `stage_demo.sh`  | Copies the demo's fixture inputs + config into a build context (`build_docker.sh` and release.yml both call it). |
+| `stage_demo.sh`  | Stages the demo data library, the TNG library `:ingested_tng` builds, into a build context: its archive, its config, the curated stores (`build_docker.sh` and release.yml both call it). |
+| `demo/applets.toml` | The applets the demo's config ends with. |
+| `demo/unpack.sh` | Unpacks the staged archive inside the image build, at `/opt/datalib/demo`. |
 | `doc_test.sh`    | Runs `docs/user/docker.md`'s shell blocks against an image; `//datalib/docker:doc_test` in Bazel, and a release.yml step. |
 
 ## Building locally

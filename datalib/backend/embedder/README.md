@@ -5,6 +5,14 @@ The embedder runs the search model, embeddinggemma 300M (Q8_0, the file
 (`third-party/llama_cpp`) behind a small C shim (`csrc/embedder.cpp`). It
 is set up as qmd's node-llama-cpp set it up, so the vectors are the ones
 qmd wrote; `tests/parity.rs` holds that against a golden of qmd's answers.
+What the search does with the vectors is in
+[`../search_index/README.md`](../search_index/README.md).
+
+llama.cpp rather than a pure-Rust runtime such as `candle` (already a
+dependency, through perseus): llama.cpp is what runs GGUF files, so
+pinning a release of it brings its tokenizer, its `gemma-embedding`
+graph and its Q8_0 kernels as they are, where `candle` would mean writing
+the model and the tokenizer ourselves and proving both equal to it.
 
 **The facts below are tests.** `//datalib/backend/embedder:embedding_facts`
 (`tests/embedding_facts.rs`) checks each one, in this order. Run it after
@@ -113,7 +121,8 @@ CI has no GPU, so these were measured with `gpu_check`
 (`tools/gpu_check.rs`, built with the CUDA module by
 `.github/workflows/cuda.yml`) on Modal's GPUs and on an M-series Mac,
 over the TNG fixture's 484 prompts. The numbers and how they were taken
-are in `docs/dev/plans/embed_on_modal.md` § "Measured on Modal".
+are in [`docs/dev/embed_on_modal.md`](../../../docs/dev/embed_on_modal.md)
+§ "Measured on Modal".
 
 - **CUDA comes as a module.** A gnu Linux build loads `libggml-cuda.so`
   from `lib/` beside the running binary when it is there (the `-cuda`

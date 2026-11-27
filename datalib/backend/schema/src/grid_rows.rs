@@ -322,7 +322,7 @@ pub struct GridRow {
     /// How this row differs between the two commits its diff group
     /// compares — a `DiffStatus` spelling, bound as text. **NULL on
     /// every real source's row**; non-NULL is what marks a row as
-    /// coming from a diff tree. See `docs/dev/plans/completed/diff_renderer.md`.
+    /// coming from a diff tree. See `docs/dev/grid_rows.md`.
     #[col(sql = "VARCHAR(16)", search = "change")]
     pub diff_status: Option<String>,
     /// For a `modified` row: the names of the columns whose value

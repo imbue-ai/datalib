@@ -3,7 +3,8 @@
 //! stored in the grid index (`source_photos`); pictures are the source's
 //! own previews, looked up when asked, else the original when a browser
 //! can draw it, and the answer says which. It never reads a source's raw
-//! store. `docs/dev/plans/photos_applet.md` is the design.
+//! store. Where Lightroom keeps its previews:
+//! `etl/providers/lightroom/INGEST.md` § "The previews".
 
 mod pictures;
 

@@ -15,6 +15,7 @@ import {
   MANAGE_WITH_CONFIG,
   TABLE_ROWS,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 
 async function openManager(page: Page) {
@@ -94,7 +95,7 @@ test.afterEach(async ({ page }) => {
   await openManager(page);
   await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 });
 
 test("one dialog writes a group and two steps: one row, with two under it", async ({ page }) => {
@@ -133,7 +134,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await expect(preview).toContainText('inputs = ["personal-claude/ingest"]');
 
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Personal Claude.")).toBeVisible();
+  await expect(page.getByText("Added Personal Claude.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // One row for the source: the group's name, its id only on hover.
   // The steps are under it, and folded until asked for — which is the
@@ -189,7 +190,7 @@ test("one dialog writes a group and two steps: one row, with two under it", asyn
   await nameField(page).fill("Claude Archive");
   await expect(wizard(page).locator(".wiz-fixed-id")).toContainText("personal-claude/");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Claude Archive.")).toBeVisible();
+  await expect(page.getByText("Saved Claude Archive.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // The name belongs to the group, so the group row renames and the
   // steps under it — labelled by what they do — do not. Saving rewrote
@@ -210,7 +211,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await pickClaude(page);
   await nameField(page).fill("Fetch Only");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Fetch Only.")).toBeVisible();
+  await expect(page.getByText("Added Fetch Only.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // Take the render step out by hand, the way a config edited in an
   // editor might lack one — including the reference to it that adding
@@ -231,7 +232,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   expect(without).not.toContain("fetch-only/render_markdown");
   await fillConfigEditor(page, without);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expandGroup(page, "fetch-only");
   await expect(row(page, "fetch-only/ingest")).toBeVisible();
@@ -253,7 +254,7 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
   await expect(wizard(page)).toContainText("This source is missing");
   await expect(wizard(page)).toContainText("fetch-only/render_markdown");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Fetch Only.")).toBeVisible();
+  await expect(page.getByText("Saved Fetch Only.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expect(row(page, "fetch-only/render_markdown")).toBeVisible();
   await expect(editor).toHaveValue(/inputs = \["fetch-only\/ingest"\]/);
@@ -266,7 +267,7 @@ test("editing a source keeps what the form has no field for", async ({ page }) =
   await pickClaude(page);
   await nameField(page).fill("Hand Tuned");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Hand Tuned.")).toBeVisible();
+  await expect(page.getByText("Added Hand Tuned.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // A key and a comment written by hand, which no field of the form owns.
   await expect(editor).toHaveValue(/id = "hand-tuned\/ingest"/);
@@ -278,14 +279,14 @@ test("editing a source keeps what the form has no field for", async ({ page }) =
   expect(tuned).not.toBe(text);
   await fillConfigEditor(page, tuned);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expandGroup(page, "hand-tuned");
   await pickRowMenu(page, row(page, "hand-tuned/ingest"), "Edit settings…", wizard(page));
   await expect(wizard(page)).toContainText("This form has no field for code_version");
   await nameField(page).fill("Hand Tuned Too");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Hand Tuned Too.")).toBeVisible();
+  await expect(page.getByText("Saved Hand Tuned Too.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expect(editor).toHaveValue(/name = "Hand Tuned Too"/);
   await expect(editor).toHaveValue(/# pinned by hand\ncode_version = "7"\n/);
@@ -297,7 +298,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   await nameField(page).fill("No Render");
   await expect(renderToggle(page)).toBeChecked();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added No Render.")).toBeVisible();
+  await expect(page.getByText("Added No Render.")).toBeVisible({ timeout: SAVE_ANSWERED });
   await expect(editor).toHaveValue(/inputs = \["no-render\/ingest"\]/);
 
   await expandGroup(page, "no-render");
@@ -307,7 +308,7 @@ test("clearing Rendering removes the render step and its index edge", async ({ p
   // Saving takes the step out, so the dialog says so before it does.
   await expect(wizard(page)).toContainText("Rendering is off under Advanced options");
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved No Render.")).toBeVisible();
+  await expect(page.getByText("Saved No Render.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expect(
     page.locator('.tg-grid .slick-row[data-key="no-render/render_markdown"]'),
@@ -335,7 +336,7 @@ test("free-text search is a choice, and only the search feels it", async ({ page
   // kept alone.
   await expect(embedToggle(page)).toBeDisabled();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Rows Only.")).toBeVisible();
+  await expect(page.getByText("Added Rows Only.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expect(editor).toHaveValue(/rows-only\/render_markdown|group = "rows-only"/);
   await expect(editor).toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
@@ -365,7 +366,7 @@ test("free-text search is a choice, and only the search feels it", async ({ page
   await openAdvanced(page);
   await embedToggle(page).uncheck();
   await wizard(page).getByRole("button", { name: "Save changes" }).click();
-  await expect(page.getByText("Saved Rows Only.")).toBeVisible();
+  await expect(page.getByText("Saved Rows Only.")).toBeVisible({ timeout: SAVE_ANSWERED });
   await expect(editor).not.toHaveValue(/not_searched = \[[^\]]*"rows-only"/);
   const keywordOnly = await editor.inputValue();
   expect(notSearched(keywordOnly)).not.toContain("rows-only");
@@ -418,7 +419,7 @@ test("a provider with render options writes them on the render step, from the on
     )
     .fill("Inbox");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Mac Mail.")).toBeVisible();
+  await expect(page.getByText("Added Mac Mail.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expandGroup(page, "mac-mail");
   await expect(row(page, "mac-mail/render_markdown")).toBeVisible();
@@ -455,7 +456,7 @@ test("a download-only source gets its render step, and no Rendering section", as
     wizard(page).getByRole("checkbox", { name: /Turn on the Photos card/ }),
   ).toBeChecked();
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Photos.")).toBeVisible();
+  await expect(page.getByText("Added Photos.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   await expect(editor).toHaveValue(/id = "photos\/render_markdown"/);
   const text = await editor.inputValue();
@@ -503,7 +504,7 @@ test("Add source waits for the config, and what it adds keeps the rest", async (
   letReadLand();
   await fillInPhotos(page);
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Photos.")).toBeVisible();
+  await expect(page.getByText("Added Photos.")).toBeVisible({ timeout: SAVE_ANSWERED });
   const saved = await savedConfig(request);
   expect(saved).toContain('id = "photos/ingest"');
   for (const [entry] of original.matchAll(/^id = "[^"]+"$/gm)) expect(saved).toContain(entry);
@@ -539,7 +540,7 @@ test("deleting a fetch step takes its render step with it", async ({ page }) => 
   await pickClaude(page);
   await nameField(page).fill("Doomed");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Doomed.")).toBeVisible();
+  await expect(page.getByText("Added Doomed.")).toBeVisible({ timeout: SAVE_ANSWERED });
   await expandGroup(page, "doomed");
   await expect(row(page, "doomed/render_markdown")).toBeVisible();
 
@@ -669,7 +670,7 @@ async function addComparison(page: Page, root: string, id: string, name: string)
         `[steps.params.diff]\nfrom = "a"\nto = "b"\n`,
     );
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
   await openManager(page);
 }
 

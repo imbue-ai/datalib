@@ -1,7 +1,7 @@
 """The provider contract, checked against every render provider's TNG store.
 
-`docs/dev/plans/completed/one_mode.md` §"Layer 2: the provider contract". The one
-clause worth a machine check is the hard one: *the changed set is
+`docs/dev/data_architecture_parse_and_render.md` §"Incremental equals
+cold". The clause worth a machine check is the hard one: *the changed set is
 complete* — for any change to the raw store, every document whose output
 differs is one the provider's diff scan names. A miss is silent (the run
 succeeds, the document is simply old), which is why it gets a test and

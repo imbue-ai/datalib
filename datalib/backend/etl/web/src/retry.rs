@@ -128,6 +128,20 @@ impl RetryGuard {
         self.max_backoff
     }
 
+    /// The first wait for a request that starts now: where the source's
+    /// streak of failures has the backoff, so a request handed back as
+    /// failed does not reset it for the next one, and an outage still
+    /// takes the guard's full time to give up on.
+    pub fn backoff_now(&self) -> Duration {
+        match self.sequential_failures.load(Ordering::Relaxed).min(32) as u32 {
+            0 => self.initial_backoff,
+            streak => self
+                .initial_backoff
+                .saturating_mul(2u32.saturating_pow(streak))
+                .min(self.max_backoff),
+        }
+    }
+
     /// The most requests the source may have out at once, for a download
     /// that sizes its own fan-out to fit.
     pub fn requests_at_once(&self) -> usize {
@@ -268,6 +282,30 @@ mod tests {
         assert_eq!(g.on_failure(), GuardVerdict::Continue);
         std::thread::sleep(Duration::from_millis(20));
         assert!(matches!(g.on_failure(), GuardVerdict::GiveUp(_)));
+    }
+
+    /// A request handed back as failed must not reset the backoff for the
+    /// next one, or an outage would use up the failure count in minutes
+    /// instead of riding out the guard's time.
+    #[test]
+    fn the_next_request_backs_off_from_the_sources_streak() {
+        let g = RetryGuard::new(
+            Duration::from_secs(3600),
+            100,
+            Duration::from_secs(2),
+            Duration::from_secs(60),
+            datalib_etl::stop::StopFlag::default(),
+        );
+        assert_eq!(g.backoff_now(), Duration::from_secs(2));
+        g.on_failure();
+        g.on_failure();
+        g.on_failure();
+        assert_eq!(g.backoff_now(), Duration::from_secs(16));
+        g.on_failure();
+        g.on_failure();
+        assert_eq!(g.backoff_now(), Duration::from_secs(60), "capped");
+        g.on_progress();
+        assert_eq!(g.backoff_now(), Duration::from_secs(2));
     }
 
     #[tokio::test]

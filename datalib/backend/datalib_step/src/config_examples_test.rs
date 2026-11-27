@@ -1,5 +1,5 @@
 //! The checked-in example configs — `docs/user/config_examples/*.toml`,
-//! `configs/dag_example.toml`, the docker image's demo, and the TOML the
+//! `configs/dag_example.toml`, and the TOML the
 //! agent config guide shows — have to load as the runner would and plan
 //! as this binary would, so the documentation cannot drift from the real
 //! schemas, and be in the shape `datalib-http` leaves as written. Every
@@ -67,8 +67,6 @@ fn example_configs_load_and_plan() {
         "docs/user/config_examples/all_sources.toml",
         // The walkthrough config AGENTS.md sends people to.
         "configs/dag_example.toml",
-        // The demo library the docker image bakes in.
-        "datalib/docker/demo/config.toml",
     ] {
         let path = example_config(name);
         validate_config(name, &path);

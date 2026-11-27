@@ -128,7 +128,7 @@ impl Batching {
     /// Metal gained nothing from sharing a call, and more tokens per call
     /// only took more memory; CUDA ran 15% (T4) to 80% (A100) faster at 8
     /// prompts in one context's tokens, and slower at any larger budget
-    /// (docs/dev/plans/embed_on_modal.md § "Measured on Modal").
+    /// (docs/dev/embed_on_modal.md § "Measured on Modal").
     pub fn for_device(device: &str) -> Batching {
         if device == "CPU" || device.starts_with("MTL") {
             Batching::ONE

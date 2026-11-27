@@ -132,8 +132,11 @@ The root has the contacts app too, holding what Picard curated
 (`tests/fixtures/curated/`): seven of the crew linked across their sources,
 Picard as "me", a merge, a group, an agent's proposal left to answer and
 three muted problems. Most people in the corpus are linked to nobody, so
-there is plenty left to curate; every edit goes with the tmpdir. Every source in it is render-only: browsing and search work,
-and syncing a source fails on its missing raw store.
+there is plenty left to curate; every edit goes with the tmpdir. Syncing
+works too: the sources that read files read a copy kept in the root, and
+the ones that stand in for a web service keep what they already
+downloaded ([`tests/fixtures/README.md`](../../tests/fixtures/README.md)
+§"Start here").
 
 ```sh
 bazelisk run //datalib:dev_tng

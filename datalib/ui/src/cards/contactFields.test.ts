@@ -1,19 +1,10 @@
-// Your contact's fields beside the rest of the card: where a field's
-// handle stands, and copying what a source says into the contact.
+// Your contact's lines beside the rest of the card: where a typed
+// line's handle stands, and copying what a source says into the contact.
 
 import { describe, expect, it } from "vitest";
 
 import type { ContactEdit, Field } from "./contactEdit";
-import {
-  copyAll,
-  copyInto,
-  drift,
-  holds,
-  linkedNotFields,
-  sourceValues,
-  standing,
-  valueText,
-} from "./contactFields";
+import { copyInto, drift, holds, sourceValues, standing, valueText } from "./contactFields";
 import type { NormalizedContact, Who } from "./contacts";
 
 function record(over: Partial<NormalizedContact> = {}): NormalizedContact {
@@ -90,20 +81,6 @@ describe("standing", () => {
   });
 });
 
-describe("linkedNotFields", () => {
-  it("offers each working address and number no field holds, never a Slack id", () => {
-    const linked = record().handles;
-    expect(linkedNotFields(linked, ["email:picard@enterprise.starfleet", null])).toEqual([
-      { handle: "tel:+12025550101", kind: "phone", value: "+1-202-555-0101", label: "cell" },
-    ]);
-  });
-
-  it("leaves out a handle that stopped working", () => {
-    const linked = record().handles.map((h) => ({ ...h, stopped_working_by: "2370" }));
-    expect(linkedNotFields(linked, [])).toEqual([]);
-  });
-});
-
 describe("sourceValues", () => {
   it("lists what a source says as a contact would hold it", () => {
     expect(sourceValues(record()).map(valueText)).toEqual([
@@ -161,21 +138,6 @@ describe("copying", () => {
     };
     const values = sourceValues(record()).filter((v) => v.part === "field");
     expect(values.slice(0, 2).map((v) => holds(edit, v))).toEqual([true, true]);
-  });
-
-  it("copies everything but the name with Copy all", () => {
-    const all = copyAll(EMPTY, sourceValues(record()), FROM, ids());
-    expect(all.name).toBe("Jean-Luc");
-    expect(all.note).toBe("Make it so.");
-    expect(all.fields.map((f) => f.kind)).toEqual([
-      "email",
-      "phone",
-      "title",
-      "organization",
-      "address",
-      "birthday",
-      "other",
-    ]);
   });
 });
 

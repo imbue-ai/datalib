@@ -2135,6 +2135,9 @@ handles
     reviewed_at_utc
     confidence
     run
+    label
+    copied_from_source
+    copied_from_key
 labels
     subject
     label
