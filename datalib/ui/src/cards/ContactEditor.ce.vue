@@ -320,8 +320,27 @@ function handleKindLabel(handle: string | null): string {
   return HANDLE_KIND_LABELS[kind] ?? kind[0]!.toUpperCase() + kind.slice(1);
 }
 
-async function labelHandle(handle: string, ev: Event) {
-  const label = (ev.target as HTMLInputElement).value;
+/// What was typed into each handle's label, by handle, until the handle
+/// comes back saying it. The input shows this rather than the handle's
+/// label: Vue writes an input's bound value back on every render, so a
+/// render before the blur would put the old label over the typing.
+const typedLabels = ref<Record<string, string>>({});
+watch(
+  () => props.linked,
+  (linked) => {
+    for (const h of linked) {
+      const typed = h.handle ? typedLabels.value[h.handle] : undefined;
+      if (typed !== undefined && (typed.trim() || null) === h.label) {
+        delete typedLabels.value[h.handle!];
+      }
+    }
+  },
+  { deep: true },
+);
+
+async function labelHandle(handle: string) {
+  const label = typedLabels.value[handle];
+  if (label === undefined) return;
   error.value = null;
   try {
     await setHandleLabel(handle, props.contactId, label);
@@ -635,11 +654,12 @@ onUnmounted(() => {
             <span class="contact-edit-value contact-edit-shown">{{ h.value }}</span>
             <input
               v-if="h.handle"
-              :value="h.label ?? ''"
+              :value="typedLabels[h.handle!] ?? h.label ?? ''"
               class="person-input contact-edit-tag"
               :aria-label="`Label for ${h.value}`"
               placeholder="label"
-              @change="labelHandle(h.handle!, $event)"
+              @input="typedLabels[h.handle!] = ($event.target as HTMLInputElement).value"
+              @change="labelHandle(h.handle!)"
             />
             <button
               v-if="h.handle"
