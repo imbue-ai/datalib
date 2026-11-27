@@ -1,5 +1,5 @@
 //! A folder of Lightroom backups: which entries are backups, and which
-//! the store does not hold yet. Pure over an `file_changes_scan` of the folder and
+//! the store does not hold yet. Pure over a `file_changes_scan` of the folder and
 //! the ledger; `sync` acts on it.
 
 use std::collections::BTreeMap;

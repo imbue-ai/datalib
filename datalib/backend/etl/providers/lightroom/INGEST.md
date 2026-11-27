@@ -729,9 +729,8 @@ measure it without touching the store.
 
 `gc = true` runs it at the start of each run, which collects the
 *previous* run's garbage. Same steady-state result, and it happens while
-the working tree is provably clean and outside the commit lifecycle the
-orchestrator owns — but it does mean a brand-new store isn't collected
-until its second run.
+the working tree is provably clean, before the run has written anything —
+but it does mean a brand-new store isn't collected until its second run.
 It is **off by default** because gc rewrites the whole file, which is
 time a routine no-op run shouldn't spend. It runs once per sync, before
 the sync's first mirror, and every sync mirrors at least the newest
