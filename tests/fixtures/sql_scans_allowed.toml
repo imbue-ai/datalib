@@ -53,11 +53,6 @@ files = ["*/ingest/entities.doltlite_db"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
-statement = "/* sql:runs.read_latest_run */ SELECT run_id, started_at_utc, finished_at_utc, tz_offset, kind, reason FROM runs INDEXED BY runs_by_start ORDER BY started_at_utc DESC, run_id DESC LIMIT 1"
-files = ["*/runs/runs.sqlite"]
-why = "Reads one row: it walks `runs_by_start` from its newest end and stops at LIMIT 1. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
-
-[[scan]]
 statement = "/* sql:etl.render.grid.delete_uncarried_contact_records */ DELETE FROM contact_record_handles WHERE NOT EXISTS (SELECT 1 FROM document_contacts d INDEXED BY document_contacts_by_record WHERE d.record_id = contact_record_handles.record_id)"
 files = ["*/unified_grid_and_search_index/db.sqlite"]
 why = "Once per pass that changed anything: records no document carries any more, in tables of one row per distinct record, or per handle of one."
@@ -93,9 +88,24 @@ files = ["*/render_markdown/indexed_markdown.doltlite_db"]
 why = "Once per render pass, clearing one stage's rows. A render store's problems are one row per record its render could not fully do, a few beside the documents the pass reads."
 
 [[scan]]
-statement = "/* sql:runs.delete_runs_past_max */ DELETE FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 AND (started_at_utc, run_id) < (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start WHERE run_id != ?1 ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?2) RETURNING run_id"
+statement = "/* sql:runs.delete_runs_past_max */ DELETE FROM runs INDEXED BY runs_by_start WHERE (started_at_utc, run_id) < (SELECT started_at_utc, run_id FROM runs INDEXED BY runs_by_start ORDER BY started_at_utc DESC, run_id DESC LIMIT 1 OFFSET ?) RETURNING run_id"
 files = ["*/runs/runs.sqlite"]
-why = "Retention, once per run. It walks `runs_by_start` from its newest end to the `max_runs`-th run (100 by default), then deletes below that through the same index. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
+why = "Retention of an older build's runs, as a writer opens and hourly. It walks `runs_by_start` from its newest end to the `max_runs`-th run (100 by default), then deletes below that through the same index. SQLite marks any walk that starts at one end of an index as a full scan, which is what this check reads."
+
+[[scan]]
+statement = "/* sql:runs.delete_invocations_past_max */ DELETE FROM invocations /* walks by design */ WHERE finished_at_utc IS NOT NULL AND invocation_id NOT IN ( SELECT q.invocation_id FROM invocation_requests q WHERE q.request_id IN ( SELECT k.request_id FROM invocation_requests k JOIN invocations i ON i.invocation_id = k.invocation_id GROUP BY k.request_id ORDER BY MAX(i.started_at_utc) DESC LIMIT ?)) RETURNING invocation_id"
+files = ["*/runs/runs.sqlite"]
+why = "Retention of invocations by count, as a writer opens and hourly: it ranks every request by its newest invocation to keep the newest `max_runs`, which reads every link. The store's retention bounds what it reads."
+
+[[scan]]
+statement = "/* sql:runs.close_abandoned_invocations */ UPDATE invocations SET state = ?1, finished_at_utc = coalesce(finished_at_utc, max(?2, started_at_utc)), error = coalesce(error, ?3), updated_at_utc = ?2, tz_offset = coalesce(tz_offset, ?4) WHERE state IN (SELECT value FROM json_each(?5))"
+files = ["*/runs/runs.sqlite"]
+why = "Once per process that takes `runner-lock`, closing what a dead loop left: it reads every invocation retention keeps for the few still marked live."
+
+[[scan]]
+statement = "/* sql:runs.list_newest_invocation_per_step */ SELECT invocation_id FROM ( SELECT invocation_id, ROW_NUMBER() OVER (PARTITION BY step ORDER BY started_at_utc DESC, invocation_id DESC) AS rn FROM invocations INDEXED BY invocations_by_step) WHERE rn = 1"
+files = ["*/runs/runs.sqlite"]
+why = "Each step's newest invocation, for the Manage screen: it walks `invocations_by_step` once, in step order, and keeps the first of each step. The store's retention bounds the walk."
 
 [[scan]]
 statement = "/* sql:search_index.store.delete_passes_of_dropped_sources */ DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
@@ -1365,11 +1375,6 @@ why = "Walks the index from its newest end and stops at the LIMIT, once per star
 [[scan]]
 statement = "/* sql:beeper.list_media_paths */ SELECT rel_path FROM beeper_media_files"
 files = ["*/ingest/entities.doltlite_db"]
-why = "Reads every row by design: the statement has no WHERE."
-
-[[scan]]
-statement = "/* sql:dag.supervisor.read_latest_run */ SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs ORDER BY rowid DESC LIMIT 1"
-files = ["*/supervisor.sqlite"]
 why = "Reads every row by design: the statement has no WHERE."
 
 [[scan]]
