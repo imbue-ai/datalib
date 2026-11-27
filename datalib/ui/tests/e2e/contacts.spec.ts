@@ -331,6 +331,38 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   expect(gone.status()).toBe(404);
 });
 
+/// The contacts list says how much each contact wrote, which is what
+/// `from:` finds, and sorts by it; Unfiled lists who wrote and is on no
+/// contact, and adding one from it makes them a contact and takes them
+/// off the list.
+test("the contacts list sorts by what each wrote, and Unfiled adds whom it lists", async ({
+  page,
+  request,
+}) => {
+  const boothby = "discord:170100000000000016";
+  await page.goto("/contactsView()");
+  const card = page.locator(".contacts-card");
+  await expect(card.locator(".slick-header-column", { hasText: "Items" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await card.getByLabel("Sort contacts").selectOption("most");
+  const counts = card.locator('.slick-row [col-id="items"]');
+  await expect(counts.first()).not.toBeEmpty();
+  const items = (await counts.allInnerTexts()).map((t) => Number(t.trim() || "0"));
+  expect(items.length, "contacts to sort").toBeGreaterThan(1);
+  expect(items).toEqual([...items].sort((a, b) => b - a));
+
+  await card.getByRole("tab", { name: "Unfiled" }).click();
+  const row = card.locator(`.slick-row[data-key="${boothby}"]`);
+  await expect(row).toHaveCount(1, { timeout: 15_000 });
+  await row.locator('[col-id="items"]').click({ button: "right" });
+  await menuEntry(page, "Add to contacts").click();
+  await expect(row).toHaveCount(0);
+  const held = await heldWith(request, [boothby]);
+  expect(held[boothby]?.name).toBe("Boothby");
+  await deleteContacts(request, [held[boothby]!.id]);
+});
+
 /// Editing your contact on its person card: the edit is a draft nobody
 /// else sees, which a reload resumes; a rename made elsewhere just
 /// before Save makes the save refuse rather than overwrite it, and

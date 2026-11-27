@@ -1,10 +1,11 @@
 //! What the search reads of the contacts store without being its writer:
 //! a detached read of `main`'s head (`doltlite_raw::open_reader`), so it
 //! takes no lock the `datalib_contacts` applet needs. It answers a
-//! `contact:` value with the handles it reaches, and the people
-//! suggestions with the contacts whose name holds what was typed.
+//! `contact:` value with the handles it reaches, the people suggestions
+//! with the contacts whose name holds what was typed, and the contacts
+//! list's counts and Unfiled tab with who is filed.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -15,6 +16,19 @@ use datalib_sql::sql;
 
 pub struct ContactsReader {
     reader: doltlite_raw::Reader,
+}
+
+/// Who the contacts app has filed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Filing {
+    /// Each contact not merged away, by id, with every handle it reaches
+    /// as [`ContactsReader::handles`] reads them: what `from:contact:`
+    /// finds.
+    pub reach: BTreeMap<String, BTreeSet<String>>,
+    /// Every handle on a contact.
+    pub held: BTreeSet<String>,
+    /// The handles a person or an agent said are not real (`REAL` out).
+    pub not_real: BTreeSet<String>,
 }
 
 impl ContactsReader {
@@ -113,6 +127,51 @@ impl ContactsReader {
         Ok(out)
     }
 
+    /// Every contact and the handles each reaches, every handle on one,
+    /// and the senders marked not real.
+    pub async fn filing(&self) -> Result<Filing> {
+        let pool = self.reader.pool();
+        let ids: Vec<String> = sql!(
+            "contacts_app.read.list_unmerged_contact_ids",
+            "SELECT contact_id FROM contacts WHERE merged_into IS NULL ORDER BY contact_id"
+        )
+        .query_scalar()
+        .fetch_all(pool)
+        .await
+        .context("list the contacts")?;
+        let mut reach = BTreeMap::new();
+        for id in ids {
+            let handles = self.handles(&id).await?.unwrap_or_default();
+            reach.insert(id, handles);
+        }
+        let held: Vec<String> = sql!(
+            "contacts_app.read.list_held_handles",
+            "SELECT DISTINCT handle FROM handles"
+        )
+        .query_scalar()
+        .fetch_all(pool)
+        .await
+        .context("list the handles on contacts")?;
+        let not_real: Vec<String> = sql!(
+            "contacts_app.read.list_not_real_subjects",
+            "SELECT subject FROM labels INDEXED BY labels_by_label \
+              WHERE label = ? AND applies = 0"
+        )
+        .query_scalar()
+        .bind(crate::REAL)
+        .fetch_all(pool)
+        .await
+        .context("list the senders marked not real")?;
+        Ok(Filing {
+            reach,
+            held: held.into_iter().collect(),
+            not_real: not_real
+                .into_iter()
+                .filter(|s| !s.starts_with(crate::contact_subject("").as_str()))
+                .collect(),
+        })
+    }
+
     /// Contacts whose name contains `q`, as the store's own search.
     pub async fn search(&self, q: &str, limit: u32) -> Result<Vec<ContactSummary>> {
         search_in(self.reader.pool(), q, limit).await
@@ -134,6 +193,56 @@ mod tests {
     use datalib_sql::{test_sql, test_sql_id, Sql};
     fn email(s: &str) -> Handle {
         Handle::email(s).unwrap()
+    }
+
+    /// Who is filed: each contact not merged away with the handles it
+    /// reaches, every handle on one, and the senders marked not real —
+    /// a contact marked not real is no sender, and stays out of that.
+    #[tokio::test]
+    async fn the_filing_names_each_contact_and_every_handle_on_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(tmp.path())).await.unwrap();
+        let riker = store
+            .create(
+                "Will Riker",
+                ContactKind::Person,
+                &[email("riker@enterprise.org")],
+            )
+            .await
+            .unwrap();
+        let old = store
+            .create("W. Riker", ContactKind::Person, &[email("wtr@old.org")])
+            .await
+            .unwrap();
+        store.merge(&old, &riker).await.unwrap();
+        store
+            .set_label("email:prizes@quarks.example", crate::REAL, Some(false))
+            .await
+            .unwrap();
+        store
+            .set_label(&crate::contact_subject(&riker), crate::REAL, Some(false))
+            .await
+            .unwrap();
+        store
+            .set_label("email:troi@enterprise.org", crate::REAL, Some(true))
+            .await
+            .unwrap();
+        store.close().await;
+
+        let reader = ContactsReader::open(tmp.path()).await.unwrap().unwrap();
+        let filing = reader.filing().await.unwrap();
+        reader.close().await;
+        let both: BTreeSet<String> = ["email:riker@enterprise.org", "email:wtr@old.org"]
+            .map(String::from)
+            .into();
+        assert_eq!(
+            filing,
+            Filing {
+                reach: BTreeMap::from([(riker, both.clone())]),
+                held: both,
+                not_real: ["email:prizes@quarks.example".to_string()].into(),
+            }
+        );
     }
 
     /// A merged-away contact reads as its survivor; a group as its own

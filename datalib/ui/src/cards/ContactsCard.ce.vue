@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // `contactsView()`: every contact in the contacts app, read straight from
 // it (`GET /applet/datalib_contacts/contacts`), so an edit made anywhere
-// shows at once. The person is a chip, as in any grid: a double-click on
-// a row opens the person card, a right-click offers
-// the card, everything with them, copying the name, merging the selected
-// rows into the one clicked, and deleting. A new contact is made from the
-// box at the top. Review switches to what agents proposed
-// (`ContactsReview.ce.vue`).
+// shows at once, with how much each wrote from the index
+// (`GET …/people/contacts`), and sorted by recency, by that count or by
+// name. The person is a chip, as in any grid: a double-click on a row
+// opens the person card, a right-click offers the card, everything with
+// them, copying the name, merging the selected rows into the one
+// clicked, and deleting. A new contact is made from the box at the top.
+// Unfiled lists everyone else who wrote (`UnfiledList.ce.vue`); Review,
+// what agents proposed (`ContactsReview.ce.vue`).
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { copyToClipboard } from "@/clipboard";
 import { confirmAction } from "@/desktop";
@@ -19,6 +21,7 @@ import type { ColumnSpec } from "@/api";
 import { contactSubject, personSource, searchSource } from "./cardSources";
 import {
   CONTACTS_APPLET,
+  contactCounts,
   contactsById,
   createContact,
   deleteContact,
@@ -28,9 +31,22 @@ import {
   people,
   type NormalizedContact,
 } from "./contacts";
-import { filterContacts, mergeInto, rowHandle, type ContactRow } from "./contactsTable";
+import {
+  contactSortKey,
+  filterContacts,
+  LIST_SORTS,
+  mergeInto,
+  rowHandle,
+  sortList,
+  withCountColumns,
+  withCounts,
+  type ContactRow,
+  type ListSort,
+  type Wrote,
+} from "./contactsTable";
 import type { ReviewRow } from "./contactsReview";
 import ContactsReview from "./ContactsReview.ce.vue";
+import UnfiledList from "./UnfiledList.ce.vue";
 import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
 import type { CardCtx } from "./types";
@@ -40,10 +56,18 @@ props.ctx.setTitle("Contacts");
 props.ctx.setHelp(`
 <p>The people you have added, and nobody else: no source fills this list.
 To add someone, double-click them anywhere and choose <em>Add to
-contacts</em>, or type a new name above. Double-click a row for the
-person's page: your contact, and what every source says about them.
-Right-click for everything with them, or to delete the contact. To merge
-duplicates, select them all and right-click the one to keep.</p>
+contacts</em>, pick them from <b>Unfiled</b>, or type a new name above.
+Double-click a row for the person's page: your contact, and what every
+source says about them. Right-click for everything with them, or to
+delete the contact. To merge duplicates, select them all and right-click
+the one to keep.</p>
+<p><em>Items</em> is how much someone wrote, which is what
+<code>from:</code> finds, and <em>Last</em> when they last did; sort by
+either, or by name.</p>
+<p><b>Unfiled</b> lists everyone else who wrote something here, the most
+first. Select some and <em>Add selected to contacts</em>: each comes with
+every handle a source says is theirs. Senders you or an agent marked not
+real are left out unless you ask for them.</p>
 <p><b>Review</b> lists what agents proposed: contacts they made, handles
 they put on one, and whether each person or sender is <i>real</i>, which is
 to say not spam. A label is in, out, or not decided. Confirm agrees with the agent; Reject takes off the
@@ -51,7 +75,7 @@ handles it put on and flips its labels, and both are written down so no agent
 proposes the same again. Select many rows to act on them at once.</p>
 `);
 
-const mode = ref<"contacts" | "review">("contacts");
+const mode = ref<"contacts" | "unfiled" | "review">("contacts");
 const waitingReview = ref<number | null>(null);
 
 const columns = ref<ColumnSpec[]>([]);
@@ -60,9 +84,20 @@ const error = ref<string | null>(null);
 /// This library's config has no contacts app.
 const absent = ref(false);
 const filter = ref("");
+const sort = ref<ListSort>("recent");
+/// How much each contact wrote; null until the index answers, or where
+/// it cannot.
+const counts = ref<Record<string, Wrote> | null>(null);
 const newName = ref("");
 const creating = ref(false);
-const shown = computed(() => filterContacts(rows.value, filter.value));
+const loaded = ref(false);
+const shown = computed(() => {
+  const counted = counts.value ? withCounts(rows.value, counts.value) : rows.value;
+  return sortList(filterContacts(counted, filter.value), sort.value, contactSortKey);
+});
+const shownColumns = computed(() =>
+  counts.value ? withCountColumns(columns.value) : columns.value,
+);
 const cardEl = ref<HTMLElement | null>(null);
 const grid = shallowRef<TableGridApi<ContactRow> | null>(null);
 
@@ -70,18 +105,27 @@ let asked = 0;
 async function load() {
   const mine = ++asked;
   try {
-    const r = await fetch(`${CONTACTS_APPLET}/contacts`);
+    // Together, so the grid's first columns hold the counts: a column
+    // that comes later goes after any the grid has laid out.
+    const [r, wrote] = await Promise.all([
+      fetch(`${CONTACTS_APPLET}/contacts`),
+      // A library with no index yet shows the list without them.
+      contactCounts().catch(() => null),
+    ]);
     const text = await r.text();
     if (mine === asked) absent.value = isAbsent(r.status, text);
     if (absent.value) return;
     if (!r.ok) throw new Error(`contacts → ${r.status}: ${text}`);
     const t = JSON.parse(text) as { columns: ColumnSpec[]; rows: ContactRow[] };
     if (mine !== asked) return;
+    counts.value = wrote;
     if (JSON.stringify(t.columns) !== JSON.stringify(columns.value)) columns.value = t.columns;
     rows.value = t.rows;
     error.value = null;
   } catch (e) {
     if (mine === asked) error.value = (e as Error).message;
+  } finally {
+    if (mine === asked) loaded.value = true;
   }
   void countReview();
 }
@@ -227,14 +271,23 @@ onBeforeUnmount(() => {
       <button
         role="tab"
         class="contacts-mode"
+        :aria-selected="mode === 'unfiled'"
+        @click="mode = 'unfiled'"
+      >
+        Unfiled
+      </button>
+      <button
+        role="tab"
+        class="contacts-mode"
         :aria-selected="mode === 'review'"
         @click="mode = 'review'"
       >
         Review<span v-if="waitingReview" class="contacts-waiting">{{ waitingReview }} waiting</span>
       </button>
     </div>
+    <UnfiledList v-if="!absent && mode === 'unfiled'" :ctx="props.ctx" @added="load" />
     <ContactsReview
-      v-if="!absent && mode === 'review'"
+      v-else-if="!absent && mode === 'review'"
       :ctx="props.ctx"
       @waiting="(n) => (waitingReview = n)"
     />
@@ -247,6 +300,9 @@ onBeforeUnmount(() => {
           placeholder="Filter by name, address, number or note"
           aria-label="Filter contacts"
         />
+        <select v-model="sort" class="contacts-input contacts-sort" aria-label="Sort contacts">
+          <option v-for="s in LIST_SORTS" :key="s.sort" :value="s.sort">{{ s.label }}</option>
+        </select>
         <span class="contacts-count">
           {{ shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}` }}
           {{ rows.length === 1 ? "contact" : "contacts" }}
@@ -264,9 +320,13 @@ onBeforeUnmount(() => {
         </form>
       </div>
       <div v-if="error" class="contacts-error">{{ error }}</div>
+      <p v-if="loaded && !error && rows.length === 0" class="contacts-empty">
+        No contacts yet. Double-click anyone in a message and choose <em>Add to contacts</em>, or
+        pick people from <b>Unfiled</b>.
+      </p>
       <div class="contacts-grid">
         <TableGrid
-          :columns="columns"
+          :columns="shownColumns"
           :rows="shown"
           rowKey="key"
           :selectable="true"
@@ -371,5 +431,25 @@ onBeforeUnmount(() => {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+.contacts-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.contacts-bar > .contacts-sort {
+  flex: 0 0 auto;
+}
+.contacts-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--datalib-muted);
+}
+.contacts-empty {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  color: var(--datalib-muted);
 }
 </style>

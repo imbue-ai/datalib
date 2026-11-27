@@ -253,6 +253,101 @@ fn people_by_handle_gives_each_sources_account() {
     child.kill().ok();
 }
 
+/// The contacts list's counts and its Unfiled tab, from the grid's rows: a
+/// contact's count is what `from:contact:` finds, and Unfiled is everyone
+/// who wrote and is on no contact, not the library's owner or `me`, most
+/// first, with a sender marked not real only when asked for, and marked.
+#[test]
+fn contacts_are_counted_as_from_finds_and_unfiled_is_everyone_else() {
+    let root = tempfile::tempdir().unwrap();
+    datalib_search_fixture::copy_grid_index(root.path());
+    let riker_handles = [
+        "email:riker@enterprise.starfleet",
+        "slack:T_NCC1701D/U_RIKER",
+    ];
+    let quark = "email:prizes@quarks.example";
+    let riker = tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let path = datalib_contacts::store_path(root.path());
+        let store = datalib_contacts::Store::open(&path).await.unwrap();
+        let handles: Vec<datalib_handle::Handle> = riker_handles
+            .iter()
+            .map(|h| datalib_handle::Handle::parse(h).unwrap())
+            .collect();
+        let riker = store
+            .create(
+                "Will Riker",
+                datalib_contacts::ContactKind::Person,
+                &handles,
+            )
+            .await
+            .unwrap();
+        store
+            .set_label(quark, datalib_contacts::REAL, Some(false))
+            .await
+            .unwrap();
+        store.close().await;
+        riker
+    });
+    let mut child = applet()
+        .env(super::DATA_ROOT_ENV, root.path())
+        .current_dir(root.path())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the applet");
+    let port = announced_port(&mut child);
+
+    let (status, body) = get(port, "/people/contacts", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let items = body["counts"][&riker]["items"].as_u64().expect("a count");
+    let found = search_command(root.path(), &format!("from:contact:{riker}"))
+        .args(["--limit", "100000"])
+        .output()
+        .expect("run the search command");
+    let found: serde_json::Value = serde_json::from_slice(&found.stdout).expect("JSON");
+    let found = found["rows"].as_array().map_or(0, Vec::len) as u64;
+    assert!(
+        found > 0,
+        "Riker wrote nothing here, so this checks nothing"
+    );
+    assert_eq!(items, found, "the count is what from: finds");
+
+    let handles = |body: &serde_json::Value| -> Vec<String> {
+        body["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["handle"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (status, body) = get(port, "/people/unfiled", Some(SECRET));
+    assert_eq!(status, 200, "{body}");
+    let unfiled = handles(&body);
+    assert!(!unfiled.is_empty(), "{body}");
+    for gone in riker_handles
+        .iter()
+        .chain(&["email:picard@enterprise.starfleet", "me:self", quark])
+    {
+        assert!(!unfiled.iter().any(|h| h == gone), "{gone} in {unfiled:?}");
+    }
+    let counts: Vec<u64> = body["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["items"].as_u64().unwrap())
+        .collect();
+    assert!(counts.windows(2).all(|w| w[0] >= w[1]), "{counts:?}");
+
+    let (_, body) = get(port, "/people/unfiled?not_real=true", Some(SECRET));
+    let quarks = body["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["handle"] == quark)
+        .expect("a sender marked not real, when asked for");
+    assert_eq!(quarks["marks"][0]["text"], "not real", "{quarks}");
+    child.kill().ok();
+}
+
 /// `/sql` as the gateway reaches it: the store listing names the grid
 /// index, a query over it answers a page, and neither route answers
 /// without the secret.
