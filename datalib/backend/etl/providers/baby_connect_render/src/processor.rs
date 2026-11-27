@@ -1,4 +1,4 @@
-//! The render wave for the baby_connect source: its planner and the
+//! The render step's processor for the baby_connect source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use std::path::Path;

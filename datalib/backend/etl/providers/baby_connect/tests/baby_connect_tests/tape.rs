@@ -10,8 +10,8 @@
 //! asks.
 //! [`Edition::Before`] is a run on the evening of 2048-10-16: the home
 //! page and the five days from Wesley's birthday. [`Edition::After`] is
-//! two days later: the two days the first run left unsettled, one entry
-//! on them edited, and the two days since.
+//! two days later: the two days the first run did not record as read,
+//! one entry on them edited, and the two days since.
 
 use std::collections::BTreeMap;
 use std::path::Path;

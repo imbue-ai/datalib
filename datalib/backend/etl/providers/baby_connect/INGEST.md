@@ -40,9 +40,8 @@ session has ended needs a person.
 
 **Tick Remember Me when signing in.** The form posts it as
 `remember=on`, and the server then sets `seacloud1` to expire a year
-later (measured November 2026). A captured session has ended within a
-day before, the next morning's `/home2` a 302 to the login page; that
-is what a session without the box looks like. latchkey keeps only the
+later (measured November 2026). A session captured without it ended
+within a day: the next morning's `/home2` was a 302 to the login page. latchkey keeps only the
 cookies' values, not their expiry, so nothing says which kind of
 session was captured.
 
@@ -71,8 +70,8 @@ birthday (`BDay`), to `api.until` or today, oldest first, less the days
 its people and its span land in one transaction. A day more than one
 day old is recorded as read; the last two are not, since a parent may
 log the night's feeds the next morning, so every run reads them again.
-A day whose eve is held reaches back to it, so a run of days stays one
-span (`days::span_for`).
+When `coverage` already holds the day before, the new span starts at
+that day, so a run of days stays one span (`days::span_for`).
 
 Nothing else is kept as a position. A run stopped part-way leaves the
 days it read recorded and asks for the rest next time.
@@ -131,7 +130,7 @@ datalib-doltlite -readonly <root>/<group>/ingest/entities.doltlite_db \
 
 `tests/baby_connect_tests/` replays made-up TNG tapes (`tape.rs`) in the
 shapes above. Beverly Crusher's account, with Wesley its one child,
-covers a first run, a second run that asks only for the unsettled days,
-an entry edited after its day, a `since`/`until` window and a
-signed-out session. The Enterprise nursery's account, with Wesley and
+covers a first run, a second run that asks only for the days not yet
+recorded as read, an entry edited after its day, a `since`/`until`
+window and a signed-out session. The Enterprise nursery's account, with Wesley and
 Alexander, covers asking for every child at once.

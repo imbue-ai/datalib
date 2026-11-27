@@ -63,8 +63,9 @@ pub fn settled(d: NaiveDate, today: NaiveDate) -> bool {
 }
 
 /// The span that records `d` as read. Spans merge only where they
-/// overlap, so a day whose eve is held reaches back to it: a run of days
-/// stays one span, not a row per day.
+/// overlap, so when a stored span already covers the day before `d`,
+/// the span starts at that day: a run of days stays one span, not a row
+/// per day.
 pub fn span_for(d: NaiveDate, held: &[Span]) -> Span {
     let eve = key(d - Duration::days(1));
     let lo = if held.iter().any(|s| s.lo <= eve && eve <= s.hi) {

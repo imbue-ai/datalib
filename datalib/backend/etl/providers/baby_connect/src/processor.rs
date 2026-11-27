@@ -17,7 +17,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`.
+/// The ingest step's processor, planned only when the config sets `api`.
 pub fn plan_ingest(
     ctx: PlanContext,
     config: BabyConnectConfig,
@@ -48,7 +48,7 @@ impl DataProcessor for BabyConnectIngest {
         &self.id
     }
 
-    /// Seals as days land.
+    /// Seals as the days are stored, not only when the run ends.
     fn streams_output(&self) -> bool {
         true
     }

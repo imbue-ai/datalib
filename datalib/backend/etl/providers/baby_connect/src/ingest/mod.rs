@@ -205,8 +205,8 @@ impl Ctx<'_> {
     }
 
     /// One day's entries and the people who logged them, and the day
-    /// recorded as read when it is settled, in one transaction. Returns
-    /// the span recorded.
+    /// recorded as read when it is more than a day old
+    /// (`days::settled`), in one transaction. Returns the span recorded.
     async fn store_day(
         &mut self,
         d: NaiveDate,

@@ -1,5 +1,5 @@
 //! Provider-owned config schema for the `baby_connect` source.
-//! Schema-only (serde + anyhow), so the orchestrator and `http` can name
+//! Schema-only (serde + anyhow), so `datalib-step` can name
 //! `BabyConnectConfig` without linking the provider.
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};
