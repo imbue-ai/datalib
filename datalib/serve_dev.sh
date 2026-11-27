@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the datalib HTTP backend and, from a terminal, open a browser at it.
+# Launch the Datalib HTTP backend and, from a terminal, open a browser at it.
 # Invoked via `bazelisk run //datalib:serve`.
 set -eo pipefail
 

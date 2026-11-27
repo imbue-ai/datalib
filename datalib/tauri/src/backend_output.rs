@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 const TAIL_LINES: usize = 20;
 const POLL: Duration = Duration::from_millis(50);
-/// How long a dead server's last words get to come out of the pipe. A
-/// program it started can hold the pipe open past its death.
+/// How long the pipe is still read after the server exits, for its last
+/// lines. A program it started can hold the pipe open after it exits.
 const LAST_WORDS: Duration = Duration::from_secs(1);
 
 pub fn output_file(root: &Path) -> PathBuf {
@@ -112,9 +112,10 @@ fn wait_for_last_words(stderr: &JoinHandle<()>) {
     }
 }
 
-/// A server that announces has taken the root's lock, so it is the only one
-/// using these files. The previous run's stays for one more run: a person
-/// who reopens the app after a crash still has what the crash said.
+/// A server that has printed its URL has taken the root's lock, so it is
+/// the only one using these files. The previous run's stays for one more
+/// run: a person who reopens the app after a crash still has what the
+/// crash said.
 fn open_output_file(root: &Path) -> std::io::Result<File> {
     let current = output_file(root);
     match std::fs::rename(&current, previous_output_file(root)) {
@@ -124,9 +125,9 @@ fn open_output_file(root: &Path) -> std::io::Result<File> {
     File::create(current)
 }
 
-/// Wait for a `datalib-http --url-stdout` child, whose stdout and stderr are
-/// pipes, to announce its URL; its output keeps being read for as long as it
-/// runs. `Err` quotes its last lines, since a Finder-launched app has no
+/// Wait for a `datalib-http --url-stdout` child, whose stdout and stderr
+/// are pipes, to print its URL on stdout; its output keeps being read for
+/// as long as it runs. `Err` quotes its last lines, since a Finder-launched app has no
 /// terminal, and a child that outlasts `patience` is killed first.
 pub fn await_url(child: &mut Child, root: &Path, patience: Duration) -> Result<String, String> {
     let output = Arc::new(Mutex::new(Output::default()));

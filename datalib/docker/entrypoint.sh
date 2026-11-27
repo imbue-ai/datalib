@@ -1,12 +1,12 @@
 #!/bin/sh
-# datalib container entrypoint.
+# Datalib container entrypoint.
 #
 # Bootstraps a per-`.latchkey` encryption key before exec'ing the user's
 # command. Inside this image there is no Secret Service (no GNOME
 # Keyring / KWallet) for `@napi-rs/keyring` to talk to, so latchkey's
 # only option is its env-var fallback (`LATCHKEY_ENCRYPTION_KEY`).
-# Asking every user to invent and pass a key would be a paper cut they'd
-# get wrong half the time — losing the key means losing the credentials
+# Asking every user to invent and pass a key is a step many would get
+# wrong — losing the key means losing the credentials
 # it encrypted — so we generate one once, persist it inside the
 # bind-mounted `/root/.latchkey/` dir, and re-read it on every container
 # start.
