@@ -773,7 +773,8 @@ impl EmailListing<'_> {
             let mut tx = self.db.pool().begin().await.context("begin changes tx")?;
             listed::list_in_tx(&mut tx, &named, Some(&new_state), Named::Changed).await?;
             summary.emails_destroyed +=
-                listed::forget_in_tx(&mut tx, self.now, &destroyed, listed::same_id).await?;
+                listed::delete_gone_messages_in_tx(&mut tx, self.now, &destroyed, listed::same_id)
+                    .await?;
             if self.indexing {
                 listed::unmember_in_tx(&mut tx, &destroyed).await?;
             }

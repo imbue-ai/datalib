@@ -675,7 +675,8 @@ impl Run<'_> {
             listed::unmember_in_tx(&mut tx, &changes.deleted).await?;
         }
         summary.emails_destroyed +=
-            listed::forget_in_tx(&mut tx, self.now, &changes.deleted, email_id_of).await?;
+            listed::delete_gone_messages_in_tx(&mut tx, self.now, &changes.deleted, email_id_of)
+                .await?;
         listed::save_token_in_tx(&mut tx, &scope, history_id).await?;
         tx.commit().await.context("commit history tx")?;
         Ok(true)

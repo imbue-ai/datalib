@@ -895,7 +895,7 @@ mod tests {
 
     /// An email that goes takes its read mark with it.
     #[tokio::test]
-    async fn deleting_an_email_forgets_its_read_mark() {
+    async fn deleting_an_email_deletes_its_read_mark() {
         use datalib_etl::read_marks::{self, ReadMarkRow};
         let (_d, db) = tmp_db().await;
         let mut tx = db.pool().begin().await.unwrap();

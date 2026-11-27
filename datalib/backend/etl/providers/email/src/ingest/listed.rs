@@ -341,7 +341,7 @@ pub async fn drop_unkept_threads(
         return Ok(0);
     }
     let mut tx = pool.begin().await.context("begin unkept threads tx")?;
-    let n = forget_in_tx(&mut tx, now, &gone, email_id_of).await?;
+    let n = delete_gone_messages_in_tx(&mut tx, now, &gone, email_id_of).await?;
     tx.commit().await.context("commit unkept threads tx")?;
     Ok(n)
 }
@@ -493,7 +493,7 @@ pub async fn write_batch_in_tx(
 
 /// Upstream no longer has these messages: the listing, what is held and
 /// the email rows go together. Returns how many emails went.
-pub async fn forget_in_tx(
+pub async fn delete_gone_messages_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
     ids: &[String],
@@ -728,7 +728,7 @@ pub async fn close_enumeration(
             .filter(|id| !named.contains(*id))
             .cloned()
             .collect();
-        gone = forget_in_tx(&mut tx, now, &unnamed, email_id_of).await?;
+        gone = delete_gone_messages_in_tx(&mut tx, now, &unnamed, email_id_of).await?;
         datalib_etl::prune::record("listed messages", listed.len(), unnamed.len());
         if let Some(account_id) = rows_of {
             let named_rows: BTreeSet<String> = named.iter().map(|id| email_id_of(id)).collect();
