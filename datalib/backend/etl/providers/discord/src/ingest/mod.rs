@@ -6,9 +6,9 @@
 //! their threads, the direct messages. Every listing names each
 //! conversation's newest message, so one with nothing new costs no
 //! request. Then it walks what is owed newest first across every
-//! conversation, a page at a time, each page stored with the stretch it
-//! settles, and fetches each page's files. INGEST.md has the whole
-//! account.
+//! conversation, a page at a time, each page stored with the stretch of
+//! ids it shows read whole, and fetches each page's files. INGEST.md has
+//! the full description.
 
 pub mod api;
 pub mod db;
@@ -359,8 +359,8 @@ impl Ctx<'_> {
             let tips: Vec<u64> = threads.iter().filter_map(tip_of).collect();
             let top_here = top.or(tips.iter().copied().max());
             let oldest = tips.iter().copied().min();
-            // The listing's last page, or one past `since`, settles it to
-            // the bottom.
+            // The listing's last page, or one past `since`, covers it down
+            // to the floor.
             let ends = !more || threads.is_empty() || oldest.is_some_and(|o| o < self.floor);
             let bottom = match oldest {
                 Some(oldest) if !ends => oldest,
@@ -470,8 +470,8 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// One page of one conversation, with the stretch it settles; then its
-    /// files. Answers with the threads its messages started.
+    /// One page of one conversation, with the stretch of ids it shows read
+    /// whole; then its files. Returns the threads its messages started.
     async fn store_page(
         &mut self,
         walk: &mut Walk,

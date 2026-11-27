@@ -1,7 +1,7 @@
-//! What is left to read of one conversation, and what each page of it
-//! settles: pure decisions over message ids. A conversation's messages
-//! come newest first, so a walk goes down each stretch it owes, newest
-//! stretch first.
+//! What is left to read of one conversation, and which stretch of it
+//! each page shows read whole: pure decisions over message ids. A
+//! conversation's messages come newest first, so a walk goes down each
+//! stretch it owes, newest stretch first.
 
 use std::collections::VecDeque;
 
@@ -30,7 +30,7 @@ pub struct Walk {
     /// The oldest id read of the current stretch; the next page is what
     /// is older.
     before: Option<u64>,
-    /// How far down the current stretch is settled.
+    /// How far down the current stretch has been read whole.
     settled: Option<u64>,
     /// Where the refresh window starts, until everything from there up has
     /// been read by this walk: what a first read of it leaves nothing to
@@ -38,7 +38,8 @@ pub struct Walk {
     window: Option<u64>,
 }
 
-/// What a page of messages settled.
+/// What a page of messages showed: the stretch it read whole, and what
+/// follows from that.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settled {
     /// The stretch read whole, as `coverage` takes it.
@@ -141,7 +142,7 @@ impl Walk {
         let bottom = match oldest {
             Some(oldest) if oldest > s.lo => oldest,
             // An empty page: nothing older is there at all, so what is
-            // left below is settled too.
+            // left below counts as read too.
             None => self.stretches.back().map_or(s.lo, |last| last.lo),
             Some(_) => s.lo,
         };
@@ -218,8 +219,9 @@ mod tests {
         assert_eq!(ends, [(70, 99, true), (10, 50, false)]);
     }
 
-    /// Each page settles down to its oldest message; the last reaches the
-    /// bottom of the stretch, whether it is past it or empty.
+    /// Each page shows the stretch read whole down to its oldest message;
+    /// the last reaches the bottom of the stretch, whether it is past it
+    /// or empty.
     #[test]
     fn pages_settle_the_stretch_from_the_top_down() {
         let mut w = Walk::new("c", owed(10, 90, &[], None), None);
@@ -236,8 +238,8 @@ mod tests {
     }
 
     /// The newest message listed was deleted: what is above the newest
-    /// one that came back is settled all the same, so it is not asked
-    /// for again.
+    /// one that came back counts as read all the same, so it is not
+    /// requested again.
     #[test]
     fn a_deleted_newest_message_is_settled_by_the_page_that_lacks_it() {
         let mut w = Walk::new("c", owed(10, 90, &[span(10, 60)], None), None);

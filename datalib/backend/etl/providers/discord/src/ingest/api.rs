@@ -1,7 +1,7 @@
 //! Discord's API (`discord.com/api/v9`) through `latchkey curl`, which
 //! adds the account's own credential. Every request is a GET and every
 //! one is built here, so a test's playback tape is keyed the way the
-//! download asks.
+//! download sends it.
 
 use std::time::Duration;
 

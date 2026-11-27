@@ -57,7 +57,7 @@ pub fn profile() -> RenderProfile {
 }
 
 /// Renders every conversation `store` hands out, a page at a time;
-/// `on_page` hears how each page ended before the next is read.
+/// `on_page` is called with how each page ended before the next is read.
 pub fn render_store(
     store: &Store,
     source_id: &str,
