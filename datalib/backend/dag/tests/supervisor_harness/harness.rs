@@ -19,7 +19,7 @@ use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
 use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::loop_host::{LoopHost, PeriodSink};
+use datalib_dag::supervisor::loop_host::{LoopHost, OpenRunSink};
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
@@ -89,7 +89,8 @@ impl Step {
         self
     }
 
-    /// Starts once what it reads has settled, not on each seal.
+    /// Starts once no step upstream of it is running or waiting, not on
+    /// each seal.
     pub fn after_inputs_settle(mut self) -> Step {
         self.start = Some("after_inputs_settle");
         self
@@ -112,13 +113,13 @@ pub enum Seen {
     Event(Event),
     /// Something announced to the store's listeners.
     Heard(String),
-    /// What the host did: a busy period opened or closed.
+    /// What the host did: a run opened or closed.
     Host(String),
     /// The loop returned an error.
     Broke(String),
 }
 
-/// What the store says now: the record, every invocation, and requests.
+/// What the store says now: the `Record`, every invocation, and requests.
 pub struct State {
     pub record: Record,
     pub invocations: Vec<(InvocationRow, Option<InvocationEnd>)>,
@@ -237,7 +238,7 @@ impl Harness {
         Harness::build(steps, clocks, locks, false).await
     }
 
-    /// Each busy period also writes the run store, as the server's does:
+    /// Each run also writes the run store, as the server's does:
     /// for a scenario about what a person reads there.
     pub async fn recording(steps: &[Step]) -> Harness {
         Harness::build(steps, Clocks::default(), "", true).await
@@ -306,19 +307,19 @@ impl Harness {
         let root = self.root.path().to_path_buf();
         let stop = self.stop.subscribe();
         let store = Store::open(&root).await.unwrap();
-        let periods = Periods {
+        let run_host = RunHost {
             root,
             report: tx.clone(),
-            record: Arc::new(PeriodSink::default()),
+            run_sink: Arc::new(OpenRunSink::default()),
             write_run_store: record,
         };
         let sink: Arc<dyn EventSink> = Arc::new(FanOutSink(vec![
             Arc::new(ChannelSink(tx)),
-            periods.record.clone(),
+            run_host.run_sink.clone(),
         ]));
         self.host = Some(tokio::spawn(async move {
-            if let Some((checked, path)) = periods.graph() {
-                let mut runner = Runner::new(&periods.root)
+            if let Some((checked, path)) = run_host.graph() {
+                let mut runner = Runner::new(&run_host.root)
                     .sink(sink)
                     .stop_on(stop.clone())
                     .retry(RetryPolicy {
@@ -328,8 +329,8 @@ impl Harness {
                     .reload_from(Arc::new(ConfigFile::new(path)));
                 runner.stop_grace = clocks.stop_grace;
                 runner.backstop = clocks.backstop;
-                if let Err(e) = runner.run_forever(&checked.graph, &store, &periods).await {
-                    let _ = periods.report.send(Seen::Broke(format!("{e:#}")));
+                if let Err(e) = runner.run_forever(&checked.graph, &store, &run_host).await {
+                    let _ = run_host.report.send(Seen::Broke(format!("{e:#}")));
                 }
             }
             store.close().await;
@@ -337,7 +338,7 @@ impl Harness {
     }
 
     fn config_text(&self, steps: &[Step], locks: &str) -> String {
-        // The puppet answers `--reset` itself.
+        // The puppet handles `--reset` itself.
         let mut text = format!(
             "[[programs]]\ncommand = {:?}\nverbs = [\"reset\"]\n\n{WIDE_DEFAULTS}{locks}",
             self.puppet_bin
@@ -478,8 +479,8 @@ impl Harness {
         .await
     }
 
-    /// Wait for the loop's busy period to end, as the host says.
-    pub async fn period_over(&mut self) {
+    /// Wait for the loop's run to end, as the host says.
+    pub async fn run_over(&mut self) {
         self.wait("the busy period to end", |s| {
             matches!(s, Seen::Host(l) if l == "busy period over").then_some(())
         })
@@ -515,8 +516,9 @@ impl Harness {
         }
     }
 
-    /// Like `wait`, but `None` once `pid` has exited without answering: a
-    /// puppet the loop killed at the end of its stop grace never will.
+    /// Like `wait`, but `None` once `pid` has exited before `pick` matched
+    /// anything: a puppet the loop killed at the end of its stop grace
+    /// never will.
     /// The loop reports each process it reaps, so every report is a
     /// moment to look again.
     pub async fn wait_while_alive<T>(
@@ -686,7 +688,7 @@ impl Harness {
     }
 
     /// A sync of everything, with the roots the server's Sync all opens
-    /// one on: the config's fringe.
+    /// one on: the config's steps with no declared inputs.
     pub async fn sync_all(&mut self) -> String {
         let path = datalib_config::root_config_path(self.root.path());
         let (checked, _) = config_check::load_graded(&path).unwrap();
@@ -750,7 +752,7 @@ impl Harness {
             .await
     }
 
-    /// Stop the host as Ctrl-C does, and wait for it to let go.
+    /// Stop the host as Ctrl-C does, and wait for it to return.
     pub async fn stop_host(&mut self) {
         let _ = self.stop.send(true);
         if let Some(host) = self.host.take() {
@@ -772,16 +774,16 @@ impl Harness {
     }
 }
 
-struct Periods {
+struct RunHost {
     root: PathBuf,
     report: mpsc::UnboundedSender<Seen>,
-    /// The open period's run store record, when it writes one.
-    record: Arc<PeriodSink>,
-    /// Whether a busy period writes the run store too.
+    /// The run store writer for the open run, when it writes one.
+    run_sink: Arc<OpenRunSink>,
+    /// Whether a run writes the run store too.
     write_run_store: bool,
 }
 
-impl Periods {
+impl RunHost {
     fn graph(&self) -> Option<(config_check::ConfigCheck, PathBuf)> {
         let path = datalib_config::root_config_path(&self.root);
         match config_check::load_graded(&path) {
@@ -798,7 +800,7 @@ impl Periods {
     }
 }
 
-impl LoopHost for Periods {
+impl LoopHost for RunHost {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let _ = self.report.send(Seen::Host("busy period".into()));
         let (checked, _) = self.graph().ok_or("the config does not load")?;
@@ -808,15 +810,15 @@ impl LoopHost for Periods {
         if self.write_run_store {
             let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, start)
                 .expect("open the run store");
-            self.record.point_at(Some(Arc::new(store)));
+            self.run_sink.point_at(Some(Arc::new(store)));
         }
         Ok(env.vars)
     }
 
-    /// Dropping the run store's writer flushes and joins: the period is
+    /// Dropping the run store's writer flushes and joins: the run is
     /// over once what it wrote can be read.
     fn close(&self, _run_id: &str) {
-        drop(self.record.point_at(None));
+        drop(self.run_sink.point_at(None));
         let _ = self.report.send(Seen::Host("busy period over".into()));
     }
 }
@@ -853,7 +855,7 @@ fn describe(e: &Event) -> String {
 
 /// Whether `pid` is a live process (a zombie counts: it is not reaped).
 fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only asks.
+    // SAFETY: signal 0 only checks whether the process exists.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 

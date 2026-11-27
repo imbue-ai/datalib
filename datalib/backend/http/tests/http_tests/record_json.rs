@@ -1,4 +1,4 @@
-//! A loop record written as JSON, for tests that set one up: easier to
+//! The loop's rows written as JSON, for tests that set them up: easier to
 //! read in a fixture than the struct literal, and written into the store
 //! the way the loop would.
 
@@ -55,7 +55,7 @@ fn record(v: &Value) -> Record {
     Record { steps, current_run }
 }
 
-/// Write the record `json` describes into the store at `root`.
+/// Write the rows `json` describes into the loop's store at `root`.
 pub async fn write(root: &Path, json: &str) {
     let value: Value = serde_json::from_str(json).unwrap();
     let store = datalib_dag::supervisor::store::Store::open(root)

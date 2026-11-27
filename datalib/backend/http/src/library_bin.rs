@@ -1,9 +1,9 @@
 //! A library's own programs live in its `system/bin/`
 //! (`datalib_runtime::layout::BIN_DIR_REL`), which every step's and
-//! applet's `PATH` names. They used to be looked up in `~/.datalib/bin`,
-//! one directory shared by every library on the machine. At boot, a
-//! program the config runs that only that old directory has is copied
-//! into the library, so a config that ran before still runs.
+//! applet's `PATH` names. The old place for them is `~/.datalib/bin`, one
+//! directory shared by every library on the machine. At boot, a program
+//! the config runs that only that old directory has is copied into the
+//! library, so a config that ran from there still runs.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

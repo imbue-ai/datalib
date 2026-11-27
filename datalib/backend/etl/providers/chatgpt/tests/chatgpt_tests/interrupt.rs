@@ -288,7 +288,7 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     }
 }
 
-/// Bug C2 of the plan: the conversation's row and its freshness were
+/// Guards this bug: the conversation's row and its freshness were
 /// committed in one transaction and its attachment edges in a later one.
 /// A run that died between them left a conversation that read as up to
 /// date with no edge to say it had files, and no later run fetched

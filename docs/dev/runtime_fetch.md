@@ -146,7 +146,7 @@ enforced. An install that ships what it runs says so by setting
 the URL it wanted and the switch, so a missing piece shows up as a
 failed step rather than as a download. The docker image sets it, and every
 child process is handed it (`datalib_env`). `DATALIB_MODELS_NO_FETCH`
-(once `DATALIB_QMD_MODELS_NO_FETCH`, still read) is the older, narrower
+(`DATALIB_QMD_MODELS_NO_FETCH` is read as the same) is a narrower
 switch: the embedding models only, reported as missing
 rather than refused, for a test root that stages the one model it
 loads.

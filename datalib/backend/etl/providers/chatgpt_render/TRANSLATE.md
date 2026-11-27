@@ -62,9 +62,9 @@ original's message ids. The two conversations are separate documents,
 and since every branch is on the page both show those messages: the
 new one on its current branch, the original wherever its shown version
 left them, often a folded branch. A message keyed on its id alone
-minted one row uuid for both pages, and the index refused the second
-("UNIQUE constraint failed: grid_rows.uuid"), failing every render of
-the source. One real account held 28 such messages across two
+would mint one row uuid for both pages, and the index would refuse the
+second ("UNIQUE constraint failed: grid_rows.uuid"), failing every
+render of the source. One real account held 28 such messages across two
 conversations. Within one conversation a message id is unique (it is
 the `mapping` key), so the conversation id is all the key needs.
 `branched_chat.rs` in `../chatgpt/tests/chatgpt_tests/` is the test.

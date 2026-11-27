@@ -36,7 +36,8 @@ the core.
 Three reasons, all of them things this tree has already paid for:
 
 - **The decisions are the bugs.** Staleness, resume cursors, refresh
-  windows, "queued" versus "running", one-more-pass-after-a-seal —
+  windows, "queued" versus "running", running a consumer once more
+  after a seal —
   every hard bug in the pipeline's history was a wrong decision, not
   a wrong write. A wrong decision inside an `async fn` that also
   fetches and upserts can only be reproduced by fetching and
@@ -68,8 +69,8 @@ shape.
 | `config_check::check_text(text) -> ConfigCheck` in `dag/src/config_check.rs` | `load_graded` | what a config means and every problem in it |
 | `ui/src/config/{rowMenu,sourceSteps,browsePresets}.ts` | the Vue components | which menu entries, which steps, which columns a Browse card opens with |
 
-Every one of these has synchronous tests, and the tick's walk a sync
-through its states event by event, which is only writable because the
+Every one of these has synchronous tests, and the tick's tests walk a
+sync through its states event by event, which is only writable because the
 function is pure.
 
 ### Where to split

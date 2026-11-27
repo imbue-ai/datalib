@@ -1,8 +1,8 @@
 //! How much room is left on the volume a data root lives on, and whether
-//! the config's `[disk_space]` floor (`datalib_config::disk_floor`) holds
-//! the steps back. The loop holds
-//! every step while it does (`supervisor/tick.rs`, `Wait::DiskSpace`); the
-//! app's server samples the same number for the status bar.
+//! the config's `[disk_space]` floor (`datalib_config::disk_floor`) pauses
+//! the steps. While it does, the loop starts no step
+//! (`supervisor/tick.rs`, `Wait::DiskSpace`); the app's server samples
+//! the same number for the status bar.
 
 use std::path::Path;
 
@@ -18,7 +18,7 @@ pub struct Space {
     pub total: u64,
 }
 
-/// The steps are held for want of space: what the loop logs and a
+/// The steps are paused for want of space: what the loop logs and a
 /// waiting step's row says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LowDisk {

@@ -1,6 +1,6 @@
 //! The one version the loop makes up rather than takes from a step.
 
-/// The version for a tree whose producer did not run this pass and has no
+/// The version for a tree whose producer did not run in this run and has no
 /// version recorded from an earlier one: the loop does not know what the
 /// tree holds, and never reads it to find out.
 ///

@@ -67,8 +67,8 @@ pub async fn run_render(
     let raw = data_root.join(env.raw_store_rel()?);
     let (wanted, unreadable) = read(source_type, &raw, &env.group)?;
     // A file that could not be read costs its own time series and
-    // nothing else; it is a warning row, which `unified_grid_and_search_index` copies into
-    // the index for the Manage row to count.
+    // nothing else; it is a warning row in this step's own store, where
+    // the Manage row counts it (`datalib_step_problems::of_step`).
     let problems = datalib_etl_time_series::unreadable_problems(&env.group, &unreadable);
     let progress = emitter.progress();
     for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {

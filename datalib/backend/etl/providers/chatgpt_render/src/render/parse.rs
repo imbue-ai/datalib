@@ -121,8 +121,8 @@ pub struct ShreddedConversation {
     pub content_parts: Vec<OAContentPartRow>,
 }
 
-/// Result of the dolt_diff scan. Travels alongside the parsed bag so
-/// render can advance the cursor + log timing without a second
+/// Result of the dolt_diff scan. Returned with the parsed conversations
+/// so render can advance the cursor and log timing without a second
 /// round-trip.
 #[derive(Debug, Clone, Default)]
 pub struct ScanResult {
@@ -725,7 +725,8 @@ async fn load_conversations(
 
 /// Phase 1: union over the per-table dolt_diff vtabs to project
 /// touched conversation ids. A renamed account reaches every page
-/// through the `me` row each one declared, so nothing fans out.
+/// through the `me` row each one declared, so the scan needs no
+/// `fanout_query`.
 async fn scan_diff(
     pool: &SqlitePool,
     source_id: &str,

@@ -78,13 +78,13 @@ bundles 20, and a stop writes what was answered before it.
 A request that fails writes nothing but an attempt and the error in
 the sidecar (for the Manage screen; nothing reads them back to decide
 what to fetch), so the record is simply still owed. Because the owed
-set is computed, a change of config needs no record: an earlier
-`since` leaves days with no row and start dates with no span, and
-turning `activity_files` on leaves every stored activity without a
-file row.
+set is computed, a change of config needs nothing stored about it: an
+earlier `since` leaves days with no row and start dates with no span,
+and turning `activity_files` on leaves every stored activity without
+a file row.
 
-Every prune below has the same gate, stated once here: **a walk deletes
-what its listing did not name only when the listing was an
+Every prune below follows the same rule, stated once here: **a walk
+deletes what its listing did not name only when the listing was an
 enumeration** — an array (every page of it, for the paged ones), with
 no request failing. A 204/404/empty body, an object with no array
 inside, or a page that errored is byte-similar to "everything was

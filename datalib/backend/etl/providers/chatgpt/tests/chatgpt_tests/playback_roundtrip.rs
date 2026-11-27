@@ -84,8 +84,8 @@ async fn chatgpt_synth_playback_extract_roundtrip() {
             &fs::read(api.join(format!("conversations/{id}.json"))).unwrap(),
         )
         .unwrap();
-        // Payload is the raw upstream response — no `_fetched_at` or
-        // `_listing_update_time` polluting the body anymore.
+        // Payload is the raw upstream response, with no `_fetched_at` or
+        // `_listing_update_time` key added to the body.
         let got = by_id.get(id).expect("conv in db");
         assert_eq!(got, &want, "{id} body mismatch");
     }

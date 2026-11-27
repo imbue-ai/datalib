@@ -75,15 +75,18 @@
                                                   old file, copied aside when a new build
                                                   or a torn file made it start over
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
-                                                  and how it ended) and steps turned off: the
-                                                  mailbox the loop reads; and the loop's
-                                                  record — each step's state now, its
+                                                  and how it ended), steps turned off and
+                                                  jobs (a reset, a purge, freeing disk
+                                                  space; the loop's own prepare pass is
+                                                  one too): the tables anyone may write and
+                                                  the loop reads; and the loop's own
+                                                  tables — each step's state now, its
                                                   last run and last success, each
                                                   sink's version,
                                                   the run in flight, every process it
-                                                  started (plain SQLite; anyone writes
-                                                  intent, only the loop's holder writes
-                                                  the record; every commit is announced)
+                                                  started (plain SQLite; only the process
+                                                  holding `runner-lock` writes the loop's
+                                                  own tables; every commit is announced)
 <data_root>/system/supervisor-listeners/          a FIFO per process waiting on the loop's
                                                   store: how it hears a commit
                                                   (`dag/README.md` § What wakes the loop)
@@ -140,24 +143,28 @@ keep a directory of its own here too, so a store found here need not be
 ours.
 
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
-§ "Connection pools" has the rule and why). The `ingest` step owns its group's
-two stores; `render_markdown` owns its render store; `unified_grid_and_search_index` owns
-the grid index's tables and the search index's `search_*` tables in the
-same file; `datalib-http` owns disk stats and remote media;
-the applet only reads, each request inside one read transaction on a
+§ "Connection pools" has the rule and why):
+
+- the `ingest` step owns its group's two stores;
+- `render_markdown` owns its render store;
+- `unified_grid_and_search_index` owns the grid index's tables and the
+  search index's `search_*` tables in the same file;
+- `datalib-http` owns disk stats and remote media.
+
+The `unified_grid_and_search_index` applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
 `unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
 SQLite in WAL mode, and its step writes one source per transaction, so
-that transaction reads one state of it and a `unified_grid_and_search_index` pass in
-flight is never served; a request also reopens the file when a reset
+that transaction reads one state of it and a source the step is
+still writing is never served; a request also reopens the file when a reset
 has replaced it. The `-wal` can keep the size a large transaction
 gave it ([`doltlite.md`](doltlite.md) §
 "Plain SQLite files and SQLite compatibility"), so the step truncates
-it at the end of every pass (`grid_index::close_index`). The grid's
+it at the end of every run (`grid_index::close_index`). The grid's
 load and the search index's writes are two parts of the one step, each
 with its own connection; each write transaction starts with `BEGIN
 IMMEDIATE`, and the search index writes in batches of a few hundred
-documents, so a reader is never held long. When either part's shape
+documents, so a reader never waits long. When either part's shape
 changes it drops only its own tables. Deleting the file by hand deletes
 the search index's rows with it; `unified_grid_and_search_index` puts them back on its
 next run. `runs.sqlite` is the other exception to doltlite: plain
@@ -169,17 +176,19 @@ makes ordinary; `runs_two_process_test` is the measurement.
 Who writes which line of it, how to add one, and how to read it is
 [`logging.md`](logging.md).
 
-## The three stores `datalib-http` owns
+## The two stores `datalib-http` owns
 
-Remote media is doltlite; disk stats is plain SQLite.
-`datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
+Remote media (`system/remote_media.doltlite_db`) is doltlite; disk
+stats (`system/disk_stats.sqlite`) is plain SQLite. The bytes of a
+fetched remote image are files under `system/remote_media/`, named by
+their sha256, and are not a store. `datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
 them in `AppStore` (`datalib/backend/core/src/app_store.rs`), the
 implementation of the `AppRepo` trait in `repo.rs`. The same pool serves
 reads and writes.
 
 **Disk stats** is plain SQLite, because nothing ever committed it: it
 is a timeseries — `datalib-http` walks the root every five seconds
-*while a run holds it*, or once when asked (`POST
+*while a run is open*, or once when asked (`POST
 /api/pipeline/storage/refresh` or `/api/manage/rows/refresh`; a GET
 never walks), and appends a row per tree whose size moved, one
 transaction per walk — so the rows *are* the history. Between runs nothing writes the root, so the series
@@ -203,7 +212,7 @@ SQLite reuses the freed pages, so the file stops growing once the
 window is full.
 
 **Remote media.** A rendered document's images on remote
-hosts are held back by the UI until a person lets them load, because
+hosts are not loaded by the UI until a person lets them load, because
 loading one tells its host who opened the document and when. A
 decision is a row in `remote_media_allow` — its `scope` is `url`,
 `document`, `host` or `source` and its `key` the thing named. The

@@ -34,7 +34,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        // The loop saving its record, one step's row more each time.
+        // The loop saving its `Record`, one step's row more each time.
         "record" => {
             let mut prev = Record::default();
             for k in 0..n {
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
                 prev = next;
             }
         }
-        // The server answering the Manage screen.
+        // The server reading the store for the Manage screen.
         "reader" => {
             for _ in 0..n {
                 store.load_record().await?;

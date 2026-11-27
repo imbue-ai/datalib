@@ -133,7 +133,8 @@ database the binaries bundle is older than IANA's latest.
 which Dependabot cannot (`.github/dependabot.yml` says why). Every
 Monday it runs `cargo update` with the 7-day burn-in
 (`first_time_dev.md` § "Version policy"; cargo's unstable
-`-Zmin-publish-age`), holds `libsqlite3-sys` for the doltlite patch,
+`-Zmin-publish-age`), leaves `libsqlite3-sys` out of the update,
+where the doltlite patch expects it,
 repins `MODULE.bazel.lock`, and opens or rewrites one PR from
 `bot/cargo-update`. GITHUB_TOKEN opens that PR, and GitHub holds the
 `pull_request` run of such a PR for a maintainer's approval
@@ -223,7 +224,8 @@ is a repository setting: [`security_posture.md`](security_posture.md)
 main push writes the release org and a PR run writes the contributor
 org, which means nothing wrote *main's tree* into the contributor org:
 the first PR run after any merge that touched a shared crate rebuilt
-the world, however small the PR's own diff. #658's run is the shape —
+everything downstream of it, however small the PR's own diff. #658's
+run is the example —
 a PR touching `http` and `ui` alone, 1677 s, 713 sandboxed actions, 141
 tests executed. `test.yml`'s `warm-contributor-cache` job is the
 missing writer: on a main push it runs the same two commands the PR
@@ -387,8 +389,10 @@ reads (#674).
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
 and re-runs most of the suite. A rising median means cold runs got
 more frequent, not that anything got slower. The levers on a cold run
-are its blast radius, which can be measured before pushing, and what
-each rebuilt binary costs (the next paragraph):
+are its blast radius, the test targets that depend on a crate the
+change touched, each of which is linked again and run again, counted
+before pushing by the queries below; and what each rebuilt binary costs
+(the next paragraph):
 
 ```bash
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'
@@ -538,7 +542,7 @@ test job's pull (64 s → 56–60 s, two runs) and cut the *push* in
    at the cost of a machine. Either is a cost decision, not a config
    change.
 4. **Blast radius** — what a cold run has to rebuild, and a design
-   question per crate (the `rdeps` numbers above are the price tags).
+   question per crate (the `rdeps` numbers above are what each costs).
 
 ## Locally, you are probably not on the remote cache
 
@@ -548,7 +552,7 @@ feel fast for actions *you* have built before; and the remote cache
 needs `.bazelrc.user`, which is gitignored and per-workspace —
 `try-import %workspace%/.bazelrc.user` resolves to the worktree root,
 so a file in `datalib/` is invisible to every `.claude/worktrees/*`
-clone. The `processes:` line settles it: a run on the remote cache
+clone. The `processes:` line shows which: a run on the remote cache
 says `remote cache hit`; a local run without the key never does.
 
 Keep one real file outside the repo and symlink it in:

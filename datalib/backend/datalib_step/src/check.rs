@@ -1,5 +1,5 @@
-//! Plan a step's params the way a sync would, and run nothing: the answer
-//! to `run … --check` (`step_protocol.md` § Check), which the app sends on
+//! Plan a step's params the way a sync would, and run nothing: what
+//! `run … --check` does (`step_protocol.md` § Check), which the app sends on
 //! a save and `datalib-pipeline check` sends from a terminal; and the same
 //! for every datalib-step step of a file, which `examples --append` and
 //! the example configs' tests hold to.

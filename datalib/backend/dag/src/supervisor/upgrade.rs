@@ -1,15 +1,16 @@
-//! Which steps the prepare pass asks each time the loop starts
-//! (`dag/README.md` §"Upgrading a root"): every step whose program takes
-//! the `--prepare` verb, to make what it wrote usable. The
-//! runner knows nothing of any store or of when a program changed; each
-//! step answers for its own (`step_protocol.md` § Verbs).
+//! Which steps the prepare pass runs with `--prepare` each time the loop
+//! starts (`dag/README.md` §"Upgrading a root"): every step whose program
+//! takes the verb, to make what it wrote usable. The runner knows nothing
+//! of any store or of when a program changed; each step's program is
+//! responsible for its own (`step_protocol.md` § Verbs).
 
 use crate::graph::Graph;
 use crate::step::StepId;
 
-/// The steps a prepare pass asks, producers before what reads them, so a
-/// render answers after its raw store has been brought up to date.
-pub fn steps_to_ask(graph: &Graph) -> Vec<StepId> {
+/// The steps a prepare pass runs with `--prepare`, producers before what
+/// reads them, so a render's `--prepare` runs after its raw store has
+/// been brought up to date.
+pub fn steps_to_prepare(graph: &Graph) -> Vec<StepId> {
     graph
         .topo
         .iter()
@@ -38,10 +39,10 @@ mod tests {
         spec
     }
 
-    /// Only steps that take the verb are asked, and a reader is asked
-    /// after what it reads.
+    /// Only steps that take the verb are run with it, and a reader after
+    /// what it reads.
     #[test]
-    fn a_pass_asks_the_steps_that_prepare_in_graph_order() {
+    fn a_pass_prepares_the_steps_that_take_the_verb_in_graph_order() {
         let graph = Graph::build(vec![
             step("mail/render_markdown", &["mail/ingest"], true),
             step("custom/out", &["mail/ingest"], false),
@@ -49,7 +50,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            steps_to_ask(&graph),
+            steps_to_prepare(&graph),
             ["mail/ingest", "mail/render_markdown"]
         );
     }

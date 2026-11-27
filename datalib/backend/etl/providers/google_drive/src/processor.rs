@@ -1,4 +1,4 @@
-//! The ingest wave for the `google_drive` source.
+//! The ingest step for the `google_drive` source.
 
 use std::path::PathBuf;
 

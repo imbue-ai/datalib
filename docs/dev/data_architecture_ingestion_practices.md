@@ -168,7 +168,7 @@ It costs a second render, though, so where the API allows it **fetch the
 tables every document's header reads first** — users, channels, orgs,
 recipients, the account's own identity — and then the entities that
 point at them. A render that runs at a checkpoint then finds each new
-message's author, rather than writing a wave of "unknown user"
+message's author, rather than writing many "unknown user"
 documents that render again when the users land. Some sources cannot:
 a listing that names its authors only as it goes.
 

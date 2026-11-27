@@ -1,5 +1,6 @@
-//! Provider-owned config schema for the `chatgpt` source (Program A goal
-//! #1). Schema-only (serde + anyhow).
+//! The config schema of the `chatgpt` source, and nothing else (serde +
+//! anyhow), so anything that reads a config can link it without the
+//! download.
 
 pub use datalib_source_common::WhenDeletedUpstream;
 use datalib_source_common::{
@@ -146,8 +147,8 @@ impl ChatgptApiSync {
     }
 }
 
-/// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
+/// Params for the render step. It has no settings of its own, so it
+/// takes the shared `BareRenderConfig`.
 pub type ChatgptRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for ChatgptConfig {

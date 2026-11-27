@@ -19,7 +19,7 @@ brew install uv
 # needs nothing in your home directory. The binaries shell out to
 # latchkey through a staged `runtime/` tree (the dev launchers
 # stage one; see "Re-run ingestion" below), never through a host Node.
-# A sync's first search-index pass fetches the pinned embedding model,
+# A sync's first `embed` fetches the pinned embedding model,
 # sha256-verified, into the shared cache (`~/.cache/qmd/models`).
 ```
 
@@ -328,7 +328,7 @@ Design notes:
 - **First run is slow**: embedding every chunk of a fresh root takes
   minutes on CPU. An embed is resumable, so stopping and re-running is
   safe, and turning one source's `embed` off leaves the rest running.
-  Once the backlog drains, re-runs are no-ops.
+  Once every chunk has a vector, re-runs do nothing.
 - **Chunks are cut in the model's tokens**: 900 a chunk, so every prompt
   fits the 2,048 the model reads. An embed reads the tokenizer from the
   model file without its weights, and only when a document needs cutting;

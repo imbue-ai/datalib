@@ -233,9 +233,10 @@ async fn render_shows_only_the_networks_it_names() -> Result<()> {
     Ok(())
 }
 
-/// A chat on an account no bridge here reads was left out with nothing to say
-/// so. Beeper's own `hungryserv` is on record at `info`; a bridge this render
-/// does not know is a warning. A login in the account id goes no further.
+/// A chat on an account no bridge here reads renders no document, and a
+/// `problems` row says so: at `info` for Beeper's own `hungryserv`, a
+/// warning for a bridge this render does not know. The row names the
+/// bridge, never the login in the account id.
 #[tokio::test(flavor = "multi_thread")]
 async fn chats_on_an_unlisted_account_are_on_record() -> Result<()> {
     use datalib_etl_beeper_render::render::parse::unlisted_chat_rows;
@@ -433,8 +434,8 @@ async fn people_are_written_by_their_handles() -> Result<()> {
 }
 
 /// Each person with a handle is a source contact, with their avatar
-/// linked where the blob store holds it when the app had cached it; a chat with no name of its own is
-/// called by its other person.
+/// linked where the app had cached it and the blob store holds it; a
+/// chat with no name of its own is called by its other person.
 #[tokio::test(flavor = "multi_thread")]
 async fn people_are_contacts_with_their_avatars() -> Result<()> {
     let fx = Fixture::new();
@@ -471,7 +472,7 @@ async fn people_are_contacts_with_their_avatars() -> Result<()> {
 }
 
 /// A message that answers another is a reply edge from it to the one it
-/// answers; before, only its "in reply to" line said so.
+/// answers, not only an "in reply to" line.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reply_is_an_edge_to_the_message_it_answers() -> Result<()> {
     let fx = Fixture::new();

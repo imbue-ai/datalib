@@ -17,8 +17,9 @@ use tempfile::tempdir;
 use crate::support::*;
 use datalib_sql::test_sql;
 
-/// A body that would not fetch used to be a log line, and the page was
-/// stored with its new `last_edited_time`, so no later run asked again.
+/// The regression: a body that would not fetch was only a log line, and
+/// the page was stored with its new `last_edited_time`, so no later run
+/// asked again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_body_that_did_not_fetch_is_a_problem_until_it_does() {
     let d = tempdir().unwrap();
@@ -88,7 +89,7 @@ async fn an_attachment_that_did_not_fetch_is_retried_through_its_page() {
 
 /// An attachment past the size cap failed like a dropped connection:
 /// an error, and owed again in full every run. It is a skip by the size
-/// rule now, a warning, and the page is kept.
+/// rule, a warning, and the page is kept.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_attachment_past_the_size_cap_is_a_skip() {
     let d = tempdir().unwrap();
@@ -402,11 +403,11 @@ async fn coverage(store: &Path) -> Vec<(String, String)> {
     spans
 }
 
-/// When the retry guard gave up, the run failed, and a failed run is not
-/// committed: every page it had already fetched was thrown away. Now
-/// the listing is durable whatever the bodies did: the pages are
-/// stored, the search is covered, and the bodies that did not come are
-/// owed.
+/// The regression: when the retry guard gave up, the run failed, and a
+/// failed run is not committed, so every page it had already fetched was
+/// thrown away. The listing is kept whatever the bodies did: the pages
+/// are stored, the search is covered, and the bodies that did not come
+/// are owed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_retry_guard_that_gives_up_keeps_what_it_fetched() {
     let d = tempdir().unwrap();
@@ -538,8 +539,8 @@ async fn comments_the_credential_may_not_read_are_one_row() {
 }
 
 /// A search that failed past its first page failed the whole step, and
-/// would have moved the resume cursor past what it never read. Now it
-/// covers only what it read, and the next run walks the rest.
+/// would have moved the resume cursor past what it never read. It covers
+/// only what it read, and the next run walks the rest.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_search_cut_short_keeps_its_pages_and_covers_only_what_it_read() {
     let d = tempdir().unwrap();

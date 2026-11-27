@@ -1,7 +1,7 @@
 //! The supervisor's loop: every open request ticked until it closes, and
-//! the record kept true while none is open. The facts come from the record
-//! in `system/supervisor.sqlite` and go back to it, and the events are the
-//! ones the run store and the server read.
+//! the `steps` table kept true while none is open. The facts come from
+//! the loop's tables in `system/supervisor.sqlite` and go back to them, and
+//! the events are the ones the run store and the server read.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -28,8 +28,8 @@ use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::scheduler::{
-    apply_answer, fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp,
-    reported_version, step_summary, InvokeError, PrepareError, QueueLedger, RunReport, Runner,
+    apply_verb_outcome, fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp,
+    reported_version, step_summary, ConsumerQueues, InvokeError, PrepareError, RunReport, Runner,
     StepReport, StepStatus, REFUSED_PREPARE,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
@@ -41,17 +41,17 @@ use crate::version::UNKNOWN;
 /// floor. Nothing announces a disk filling or being freed.
 const DISK_LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// How an invocation ended, held until the step runs again (it was a
-/// pass) or everything it reads has settled (it is done for now). While a
-/// step it reads is still running or waiting, its row keeps reading
-/// Running: the step is not finished, it is waiting for the next seal.
+/// How an invocation ended, kept until the step runs again (that process
+/// was one of several) or no step it reads is running or waiting any more
+/// (it is done for now). Until then its row reads `waiting` on that
+/// producer: the step is not finished, it is waiting for the next seal.
 struct Ended {
     status: StepStatus,
     error: Option<String>,
     exit: Option<Exit>,
     attempts: u32,
     /// Whether its process has been closed with a `PassEnd` already.
-    pass_ended: bool,
+    pass_end_sent: bool,
 }
 
 impl Ended {
@@ -71,9 +71,9 @@ impl Ended {
     }
 }
 
-/// What the loop holds for one step, by its id: a config swap leaves it
-/// where it is. Besides the round's bookkeeping, the facts the record does
-/// not hold, which [`facts_of`] lays over the record's.
+/// What the loop keeps for one step, by its id: a config swap leaves it
+/// where it is. Besides the round's bookkeeping, the facts the `Record`
+/// does not have, which [`facts_of`] lays over the `Record`'s.
 #[derive(Default)]
 struct Slot {
     running: Option<Running>,
@@ -93,7 +93,7 @@ struct Slot {
     status: Option<StepStatus>,
     attempts: u32,
     error: Option<String>,
-    /// Passes that failed and were run again this round.
+    /// Processes of it that failed and were run again this round.
     failed_passes: u32,
 }
 
@@ -150,8 +150,8 @@ struct Tried {
     read: Read,
 }
 
-/// A step's state the last time a request wanted it, as far as what its
-/// row settles on once none does. A step it was blocked on is named, so
+/// A step's state the last time a request wanted it, as far as it decides
+/// the status its row ends with once none does. A step it was blocked on is named, so
 /// no index goes stale when the config is swapped.
 #[derive(Default)]
 enum LastWanted {
@@ -175,7 +175,7 @@ impl LastWanted {
     }
 
     /// A step turned off took no part: none.
-    fn settles(&self, cancelled: bool) -> Option<StepStatus> {
+    fn final_status(&self, cancelled: bool) -> Option<StepStatus> {
         Some(match self {
             LastWanted::Off => return None,
             LastWanted::Waiting if cancelled => StepStatus::Failed {
@@ -191,7 +191,7 @@ impl LastWanted {
 struct Live {
     invocation: String,
     consumed: Read,
-    /// Taken when the loop tells it to stop: what ends then was asked to.
+    /// Taken when the loop sends it SIGINT: what ends then was told to stop.
     stop: Option<watch::Sender<bool>>,
 }
 
@@ -203,7 +203,7 @@ enum Done {
     /// A step's invocation: its id, its attempts, and how it ended.
     Step(String, u32, Result<StepOutcome, StepError>),
     /// A step's `--prepare`.
-    Prepared(String, Result<StepOutcome, InvokeError>),
+    PrepareExited(String, Result<StepOutcome, InvokeError>),
 }
 
 /// How many `--prepare` processes the pass runs at once. Most exit at once
@@ -242,7 +242,7 @@ impl PreparePass {
 
     /// The steps that may not start a normal run yet: each whose
     /// `--prepare` has not exited, and every step downstream of one.
-    fn holds(&self, graph: &Graph) -> Vec<bool> {
+    fn waiting_on_prepare(&self, graph: &Graph) -> Vec<bool> {
         graph.downstream_of(&self.not_finished(graph))
     }
 
@@ -278,39 +278,39 @@ impl PreparePass {
     }
 }
 
-/// The record as the loop holds it, beside the one it last saved: a save
-/// writes the difference.
-struct Recorded<'a> {
+/// The loop's tables as the last save left them, beside the store: a save
+/// writes the difference between this and the loop's `Record` now.
+struct Saver<'a> {
     store: &'a Store,
-    saved: Record,
+    last: Record,
 }
 
-impl<'a> Recorded<'a> {
-    async fn load(store: &'a Store) -> Result<Recorded<'a>> {
-        let saved = store.load_record().await.context("load the record")?;
-        Ok(Recorded { store, saved })
+impl<'a> Saver<'a> {
+    async fn load(store: &'a Store) -> Result<Saver<'a>> {
+        let last = store.load_record().await.context("load the record")?;
+        Ok(Saver { store, last })
     }
 
     async fn save(&mut self, state: &Record) -> Result<()> {
         self.store
-            .save_record(&self.saved, state)
+            .save_record(&self.last, state)
             .await
             .context("save the record")?;
-        self.saved = state.clone();
+        self.last = state.clone();
         Ok(())
     }
 }
 
 /// Where the loop's requests and switches come from: the store, read again
 /// whenever another process writes to it.
-struct Mailbox<'a> {
+struct IntentReader<'a> {
     store: &'a Store,
     seen: Option<i64>,
     /// Whether the store has been read once: a request open before that
     /// was open before the loop loaded its graph.
     started: bool,
     /// Requests naming a step this loop's graph lacks, set aside until a
-    /// config that has it is taken on, by this loop or the next. Each with
+    /// config that has it is in use, by this loop or the next. Each with
     /// the roots this graph lacks.
     deferred: BTreeMap<String, Vec<String>>,
     /// Requests asked to stop, closed only once a save has let go of them.
@@ -321,8 +321,8 @@ struct Mailbox<'a> {
     reload: bool,
 }
 
-/// An open request as the loop holds it: its row's id, its roots by id,
-/// and when the loop took it on.
+/// An open request as the loop keeps it: its row's id, its roots by id,
+/// and when the loop started serving it.
 struct Open {
     id: String,
     roots: Vec<String>,
@@ -344,15 +344,15 @@ impl Open {
     }
 }
 
-/// One busy period: from the first request or wipe the loop takes on with
+/// One run: from the first request or job the loop starts serving with
 /// none open, to the moment none is left and nothing runs. Only the run
 /// store's grouping, and what its summary compares against.
-struct Period {
+struct OpenRun {
     run_id: String,
     /// The same clock its steps get in `DATALIB_DAG_NOW`.
     clock: datalib_time::RunClock,
-    /// Each step's version as the period began: the summary says whether
-    /// the period as a whole moved a step's output.
+    /// Each step's version as the run began: the summary says whether
+    /// the run as a whole moved a step's output.
     at_start: HashMap<String, Option<String>>,
 }
 
@@ -377,7 +377,7 @@ impl Runner {
 
 impl Runner {
     /// Every request open in the store, and any opened while this runs,
-    /// until none is left: one busy period, its steps given the runner's
+    /// until none is left: one run, its steps given the runner's
     /// own environment and its events its own sink. The caller holds
     /// `runner-lock`.
     pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
@@ -386,9 +386,9 @@ impl Runner {
     }
 
     /// The loop for a host holding `runner-lock` until `stop`: every
-    /// request and wipe served as it comes, and the record brought to the
-    /// switches and the config while nothing runs. Each stretch with work
-    /// open is a busy period, which `host` records.
+    /// request and job served as it comes, and the `steps` table brought
+    /// to the switches and the config while nothing runs. Each stretch
+    /// with work open is a run, which `host` records.
     pub async fn run_forever(
         &self,
         graph: &Graph,
@@ -402,7 +402,7 @@ impl Runner {
 
     /// [`Runner::run_forever`] until nothing is open and nothing runs: what
     /// a `datalib-pipeline` verb runs when no other process holds the lock.
-    /// The last busy period's report.
+    /// The last run's report.
     pub async fn run_until_idle(
         &self,
         graph: &Graph,
@@ -412,7 +412,7 @@ impl Runner {
         self.drive(graph, store, Some(host), true).await
     }
 
-    /// `host` is `None` for [`Runner::serve`], which opens one period
+    /// `host` is `None` for [`Runner::serve`], which opens one run
     /// at once and returns its report when it ends. `until_idle` returns
     /// once nothing is open and nothing runs.
     async fn drive(
@@ -422,7 +422,7 @@ impl Runner {
         host: Option<&dyn LoopHost>,
         until_idle: bool,
     ) -> Result<Option<RunReport>> {
-        let mut mailbox = Mailbox {
+        let mut intent_reader = IntentReader {
             store,
             seen: None,
             started: false,
@@ -430,19 +430,19 @@ impl Runner {
             stopped: Vec::new(),
             reload: false,
         };
-        let mut record = Recorded::load(store).await?;
-        let mut state = record.saved.clone();
-        let mut period = match host {
-            None => Some(self.open_period(graph, &mut record, &mut state).await?),
+        let mut saver = Saver::load(store).await?;
+        let mut state = saver.last.clone();
+        let mut this_run = match host {
+            None => Some(self.open_run(graph, &mut saver, &mut state).await?),
             Some(_) => None,
         };
         let mut report = None;
 
-        // Made before the first look at the mailbox, so a row written
-        // after that look is heard.
+        // Made before the store's requests, switches and jobs are first
+        // read, so a row written after that read is heard.
         let mut listener = Listener::new(store, "the loop").backstop(self.backstop);
         let mut current = graph.clone();
-        // The host loaded the config before this period began, and it may
+        // The host loaded the config before this run began, and it may
         // have moved since; after that, only when it is said to have.
         let mut config_moved = true;
         let mut next_graph: Option<Graph> = None;
@@ -454,10 +454,11 @@ impl Runner {
         let mut turned_off: BTreeMap<String, String> = BTreeMap::new();
         let mut wipes: Vec<JobRow> = Vec::new();
         let mut seq = 0u64;
-        let mut queue = QueueLedger::default();
+        let mut queue = ConsumerQueues::default();
         let mut cancelled = false;
-        // Whether the loop takes on what the mailbox brings: not once it is
-        // told to stop, nor, for `serve`, once its one period is over.
+        // Whether the loop starts serving new requests and jobs from the
+        // store: not once it is told to stop, nor, for `serve`, once its
+        // one run is over.
         let mut taking = true;
         let mut stop_rx = self.stop.clone();
         let mut disk = DiskWatch::default();
@@ -468,8 +469,8 @@ impl Runner {
 
         self.refresh(
             graph,
-            &mut mailbox,
-            period.is_some(),
+            &mut intent_reader,
+            this_run.is_some(),
             &mut open,
             &mut turned_off,
             &mut wipes,
@@ -522,8 +523,9 @@ impl Runner {
                     said_waiting_to_swap = false;
                     let old = std::mem::replace(&mut current, next);
                     let graph = &current;
-                    // A step the new graph lacks, done but for what it
-                    // reads settling, is done now, under the graph it ran in.
+                    // A step the new graph lacks, done but for producers it
+                    // reads still running or waiting, is done now, under the
+                    // graph it ran in.
                     for (i, spec) in old.steps.iter().enumerate() {
                         if graph.by_id.contains_key(&spec.id) {
                             continue;
@@ -541,11 +543,16 @@ impl Runner {
                             slot_of(&mut slots, graph, i).ever_in_scope = true;
                         }
                     }
-                    // Read the requests again: one left for want of a step
-                    // this graph has is taken on now.
-                    mailbox.seen = None;
+                    // Read the requests again: one set aside for want of a
+                    // step this graph has is served now.
+                    intent_reader.seen = None;
                     let mut added = Vec::new();
-                    for (i, spec) in graph.steps.iter().enumerate().filter(|_| period.is_some()) {
+                    for (i, spec) in graph
+                        .steps
+                        .iter()
+                        .enumerate()
+                        .filter(|_| this_run.is_some())
+                    {
                         match old.by_id.get(&spec.id) {
                             None => {
                                 added.push(PlannedStep::of(spec));
@@ -566,8 +573,8 @@ impl Runner {
             if taking {
                 self.refresh(
                     graph,
-                    &mut mailbox,
-                    period.is_some(),
+                    &mut intent_reader,
+                    this_run.is_some(),
                     &mut open,
                     &mut turned_off,
                     &mut wipes,
@@ -575,25 +582,25 @@ impl Runner {
                     &mut slots,
                 )
                 .await?;
-                if std::mem::take(&mut mailbox.reload) {
+                if std::mem::take(&mut intent_reader.reload) {
                     config_moved = true;
                     continue;
                 }
-                if let Some(host) = host.filter(|_| period.is_none()) {
+                if let Some(host) = host.filter(|_| this_run.is_none()) {
                     if !open.is_empty() || !wipes.is_empty() || prepare.is_some() {
-                        let start = super::host::period_start(
+                        let start = super::host::run_start(
                             &store.open_requests().await?,
                             &store.open_jobs().await?,
                         );
                         match host.open(start) {
                             Ok(env) => {
                                 self.set_steps_env(env.into());
-                                period =
-                                    Some(self.open_period(graph, &mut record, &mut state).await?);
-                                // What it took on was read with no period
-                                // open, as strictly as a period's first read.
-                                mailbox.started = true;
-                                queue = QueueLedger::default();
+                                this_run =
+                                    Some(self.open_run(graph, &mut saver, &mut state).await?);
+                                // What it starts serving was read with no
+                                // run open, as strictly as a run's first read.
+                                intent_reader.started = true;
+                                queue = ConsumerQueues::default();
                             }
                             Err(why) => {
                                 tracing::warn!("supervisor: cannot sync: {why}");
@@ -613,7 +620,7 @@ impl Runner {
                         graph,
                         next_graph.as_ref(),
                         store,
-                        &mut record,
+                        &mut saver,
                         &mut state,
                         &mut wipes,
                         &mut slots,
@@ -622,11 +629,11 @@ impl Runner {
                 if opened {
                     // The loop's own write does not move what `refresh`
                     // watches.
-                    mailbox.seen = None;
+                    intent_reader.seen = None;
                     self.refresh(
                         graph,
-                        &mut mailbox,
-                        period.is_some(),
+                        &mut intent_reader,
+                        this_run.is_some(),
                         &mut open,
                         &mut turned_off,
                         &mut wipes,
@@ -636,7 +643,7 @@ impl Runner {
                     .await?;
                 }
             }
-            if period.is_some() {
+            if this_run.is_some() {
                 if let Some(pass) = prepare.as_mut() {
                     for task in self.start_what_it_can(graph, store, pass).await? {
                         set.spawn(task);
@@ -645,10 +652,10 @@ impl Runner {
                 if let Some(pass) = prepare.take_if(|p| p.is_over()) {
                     store.close_job(&pass.job, None).await?;
                     // A verb run from the command line does what it was
-                    // asked and says what needs to run again; the app's
+                    // told and says what needs to run again; the app's
                     // loop runs it.
                     if !until_idle && self.open_the_reruns(graph, store, &state).await? {
-                        mailbox.seen = None;
+                        intent_reader.seen = None;
                         continue;
                     }
                 }
@@ -662,7 +669,7 @@ impl Runner {
                 o.roots
                     .retain(|r| graph.by_id.get(r).is_none_or(|i| !wiping.contains_key(i)));
                 if o.roots.is_empty() {
-                    mailbox.stopped.push(o.id.clone());
+                    intent_reader.stopped.push(o.id.clone());
                 }
                 !o.roots.is_empty()
             });
@@ -675,8 +682,8 @@ impl Runner {
             let mut facts = facts_of(graph, &state, &slots);
             facts.low_disk = low.is_some();
             if let Some(pass) = &prepare {
-                for (f, held) in facts.steps.iter_mut().zip(pass.holds(graph)) {
-                    f.preparing = held;
+                for (f, waits) in facts.steps.iter_mut().zip(pass.waiting_on_prepare(graph)) {
+                    f.preparing = waits;
                 }
             }
             let t = tick(&shape, &intent, &facts);
@@ -693,18 +700,19 @@ impl Runner {
             }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
             let n = graph.steps.len();
-            let between_passes = |slots: &Slots, i: usize| {
+            let between_processes = |slots: &Slots, i: usize| {
                 slot_at(slots, graph, i).is_some_and(|s| s.ended.is_some())
             };
 
-            // A step between passes has not settled either, so the index
-            // behind a render that is waiting on its download's next seal
-            // keeps reading Running too, not just the render.
-            let mut unsettled = vec![false; n];
+            // A step between processes whose own producer is still running
+            // or waiting counts as moving too, so the index behind a render
+            // that is waiting on its download's next seal keeps waiting
+            // too, not just the render.
+            let mut moving = vec![false; n];
             for &i in &graph.topo {
-                let upstream = graph.deps_in_order(i).any(|p| unsettled[p]);
-                unsettled[i] = matches!(t.states[i], Row::Running | Row::Waiting(_))
-                    || (between_passes(&slots, i) && upstream);
+                let upstream = graph.deps_in_order(i).any(|p| moving[p]);
+                moving[i] = matches!(t.states[i], Row::Running | Row::Waiting(_))
+                    || (between_processes(&slots, i) && upstream);
             }
 
             for i in 0..n {
@@ -713,9 +721,9 @@ impl Runner {
                 };
                 let Some(e) = s.ended.as_mut() else { continue };
                 let again = starting.contains(&i);
-                let upstream_busy = graph.deps_in_order(i).any(|p| unsettled[p]);
-                if (again || upstream_busy) && !e.pass_ended {
-                    e.pass_ended = true;
+                let upstream_busy = graph.deps_in_order(i).any(|p| moving[p]);
+                if (again || upstream_busy) && !e.pass_end_sent {
+                    e.pass_end_sent = true;
                     self.sink.emit(&Event::PassEnd {
                         step: graph.steps[i].id.clone(),
                         status: e.status.state(),
@@ -725,8 +733,8 @@ impl Runner {
                     });
                 }
                 if again {
-                    // Its run reports the pass that runs now, so a failure
-                    // here would be lost but for this count.
+                    // Its run reports the process that starts now, so a
+                    // failure here would be lost but for this count.
                     if e.status.state() == RunState::Failed {
                         s.failed_passes += 1;
                     }
@@ -742,13 +750,11 @@ impl Runner {
             // some other source away: one no open request wants any more,
             // and one up to date with nothing above it that could still
             // change what it reads.
-            let mut above_unsettled = vec![false; n];
+            let mut moving_above = vec![false; n];
             for &i in &graph.topo {
-                above_unsettled[i] = graph
-                    .deps_in_order(i)
-                    .any(|p| unsettled[p] || above_unsettled[p]);
+                moving_above[i] = graph.deps_in_order(i).any(|p| moving[p] || moving_above[p]);
             }
-            for (i, &above) in above_unsettled.iter().enumerate() {
+            for (i, &above) in moving_above.iter().enumerate() {
                 let done = match t.states[i] {
                     Row::Idle | Row::Stale => true,
                     Row::Fresh => !above,
@@ -758,19 +764,19 @@ impl Runner {
                     continue;
                 };
                 if s.ended.is_none() && done {
-                    self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
+                    self.give_final_status(graph, &mut state, &mut queue, s, i, cancelled);
                 }
             }
 
             // A request closing now, or stopped, is closed after the save
             // below: a reader that sees it closed finds no step serving it.
             let closing: BTreeSet<usize> = t.closed.iter().map(|&(r, _)| r).collect();
-            // A step between passes waits on the first producer it reads
-            // that has not settled.
-            let held: Vec<Option<usize>> = (0..n)
+            // A step between processes waits on the first producer it
+            // reads that is still moving.
+            let waiting_on: Vec<Option<usize>> = (0..n)
                 .map(|i| {
-                    between_passes(&slots, i)
-                        .then(|| graph.deps_in_order(i).find(|&p| unsettled[p]))
+                    between_processes(&slots, i)
+                        .then(|| graph.deps_in_order(i).find(|&p| moving[p]))
                         .flatten()
                 })
                 .collect();
@@ -779,15 +785,15 @@ impl Runner {
             // index its request also reaches is still running.
             let working: Vec<bool> = (0..n)
                 .map(|i| {
-                    held[i].is_some()
+                    waiting_on[i].is_some()
                         || match t.states[i] {
                             Row::Running | Row::Waiting(_) => true,
-                            Row::Fresh => above_unsettled[i],
+                            Row::Fresh => moving_above[i],
                             _ => false,
                         }
                 })
                 .collect();
-            record_states(graph, &shape, &mut state, &t, &held, &off, low, |i| {
+            record_states(graph, &shape, &mut state, &t, &waiting_on, &off, low, |i| {
                 if !working[i] {
                     return Vec::new();
                 }
@@ -798,7 +804,7 @@ impl Runner {
                     .collect()
             });
             say_wiping(graph, &mut state, &t, &wiping);
-            record_deferred(graph, &mut state, &mailbox.deferred);
+            record_deferred(graph, &mut state, &intent_reader.deferred);
 
             for start in t.starts {
                 let i = start.step;
@@ -865,9 +871,9 @@ impl Runner {
                 }
                 slot_of(&mut slots, graph, i).said_waiting_for_disk = waiting;
             }
-            record.save(&state).await?;
+            saver.save(&state).await?;
 
-            for id in std::mem::take(&mut mailbox.stopped) {
+            for id in std::mem::take(&mut intent_reader.stopped) {
                 store
                     .close_request(&id, RequestOutcome::Stopped, None)
                     .await?;
@@ -884,30 +890,24 @@ impl Runner {
             }
             if open.is_empty() && set.is_empty() {
                 // A config waiting on what just ended may bring requests
-                // of its own, which this loop takes on rather than the next;
+                // of its own, which this loop serves rather than the next;
                 // and a purge waits for the config that lets its groups go.
                 if next_graph.is_some() {
                     continue;
                 }
                 if wipes.is_empty() && prepare.is_none() {
-                    if let Some(p) = period.take() {
+                    if let Some(p) = this_run.take() {
                         report = Some(
-                            self.end_period(
-                                graph,
-                                &mut record,
-                                &mut state,
-                                &mut slots,
-                                &mut queue,
-                                cancelled,
-                                p,
-                                host,
+                            self.end_run(
+                                graph, &mut saver, &mut state, &mut slots, &mut queue, cancelled,
+                                p, host,
                             )
                             .await?,
                         );
-                        mailbox.started = false;
+                        intent_reader.started = false;
                         taking &= !until_idle;
-                        // The next tick, with nothing open, is the record
-                        // at rest.
+                        // The next tick, with nothing open, writes the
+                        // `steps` rows at rest.
                         continue;
                     }
                     if !taking || until_idle {
@@ -948,8 +948,8 @@ impl Runner {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 _ = tokio::time::sleep(DISK_LOOK_EVERY),
-                    if listening && period.is_some() && graph.disk_floor.is_some() => {}
-                // Empty while the disk holds every step back.
+                    if listening && this_run.is_some() && graph.disk_floor.is_some() => {}
+                // Empty while the disk is under the floor and no step runs.
                 joined = set.join_next(), if !set.is_empty() => {
                     // Seals before joins: a step sends its seal before its
                     // task can finish, so every seal this join follows is
@@ -962,16 +962,17 @@ impl Runner {
                         .context("step task panicked")?;
                     let (id, attempts, res) = match joined {
                         Done::Step(id, attempts, res) => (id, attempts, res),
-                        Done::Prepared(step, answer) => {
-                            // A stop drops the pass, not the answer in flight.
+                        Done::PrepareExited(step, result) => {
+                            // A stop drops the pass, not the outcome of a
+                            // `--prepare` that has already exited.
                             let at = prepare.as_mut().map(|pass| {
                                 pass.running.remove(&step);
                                 (pass.job.clone(), pass.ord(&step),
                                     pass.turned_off_before.get(&step).cloned())
                             });
-                            self.answered(graph, store, &mut state, &step, at, answer).await?;
-                            mailbox.seen = None;
-                            record.save(&state).await?;
+                            self.apply_prepare_exit(graph, store, &mut state, &step, at, result).await?;
+                            intent_reader.seen = None;
+                            saver.save(&state).await?;
                             continue;
                         }
                     };
@@ -986,8 +987,8 @@ impl Runner {
                     s.last_attempt = Some(Tried {
                         started,
                         failed: !matches!(e.status, StepStatus::Succeeded { .. }),
-                        // Asked to stop, and it did: one that says it
-                        // failed has failed, whatever it was asked.
+                        // Sent SIGINT, and it stopped: one that says it
+                        // failed has failed, whatever it was sent.
                         stopped: live.stop.is_none()
                             && e.status.state() == crate::run_state::RunState::Stopped,
                         read: live.consumed,
@@ -996,7 +997,7 @@ impl Runner {
                     s.attempts = e.attempts;
                     s.error = e.error.clone();
                     s.ended = Some(e);
-                    record.save(&state).await?;
+                    saver.save(&state).await?;
                 }
             }
         }
@@ -1020,22 +1021,22 @@ impl Runner {
                     .await?;
             }
         }
-        let asked = super::upgrade::steps_to_ask(graph);
+        let to_prepare = super::upgrade::steps_to_prepare(graph);
         let job = store.open_job(JobKind::Prepare, &[], LOOP_OPENER).await?;
-        if asked.is_empty() {
+        if to_prepare.is_empty() {
             store.close_job(&job, None).await?;
             return Ok(None);
         }
         tracing::info!(
-            steps = asked.len(),
+            steps = to_prepare.len(),
             "supervisor: asking each step to prepare"
         );
-        let ids: Vec<&str> = asked.iter().map(String::as_str).collect();
+        let ids: Vec<&str> = to_prepare.iter().map(String::as_str).collect();
         store.begin_job_steps(&job, &ids).await?;
         Ok(Some(PreparePass {
             job,
-            order: asked.clone(),
-            not_started: asked,
+            order: to_prepare.clone(),
+            not_started: to_prepare,
             running: BTreeSet::new(),
             turned_off_before: store.turned_off().await?,
         }))
@@ -1078,31 +1079,32 @@ impl Runner {
                 datalib_config::Verb::Prepare,
             );
             pass.running.insert(step.clone());
-            tasks.push(async move { Done::Prepared(step, task.await) });
+            tasks.push(async move { Done::PrepareExited(step, task.await) });
         }
         Ok(tasks)
     }
 
-    /// One step's answer to `--prepare`, in the loop's record: a new
-    /// version or `needs_rerun` recorded; a refusal turns it off by
-    /// [`REFUSED_PREPARE`] until a later pass finds it willing; anything
-    /// else is said and the pass goes on.
+    /// What one step's `--prepare` process reported, written into the
+    /// loop's `Record`: a new version or `needs_rerun` recorded; a refusal
+    /// turns it off by [`REFUSED_PREPARE`] until a later pass's
+    /// `--prepare` does not refuse; anything else is logged and the pass
+    /// goes on.
     #[allow(clippy::too_many_arguments)]
     /// `at` is the pass's job, the step's place in it, and who had it
     /// turned off as the pass began; `None` once a stop dropped the pass.
-    async fn answered(
+    async fn apply_prepare_exit(
         &self,
         graph: &Graph,
         store: &Store,
         state: &mut Record,
         step: &str,
         at: Option<(String, usize, Option<String>)>,
-        answer: std::result::Result<StepOutcome, InvokeError>,
+        result: std::result::Result<StepOutcome, InvokeError>,
     ) -> Result<()> {
         let turned_off_before = at.as_ref().and_then(|(_, _, by)| by.clone());
-        let answer = match answer {
+        let result = match result {
             Ok(outcome) => match graph.by_id.get(step) {
-                Some(&i) => apply_answer(graph, i, &outcome, state)
+                Some(&i) => apply_verb_outcome(graph, i, &outcome, state)
                     .map(|()| outcome.needs_rerun)
                     .map_err(|e| PrepareError::Failed(format!("{e:#}"))),
                 None => Ok(false),
@@ -1118,10 +1120,10 @@ impl Runner {
             }
         };
         let refused_before = turned_off_before.is_some_and(|by| by.starts_with(REFUSED_PREPARE));
-        if refused_before && !matches!(answer, Err(PrepareError::Refused(_))) {
+        if refused_before && !matches!(result, Err(PrepareError::Refused(_))) {
             store.turn_on(step).await?;
         }
-        let (state, error) = match answer {
+        let (state, error) = match result {
             Ok(false) => (PassState::Done, None),
             Ok(true) => {
                 tracing::info!(step, "supervisor: needs to run again before it is current");
@@ -1145,8 +1147,8 @@ impl Runner {
         Ok(())
     }
 
-    /// Run what the pass marked `needs_rerun`, without waiting to be
-    /// asked: nothing reads a store in another shape, so what those steps
+    /// Run what the pass marked `needs_rerun`, without waiting for a
+    /// person to ask: nothing reads a store in another shape, so what those steps
     /// wrote is not shown until they run, and none of them downloads. One
     /// request, unless one this requester opened is still open. Whether it
     /// opened one.
@@ -1169,15 +1171,15 @@ impl Runner {
         Ok(true)
     }
 
-    /// The period's record opened: its plan said, its run id and "now"
-    /// recorded as the record's current run. The steps' environment
+    /// The run opened: its plan sent, its run id and "now" recorded as the
+    /// `Record`'s current run. The steps' environment
     /// carries both.
-    async fn open_period(
+    async fn open_run(
         &self,
         graph: &Graph,
-        record: &mut Recorded<'_>,
+        saver: &mut Saver<'_>,
         state: &mut Record,
-    ) -> Result<Period> {
+    ) -> Result<OpenRun> {
         let child_env = self.steps_env();
         let plan: Vec<PlannedStep> = graph
             .topo
@@ -1203,32 +1205,32 @@ impl Runner {
             finished_at: None,
             states: Default::default(),
         });
-        record.save(state).await?;
+        saver.save(state).await?;
         let at_start = state
             .steps
             .iter()
             .map(|(id, s)| (id.clone(), s.version.clone()))
             .collect();
-        Ok(Period {
+        Ok(OpenRun {
             run_id,
             clock,
             at_start,
         })
     }
 
-    /// Nothing is open and nothing runs: each step the period reached
-    /// finished, the record's run closed, and the summary sent. A step no
+    /// Nothing is open and nothing runs: each step the run reached
+    /// finished, the `Record`'s current run closed, and the summary sent. A step no
     /// request reached took no part, and has no line.
     #[allow(clippy::too_many_arguments)]
-    async fn end_period(
+    async fn end_run(
         &self,
         graph: &Graph,
-        record: &mut Recorded<'_>,
+        saver: &mut Saver<'_>,
         state: &mut Record,
         slots: &mut Slots,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
         cancelled: bool,
-        period: Period,
+        this_run: OpenRun,
         host: Option<&dyn LoopHost>,
     ) -> Result<RunReport> {
         for i in 0..graph.steps.len() {
@@ -1238,12 +1240,12 @@ impl Runner {
             if let Some(e) = s.ended.take() {
                 self.finish_ended(graph, state, s, i, e);
             }
-            self.settle_row(graph, state, queue, s, i, cancelled);
+            self.give_final_status(graph, state, queue, s, i, cancelled);
         }
         if let Some(run) = state.current_run.as_mut() {
-            run.finished_at = Some(period.clock.now().to_rfc3339_micros());
+            run.finished_at = Some(this_run.clock.now().to_rfc3339_micros());
         }
-        record.save(state).await?;
+        saver.save(state).await?;
         let facts = facts_of(graph, state, slots);
         let steps = graph
             .topo
@@ -1254,10 +1256,10 @@ impl Runner {
                 let now = facts.sinks[i]
                     .clone()
                     .unwrap_or_else(|| UNKNOWN.to_string());
-                let before = period.at_start.get(&graph.steps[i].id).cloned().flatten();
+                let before = this_run.at_start.get(&graph.steps[i].id).cloned().flatten();
                 let changed = facts.sinks[i].is_some() && facts.sinks[i] != before;
-                // A pass's own `changed` is against the seal before it; the
-                // period's is against where the period started.
+                // One process's own `changed` is against the seal before
+                // it; the run's is against where the run started.
                 let status = match s.status.clone()? {
                     StepStatus::Succeeded { .. } => StepStatus::Succeeded {
                         changed: changed as usize,
@@ -1279,23 +1281,24 @@ impl Runner {
             steps: report.steps.iter().map(step_summary).collect(),
         });
         if let Some(host) = host {
-            host.close(&period.run_id);
+            host.close(&this_run.run_id);
         }
-        // Nothing runs: what the slots hold of the facts the record does
-        // not, a step's last attempt among them, ends with the period.
+        // Nothing runs: what the slots keep of the facts the `Record` does
+        // not, a step's last attempt among them, ends with the run.
         slots.clear();
         Ok(report)
     }
 
-    /// Bring `open`, `turned_off` and `wipes` up to what the mailbox says.
+    /// Bring `open`, `turned_off` and `wipes` up to what the store's
+    /// `requests`, `turned_off` and `jobs` tables say.
     /// A request the loop has not seen before is opened now, so only an
     /// invocation started after this counts as serving it.
     #[allow(clippy::too_many_arguments)]
     async fn refresh(
         &self,
         graph: &Graph,
-        mailbox: &mut Mailbox<'_>,
-        in_period: bool,
+        intent_reader: &mut IntentReader<'_>,
+        in_run: bool,
         open: &mut Vec<Open>,
         turned_off: &mut BTreeMap<String, String>,
         wipes: &mut Vec<JobRow>,
@@ -1325,27 +1328,27 @@ impl Runner {
                 .and_then(|s| s.load().ok())
                 .is_some_and(|g| roots.iter().all(|r| g.by_id.contains_key(r)))
         };
-        let Mailbox {
+        let IntentReader {
             store,
             seen,
             started,
             deferred,
             stopped,
             reload,
-        } = mailbox;
+        } = intent_reader;
         {
             {
                 let version = store.data_version().await?;
                 if *seen == Some(version) {
                     return Ok(());
                 }
-                // Read with no period open, or the first read of one: the
+                // Read with no run open, or the first read of one: the
                 // config it names cannot be newer than the graph the loop
                 // has, so a step this graph lacks does not exist.
                 let first = !*started;
-                *started |= in_period;
+                *started |= in_run;
                 *seen = Some(version);
-                let (rows, all_turned_off) = store.mailbox().await?;
+                let (rows, all_turned_off) = store.requests_and_turned_off().await?;
                 deferred.retain(|id, _| {
                     rows.iter()
                         .any(|r| &r.id == id && r.stop_requested_by.is_none())
@@ -1433,7 +1436,8 @@ impl Runner {
     }
 
     /// Each wipe whose steps have stopped, done; each that cannot be done,
-    /// closed with why. The rest wait, their steps held. Whether a reset
+    /// closed with why. The rest wait, their steps kept from running.
+    /// Whether a reset
     /// opened a request for what reads what it emptied.
     #[allow(clippy::too_many_arguments)]
     async fn carry_out_wipes(
@@ -1441,7 +1445,7 @@ impl Runner {
         graph: &Graph,
         next_graph: Option<&Graph>,
         store: &Store,
-        record: &mut Recorded<'_>,
+        saver: &mut Saver<'_>,
         state: &mut Record,
         wipes: &mut Vec<JobRow>,
         slots: &mut Slots,
@@ -1465,21 +1469,21 @@ impl Runner {
                 store.close_job(&w.id, Some(&why)).await?;
                 continue;
             }
-            let held = wipe::held(graph, kind, &w.targets);
-            let stopped = held.iter().all(|&i| {
+            let kept = wipe::kept_from_running(graph, kind, &w.targets);
+            let stopped = kept.iter().all(|&i| {
                 slot_at(slots, graph, i).is_none_or(|s| s.running.is_none() && s.live.is_none())
             });
             // A purge waits for the config swap too: a step the graph
-            // still has would be written back into the record.
+            // still has would be written back into the `steps` table.
             let ready = match kind {
                 JobKind::Reset | JobKind::Compact | JobKind::Collect => stopped,
-                JobKind::Purge | JobKind::Prepare => held.is_empty(),
+                JobKind::Purge | JobKind::Prepare => kept.is_empty(),
             };
             if !ready {
                 wipes.push(w);
                 continue;
             }
-            for &i in &held {
+            for &i in &kept {
                 let Some(s) = slots.get_mut(&graph.steps[i].id) else {
                     continue;
                 };
@@ -1491,7 +1495,7 @@ impl Runner {
                 JobKind::Reset => self.reset_in_loop(graph, &w.targets, state, slots).await,
                 JobKind::Purge => delete_trees(&self.data_root, &w.targets)
                     .await
-                    .map(|()| wipe::forget_groups(state, &w.targets)),
+                    .map(|()| wipe::remove_group_steps(state, &w.targets)),
                 JobKind::Compact => {
                     self.shrink_in_loop(graph, &w, Shrink::Compact, state, store)
                         .await
@@ -1502,7 +1506,7 @@ impl Runner {
                 }
                 JobKind::Prepare => unreachable!("`wipe::refusal` refuses a prepare job"),
             };
-            record.save(state).await?;
+            saver.save(state).await?;
             match done {
                 Ok(()) => {
                     let roots = match kind {
@@ -1547,7 +1551,7 @@ impl Runner {
         Ok(())
     }
 
-    /// Each step the compaction or collection asks invoked with `how`'s
+    /// Each step the compaction or collection runs invoked with `how`'s
     /// flag, and the version it reports recorded. One that fails is named
     /// and the rest go on.
     async fn shrink_in_loop(
@@ -1558,11 +1562,14 @@ impl Runner {
         state: &mut Record,
         store: &Store,
     ) -> Result<()> {
-        let asked = wipe::compact_targets(graph, &w.targets, how);
-        let ids: Vec<&str> = asked.iter().map(|&i| graph.steps[i].id.as_str()).collect();
+        let to_shrink = wipe::compact_targets(graph, &w.targets, how);
+        let ids: Vec<&str> = to_shrink
+            .iter()
+            .map(|&i| graph.steps[i].id.as_str())
+            .collect();
         store.begin_job_steps(&w.id, &ids).await?;
         let mut failed: BTreeMap<String, Vec<&str>> = BTreeMap::new();
-        for (ord, &i) in asked.iter().enumerate() {
+        for (ord, &i) in to_shrink.iter().enumerate() {
             let step = &graph.steps[i].id;
             store
                 .set_job_step(&w.id, ord, PassState::Running, None, None)
@@ -1651,7 +1658,7 @@ impl Runner {
     }
 
     /// A step done with its last invocation: its finish, after the count
-    /// of the passes before that one that failed, which replaces the
+    /// of its processes before that one that failed, which replaces the
     /// count its last run left.
     fn finish_ended(&self, graph: &Graph, state: &mut Record, s: &mut Slot, i: usize, e: Ended) {
         self.sink.emit(&Event::Metric {
@@ -1672,13 +1679,14 @@ impl Runner {
         );
     }
 
-    /// A step a request wanted, with no row of its own yet and nothing
-    /// left to finish, takes the one its last state settles on.
-    fn settle_row(
+    /// A step a request wanted, with no status of its own yet and nothing
+    /// left to finish, is given the one [`LastWanted::final_status`] maps its
+    /// last state to.
+    fn give_final_status(
         &self,
         graph: &Graph,
         state: &mut Record,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
         s: &mut Slot,
         i: usize,
         cancelled: bool,
@@ -1686,7 +1694,7 @@ impl Runner {
         if !s.ever_in_scope || s.status.is_some() {
             return;
         }
-        let Some(st) = s.last_wanted.settles(cancelled) else {
+        let Some(st) = s.last_wanted.final_status(cancelled) else {
             return;
         };
         if st == StepStatus::SkippedUpToDate {
@@ -1719,7 +1727,7 @@ impl Runner {
         graph: &Graph,
         signal: crate::step::StepSignal,
         state: &mut Record,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
         slots: &mut Slots,
     ) {
         use crate::step::StepSignal;
@@ -1791,7 +1799,7 @@ impl Runner {
         live: &Live,
         slots: &Slots,
         state: &mut Record,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
     ) -> Ended {
         let spec = &graph.steps[i];
         let consumed = &live.consumed.in_graph(graph);
@@ -1806,7 +1814,7 @@ impl Runner {
             error: Some(error),
             exit,
             attempts,
-            pass_ended: false,
+            pass_end_sent: false,
         };
         match res {
             Ok(outcome) => {
@@ -1842,7 +1850,7 @@ impl Runner {
                     error: None,
                     exit,
                     attempts,
-                    pass_ended: false,
+                    pass_end_sent: false,
                 }
             }
             Err(step_err) => {
@@ -1864,14 +1872,15 @@ fn wiping(graph: &Graph, wipes: &[JobRow]) -> BTreeMap<usize, JobKind> {
         .iter()
         .filter_map(|w| Some((w.kind?, w)))
         .flat_map(|(kind, w)| {
-            wipe::held(graph, kind, &w.targets)
+            wipe::kept_from_running(graph, kind, &w.targets)
                 .into_iter()
                 .map(move |i| (i, kind))
         })
         .collect()
 }
 
-/// A held step reads as off, which is not what a person did: say why.
+/// A step a wipe keeps from running reads as off, which is not what a
+/// person did: say why.
 fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usize, JobKind>) {
     for (&i, kind) in wiping {
         let why = match kind {
@@ -1891,7 +1900,7 @@ fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usi
 }
 
 /// The trees of `groups` under the data root. One already gone is not an
-/// error: the record still needs forgetting. A folder is deleted only by
+/// error: the group's `steps` rows still need deleting. A folder is deleted only by
 /// its own name: on a Mac's disk, which ignores letter case, `Gone` would
 /// otherwise delete `gone`.
 async fn delete_trees(root: &std::path::Path, groups: &[String]) -> Result<()> {
@@ -1929,9 +1938,9 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
         .collect()
 }
 
-/// Write what the tick made of each step into its record. A step between
-/// passes (`held`: its invocation ended, and what it reads has not
-/// settled) waits for the producer named there. `serving` names the open requests a step
+/// Write what the tick made of each step into its `steps` entry. A step
+/// between processes (`waiting_on`: its invocation ended, and a producer it
+/// reads is still running or waiting) waits for the producer named there. `serving` names the open requests a step
 /// has work left in, oldest first.
 #[allow(clippy::too_many_arguments)]
 fn record_states(
@@ -1939,14 +1948,14 @@ fn record_states(
     shape: &Shape,
     state: &mut Record,
     t: &Tick,
-    held: &[Option<usize>],
+    waiting_on: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
     low: Option<LowDisk>,
     serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
     for (i, &st) in t.states.iter().enumerate() {
-        let st = match held[i] {
+        let st = match waiting_on[i] {
             Some(p) => Row::Waiting(Wait::Upstream(p)),
             None => st,
         };
@@ -2004,7 +2013,8 @@ fn record_states(
     }
 }
 
-/// Whether the disk holds the steps back, as of the loop's last look:
+/// Whether the disk is under the floor, so no step runs, as of the loop's
+/// last look:
 /// the floor has two lines, so the answer depends on the one before. A
 /// crossing is logged once each way rather than on every look.
 #[derive(Default)]
@@ -2014,8 +2024,8 @@ struct DiskWatch {
 }
 
 impl DiskWatch {
-    /// The disk holding the steps back, if it does. A disk that cannot be
-    /// measured holds nothing back: that is logged once, at ERROR.
+    /// How low the disk is, if it is under the floor. A disk that cannot
+    /// be measured stops nothing: that is logged once, at ERROR.
     fn look(&mut self, root: &std::path::Path, floor: Option<DiskFloor>) -> Option<LowDisk> {
         let low = match floor.map(|f| (f, disk_space::space(root))) {
             None => None,
@@ -2099,7 +2109,7 @@ fn queued<T>(rx: &mut tokio::sync::mpsc::UnboundedReceiver<T>) -> Vec<T> {
 }
 
 /// The same steps in the same places, each with the same definition and
-/// held apart the same way: nothing a swap would move. When a step may
+/// kept apart by the same locks: nothing a swap would move. When a step may
 /// run is not in its fingerprint, so it is compared here.
 fn same_graph(a: &Graph, b: &Graph) -> bool {
     let when = |g: &Graph| -> Vec<_> {
@@ -2164,7 +2174,8 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
     }
 }
 
-/// The record's facts, with what only the loop holds laid over them.
+/// The `Record`'s facts, with what only the loop's slots have laid over
+/// them.
 fn facts_of(graph: &Graph, state: &Record, slots: &Slots) -> Facts {
     let recorded = |i: usize| state.steps.get(&graph.steps[i].id);
     let sinks: Vec<Option<String>> = (0..graph.steps.len())
@@ -2213,8 +2224,8 @@ fn facts_of(graph: &Graph, state: &Record, slots: &Slots) -> Facts {
     }
 }
 
-/// The steps that answered a launch's `--migrate` with `needs_rerun` and
-/// have not succeeded since, turned-off ones aside: what the loop runs
+/// The steps whose `--prepare` at the loop's start reported `needs_rerun`
+/// and have not succeeded since, turned-off ones aside: what the loop runs
 /// after an upgrade's pass, and what the app waits on.
 pub fn rerun_offer(graph: &Graph, state: &Record) -> Vec<StepId> {
     graph
@@ -2227,7 +2238,7 @@ pub fn rerun_offer(graph: &Graph, state: &Record) -> Vec<StepId> {
 }
 
 /// The versions an invocation was started against, keyed the way the
-/// record keys them: by the producer's output path.
+/// `steps` table's `reads` keys them: by the producer's output path.
 fn paths_of(graph: &Graph, consumed: &Consumed) -> HashMap<String, String> {
     consumed
         .reads
@@ -2307,10 +2318,10 @@ mod tests {
         steps.extend(others.iter().map(|id| step(id, None, true)));
         let graph = Graph::build(steps).unwrap();
         let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let mut asked = super::super::upgrade::steps_to_ask(&graph);
-        asked.sort();
+        let mut to_prepare = super::super::upgrade::steps_to_prepare(&graph);
+        to_prepare.sort();
         assert_eq!(
-            asked,
+            to_prepare,
             ids(&["a/ingest", "a/render", "b/ingest", "c/ingest", "d/ingest", "e/ingest"])
         );
         // One graph order of the six, fixed so the test does not depend on
@@ -2369,9 +2380,9 @@ mod tests {
         }
     }
 
-    /// A source that counts its runs, and holds each run until `go` is set
-    /// — or until it is asked to stop, when it sets `stopped` and reports a
-    /// cancel.
+    /// A source that counts its runs, and keeps each run going until `go`
+    /// is set — or until it is told to stop, when it sets `stopped` and
+    /// reports a cancel.
     fn source(
         id: &str,
         runs: Arc<AtomicU32>,
@@ -2452,8 +2463,8 @@ mod tests {
         store.request(id).await.unwrap().unwrap().closed
     }
 
-    /// The mailbox: a request another process writes while the loop runs is
-    /// served by that loop, beside the one it was already running.
+    /// A request another process writes to the store while the loop runs
+    /// is served by that loop, beside the one it was already running.
     #[tokio::test]
     async fn a_request_written_while_the_loop_runs_is_served_beside_the_first() {
         let f = fixture();
@@ -2719,7 +2730,7 @@ mod tests {
     /// not interrupted: the loop keeps its graph until the step ends, and
     /// what the new config adds waits with it.
     #[tokio::test]
-    async fn a_config_that_drops_a_running_step_is_taken_on_once_it_ends() {
+    async fn a_config_that_drops_a_running_step_is_used_once_it_ends() {
         let t = Three::new();
         let graph = Graph::build(vec![t.step(0), t.step(1)]).unwrap();
         let config = Swappable::new(&graph);
@@ -2838,8 +2849,8 @@ mod tests {
     }
 
     /// A step edited while it runs finishes on the definition it started
-    /// with, and its record says so: the next busy period reads that
-    /// record, and the new definition must read as out of date there too.
+    /// with, and its `steps` row says so: the next run reads that row,
+    /// and the new definition must read as out of date there too.
     /// The request that still wants it then runs it again under the new one.
     #[tokio::test]
     async fn a_step_edited_while_it_runs_records_what_it_ran_and_runs_again() {
@@ -2935,7 +2946,7 @@ mod tests {
         spec
     }
 
-    /// After an upgrade `b`'s render answered `--migrate` with
+    /// After an upgrade `b`'s render's `--prepare` reported
     /// `needs_rerun`. A sync of `a` leaves it alone; the offer names it; a
     /// request rooted at the offer runs it without `b`'s download, and its
     /// success takes it off the offer.
@@ -2993,7 +3004,7 @@ mod tests {
         );
     }
 
-    /// A step's record as the loop last saved it, once `ready` holds.
+    /// A step's `steps` entry as the loop last saved it, once `ready` holds.
     async fn until_recorded(
         root: &std::path::Path,
         step: &str,
@@ -3015,7 +3026,7 @@ mod tests {
         }
     }
 
-    /// A Manage row is the record's `state`, with no inference behind it:
+    /// A Manage row is the `steps` row's `state`, with no inference behind it:
     /// the step a request wants reads running and names that request, and
     /// one no request wants names none.
     #[tokio::test]
@@ -3224,12 +3235,10 @@ mod tests {
     }
 
     /// The loop does not end when nothing is open. A turn-off or turn-on
-    /// while it is idle reaches the record with no request and no period;
-    /// a request opens a period, which closes once the request is done.
-    /// Before the loop never exited, the idle side needed `settle`, a
-    /// second way to run a tick, to do the first of these.
+    /// while it is idle reaches the `steps` table with no request and no
+    /// run; a request opens a run, which closes once the request is done.
     #[tokio::test]
-    async fn the_loop_keeps_the_record_while_idle_and_opens_a_period_per_stretch_of_work() {
+    async fn the_loop_keeps_the_steps_table_while_idle_and_opens_a_run_per_stretch_of_work() {
         let f = fixture();
         let other = Store::open(f.root.path()).await.unwrap();
         let told = Arc::new(Told::default());
@@ -3284,10 +3293,10 @@ mod tests {
         assert_eq!(f.runs[1].load(Ordering::SeqCst), 1);
     }
 
-    /// A request asked to stop before the loop took it on is closed where
-    /// it stands, and opens no period.
+    /// A request asked to stop before the loop started serving it is
+    /// closed where it stands, and opens no run.
     #[tokio::test]
-    async fn a_request_stopped_before_the_loop_took_it_opens_no_period() {
+    async fn a_request_stopped_before_the_loop_served_it_opens_no_run() {
         let f = fixture();
         let other = Store::open(f.root.path()).await.unwrap();
         let id = other.open_request(&["a/raw".into()], "ui").await.unwrap();
@@ -3312,10 +3321,10 @@ mod tests {
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
     }
 
-    /// A host that cannot open a period fails the requests that wanted
+    /// A host that cannot open a run fails the requests that wanted
     /// one, and the loop goes on.
     #[tokio::test]
-    async fn a_period_that_cannot_open_fails_its_requests() {
+    async fn a_run_that_cannot_open_fails_its_requests() {
         struct Broken;
         impl LoopHost for Broken {
             fn open(
@@ -3356,7 +3365,7 @@ mod tests {
         task.await.unwrap().unwrap();
     }
 
-    /// A loop with nowhere to re-read its graph cannot take on a source
+    /// A loop with nowhere to re-read its graph cannot serve a source
     /// added to the config while it runs. Its request waits for the next
     /// loop, which loads the config again, rather than failing as a step
     /// that does not exist.
@@ -3369,7 +3378,7 @@ mod tests {
         until("a to start", || f.runs[0].load(Ordering::SeqCst) == 1).await;
 
         let later = other.open_request(&["c/raw".into()], "ui").await.unwrap();
-        // Written after the new request, so seeing it taken on means the
+        // Written after the new request, so seeing it served means the
         // loop has read past the new one too.
         let marker = other.open_request(&["b/raw".into()], "ui").await.unwrap();
         until("the loop to read past the new request", || {
@@ -3391,11 +3400,11 @@ mod tests {
         }
     }
 
-    /// A step a stopped request wanted, and nothing else does, reads as
-    /// settled while the loop goes on with another source's sync. It used
-    /// to keep its last record until the whole loop ended.
+    /// A step a stopped request wanted, and nothing else does, gets its
+    /// status for the run (`skipped_up_to_date`) while the loop goes on
+    /// with another source's sync, not once the whole loop has ended.
     #[tokio::test]
-    async fn a_step_no_request_wants_any_more_settles_while_the_loop_goes_on() {
+    async fn a_step_no_request_wants_any_more_gets_its_status_while_the_loop_goes_on() {
         let f = fixture();
         let render = StepSpec::new(
             "a/rendered",

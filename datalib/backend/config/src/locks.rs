@@ -55,7 +55,7 @@ mod tests {
     use super::*;
 
     /// strum and serde spell these independently; the config is read with
-    /// serde and the record's detail with strum.
+    /// serde and a step's `state_detail` is written with strum.
     #[test]
     fn hold_as_str_matches_the_serde_spelling() {
         for &v in Hold::VARIANTS {

@@ -1,11 +1,10 @@
 //! Beeper's render stage: normalize, then hand off to `chat-common`.
 //!
-//! Everything about *how* a Beeper message looks now lives in
-//! `datalib_etl_chat_common`. What is left here is the stage plumbing —
-//! loading each render unit's attachment bytes out of the blob CAS a batch at
-//! a time, and
-//! running one pass per bridged network, because the `grid_rows`
-//! taxonomy and the `source_label` are per-network.
+//! Everything about *how* a Beeper message looks is in
+//! `datalib_etl_chat_common`. What is here is the stage plumbing: it
+//! loads each render unit's attachment bytes out of the blob CAS a batch
+//! at a time, and calls chat-common once per bridged network, because
+//! the `grid_rows` taxonomy and the `source_label` are per-network.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -40,7 +39,7 @@ use super::parse::{DocRenderUnit, ParsedBeeper};
 /// v7: an avatar is linked where the blob store holds it.
 /// v8: the account's own person is marked as the account, so search
 ///     reads their handles as `me`.
-/// v9: chats on an account no bridge here reads are on record.
+/// v9: chats on an account no bridge here reads get a `problems` row.
 /// v10: a room is one document, under the room's own uuid; a reply is a
 ///      reply edge to the message it answers.
 pub const RENDER_VERSION: u32 = 10;

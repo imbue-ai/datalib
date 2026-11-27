@@ -1,5 +1,5 @@
 //! The runner's settings and the pieces of a round that are not the
-//! decision: retries, recording an outcome in the record, the
+//! decision: retries, recording an outcome in the loop's store, the
 //! consumers' queue depth, reset. The round itself is
 //! `supervisor/round.rs`; what starts when is `supervisor/tick.rs`.
 //!
@@ -71,10 +71,10 @@ pub struct Runner {
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
     /// Extra environment applied to every subprocess step — settings
-    /// for the whole busy period like `PATH` (with the binary dir
-    /// prepended) and the pinned `DATALIB_DAG_NOW`. A step's own `env:`
-    /// entries win on key collision. [`Runner::run_forever`] replaces it
-    /// as each period opens.
+    /// for the whole run like `PATH` (with the binary dir prepended) and
+    /// the pinned `DATALIB_DAG_NOW`. A step's own `env:` entries win on
+    /// key collision. [`Runner::run_forever`] replaces it as each run
+    /// opens.
     child_env: std::sync::RwLock<Arc<BTreeMap<String, String>>>,
     /// Flipped to `true` to stop the round: running steps get SIGINT on
     /// their process group and nothing new starts.
@@ -82,7 +82,7 @@ pub struct Runner {
     /// How long a stopped subprocess step has before it is killed.
     pub stop_grace: std::time::Duration,
     /// Where the loop re-reads its graph while it runs. `None` keeps the
-    /// graph it was started with for the whole busy period.
+    /// graph it was started with for the whole run.
     pub reload: Option<Arc<dyn crate::supervisor::reload::GraphSource>>,
     /// How long the loop hears no announcement before it looks at its
     /// store anyway (`supervisor::announce`).
@@ -152,42 +152,6 @@ impl Runner {
 }
 
 impl Runner {
-    /// Empty what the named steps wrote and forget that they ever ran, so
-    /// the next run does their work from the start. A step whose program
-    /// takes `--reset` is invoked once with it appended, and what that
-    /// empties is the step's to say; any other has its tree deleted
-    /// (`step_protocol.md` § Verbs).
-    /// Nothing else runs: the caller holds the runner lock, which is what
-    /// makes emptying a store safe.
-    pub async fn reset(&self, graph: &Graph, steps: &[StepId]) -> Result<()> {
-        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let result = self.reset_each(graph, steps, &store).await;
-        store.close().await;
-        result
-    }
-
-    async fn reset_each(
-        &self,
-        graph: &Graph,
-        steps: &[StepId],
-        store: &crate::supervisor::store::Store,
-    ) -> Result<()> {
-        for step in steps {
-            let (_, version) = self.reset_one(graph, step).await?;
-            let saved = store.load_record().await.context("load the record")?;
-            let mut state = saved.clone();
-            state.steps.insert(
-                step.clone(),
-                crate::supervisor::wipe::emptied(saved.steps.get(step), version),
-            );
-            store
-                .save_record(&saved, &state)
-                .await
-                .context("save the record")?;
-        }
-        Ok(())
-    }
-
     /// `step` reset: invoked once with `--reset` when its program takes
     /// the verb, else its tree deleted. Its index, and the version its
     /// emptied tree is at. Emptied, not gone: what reads it sees a new
@@ -222,89 +186,6 @@ impl Runner {
         Ok((i, version))
     }
 
-    /// Every step a pass will ask, written to the run's record as pending
-    /// before the first is asked, so a reader can say how many are left.
-    /// A step the pass never reaches leaves no row when the run ends.
-    pub fn plan(&self, graph: &Graph, steps: &[StepId]) {
-        let planned = steps
-            .iter()
-            .filter_map(|s| graph.by_id.get(s))
-            .map(|&i| crate::events::PlannedStep::of(&graph.steps[i]))
-            .collect();
-        self.sink.emit(&Event::RunPlan { steps: planned });
-    }
-
-    /// Ask each named step to make what it wrote usable by its program,
-    /// fetching nothing: each is invoked once with `--prepare` appended
-    /// (`step_protocol.md` § Verbs). What a step can bring to its
-    /// program's shape in place it does, and reports its new version; what
-    /// it cannot it answers `needs_rerun`, which the record keeps until the
-    /// step next succeeds; what a newer program wrote it refuses
-    /// ([`FailureKind::Incompatible`]), and the step is turned off, by
-    /// [`REFUSED_PREPARE`], until a later prepare pass finds it willing.
-    /// One that fails otherwise is reported and the rest go on.
-    pub async fn prepare(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Prepared>> {
-        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let turned_off = store.turned_off().await?;
-        let mut out = Vec::new();
-        for step in steps {
-            let answer = match self.invoke_once(graph, step, Verb::Prepare).await {
-                Ok((i, outcome)) => match record_answer(graph, i, &outcome, &store).await {
-                    Ok(()) => Ok(outcome.needs_rerun),
-                    Err(e) => Err(PrepareError::Failed(format!("{e:#}"))),
-                },
-                Err(InvokeError::Refused(why)) => {
-                    store
-                        .turn_off(step, &format!("{REFUSED_PREPARE}: {why}"))
-                        .await?;
-                    Err(PrepareError::Refused(why))
-                }
-                Err(InvokeError::Failed(e) | InvokeError::NotStarted(e)) => {
-                    Err(PrepareError::Failed(e))
-                }
-            };
-            let refused_before = turned_off
-                .get(step)
-                .is_some_and(|by| by.starts_with(REFUSED_PREPARE));
-            if refused_before && !matches!(answer, Err(PrepareError::Refused(_))) {
-                store.turn_on(step).await?;
-            }
-            out.push(Prepared {
-                step: step.clone(),
-                answer,
-            });
-        }
-        store.close().await;
-        Ok(out)
-    }
-
-    /// Ask every step that takes the verbs to give back disk its store
-    /// holds, running nothing else: each is invoked once with `how`'s flag
-    /// appended (`step_protocol.md` § Compact and collect). A step that
-    /// reports a version is recorded at it, which for a fold or a
-    /// collection that kept the content is the version it had. One that
-    /// fails is reported and the rest go on. The caller holds the runner
-    /// lock: nothing may read a store while it is rewritten.
-    pub async fn shrink(&self, graph: &Graph, how: Shrink) -> Result<Vec<Shrunk>> {
-        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let mut out = Vec::new();
-        let steps = crate::supervisor::wipe::compact_targets(graph, &[], how);
-        for step in steps.iter().map(|&i| &graph.steps[i].id) {
-            let answer = match self.invoke_once(graph, step, how.verb()).await {
-                Ok((i, outcome)) => record_answer(graph, i, &outcome, &store)
-                    .await
-                    .map_err(|e| format!("{e:#}")),
-                Err(e) => Err(e.to_string()),
-            };
-            out.push(Shrunk {
-                step: step.clone(),
-                answer,
-            });
-        }
-        store.close().await;
-        Ok(out)
-    }
-
     /// `step` invoked once with `how`'s flag: the version it reports, and
     /// its store's size before and after when it had one.
     pub(crate) async fn shrink_one(
@@ -322,7 +203,8 @@ impl Runner {
         Ok((version, outcome.store_bytes))
     }
 
-    /// What `step` answers `verb` with, outside any run: its warnings when
+    /// What `step` reports when run with `verb` appended, outside any run:
+    /// its warnings when
     /// it succeeds, its error when it does not, and `Ok(Err)` when its
     /// process could not be started at all.
     pub(crate) async fn invoke_verb(
@@ -453,30 +335,13 @@ impl std::fmt::Display for InvokeError {
 /// back on.
 pub const REFUSED_PREPARE: &str = "the runner, because the step refused --prepare";
 
-/// What a step answered a verb with, in the record. A step that reports a
-/// new version is recorded at it, so what reads it is stale; one that
-/// answers `needs_rerun` is marked so, and the tick treats it as due until
-/// it next succeeds. Everything else the record says of the step stands.
-async fn record_answer(
-    graph: &Graph,
-    i: usize,
-    outcome: &StepOutcome,
-    store: &crate::supervisor::store::Store,
-) -> Result<()> {
-    let saved = store.load_record().await.context("load the record")?;
-    let mut state = saved.clone();
-    apply_answer(graph, i, outcome, &mut state)?;
-    if state == saved {
-        return Ok(());
-    }
-    store
-        .save_record(&saved, &state)
-        .await
-        .context("save the record")
-}
-
-/// [`record_answer`] on a record the caller holds: the loop's own.
-pub(crate) fn apply_answer(
+/// Applies what a step reported when run with a verb appended to the
+/// loop's in-memory copy of `system/supervisor.sqlite`. A step that
+/// reports a new version is recorded at it, so what reads it is stale; one
+/// that reports `needs_rerun` is marked so, and the tick treats it as due
+/// until it next succeeds. Everything else the store says of the step
+/// stands.
+pub(crate) fn apply_verb_outcome(
     graph: &Graph,
     i: usize,
     outcome: &StepOutcome,
@@ -491,27 +356,13 @@ pub(crate) fn apply_answer(
     Ok(())
 }
 
-/// How one step answered `--prepare`: whether it needs to run again, or
-/// why it could not answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Prepared {
-    pub step: StepId,
-    pub answer: std::result::Result<bool, PrepareError>,
-}
-
 /// Why a step's `--prepare` did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareError {
-    /// What it wrote is a newer program's; it stays blocked.
+    /// What it wrote is a newer program's; the step is turned off until a
+    /// later `--prepare` does not refuse.
     Refused(String),
     Failed(String),
-}
-
-/// How one step answered `--compact` or `--collect`, or why it could not.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Shrunk {
-    pub step: StepId,
-    pub answer: std::result::Result<(), String>,
 }
 
 /// Terminal state of one step in one run.
@@ -563,7 +414,8 @@ pub struct StepReport {
     /// Invocations this run (0 when skipped/blocked).
     pub attempts: u32,
     pub error: Option<String>,
-    /// Passes that failed and were run again; `status` is the last one's.
+    /// Processes that failed and were started again; `status` is the last
+    /// one's.
     pub failed_passes: u32,
     /// (artifact path, version now, changed this run)
     pub outputs: Vec<(String, String, bool)>,
@@ -667,7 +519,8 @@ pub(crate) fn now_stamp() -> String {
     datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_micros()
 }
 
-/// Open a step's run record when the scheduler dispatches it, so a
+/// Set a step's `last_run` to a new, unfinished one when the scheduler
+/// dispatches it, so a
 /// reader can tell "running" from "not reached yet".
 pub(crate) fn mark_running(state: &mut Record, id: &StepId, stamp: &str) {
     if let Some(run) = state.current_run.as_mut() {
@@ -756,24 +609,24 @@ pub(crate) fn fresh_version(fingerprint: &str, invocation: &str) -> String {
 /// the runner from what producers say, so no store is opened to measure
 /// it.
 #[derive(Default)]
-pub(crate) struct QueueLedger {
+pub(crate) struct ConsumerQueues {
     /// Per consumer id, per producer id: seals not yet consumed.
     pending: BTreeMap<String, BTreeMap<String, Vec<Seal>>>,
     /// Per consumer, per producer: the version last put on the queue,
-    /// consumed or not. A producer re-announces a seal until its
-    /// consumer has run (a checkpoint arriving mid-pass is dropped by
-    /// design), and the repeat must not count its rows twice.
+    /// consumed or not. A producer reports a seal again until its
+    /// consumer has run (a checkpoint arriving while the consumer runs is
+    /// dropped by design), and the repeat must not count its rows twice.
     last_seen: BTreeMap<String, BTreeMap<String, String>>,
     /// Per consumer, per producer: the rows taken off the queue so far —
     /// the `dequeued_total{from=<producer>}` running total.
     taken: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
-/// One seal as the ledger keeps it: the qualified version, and the rows
+/// One seal as [`ConsumerQueues`] keeps it: the qualified version, and the rows
 /// it added if the producer counted.
 type Seal = (String, Option<u64>);
 
-impl QueueLedger {
+impl ConsumerQueues {
     pub(crate) fn sealed(
         &mut self,
         graph: &Graph,
@@ -800,10 +653,10 @@ impl QueueLedger {
         }
     }
 
-    /// A pass of `consumer` finished having read its inputs as of
+    /// A process of `consumer` finished having read its inputs as of
     /// `consumed`: every seal up to the version it read is off the queue.
-    /// A version not among the seals is one recorded before this ledger
-    /// began (a previous run's), or a producer that finished without a
+    /// A version not among the seals is one recorded before this
+    /// `ConsumerQueues` began (a previous run's), or a producer that finished without a
     /// row count; either way, if the producer is done there is nothing
     /// more to come. A producer the graph no longer has is left alone.
     pub(crate) fn consumed(
@@ -1160,17 +1013,17 @@ mod tests {
     // ── streaming dispatch ────────────────────────────────────────────
     //
     // Synthetic steps only: a "producer" that checkpoints on demand and a
-    // "consumer" that counts its passes. No store, no provider, no
+    // "consumer" that counts its invocations. No store, no provider, no
     // subprocess — the scheduler's rules are what is under test, and
     // anything real would make a failure ambiguous between the two.
 
-    /// A producer that seals `checkpoints` times, re-announcing each seal
-    /// until a consumer pass has actually observed it.
+    /// A producer that seals `checkpoints` times, sending each checkpoint
+    /// again until an invocation of the consumer has actually observed it.
     ///
-    /// The re-announcing is not test scaffolding — it is what a real
-    /// producer does, and it is required by the design: a checkpoint that
-    /// arrives while the consumer is already running is **dropped**, so a
-    /// producer that announced once and waited would wait forever. Modeling
+    /// The repeating is not test scaffolding — it is what a real producer
+    /// does, and it is required by the design: a checkpoint that arrives
+    /// while the consumer is already running is **dropped**, so a
+    /// producer that sent it once and waited would wait forever. Modeling
     /// that is what makes these assertions deterministic instead of timing
     /// dependent.
     fn streaming_producer(name: &str, batches: u32, passes: Arc<AtomicU32>) -> StepSpec {
@@ -1203,7 +1056,8 @@ mod tests {
         .streams_output()
     }
 
-    /// Counts its passes; that count is the only thing the tests assert on.
+    /// Counts its invocations; that count is the only thing the tests
+    /// assert on.
     fn counting_consumer(id: &str, input: &str, passes: Arc<AtomicU32>) -> StepSpec {
         StepSpec::new(
             id.to_string(),
@@ -1222,7 +1076,7 @@ mod tests {
     }
 
     // Reads whatever `slack/raw` has written and reports a version derived
-    // from it, so an early pass over a new batch is new output.
+    // from it, so an early invocation over a new batch is new output.
     fn copying_middle() -> StepSpec {
         StepSpec::new(
             "slack/rendered",
@@ -1297,8 +1151,8 @@ mod tests {
     }
 
     /// The S of USE, from what the producer says: each seal's rows go on
-    /// the consumer's queue, and each pass the consumer completes takes
-    /// off everything up to the version it read. The sequence is the
+    /// the consumer's queue, and each invocation the consumer completes
+    /// takes off everything up to the version it read. The sequence is the
     /// assertion — it has to rise on a seal and fall to zero once the
     /// consumer has caught up, and end at zero when the run does.
     #[tokio::test]
@@ -1373,8 +1227,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // A seal re-announced while the consumer is mid-pass adds the
-        // same version again only as a metric refresh, so the exact
+        // A checkpoint sent again while the consumer runs adds the same
+        // version again only as a metric refresh, so the exact
         // sequence has repeats; what must hold is the shape.
         assert!(!queued.is_empty(), "no queued metric was published");
         assert!(
@@ -1397,7 +1251,7 @@ mod tests {
     }
 
     /// The point of the whole feature: a consumer runs *before* its
-    /// producer has finished, once per checkpoint, plus a final pass.
+    /// producer has finished, once per checkpoint, plus a last invocation.
     #[tokio::test]
     async fn a_checkpoint_dispatches_the_consumer_before_the_producer_finishes() {
         let root = tempfile::tempdir().unwrap();
@@ -1418,8 +1272,8 @@ mod tests {
         let report = r.run(&graph).await.unwrap();
 
         assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
-        // Three checkpoints each dispatched a pass. The fourth is the
-        // final one, which runs because the producer's real output
+        // Three checkpoints each dispatched an invocation. The fourth is
+        // the last one, which runs because the producer's real output
         // version ("final") differs from the last checkpoint's.
         assert_eq!(
             passes.load(Ordering::SeqCst),
@@ -1436,16 +1290,17 @@ mod tests {
         assert_eq!(checkpoints, 3, "every checkpoint reaches the event stream");
     }
 
-    /// A chain of three. The middle step's early pass writes new output,
-    /// and that output has to reach the last step while the first is
-    /// still running: an early pass that completes is a seal for the next
-    /// hop, exactly as a checkpoint is. Without that a chain streams one
-    /// hop only -- the first consumer runs early, but nothing downstream of
-    /// it moves until it goes terminal, which is after the producer has
-    /// finished. For `ingest -> render -> unified_grid_and_search_index` that meant no row
-    /// reached the grid until the download was over.
+    /// A chain of three. The middle step's early invocation writes new
+    /// output, and that output has to reach the last step while the first
+    /// is still running: an early invocation that completes is a seal for
+    /// the next hop, exactly as a checkpoint is. Without that a chain
+    /// streams one hop only -- the first consumer runs early, but nothing
+    /// downstream of it moves until it goes terminal, which is after the
+    /// producer has finished. For `ingest -> render ->
+    /// unified_grid_and_search_index` that means no row reaches the grid
+    /// until the download is over.
     #[tokio::test]
-    async fn an_early_pass_that_produced_output_dispatches_its_own_consumers() {
+    async fn an_early_invocation_that_produced_output_dispatches_its_own_consumers() {
         let root = tempfile::tempdir().unwrap();
         let sink_passes = Arc::new(AtomicU32::new(0));
         // How many times the sink had run by the time the producer
@@ -1454,8 +1309,8 @@ mod tests {
 
         // Two batches. After sealing each, wait (bounded, so a regression
         // fails rather than hangs) for the sink to have caught up with it.
-        // Each re-announcement is a burst, so a seal is waiting however
-        // quick the loop is: a loop that serves seals before joins starves
+        // Each repeated checkpoint is a burst, so a seal is waiting
+        // however quick the loop is: a loop that serves seals before joins starves
         // here on every machine, not only on a slow disk.
         let producer = {
             let sink_passes = sink_passes.clone();
@@ -1518,10 +1373,11 @@ mod tests {
     }
 
     /// A chain of three, the last step two hops from a producer still
-    /// running. Its early pass must end as a pass, not a finish: the middle
-    /// step is waiting on the next seal, so nothing the last one reads has
-    /// settled. Finishing it showed the index Succeeded under a render and
-    /// a download that both still read Running.
+    /// running. Its early invocation must end with a `PassEnd`, not a
+    /// `StepFinish`: the middle step is waiting on the next seal, so a
+    /// step upstream of the last one is still running or waiting.
+    /// Finishing it would show the index Succeeded under a render and a
+    /// download that both still read Running.
     #[tokio::test]
     async fn the_end_of_a_chain_stays_running_while_its_first_step_runs() {
         let root = tempfile::tempdir().unwrap();
@@ -1613,8 +1469,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
         // Same producer, capability removed. One batch only: with no early
-        // dispatch its re-announce loop would never see a pass, so the
-        // producer must not depend on one.
+        // dispatch its loop that sends each checkpoint again would never
+        // see an invocation, so the producer must not depend on one.
         let mut producer = StepSpec::new(
             "slack/raw",
             StepRun::in_process(move |ctx: StepCtx| async move {
@@ -1668,9 +1524,10 @@ mod tests {
         );
     }
 
-    /// At most one instance of a step in flight. `unified_grid_and_search_index` is a fan-in
-    /// that every source pokes, so two producers checkpointing at once is
-    /// the ordinary case — and a second dispatch would put two writers on
+    /// At most one instance of a step in flight.
+    /// `unified_grid_and_search_index` is a fan-in that every source's
+    /// seals start, so two producers checkpointing at once is the ordinary
+    /// case — and a second dispatch would put two writers on
     /// one tree, which single-writer-per-file forbids everywhere here.
     #[tokio::test]
     async fn two_producers_checkpointing_never_run_the_consumer_twice_at_once() {
@@ -1742,7 +1599,7 @@ mod tests {
             "two instances of one step ran at once; single-writer-per-file forbids it"
         );
         // Checkpoints arriving while it runs are dropped, not queued, so
-        // the pass count stays far below the 50 checkpoints emitted.
+        // the invocation count stays far below the 50 checkpoints emitted.
         let n = passes.load(Ordering::SeqCst);
         assert!(
             n < 50,
@@ -1750,20 +1607,22 @@ mod tests {
         );
     }
 
-    /// A seal that lands while the fan-in is mid-pass is not queued -- a
-    /// second instance would be a second writer on one tree -- but it is
-    /// not forgotten either: one more pass follows as soon as the current
-    /// one lands, and reads what the seal announced. Without that, rows
-    /// sealed by one source while the index was busy with another sat
-    /// there until the next seal from anyone, or the end of the run.
+    /// A seal that arrives while the fan-in runs does not start a second
+    /// instance -- that would be a second writer on one tree -- but it is
+    /// not dropped either: one more invocation starts as soon as the
+    /// current one ends, and reads what the seal reported. Without that,
+    /// rows sealed by one source while the index was busy with another
+    /// would sit there until the next seal from anyone, or the end of the
+    /// run.
     ///
     /// Two producers, forced to interleave: `email` seals only once the
-    /// fan-in is inside its pass over `slack`, and the pass holds until
-    /// that seal has been sent. Both producers then stay alive until the
-    /// fan-in has run again -- bounded, so a regression fails rather than
-    /// hangs -- and record how many passes it had made when they finished.
+    /// fan-in is inside its invocation over `slack`, and that invocation
+    /// waits until the seal has been sent. Both producers then stay alive
+    /// until the fan-in has run again -- bounded, so a regression fails
+    /// rather than hangs -- and record how many invocations it had made
+    /// when they finished.
     #[tokio::test]
-    async fn a_seal_arriving_mid_pass_gets_one_more_pass_after_it() {
+    async fn a_seal_arriving_mid_invocation_gets_one_more_invocation_after_it() {
         use std::sync::atomic::AtomicBool;
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
@@ -1771,10 +1630,11 @@ mod tests {
         let max_seen = Arc::new(AtomicU32::new(0));
         let in_pass = Arc::new(AtomicBool::new(false));
         let email_sealed = Arc::new(AtomicBool::new(false));
-        // The fewest passes any producer had seen when it finished. The
-        // minimum, because a producer giving up its wait and finishing is
-        // itself a seal that starts a pass -- the *other* producer would
-        // then see two, and the maximum would pass for the wrong reason.
+        // The fewest invocations any producer had seen when it finished.
+        // The minimum, because a producer giving up its wait and finishing
+        // is itself a seal that starts an invocation -- the *other*
+        // producer would then see two, and the maximum would pass for the
+        // wrong reason.
         let passes_at_producers_end = Arc::new(AtomicU32::new(u32::MAX));
 
         async fn until(flag: impl Fn() -> bool) {
@@ -1843,14 +1703,15 @@ mod tests {
                     async move {
                         let now = concurrent.fetch_add(1, Ordering::SeqCst) + 1;
                         max_seen.fetch_max(now, Ordering::SeqCst);
-                        // The first pass holds until email has sealed into
-                        // it, so that seal is guaranteed to land mid-pass.
+                        // The first invocation waits until email has
+                        // sealed, so that seal is guaranteed to arrive while
+                        // it runs.
                         if passes.load(Ordering::SeqCst) == 0 {
                             in_pass.store(true, Ordering::SeqCst);
                             until(|| email_sealed.load(Ordering::SeqCst)).await;
                             // The scheduler reads the seal off a channel;
                             // give it a moment to have done so before this
-                            // pass lands.
+                            // invocation ends.
                             tokio::time::sleep(Duration::from_millis(20)).await;
                         }
                         let dir = ctx.path_str(&ctx.step_id);
@@ -1901,15 +1762,16 @@ mod tests {
         );
     }
 
-    /// Many seals landing while the fan-in is mid-pass collapse into
-    /// *one* follow-up pass, and that pass reads all of them. Each
-    /// producer seals once to get the fan-in started, then five more
-    /// times while it holds that first pass; when it lands, exactly one
-    /// more pass runs before the producers finish -- not one per seal,
+    /// Many seals arriving while the fan-in runs collapse into *one*
+    /// follow-up invocation, and that invocation reads all of them. Each
+    /// producer seals once to get the fan-in started, then five more times
+    /// while that first invocation waits; when it ends, exactly one more
+    /// invocation runs before the producers finish -- not one per seal,
     /// and not zero -- and the queue the runner keeps per producer goes
-    /// from everything sealed mid-pass straight to empty.
+    /// from everything sealed during the first invocation straight to
+    /// empty.
     #[tokio::test]
-    async fn seals_landing_mid_pass_collapse_into_one_follow_up_pass() {
+    async fn seals_arriving_mid_invocation_collapse_into_one_follow_up_invocation() {
         use std::sync::atomic::AtomicBool;
         const SEALS_EACH: u32 = 5;
         const ROWS_EACH: u64 = 10;
@@ -1919,13 +1781,13 @@ mod tests {
         let max_seen = Arc::new(AtomicU32::new(0));
         let in_pass = Arc::new(AtomicBool::new(false));
         let sealed = Arc::new(AtomicU32::new(0));
-        // Each producer's reading of the pass count as it finished, after
-        // giving a wrongly-owed third pass time to show up.
+        // Each producer's reading of the invocation count as it finished,
+        // after giving a wrongly started third invocation time to show up.
         let slack_saw = Arc::new(AtomicU32::new(0));
         let email_saw = Arc::new(AtomicU32::new(0));
         // Neither producer finishes until both have read the count: a
         // finishing producer publishes a new version, which rightly earns
-        // a third pass, and a sibling still reading would count it.
+        // a third invocation, and a sibling still reading would count it.
         let read = Arc::new(AtomicU32::new(0));
 
         async fn until(flag: impl Fn() -> bool) {
@@ -1956,8 +1818,8 @@ mod tests {
                         let dir = ctx.path_str(&ctx.step_id);
                         std::fs::create_dir_all(&dir).unwrap();
                         std::fs::write(dir.join("data.md"), "rows").unwrap();
-                        // One seal to start the fan-in; every other lands
-                        // while it is busy.
+                        // One seal to start the fan-in; every other
+                        // arrives while it is busy.
                         ctx.checkpoint_rows("v0", ROWS_EACH);
                         until(|| in_pass.load(Ordering::SeqCst)).await;
                         for k in 1..=SEALS_EACH {
@@ -1965,8 +1827,9 @@ mod tests {
                             sealed.fetch_add(1, Ordering::SeqCst);
                         }
                         until(|| passes.load(Ordering::SeqCst) >= 2).await;
-                        // A pass wrongly owed per seal would be dispatched
-                        // the moment the follow-up lands; give it room.
+                        // An invocation wrongly started per seal would be
+                        // dispatched the moment the follow-up ends; give it
+                        // room.
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         saw.store(passes.load(Ordering::SeqCst), Ordering::SeqCst);
                         read.fetch_add(1, Ordering::SeqCst);
@@ -2010,7 +1873,7 @@ mod tests {
                             in_pass.store(true, Ordering::SeqCst);
                             until(|| sealed.load(Ordering::SeqCst) >= 2 * SEALS_EACH).await;
                             // The seals cross a channel; let the scheduler
-                            // read every one before this pass lands.
+                            // read every one before this invocation ends.
                             tokio::time::sleep(Duration::from_millis(20)).await;
                         }
                         let dir = ctx.path_str(&ctx.step_id);
@@ -2055,11 +1918,11 @@ mod tests {
         }
 
         // The queue the runner keeps per producer: every seal piles on
-        // while the fan-in is busy, and the one follow-up pass takes the
-        // whole pile off in a single step. (The first pass landing may
-        // take its own starting seal off first, for the producer whose
-        // seal dispatched it -- so the pile just before the drain is
-        // at least the mid-pass seals, not exactly all of them.)
+        // while the fan-in is busy, and the one follow-up invocation takes
+        // the whole pile off in a single step. (The first invocation, as it
+        // ends, may take its own starting seal off first, for the producer
+        // whose seal dispatched it -- so the pile just before the drain is
+        // at least the seals sent while it ran, not exactly all of them.)
         let events = rec.0.lock().unwrap();
         for producer in ["slack/rendered_md", "email/rendered_md"] {
             let mut queued: Vec<i64> = events
@@ -2128,12 +1991,13 @@ mod tests {
         }
     }
 
-    /// A streaming pass must not wait behind `parallelism`. With every
+    /// A streaming consumer's invocation must not wait behind
+    /// `parallelism`. With every
     /// ordinary slot occupied by producers, a consumer that competed for
     /// those slots would never run — losing the whole point of the
     /// feature in exactly the case it exists for.
     #[tokio::test]
-    async fn a_streaming_pass_runs_even_when_every_ordinary_slot_is_busy() {
+    async fn a_streaming_consumer_runs_even_when_every_ordinary_slot_is_busy() {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
 
@@ -2153,8 +2017,8 @@ mod tests {
                         let dir = ctx.path_str(&ctx.step_id);
                         std::fs::create_dir_all(&dir).unwrap();
                         std::fs::write(dir.join("data.txt"), "x").unwrap();
-                        // Hold the ordinary slot until the streaming pass
-                        // has actually run. If streaming competed for these
+                        // Hold the ordinary slot until the streaming
+                        // consumer has actually run. If streaming competed for these
                         // slots, this would never return.
                         while ran.load(Ordering::SeqCst) == 0 {
                             tokio::time::sleep(Duration::from_millis(2)).await;
@@ -2277,7 +2141,7 @@ mod tests {
             "two instances of the fan-in ran at once; it writes one store, \
              and single-writer-per-file forbids that"
         );
-        // It has to actually run: the final pass sees "final", which no
+        // It has to actually run: the last invocation sees "final", which no
         // checkpoint reported, so the index is never left stale.
         assert!(
             passes.load(Ordering::SeqCst) >= 1,
@@ -2289,9 +2153,10 @@ mod tests {
             .find(|s| s.id == "unified_grid_and_search_index/grid")
             .unwrap();
         assert!(idx.status.is_ok(), "{:?}", idx.status);
-        // And the pass that followed the first one read *both* finals:
+        // And the invocation that followed the first one read *both* finals:
         // the second producer's finish arrived while the fan-in was busy
-        // with the first's, and held-back is not the same as dropped.
+        // with the first's, and not starting at once is not the same as
+        // dropping it.
         let st = crate::supervisor::record::recorded(root.path()).await;
         let read = &st.steps["unified_grid_and_search_index/grid"].reads;
         for producer in ["slack/rendered_md", "email/rendered_md"] {
@@ -2352,8 +2217,9 @@ mod tests {
                         let dir = ctx.path_str(&ctx.step_id);
                         std::fs::create_dir_all(&dir).unwrap();
                         std::fs::write(dir.join("data.md"), "rows").unwrap();
-                        // Stay running until the fan-in has had a pass, so
-                        // the assertion does not depend on sleep lengths.
+                        // Stay running until the fan-in has had an
+                        // invocation, so the assertion does not depend on
+                        // sleep lengths.
                         for _ in 0..400 {
                             if passes.load(Ordering::SeqCst) > 0 {
                                 break;
@@ -2527,9 +2393,9 @@ mod tests {
     }
 
     /// A step with nothing to do says so once nothing above it can still
-    /// change, not when the sync ends. A skipped step's row settled only
-    /// when the request closed, so it read Running behind the slowest
-    /// source in the sync.
+    /// change, not when the sync ends. Guards against a skipped step's row
+    /// getting its final state only when the request closed, so it read
+    /// Running behind the slowest source in the sync.
     #[tokio::test]
     async fn a_skipped_step_reports_before_a_slower_source_finishes() {
         let root = tempfile::tempdir().unwrap();
@@ -2604,10 +2470,10 @@ mod tests {
     /// A second run where nothing moved must not run the fan-in at all.
     ///
     /// This is the steady-state case, and it is the one streaming can
-    /// quietly ruin: if an early pass leaves the consumer's recorded
+    /// quietly ruin: if an early invocation leaves the consumer's recorded
     /// `reads` incomplete, the next run sees the missing entries as
     /// movement and re-runs the consumer once per producer — every run,
-    /// forever, each pass reading nothing.
+    /// forever, each invocation reading nothing.
     #[tokio::test]
     async fn a_second_run_with_nothing_moved_does_not_run_the_fan_in() {
         let root = tempfile::tempdir().unwrap();
@@ -2676,24 +2542,25 @@ mod tests {
 
     /// A step may only claim to have consumed what it could actually see.
     ///
-    /// This is the shape that lost a whole source. An early pass of the
-    /// consumer starts, and a producer it has not read yet *finishes while
-    /// that pass is running*. If the pass records its `reads` from
-    /// whatever is current when it lands, it claims that producer's final
-    /// version — a version it never read. The final pass then finds nothing
-    /// changed, is skipped up-to-date, and that producer's documents are
-    /// simply absent from the index.
+    /// This is the shape that lost a whole source. An early invocation of
+    /// the consumer starts, and a producer it has not read yet *finishes
+    /// while that invocation is running*. If the invocation records its
+    /// `reads` from whatever is current when it ends, it claims that
+    /// producer's final version — a version it never read. The last
+    /// invocation then finds nothing changed, is skipped up-to-date, and
+    /// that producer's documents are simply absent from the index.
     ///
     /// The fixture pipeline caught it two runs in six. This one is
     /// deterministic: the interleaving is forced, not raced.
     #[tokio::test]
-    async fn a_pass_may_not_claim_a_producer_that_finished_after_it_started() {
+    async fn an_invocation_may_not_claim_a_producer_that_finished_after_it_started() {
         let root = tempfile::tempdir().unwrap();
-        // Set when the consumer's first pass begins; `late` waits for it, so
-        // the consumer is guaranteed to be mid-pass when `late` finishes.
+        // Set when the consumer's first invocation begins; `late` waits for
+        // it, so the consumer is guaranteed to be running when `late`
+        // finishes.
         let consumer_running = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let late_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        // Did `late`'s output exist on each pass? The last entry is what
+        // Did `late`'s output exist on each invocation? The last entry is what
         // matters: by the end, the consumer must have seen it.
         let saw_late = Arc::new(Mutex::new(Vec::<bool>::new()));
 
@@ -2726,8 +2593,9 @@ mod tests {
             .streams_output()
         };
 
-        // Writes nothing until the consumer is already mid-pass, then
-        // finishes. Its output therefore cannot have been read by that pass.
+        // Writes nothing until the consumer is already running, then
+        // finishes. Its output therefore cannot have been read by that
+        // invocation.
         let late = {
             let (consumer_running, late_done) = (consumer_running.clone(), late_done.clone());
             StepSpec::new(
@@ -2773,13 +2641,14 @@ mod tests {
                     );
                     async move {
                         // Read *first*, before `late` is unblocked: that is
-                        // the whole point. On the first pass this sees
-                        // nothing from `late`, which is the truth the pass
-                        // must not then contradict.
+                        // the whole point. On the first invocation this
+                        // sees nothing from `late`, which is the truth the
+                        // invocation must not then contradict.
                         let seen = ctx.path_str("late/rendered_md").join("data.md").is_file();
                         saw_late.lock().unwrap().push(seen);
                         // Now let `late` run, and stay alive until it has
-                        // finished, so this pass spans its completion. That
+                        // finished, so this invocation spans its
+                        // completion. That
                         // is what creates the false claim.
                         consumer_running.store(true, std::sync::atomic::Ordering::SeqCst);
                         for _ in 0..500 {
@@ -2816,12 +2685,11 @@ mod tests {
         );
     }
 
-    /// The pleasing half of the design: an early pass records its
-    /// `reads` the ordinary way, so the final pass meets the
-    /// existing staleness predicate and is *skipped* when nothing moved
-    /// after the last checkpoint. Streaming is the same rules, earlier.
+    /// An early invocation records its `reads` the ordinary way, so the
+    /// last invocation meets the existing staleness predicate and is
+    /// *skipped* when nothing moved after the last checkpoint. Streaming is the same rules, earlier.
     #[tokio::test]
-    async fn the_final_pass_is_skipped_when_the_last_checkpoint_saw_everything() {
+    async fn the_final_invocation_is_skipped_when_the_last_checkpoint_saw_everything() {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
 
@@ -2939,11 +2807,12 @@ mod tests {
         );
     }
 
-    /// The run record is the only thing that makes a run visible to
-    /// anyone who did not spawn it — a terminal `datalib-pipeline` and the
-    /// UI's worker write the same file, so the UI can show either. Its
-    /// id is the one the caller chose, so the run store (keyed by the
-    /// same id) and the record describe the same run.
+    /// The run's rows in the loop's store (`system/supervisor.sqlite`) are
+    /// the only thing that makes a run visible to anyone who did not spawn
+    /// it — a terminal `datalib-pipeline` and the UI's worker write the
+    /// same file, so the UI can show either. Its id is the one the caller
+    /// chose, so the run store (keyed by the same id) and the loop's store
+    /// describe the same run.
     #[tokio::test]
     async fn the_run_id_is_the_one_handed_to_the_steps() {
         let fx = Fixture::new();
@@ -3016,8 +2885,8 @@ mod tests {
         }
 
         // Second run: everything downstream is up to date, and a skip is
-        // a terminal state like any other — the record says so rather
-        // than leaving last run's answer in place.
+        // a terminal state like any other — the loop's store says so
+        // rather than leaving last run's state in place.
         assert!(r.run(&g).await.unwrap().all_ok());
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let run = st.current_run.expect("second run recorded");
@@ -3035,8 +2904,8 @@ mod tests {
         );
     }
 
-    /// A failure has to be legible without reading the log: the record
-    /// carries the status, the attempt count and the message.
+    /// A failure has to be legible without reading the log: the step's
+    /// `last_run` carries the status, the attempt count and the message.
     #[tokio::test]
     async fn a_failed_step_records_its_error_and_blocks_its_dependent() {
         let fx = Fixture::new();
@@ -3076,8 +2945,8 @@ mod tests {
         assert!(failed.error.as_deref().unwrap().contains("bad json"));
         assert_eq!(failed.attempts, 1, "a Data failure is not retried");
 
-        // A step that never ran still gets a record — "blocked, and on
-        // what" is the answer the table needs.
+        // A step that never ran still gets a `last_run` — "blocked, and on
+        // what" is what the table needs.
         let blocked = st.steps["unified_grid_and_search_index/grid"]
             .last_run
             .as_ref()
@@ -3086,7 +2955,7 @@ mod tests {
         assert!(blocked.finished_at.is_some());
     }
 
-    /// A step that answers a cancel is recorded as stopped, not failed:
+    /// A step that reports `cancelled` is recorded as stopped, not failed:
     /// the person asked for it. Its dependents still wait, and the next
     /// run takes the step again — a stop is not "done".
     #[tokio::test]
@@ -3321,7 +3190,7 @@ mod tests {
         let run = tokio::spawn(async move { r.run(&g).await });
 
         started.notified().await;
-        // The step is parked inside its body. Whatever the file says
+        // The step is waiting inside its body. Whatever the file says
         // now is what a poller would see for as long as the step runs.
         let seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
@@ -3426,11 +3295,11 @@ mod tests {
 
     /// Regression: subset-sync on a *fresh* data root. Out-of-scope
     /// steps must stay untouched even when nothing has ever run here.
-    /// A step with no recorded successful run counts as dirty, and that
-    /// check used to run ahead of the subset-sync skip, so an unselected
-    /// chain's render was invoked with no raw store underneath it — it
-    /// failed with `Data`, and the failure poisoned the fan-in, so the
-    /// chain the user *did* select never reached the index.
+    /// A step with no recorded successful run counts as dirty; if that
+    /// check runs ahead of the subset-sync skip, an unselected chain's
+    /// render is invoked with no raw store underneath it — it fails with
+    /// `Data`, and the failure poisons the fan-in, so the chain the user
+    /// *did* select never reaches the index.
     #[tokio::test]
     async fn subset_sync_on_a_first_run_skips_unselected_chains() {
         let fx = Fixture::new();
@@ -4005,7 +3874,7 @@ mod tests {
         );
         // Auth doesn't retry.
         assert_eq!(rep1.step("src/raw").attempts, 1);
-        // What the failed download committed, it vouched for, so the
+        // What the failed download committed, it reported, so the
         // render reads it (dag/README.md §"Versions: reported by the step").
         assert!(
             matches!(

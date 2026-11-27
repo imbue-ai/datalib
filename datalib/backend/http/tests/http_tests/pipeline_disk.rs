@@ -1,5 +1,5 @@
 //! `GET /api/pipeline/disk` — free space on the data root's disk, and the
-//! config's `[disk_space]` lines between which the loop holds every step.
+//! config's `[disk_space]` lines between which the loop starts no step.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};

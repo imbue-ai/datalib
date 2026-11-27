@@ -9,7 +9,7 @@
 //! task grown by a turn, one new with a picture attached, one deleted,
 //! and one claude.ai has since turned into a chat.
 //!
-//! The cut the rig cannot make, between a conversation's row and the
+//! The cut the harness cannot make, between a conversation's row and the
 //! attachment edges that name its files, is made by taking the blob
 //! store away ([`a_death_between_the_row_and_its_attachments`]).
 
@@ -393,11 +393,11 @@ async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {
     }
 }
 
-/// Bug C2 of the plan: the conversation's row and its freshness were
-/// committed in one transaction and its attachment edges in a later one.
-/// A run that died between them left a conversation that read as up to
-/// date with no edge to say it had files, and no later run fetched
-/// them. The rig cuts only at requests, so the gap is opened here by
+/// The conversation's row and its freshness were committed in one
+/// transaction and its attachment edges in a later one. A run that died
+/// between them left a conversation that read as up to date with no
+/// edge to say it had files, and no later run fetched them. The
+/// `datalib_etl_web::interrupt` harness cuts only at requests, so the gap is opened here by
 /// taking the blob store away: the edge flush fails, whatever the run
 /// had committed before it is sealed, and the next run has to finish.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -432,9 +432,9 @@ async fn a_death_between_the_row_and_its_attachments_leaves_them_owed() {
     );
 }
 
-/// What the store holds of the Cowork tasks after each edition, so the
-/// tests above, which compare a cut run with an uncut one, cannot pass on
-/// a download that stores no task at all: each task with its whole log,
+/// What the store holds of the Cowork tasks after each `Edition`
+/// (before and after upstream moved), so the tests above, which compare
+/// a cut run with an uncut one, cannot pass on a download that stores no task at all: each task with its whole log,
 /// a task that grew rewritten with its new turn, a task deleted upstream
 /// gone, and one claude.ai has made a chat gone from the Cowork tables,
 /// since that chat holds it.

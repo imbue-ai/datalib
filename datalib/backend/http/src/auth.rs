@@ -60,9 +60,9 @@ pub const TOKEN_QUERY_KEY: &str = "token";
 /// `Authorization` is already spoken for.
 pub const TOKEN_HEADER: &str = "x-datalib-token";
 
-/// The env var that used to name a proxy whose identity header stood in
-/// for the token. Setting it is now an error rather than ignored, so an
-/// operator who relied on it learns that requests need the token.
+/// The env var an older build read to name a proxy whose identity header
+/// stood in for the token. Setting it is an error rather than ignored, so
+/// an operator who relied on it learns that requests need the token.
 pub const RETIRED_TRUSTED_PROXY_ENV: &str = "DATALIB_TRUSTED_PROXY";
 
 pub fn refuse_retired_env() -> anyhow::Result<()> {

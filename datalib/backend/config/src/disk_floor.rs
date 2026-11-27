@@ -1,5 +1,5 @@
 //! The config's `[disk_space]` table: the free space the data root's disk
-//! must keep. The runner holds every step while it does not
+//! must keep. The loop starts no step while it does not
 //! (`datalib_dag::disk_space`); the server shows the same line.
 
 use datalib_source_common::byte_size::{self, human_bytes};
@@ -7,8 +7,9 @@ use serde::Deserialize;
 
 const GB: u64 = 1_000_000_000;
 
-/// The config's `[disk_space]`: under `pause_below` free bytes every step
-/// is held, and once held they stay held until `resume_at`. The gap keeps
+/// The config's `[disk_space]`: under `pause_below` free bytes the loop
+/// starts no step and stops every running one, and once paused the steps
+/// stay paused until `resume_at`. The gap keeps
 /// a disk hovering at the line from stopping and restarting the same
 /// steps over and over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -64,8 +65,8 @@ impl TryFrom<RawFloor> for DiskFloor {
 }
 
 impl DiskFloor {
-    /// Whether the steps are held after a look that found `available`,
-    /// given whether they were held before it.
+    /// Whether the steps are paused after a look that found `available`,
+    /// given whether they were paused before it.
     pub fn holds(&self, was_held: bool, available: u64) -> bool {
         available
             < if was_held {
@@ -81,10 +82,10 @@ mod tests {
     use super::*;
 
     /// The gap between the two lines is the whole point: a disk that
-    /// went under the pause and climbed back a little stays held, and a
-    /// disk that never went under is not held anywhere above the pause.
+    /// went under the pause and rose back a little stays paused, and a
+    /// disk that never went under is not paused anywhere above the pause.
     #[test]
-    fn held_steps_wait_for_the_resume_line_and_free_ones_for_the_pause() {
+    fn paused_steps_wait_for_the_resume_line_and_others_for_the_pause() {
         let floor = DiskFloor::default();
         assert!(
             !floor.holds(false, 12 * GB),

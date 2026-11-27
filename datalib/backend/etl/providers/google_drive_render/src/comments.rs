@@ -238,8 +238,8 @@ pub fn sections(t: &Thread) -> Vec<Section> {
 }
 
 /// Each comment author with a handle, as this file's comments describe
-/// them: the names they showed — what chat-common's baseline says of a
-/// chat's authors. How much they wrote is the grid's to count.
+/// them: the names they showed, as chat-common's `baseline_contacts`
+/// describes a chat's authors. The grid counts how much each wrote.
 pub fn authors(source_id: &str, threads: &[Thread], me: Option<&Handle>) -> Vec<NormalizedContact> {
     let mut by_handle: BTreeMap<&str, NormalizedContact> = BTreeMap::new();
     for m in threads.iter().flat_map(|t| &t.messages) {

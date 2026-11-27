@@ -365,7 +365,7 @@ async fn a_reload_holds_what_a_full_read_holds() {
     index.remove(&["gone".to_string()]).await.unwrap();
     index.close().await;
     let cache = InferenceCache::open(&f.cache_path()).await.unwrap();
-    cache.forget_chunked(&["gone".to_string()]).await.unwrap();
+    cache.delete_chunked(&["gone".to_string()]).await.unwrap();
     assert_eq!(cache.sweep(&model).await.unwrap(), 1);
     cache.close().await;
     let mut redrawn = chat.clone();

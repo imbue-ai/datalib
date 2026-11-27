@@ -25,7 +25,7 @@ pub struct Graph {
     /// step idx → the input artifacts it reads, which are the ids of
     /// its producer steps. Kept as a field (rather than read off
     /// `steps[i].inputs`) because the scheduler diffs it against
-    /// recorded versions on every pass.
+    /// recorded versions on every tick.
     pub resolved_inputs: Vec<Vec<ArtifactPath>>,
     /// A topological order (dependencies before dependents).
     pub topo: Vec<usize>,
@@ -40,7 +40,7 @@ pub struct Graph {
     /// config declares (`supervisor::locks`).
     pub locks: Vec<crate::supervisor::locks::LockSpec>,
     /// The config's `[disk_space]`, here so a loop that re-reads its graph
-    /// mid-sync takes an edit to it on. `None` only for a graph built
+    /// mid-sync uses an edit to it. `None` only for a graph built
     /// without a config, as tests build them: no floor at all.
     pub disk_floor: Option<datalib_config::disk_floor::DiskFloor>,
 }
@@ -319,8 +319,8 @@ fn reaches_itself(dependents: &[BTreeSet<usize>], start: usize) -> bool {
 }
 
 /// The declared step ids, for a diagnostic that has to say what the
-/// valid choices were — minus the step doing the asking, which is
-/// never the answer and reads as noise in its own error message.
+/// valid choices were — minus the step the diagnostic is about, which
+/// cannot name itself and reads as noise in its own error message.
 fn id_list(ids: &BTreeSet<&str>, excluding: &str) -> String {
     const MAX: usize = 12;
     let all: Vec<&str> = ids.iter().copied().filter(|id| *id != excluding).collect();
@@ -405,8 +405,8 @@ mod tests {
         );
     }
 
-    /// The fringe is what a sync may name: steps with no declared
-    /// input, whose real input is outside the graph.
+    /// The steps with no declared input are what a sync of everything
+    /// starts from: their real input is outside the graph.
     #[test]
     fn fringe_is_the_inputless_steps() {
         let g = Graph::build(vec![
@@ -431,9 +431,8 @@ mod tests {
         assert!(err.contains("path = "), "{err}");
     }
 
-    /// Single-writer, which used to be its own pass over every pair of
-    /// output trees, is now the id-uniqueness check: a step's id *is*
-    /// the tree it writes.
+    /// Single-writer is the id-uniqueness check: a step's id *is* the
+    /// tree it writes.
     #[test]
     fn two_steps_writing_one_tree_is_a_duplicate_id() {
         let err = Graph::build(vec![spec("slack/raw", &[]), spec("slack/raw", &[])])

@@ -60,7 +60,7 @@ export default function channels(appletId) {
     const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
     // Channel names already carry their '#' in the data, so prefixing
-    // one here produced '##cat-qi'. Add it only when it is missing.
+    // one always would print two. Add it only when it is missing.
     const hash = (name) => (name.startsWith("#") ? name : `#${name}`);
 
     // "2026-07-16 20:30" — enough to place a message, short enough to

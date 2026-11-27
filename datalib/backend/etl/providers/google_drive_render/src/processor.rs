@@ -1,4 +1,4 @@
-//! The render wave for the google_drive source: its planner and the
+//! The render step for the google_drive source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use std::path::Path;
@@ -114,8 +114,8 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
         .into_iter()
         .collect();
     ctx.report_entity_problems(&ReadScope::Whole(vec![crate::store::NOT_DOCS]), &not_docs)?;
-    // A file that is not a Doc, or a Doc with no capture, renders nothing
-    // and is known to: whatever document it had goes.
+    // A file that is not a Doc, or a Doc with no capture, renders nothing,
+    // and is excluded so that whatever document it had is deleted.
     let no_capture = listing
         .docs
         .keys()
@@ -123,8 +123,8 @@ async fn render_all(db: &RawDb, ctx: &RenderCtx<'_>) -> Result<String> {
     for id in listing.others.iter().chain(no_capture) {
         ctx.exclude_render_unit(id)?;
     }
-    // A file whose listing entry is gone: its document goes once its rows
-    // have, which the driver reads from the diff.
+    // A file whose listing entry is gone: its document is deleted once its
+    // raw rows are, which the driver reads from the diff.
     let gone: Vec<&String> = listing
         .render
         .iter()

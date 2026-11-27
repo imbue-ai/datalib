@@ -78,8 +78,9 @@ pub struct AppState {
     /// and the store intent is written to.
     pub sync: supervisor::SyncControl,
     /// Fan-out channel for everything that changes in the data root — the
-    /// config, the loop's record, the component store — plus a heartbeat,
-    /// so a client can tell an idle stream from a dead one.
+    /// config, the loop's store (`system/supervisor.sqlite`), the
+    /// component store — plus a heartbeat, so a client can tell an idle
+    /// stream from a dead one.
     /// `GET /api/sync/stream` pushes it over SSE.
     pub root_tx: watch::RootTx,
     /// The chains of the requests logged since the watch last sent a
@@ -329,7 +330,7 @@ fn routes(state: AppState) -> Router {
         .fallback(embed::serve_ui)
         .with_state(state)
         // Outermost, so it covers every route plus the SPA fallback and the
-        // static mount. `CorsLayer::permissive()` is gone deliberately: with
+        // static mount. There is deliberately no CORS layer: with
         // the token gate in front a cross-origin page cannot get a usable
         // response anyway, and nothing in-tree needs cross-origin access.
         .layer(axum::middleware::from_fn_with_state(
@@ -538,8 +539,7 @@ pub struct PutLibRequest {
     pub title: Option<String>,
     /// Arguments the gallery entry should pass, as JSON values. This is
     /// what lets an authored component appear in the gallery *with*
-    /// arguments — the thing the old name-only format could not express,
-    /// and the reason `documentPickerView` had to exist as a stand-in.
+    /// arguments.
     #[serde(default)]
     pub component_args: Option<Vec<serde_json::Value>>,
     /// The icon the layouts draw beside the card's name (see
@@ -798,8 +798,8 @@ async fn agent_config_guide() -> (
 
 /// One entry in `GET /api/sync/sources`. Derived from the config file
 /// at the data root — the backend never persists this list to SQL. A
-/// source is any step with no declared inputs (a fringe step — the
-/// thing a sync can name), identified by its step id.
+/// source is any step with no declared inputs (the thing a sync can
+/// name), identified by its step id.
 #[derive(Debug, Serialize)]
 pub struct SourceInfo {
     pub id: String,
@@ -832,12 +832,12 @@ const UNIFIED_GRID_AND_SEARCH_INDEX_APPLET: &str = "unified_grid_and_search_inde
 /// Browse opens its table.
 pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
-fn configured_source_count(fringe: &[String]) -> usize {
+fn configured_source_count(ids: &[String]) -> usize {
     let prefix = format!(
         "{}/",
         datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
     );
-    fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
+    ids.iter().filter(|id| !id.starts_with(&prefix)).count()
 }
 
 #[derive(Debug, Serialize)]
@@ -876,19 +876,21 @@ pub struct ConfigResponse {
     pub newer_root: Option<NewerRoot>,
     /// Number of data sources the user has configured (0 when the
     /// config is missing or invalid). See [`configured_source_count`]
-    /// for why this is not simply the fringe's length.
+    /// for why this is not simply the number of steps with no declared
+    /// inputs.
     pub source_count: usize,
     /// How the user should invoke the latchkey CLI on this install: the
     /// bundled launcher's absolute path when running from the packaged app,
     /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
-    /// The launch's upgrade: the steps being asked to migrate, and the ones
-    /// that answered they need to run again, which the loop runs and the
-    /// page waits on.
+    /// The launch's upgrade: the steps the loop runs `--prepare` for, and
+    /// the ones whose `--prepare` reported `needs_rerun`, which the loop
+    /// runs and the page waits on.
     pub upgrade: UpgradeView,
     /// The newest "Free up disk space" since this server started, while
-    /// it runs and after: how each step it asks stands.
+    /// it runs and after: how each step it runs with `--compact` or
+    /// `--collect` stands.
     pub free_space: Option<supervisor::FreeSpace>,
 }
 
@@ -897,7 +899,7 @@ pub struct ConfigResponse {
 pub struct UpgradeView {
     #[serde(flatten)]
     pub pass: supervisor::Upgrade,
-    /// The steps that answered the pass with `needs_rerun` and have not run
+    /// The steps whose `--prepare` reported `needs_rerun` and have not run
     /// since (`round::rerun_offer`). Empty while the pass runs: the loop
     /// runs them after it.
     pub rerender: Vec<String>,
@@ -999,7 +1001,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
 }
 
 async fn rerun_offer(graph: &datalib_dag::Graph, sync: &supervisor::SyncControl) -> Vec<String> {
-    let record = match sync.mailbox().await {
+    let record = match sync.supervisor_store().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
     };
@@ -1046,10 +1048,11 @@ async fn check_config(
     Json(full_verdict(&s.root, &req.text).await)
 }
 
-/// [`config_verdict`], with each step whose program takes `--check` asked
-/// about its params (`datalib_dag::check`): a step that would refuse them
-/// is reported against its line like any other problem, and the text is
-/// not written; a warning it answers with is reported and writes.
+/// [`config_verdict`], with each step whose program takes `--check` run
+/// with `--check` appended on its params (`datalib_dag::check`): a step
+/// that would refuse them is reported against its line like any other
+/// problem, and the text is not written; a warning it prints is reported
+/// and the text is written.
 async fn full_verdict(root: &std::path::Path, text: &str) -> ConfigCheckResponse {
     let mut verdict = config_verdict(text);
     let checked = datalib_dag::config_check::check_text(text);
@@ -1141,8 +1144,8 @@ pub struct InitConfigResponse {
     /// file that was already there, or empty when `error` is set.
     pub text: String,
     /// Why nothing was written, when that is a decision rather than an
-    /// I/O failure (an I/O failure is a 5xx). Nothing sets it today; it
-    /// stays so a refusal has somewhere to go without a new shape.
+    /// I/O failure (an I/O failure is a 5xx). Nothing sets it; it is
+    /// kept so a refusal has somewhere to go without a new shape.
     pub error: Option<String>,
 }
 
@@ -1365,22 +1368,22 @@ pub struct DagResponse {
     pub run: Option<DagRunInfo>,
 }
 
-/// The runner's own record of what each step did and is doing, with
+/// The runner's own rows of what each step did and is doing, with
 /// the run store's live numbers laid over it. What `GET /api/dag` and
 /// `GET /api/manage/rows` both read.
-pub struct DagRecord {
+pub struct DagSnapshot {
     /// The run in flight, or the one that finished last. Absent on a
     /// root that has never synced, which is not an error.
     pub run: Option<DagRunInfo>,
     /// step id → its state in the run `run` describes.
     pub states: std::collections::BTreeMap<String, String>,
-    /// step id → the loop's record of it: its state now, what it did the
-    /// last time a run reached it, when it last succeeded.
+    /// step id → its row in the loop's `steps` table: its state now, what
+    /// it did the last time a run reached it, when it last succeeded.
     pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
-    /// step id → what it last reported of its problems, and the passes of
-    /// its last run that failed and were run again.
+    /// step id → what it last reported of its problems, and the streaming
+    /// processes of its last run that failed and were started again.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
     /// The grid index's error and warning rows, by whose they are and
     /// whether muted: what a row's red and yellow numbers are.
@@ -1394,27 +1397,27 @@ pub struct DagRecord {
     /// step id → what its own queue still held when its last run ended.
     pub owed: std::collections::HashMap<String, manage::Owed>,
     /// How long each read took, for the line a slow Manage answer writes.
-    pub took: RecordTimings,
+    pub took: SnapshotTimings,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct RecordTimings {
-    /// The loop's record, in `system/supervisor.sqlite`.
-    pub loop_record: std::time::Duration,
+pub struct SnapshotTimings {
+    /// The loop's store, `system/supervisor.sqlite`.
+    pub loop_store: std::time::Duration,
     /// The rest is the run store, `system/runs/runs.sqlite`: the live
     /// run's progress, then the metrics behind Problems, Items and what a step owes.
     pub run_progress: std::time::Duration,
     pub run_metrics: std::time::Duration,
 }
 
-/// An open run in the record while nothing is running is a run that died,
-/// so `live` is [`supervisor::SyncControl::running`].
-pub async fn dag_record(
+/// An open run in the loop's `runs` table while nothing is running is a
+/// run that died, so `live` is [`supervisor::SyncControl::running`].
+pub async fn dag_snapshot(
     root: &std::path::Path,
     sync: &supervisor::SyncControl,
-) -> anyhow::Result<DagRecord> {
+) -> anyhow::Result<DagSnapshot> {
     let started = std::time::Instant::now();
-    let loaded = match sync.mailbox().await {
+    let loaded = match sync.supervisor_store().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
     };
@@ -1435,9 +1438,9 @@ pub async fn dag_record(
         .map(|r| r.states.clone())
         .unwrap_or_default();
 
-    let loop_record = started.elapsed();
+    let loop_store = started.elapsed();
     let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await?;
-    let run_progress = started.elapsed() - loop_record;
+    let run_progress = started.elapsed() - loop_store;
 
     let problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await?,
@@ -1465,13 +1468,13 @@ pub async fn dag_record(
     );
     let owed =
         manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await?);
-    let took = RecordTimings {
-        loop_record,
+    let took = SnapshotTimings {
+        loop_store,
         run_progress,
-        run_metrics: started.elapsed() - loop_record - run_progress,
+        run_metrics: started.elapsed() - loop_store - run_progress,
     };
 
-    Ok(DagRecord {
+    Ok(DagSnapshot {
         run,
         states,
         steps: state.steps,
@@ -1487,7 +1490,7 @@ pub async fn dag_record(
 
 /// What each step has reported in `run`, the loop's run in flight or the
 /// one that finished last. Only when the run store's newest run is that
-/// one: in the window between a run opening its record and the runner
+/// one: in the window between a run opening its row and the runner
 /// writing its first row, the newest run in the store is still the run
 /// before, and painting its numbers onto this run's steps is worse than
 /// showing none at all.
@@ -1507,7 +1510,7 @@ async fn live_progress(
 /// Graph::build chain), so the visualization can never drift from
 /// execution. Steps come back in topological order.
 async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal> {
-    let DagRecord {
+    let DagSnapshot {
         run,
         states,
         steps: records,
@@ -1518,7 +1521,7 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
         spend: _,
         owed: _,
         took: _,
-    } = dag_record(&s.root, &s.sync).await.map_err(unread)?;
+    } = dag_snapshot(&s.root, &s.sync).await.map_err(unread)?;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = datalib_config::load(&s.config_path())?;
@@ -1573,8 +1576,7 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
 /// the steps with no declared inputs, i.e. what a sync can target.
 /// Re-loaded on every call so a config edit in the Setup tab shows up
 /// without a backend restart. Returns an empty list (rather than 500)
-/// when the file is missing or fails to parse, mirroring the previous
-/// behavior.
+/// when the file is missing or fails to parse.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     let Ok(checked) = load_dag_config(&s.config_path()) else {
         return Json(Vec::new());
@@ -1589,8 +1591,8 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     )
 }
 
-/// The query a reading route takes only to refuse it: `refresh` was a
-/// GET flag once, and is a POST now.
+/// The query a reading route takes only to refuse it: `refresh`, which
+/// is a POST.
 #[derive(Debug, Deserialize)]
 pub struct RefreshParams {
     #[serde(default)]
@@ -1746,13 +1748,13 @@ fn internal(e: anyhow::Error) -> Refusal {
     (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
 }
 
-async fn mailbox(s: &AppState) -> Result<&datalib_dag::supervisor::store::Store, Refusal> {
-    s.sync.mailbox().await.map_err(internal)
+async fn supervisor_store(s: &AppState) -> Result<&datalib_dag::supervisor::store::Store, Refusal> {
+    s.sync.supervisor_store().await.map_err(internal)
 }
 
 /// `GET /api/requests` — the open requests, then the newest closed ones.
 async fn requests_list(State(s): State<AppState>) -> Result<Json<Vec<RequestView>>, Refusal> {
-    let rows = mailbox(&s)
+    let rows = supervisor_store(&s)
         .await?
         .recent_requests(100)
         .await
@@ -1780,7 +1782,7 @@ async fn request_open(
             format!("the config has no step {unknown:?}"),
         ));
     }
-    let store = mailbox(&s).await?;
+    let store = supervisor_store(&s).await?;
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     let open = store.open_requests().await.map_err(internal)?;
     let mut listener =
@@ -1812,8 +1814,9 @@ async fn request_open(
             failed_step: None,
         });
     }
-    // Answered once the loop has taken them on, so rows read after this
-    // show their steps as wanted. A loop whose config lacks a root leaves
+    // Answered once the loop has started serving them (a step's row names
+    // the request, or it has closed), so rows read after this show their
+    // steps as wanted. A loop whose config lacks a root leaves
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     for id in &opened {
@@ -1854,7 +1857,7 @@ async fn request_stop(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<StatusCode, Refusal> {
-    let store = mailbox(&s).await?;
+    let store = supervisor_store(&s).await?;
     if store.request(&id).await.map_err(internal)?.is_none() {
         return Err((StatusCode::NOT_FOUND, format!("no request {id}")));
     }
@@ -1878,7 +1881,7 @@ async fn step_turn_off(
         ));
     }
     let by = by_of(&body)?;
-    mailbox(&s)
+    supervisor_store(&s)
         .await?
         .turn_off(&id, &by)
         .await
@@ -1892,7 +1895,11 @@ async fn step_turn_on(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Refusal> {
-    mailbox(&s).await?.turn_on(&id).await.map_err(internal)?;
+    supervisor_store(&s)
+        .await?
+        .turn_on(&id)
+        .await
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1927,8 +1934,11 @@ async fn purge_groups(
 /// keeping every commit; with `drop_old_versions_on_derived_data`, also fold each render
 /// store's history into one commit (`step_protocol.md` § Compact and
 /// collect). No targets is every step that takes the verb. 204 once done;
-/// 202 while it runs, once the steps it holds have stopped; 409, with the
-/// reason, for a step it cannot ask.
+/// 202 when it is not over within ten seconds, because its steps or what
+/// reads them have not stopped yet or it is still running; 409, with the
+/// reason, when a target is a step the config lacks or whose program does
+/// not take the verb, or when a step's run with the verb failed within
+/// those ten seconds.
 async fn free_disk_space(
     State(s): State<AppState>,
     Json(req): Json<FreeDiskSpaceRequest>,
@@ -2469,7 +2479,7 @@ mod tests {
         assert!((119.0..130.0).contains(&drain.secs), "{drain:?}");
     }
 
-    fn fringe_of(text: &str) -> Vec<String> {
+    fn source_ids_of(text: &str) -> Vec<String> {
         let checked = datalib_dag::config_check::check_text(text);
         assert!(
             checked.is_clean(),
@@ -2492,7 +2502,7 @@ mod tests {
             checked.render(std::path::Path::new("scaffold"))
         );
         // The `unified_grid_and_search_index` step has no source to read yet, so on a scaffolded
-        // root it *is* the fringe. It is what
+        // root it is the one step with no declared inputs. It is what
         // a sync can name until the first source is added — and
         // running it against nothing is a no-op, not an error.
         assert_eq!(
@@ -2509,18 +2519,18 @@ mod tests {
         );
     }
 
-    /// A scaffolded root has no *sources*, even though its two index
-    /// steps are the fringe. Counting the fringe would tell someone
-    /// with an empty library that they already have two data sources —
+    /// A scaffolded root has no *sources*, even though its index step has
+    /// no declared inputs. Counting those would tell someone
+    /// with an empty library that they already have a data source —
     /// the confusion `POST /api/config/init` exists to end.
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
-        let fringe = fringe_of(STARTER_CONFIG);
+        let ids = source_ids_of(STARTER_CONFIG);
         assert_eq!(
-            fringe,
+            ids,
             ["unified_grid_and_search_index/unified_grid_and_search_index"]
         );
-        assert_eq!(configured_source_count(&fringe), 0);
+        assert_eq!(configured_source_count(&ids), 0);
     }
 
     /// ...and a real source counts, while the index steps beside it
@@ -2531,7 +2541,7 @@ mod tests {
             "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\n",
             STARTER_CONFIG
         );
-        assert_eq!(configured_source_count(&fringe_of(&text)), 1);
+        assert_eq!(configured_source_count(&source_ids_of(&text)), 1);
     }
 
     /// TOML is the only format the server accepts; a legacy config
@@ -2539,7 +2549,7 @@ mod tests {
     #[test]
     fn only_toml_is_accepted() {
         assert_eq!(
-            fringe_of("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n"),
+            source_ids_of("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n"),
             ["x/raw"]
         );
         for legacy in [

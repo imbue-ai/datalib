@@ -65,8 +65,9 @@ pub async fn run(
         tracing::info!(raw = %raw.display(), "no raw store yet; nothing to list");
         return Ok(Vec::new());
     };
-    // An event whose occurrences could not be listed is a warning row,
-    // which `unified_grid_and_search_index` copies into the index for the Manage row to count.
+    // An event whose occurrences could not be listed is a warning row in
+    // this step's own store, where the Manage row counts it
+    // (`datalib_step_problems::of_step`).
     let problems = listed.problems(&env.group);
     let progress = emitter.progress();
     for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {

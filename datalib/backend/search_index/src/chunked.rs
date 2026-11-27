@@ -154,8 +154,9 @@ impl InferenceCache {
         tx.commit().await.context("commit the cut documents")
     }
 
-    /// Forgets what was filed for these documents.
-    pub async fn forget_chunked(&self, markdown_uuids: &[String]) -> Result<()> {
+    /// Deletes the chunks filed for these documents, and their rows in
+    /// `search_chunked`.
+    pub async fn delete_chunked(&self, markdown_uuids: &[String]) -> Result<()> {
         for batch in markdown_uuids.chunks(BATCH) {
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let uuids = serde_json::to_string(batch)?;
@@ -179,7 +180,7 @@ impl InferenceCache {
         Ok(())
     }
 
-    /// Forgets the documents of every source but `sources`: one taken out
+    /// Deletes the filed chunks of every source but `sources`: one taken out
     /// of the config or out of search. Returns how many went.
     pub async fn keep_chunked_sources(&self, sources: &[String]) -> Result<usize> {
         let gone: Vec<String> = sql!(
@@ -191,7 +192,7 @@ impl InferenceCache {
         .bind(serde_json::to_string(sources)?)
         .fetch_all(&self.pool)
         .await?;
-        self.forget_chunked(&gone).await?;
+        self.delete_chunked(&gone).await?;
         Ok(gone.len())
     }
 
@@ -218,10 +219,11 @@ impl InferenceCache {
             .collect()
     }
 
-    /// Deletes every vector but `model`'s whose hash a filed chunk names.
-    /// Returns how many went. Until any document is filed, every vector is
-    /// kept: a cache this build has not filled chunks into yet would
-    /// otherwise lose all its vectors.
+    /// Deletes every vector of another model than `model`, and every one
+    /// of `model`'s whose hash no filed chunk names. Returns how many went.
+    /// Until any document is filed, every vector is kept: a cache this
+    /// build has not filled chunks into yet would otherwise lose all its
+    /// vectors.
     pub async fn sweep(&self, model: &str) -> Result<u64> {
         let any: Option<i64> = sql!(
             "search_index.chunks.find_any_cut_document",
@@ -257,9 +259,10 @@ impl InferenceCache {
     }
 }
 
-/// The vectors no filed chunk names, found by reading the keys' index
-/// (`cache::KEYS`) rather than the table, whose every page holds a 3 KB
-/// vector: a whole read of a 2.7 GB cache took 150 s cold. Only the rows
+/// The vectors of another model, and those no filed chunk names, found
+/// by reading the keys' index (`cache::KEYS`) rather than the table,
+/// whose every page holds a 3 KB vector: a whole read of a 2.7 GB cache
+/// took 150 s cold. Only the rows
 /// found are then read, by their key.
 pub(crate) const SWEEP_SQL: Sql = sql!(
     "search_index.chunks.delete_unnamed_vectors",

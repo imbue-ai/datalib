@@ -101,8 +101,8 @@ toolkit from its redistributable manifest through `rules_cuda` in
   it (`.github/workflows/cuda.yml`, and the release's `cuda` job:
   [`release_steps.md`](release_steps.md)); CI has no GPU, so it is run
   on a GPU by hand with `gpu_check`
-  (`datalib/backend/embedder/tools/gpu_check.rs`), which holds a GPU's
-  vectors to the CPU's.
+  (`datalib/backend/embedder/tools/gpu_check.rs`), which fails when a
+  GPU's vectors and the CPU's disagree.
 
 NVIDIA's libraries are not open source. The module carries the CUDA
 runtime and the `-cuda` image cuBLAS, both redistributable under the
@@ -124,7 +124,7 @@ as `modal/<version>/` ([`runtime_fetch.md`](runtime_fetch.md)). The
 step's side is `datalib_step/src/modal.rs` and `embed_on_modal` in
 `datalib_step/src/search_index.rs`.
 
-- **The step asks the cache what is owed**, as it does locally, and
+- **The step reads what is owed from the inference cache**, as it does locally, and
   writes those prompts to the driver's stdin as it reads the documents.
   The driver cuts them into slices: what is owed spread over every
   Sandbox allowed, but at least 256 prompts, so a Sandbox's start is not
@@ -157,7 +157,7 @@ step's side is `datalib_step/src/modal.rs` and `embed_on_modal` in
   minutes; one Modal says has ended is replaced at once. The driver's
   first call to a Sandbox is an `exec`, whose error keeps its code.
 - **A laptop with no network does not use up the waits.** While Modal
-  itself cannot be asked, the calls go on until the Sandbox's life is
+  itself cannot be reached, the calls go on until the Sandbox's life is
   over, and a `create` that finds no network is tried for ten minutes of
   waiting before it counts as a failure. The waits are added up by their
   length, not by the clock, so an hour asleep spends none of them.
@@ -256,7 +256,8 @@ out.
 **Agreement.** CUDA against Metal: worst cosine 0.99913, mean 0.99973,
 as close as Metal is to the Mac's CPU (0.99936). CUDA against either CPU:
 0.9983 on one 26-token prompt, 0.9993 or better on every other, the same
-on all three GPUs. `gpu_check` holds CUDA to the CPU at 0.998.
+on all three GPUs. `gpu_check` fails when CUDA's worst cosine against
+the CPU is under 0.998.
 
 **Several prompts per call.** embeddinggemma keeps no cache in
 llama.cpp, so one call attends over every token in it, each prompt

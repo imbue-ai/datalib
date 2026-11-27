@@ -154,9 +154,9 @@ both answer the moment the container starts.
 
 The demo config is in the shape `datalib-http` leaves as written, so a
 container start does not rewrite it and leave a `config.toml.bak`:
-`//datalib/backend/dag:copy_restore_test` holds the staged config to
-that, as `config_examples_test.rs` in `datalib-step` holds every config
-the repo ships or documents.
+`//datalib/backend/dag:copy_restore_test` checks that the staged config
+is in that shape, as `config_examples_test.rs` in `datalib-step` checks
+every config the repo ships or documents.
 
 ## Checking the walkthrough against an image
 

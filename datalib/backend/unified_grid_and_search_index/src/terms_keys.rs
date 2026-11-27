@@ -95,8 +95,8 @@ const fn plain(
     }
 }
 
-/// `author:` and `author_handle:` were `grid_rows` columns' keys, exact
-/// on the name or the handle; they are `from:` now, which reads both.
+/// `author:` and `author_handle:` are aliases of `from:`, which reads both
+/// the name and the handle: people typed and saved searches with them.
 pub const TERMS_KEYS: &[TermsKey] = &[
     person(
         "from",
