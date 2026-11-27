@@ -10,7 +10,6 @@ import {
   filterUnfiled,
   mergeInto,
   peopleToAdd,
-  rowHandle,
   sortList,
   withCounts,
   type ContactRow,
@@ -31,12 +30,12 @@ function row(key: string, label: string, id: string, extra: Partial<ContactRow> 
   };
 }
 
-const riker = row("c1", "Will Riker", "mailto:riker@enterprise.org", {
+const riker = row("c1", "Will Riker", "datalib:contact/c1", {
   email: "riker@enterprise.org",
   note: "Plays the trombone",
 });
 const q = row("c2", "Q", "datalib:contact/c2");
-const troi = row("c3", "Deanna Troi", "tel:+12025550100", { phone: "+12025550100" });
+const troi = row("c3", "Deanna Troi", "datalib:contact/c3", { phone: "+12025550100" });
 
 describe("filterContacts", () => {
   it("keeps every row for blank text", () => {
@@ -47,14 +46,6 @@ describe("filterContacts", () => {
     expect(filterContacts([riker, q, troi], "TROMBONE will")).toEqual([riker]);
     expect(filterContacts([riker, q, troi], "5550100")).toEqual([troi]);
     expect(filterContacts([riker, q, troi], "riker q")).toEqual([]);
-  });
-});
-
-describe("rowHandle", () => {
-  it("is the handle the chip is drawn by, or none for a contact without one", () => {
-    expect(rowHandle(riker)).toBe("email:riker@enterprise.org");
-    expect(rowHandle(troi)).toBe("tel:+12025550100");
-    expect(rowHandle(q)).toBeNull();
   });
 });
 

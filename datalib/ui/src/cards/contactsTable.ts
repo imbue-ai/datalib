@@ -6,7 +6,6 @@
 // tested alone.
 
 import type { ColumnSpec } from "@/api";
-import { handleFromUri } from "./chipLinks";
 import type { HandleFrom, NewPerson, NormalizedContact } from "./contacts";
 import { recordHandles } from "./person";
 
@@ -173,11 +172,6 @@ export function peopleToAdd(
     into.said = { ...said, ...into.said };
   }
   return people.map((p) => ({ name: p.name, handles: p.handles, said: p.said }));
-}
-
-/** The handle a row's chip is drawn by; null for a contact with none. */
-export function rowHandle(row: ContactRow): string | null {
-  return handleFromUri(row.contact_ref.id) ?? null;
 }
 
 /** What merging the rows a right-click aims at comes to: every target

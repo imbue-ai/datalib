@@ -28,6 +28,7 @@ import {
   handleValue,
   hasContactsApp,
   identifierCell,
+  isMinted,
   linkHandle,
   nameOf,
   NOBODY,
@@ -228,6 +229,12 @@ function everything() {
 
 /** What a handle line shows: the identifier as the source wrote it, or,
  *  for a kind with no address of its own (a Slack id), the handle. */
+/** The handles that put a record on this page, as a person reads them;
+ *  an id a service minted is left to the record's own chip below. */
+function readableVia(s: { via: string[] }): string[] {
+  return s.via.filter((h) => !isMinted(h)).map(handleValue);
+}
+
 function shownValue(h: NormalizedContact["handles"][number]): string {
   return h.handle && h.medium === "other" ? handleValue(h.handle) : h.value;
 }
@@ -737,8 +744,8 @@ const headPhoto = computed(() => {
         />
         <span v-if="s.seenHere" class="person-badge">seen here</span>
         <span v-if="s.sameDigits.length" class="person-badge">same digits</span>
-        <span v-if="s.via.length" class="person-via">
-          via {{ s.via.map(handleValue).join(", ") }}
+        <span v-if="readableVia(s).length" class="person-via">
+          via {{ readableVia(s).join(", ") }}
         </span>
       </h2>
       <div class="person-record">

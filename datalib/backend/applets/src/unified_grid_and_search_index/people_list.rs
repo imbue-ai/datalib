@@ -118,7 +118,7 @@ pub(super) async fn unfiled(
             })
         })
         .collect();
-    let mut columns = vec![ColumnSpec::new("person", "Person", ColumnType::Identity)];
+    let mut columns = vec![ColumnSpec::new("person", "Person", ColumnType::Identity).width(200)];
     if ask.not_real {
         columns.push(
             ColumnSpec::new("marks", "Marked", ColumnType::Chips)

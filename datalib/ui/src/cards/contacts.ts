@@ -1083,12 +1083,42 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
   return group;
 }
 
-/** A chip that shows the identifier rather than the person, for a list of
- *  one person's handles, where the name would repeat on every line. Its
- *  colour, tooltip and menu are the person chip's; its lead is always the
- *  kind's mark. `shown` is the identifier as the source wrote it. */
+/** Kinds whose identifier a service minted and no person reads: a Slack
+ *  user's `T…/U…`, a Discord or WhatsApp number, a Signal or Notion id,
+ *  and Facebook's and Google's `name/…` and `deleted/…`. */
+const MINTED: ReadonlySet<HandleKind> = new Set<HandleKind>([
+  "slack",
+  "discord",
+  "signal_aci",
+  "notion",
+  "whatsapp",
+  "facebook",
+  "google",
+]);
+
+export function isMinted(handle: string): boolean {
+  const kind = handleKind(handle);
+  return kind !== null && MINTED.has(kind);
+}
+
+/** What a chip in a list of one person's handles says: an address, a
+ *  number or a login as written; for an id a service minted, the name
+ *  that service gives them, which its kind's mark beside it places. The
+ *  id stays in the tooltip and the copied text. */
+export function identifierText(handle: string, shown: string, who: Who): string {
+  const written = shown.trim() || handleValue(handle);
+  if (!isMinted(handle)) return written;
+  const record = who.sourceContacts.find((c) => c.handles.some((h) => h.handle === handle));
+  if (record?.names.length) return sourceName(record, handle, who);
+  return handleValue(handle).match(/^name\/(.+)$/)?.[1] ?? written;
+}
+
+/** A chip that shows the handle rather than the person, for a list of
+ *  one person's handles (`identifierText`). Its colour, tooltip and menu
+ *  are the person chip's; its lead is always the kind's mark. `shown` is
+ *  the identifier as the source wrote it. */
 export function identifierLook(handle: string, shown: string, who: Who): ChipLook {
-  const text = shown.trim() || handleValue(handle);
+  const text = identifierText(handle, shown, who);
   return {
     ...chipLook(handle, text, who),
     text,

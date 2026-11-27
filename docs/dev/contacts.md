@@ -503,7 +503,7 @@ for an agent, as steps:
 | `GET /health` | `{ok: true}` |
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: [NormalizedContact]}}`, the contacts each handle is on, by name; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the person card's *Add to contacts* |
-| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); a "me" chip on a contact marked as you; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the contact as its own chip (`datalib:contact/<id>`), never by a handle, which another contact may share; a "me" chip on a contact marked as you; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
 | `POST /contacts/add` | `{people: [{name, handles, held?, said?}]}`, in one commit (`add_people.rs`): each a new contact with every handle, unless a contact has one of them; then, when it has their name (case aside), they are that contact, which gets the rest, less any taken off it as not theirs, and when it has another name they are skipped, since it may be an address two people share and only the person can say. `held`, `{<handle>: "share" \| "move"}`, names handles other contacts have that are theirs too or theirs alone; those never make them one of those contacts. `said`, `{<handle>: {label?, copied_from?}}`, is what the card each handle came from said of it, its label and the card as `{source_id, key}`, and the handle keeps both. A person with no handle is already there when a contact has their name. Answers `{created, added_to, already, skipped: [{what, why}]}`; skipped are those with no name, those whose handles are on a contact of another name, and those whose handles are on several contacts |
 | `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
@@ -713,8 +713,14 @@ Everything is in `datalib/ui/src/cards/`:
   draft"), with *This is me* to mark the contact as you (§"Searching
   for a person"); then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
-  first, each saying which handle it was found *via*. Every handle on
-  it is a chip showing the identifier (`identifierCell`), pale blue
+  first, each saying which address, number or login it was found
+  *via* (an id a service minted is left to the record's own chip). Every
+  handle on it is a chip showing the handle (`identifierCell`): an
+  address, a number or a login as written, and an id a service minted
+  (Slack's `T…/U…`, a Discord or WhatsApp number, a Signal or Notion
+  id, Facebook's and Google's `name/…`) as the name that service gives
+  them, beside its mark, with the id in the tooltip and the copied
+  text (`identifierText`). It is pale blue
   when it is on a contact and grey when not, with a chip's double-click
   and right-click. The menu of a handle on your contact also has *Not
   theirs* and *No longer works* (whose date is then a box beside the

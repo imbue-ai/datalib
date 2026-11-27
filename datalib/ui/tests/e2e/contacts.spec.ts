@@ -304,7 +304,7 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   await card.getByLabel("Filter contacts").fill(name);
   const row = (id: string) => card.locator(`.slick-row[data-key="${id}"]`);
   await expect(row(dup).locator(`a.chip[data-contact="${dup}"]`)).toContainText(name);
-  await expect(row(keep).locator("a.chip[data-handle]")).toContainText(name);
+  await expect(row(keep).locator(`a.chip[data-contact="${keep}"]`)).toContainText(name);
 
   await row(dup).locator('[col-id="kind"]').click();
   await row(keep).locator('[col-id="kind"]').click({ button: "right" });
