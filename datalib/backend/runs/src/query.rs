@@ -77,8 +77,11 @@ const COMMIT_KEY: &str = "commit";
 /// several that invocation may have served.
 const RUN_KEY: &str = "run";
 
-const RUN_CLAUSE: &str = "(l.run_id = ? OR l.invocation_id IN (SELECT invocation_id \
-     FROM invocation_requests INDEXED BY invocation_requests_by_request WHERE request_id = ?))";
+/// `IFNULL`, because a line has a run or an invocation and not both: the
+/// other side is NULL, and `NOT NULL` would drop every line from a
+/// negated `-run:`.
+const RUN_CLAUSE: &str = "IFNULL(l.run_id = ? OR l.invocation_id IN (SELECT invocation_id \
+     FROM invocation_requests INDEXED BY invocation_requests_by_request WHERE request_id = ?), 0)";
 
 /// `min_level:warn` — this level and above. Not in [`KEYS`]: its value
 /// is a rank, not a column's text. A level word this build does not
@@ -441,7 +444,7 @@ mod tests {
         );
         let c = compile(&q("-run:r-1")).unwrap();
         assert!(
-            c.clauses[1].starts_with("NOT (l.run_id"),
+            c.clauses[1].starts_with("NOT IFNULL(l.run_id"),
             "{}",
             c.clauses[1]
         );

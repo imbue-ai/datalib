@@ -234,10 +234,11 @@ async fn until_caught_up(state: &AppState) -> serde_json::Value {
     }
 }
 
-/// While the downloads' `--prepare`s are still running, the run's rows in
-/// the run store already list every step the pass will run `--prepare` for, the rest as
-/// pending, so a person can see how many are left (#1678: the pass's run
-/// listed only the steps reached).
+/// While the downloads' `--prepare`s are still running, the pass already
+/// lists every step it will run `--prepare` for, the rest as waiting, so a
+/// person can see how many are left (#1678: the pass listed only the steps
+/// reached). Each `--prepare` running is an invocation the pass's job
+/// started, in the run store under the job.
 #[tokio::test]
 async fn the_prepare_run_lists_every_step_it_will_prepare_from_the_start() {
     let td = tempfile::tempdir().unwrap();
@@ -254,26 +255,48 @@ async fn the_prepare_run_lists_every_step_it_will_prepare_from_the_start() {
     let state = boot(&root, &bin).await;
     let want: Vec<(String, &str)> = vec![
         ("a/ingest".into(), "running"),
-        ("a/render_markdown".into(), "pending"),
+        ("a/render_markdown".into(), "waiting"),
         ("b/ingest".into(), "running"),
-        ("b/render_markdown".into(), "pending"),
+        ("b/render_markdown".into(), "waiting"),
     ];
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        let snap = datalib_runs::snapshot(&root).await.unwrap();
-        let mut got: Vec<(String, &str)> = snap
+        let upgrade = state.sync.upgrade().await.unwrap();
+        let mut got: Vec<(String, &str)> = upgrade
             .steps
             .iter()
             .map(|s| (s.step.clone(), s.state.as_str()))
             .collect();
         got.sort();
-        if snap.kind.as_deref() == Some("migrate") && got == want {
+        if got == want {
             break;
         }
         assert!(
             Instant::now() < deadline,
-            "while the downloads prepare, the run's rows never read {want:?}: {:?} {got:?}",
-            snap.kind
+            "while the downloads prepare, the pass never read {want:?}: {got:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let jobs = datalib_runs::requests_of_steps(&root, None, 10)
+            .await
+            .unwrap();
+        let mut running = Vec::new();
+        for (job, _) in &jobs {
+            for i in datalib_runs::invocations_of(&root, job).await.unwrap() {
+                if i.verb.as_deref() == Some("prepare") && i.state == "running" {
+                    running.push(i.step);
+                }
+            }
+        }
+        running.sort();
+        if running == ["a/ingest", "b/ingest"] {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the running --prepares never read as the job's invocations: {running:?}"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

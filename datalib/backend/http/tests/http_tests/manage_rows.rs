@@ -349,7 +349,7 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(index["name"]["icon"], "search");
 }
 
-/// A finished run: the step rows read the loop's `steps` table, and the
+/// A finished sync: the step rows read the loop's `steps` table, and the
 /// group reads its last step — the failed render — with the child named in
 /// the detail, and "last synced" from its ingest step.
 #[tokio::test]
@@ -364,7 +364,8 @@ async fn a_finished_run_reaches_the_rows() {
                 "slack/ingest": {
                   "succeeded": true,
                   "last_run": {
-                    "run_id": "r1",
+                    "invocation_id": "i1",
+                    "requests": ["r1"],
                     "started_at": "2026-08-31T10:00:00+01:00",
                     "finished_at": "2026-08-31T10:00:09+01:00",
                     "status": "succeeded",
@@ -376,7 +377,8 @@ async fn a_finished_run_reaches_the_rows() {
                   "succeeded": false,
                   "last_success_at": "2026-08-24T10:00:11+01:00",
                   "last_run": {
-                    "run_id": "r1",
+                    "invocation_id": "i2",
+                    "requests": ["r1"],
                     "started_at": "2026-08-31T10:00:09+01:00",
                     "finished_at": "2026-08-31T10:00:11+01:00",
                     "status": "failed",
@@ -385,12 +387,7 @@ async fn a_finished_run_reaches_the_rows() {
                   }
                 }
               },
-              "current_run": {
-                "run_id": "r1",
-                "started_at": "2026-08-31T10:00:00+01:00",
-                "finished_at": "2026-08-31T10:00:12+01:00",
-                "states": {"slack/ingest": "succeeded", "slack/render_markdown": "failed"}
-              }
+              "requests": [{"id": "r1", "roots": ["slack/ingest"], "closed": true}]
             }"#,
         ),
     )
@@ -499,16 +496,11 @@ async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            "r1",
-            "r1",
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        let metric = |step: &str, labels: &str, value: i64| datalib_runs::MetricRow {
-            run_id: "r1".into(),
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
+        let metric = |step: &str, labels: &str, value: i64| datalib_runs::InvocationMetricRow {
+            invocation_id: "i1".into(),
             step: step.into(),
             name: datalib_problems::METRIC.into(),
             labels: labels.into(),
@@ -661,16 +653,11 @@ async fn a_failed_pass_is_grey_and_not_a_warning() {
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            "r1",
-            "r1",
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        w.metric(datalib_runs::MetricRow {
-            run_id: "r1".into(),
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
+        w.metric(datalib_runs::InvocationMetricRow {
+            invocation_id: "i1".into(),
             step: "slack/ingest".into(),
             name: datalib_metrics::FAILED_PASSES.into(),
             labels: String::new(),
@@ -695,16 +682,11 @@ async fn what_a_step_owes_reaches_its_row_and_its_group() {
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            "r1",
-            "r1",
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        let owed = |step: &str, value: i64| datalib_runs::MetricRow {
-            run_id: "r1".into(),
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
+        let owed = |step: &str, value: i64| datalib_runs::InvocationMetricRow {
+            invocation_id: "i1".into(),
             step: step.into(),
             name: datalib_metrics::OWED.into(),
             labels: String::new(),
@@ -721,10 +703,9 @@ async fn what_a_step_owes_reaches_its_row_and_its_group() {
     assert_eq!(ingest["value"], 1412, "{ingest}");
     assert_eq!(ingest["unit"], "count");
     assert!(
-        ingest["detail"]
-            .as_str()
-            .unwrap()
-            .starts_with("1,412 the step saw waiting and did not get to before run r1 ended"),
+        ingest["detail"].as_str().unwrap().starts_with(
+            "1,412 the step saw waiting and did not get to before invocation i1 ended"
+        ),
         "{ingest}"
     );
     assert_eq!(
@@ -747,34 +728,36 @@ async fn what_a_step_owes_reaches_its_row_and_its_group() {
     );
 }
 
-/// The dashboard reads one run for a group: each step that took part
-/// with every series it reported and its warning and error lines
-/// counted up, and a step that did not, marked absent — in config order.
+/// The dashboard reads one run — a request — for a group: each step one
+/// of its invocations served it, with every series it reported and its
+/// warning and error lines counted up, and a step that did not, marked
+/// absent — in config order.
 #[tokio::test]
 async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
     let tmp = tempfile::tempdir().unwrap();
-    write_root(tmp.path(), CONFIG, None).await;
+    write_root(
+        tmp.path(),
+        CONFIG,
+        Some(r#"{"requests": [{"id": "r1", "roots": ["slack/ingest"], "closed": true}]}"#),
+    )
+    .await;
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            "r1",
-            "2026-08-31T09:00:00.000000+00:00",
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        w.step(datalib_runs::StepRunRow {
-            run_id: "r1".into(),
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
+        w.invocation(datalib_runs::InvocationRow {
+            invocation_id: "i1".into(),
             step: "slack/ingest".into(),
             state: "succeeded".into(),
             attempt: 1,
-            started_at_utc: Some("2026-08-31T09:00:01.000000+00:00".into()),
+            started_at_utc: "2026-08-31T09:00:01.000000+00:00".into(),
             finished_at_utc: Some("2026-08-31T09:00:09.000000+00:00".into()),
             updated_at_utc: "2026-08-31T09:00:09.000000+00:00".into(),
             ..Default::default()
         });
-        w.metric(datalib_runs::MetricRow {
-            run_id: "r1".into(),
+        w.served("i1", &["r1".to_string()]);
+        w.metric(datalib_runs::InvocationMetricRow {
+            invocation_id: "i1".into(),
             step: "slack/ingest".into(),
             name: "api_requests_total".into(),
             labels: String::new(),
@@ -784,7 +767,7 @@ async fn a_groups_dashboard_charts_the_run_its_steps_took_part_in() {
         });
         for (level, ts) in [("warn", "02"), ("error", "03"), ("warn", "04")] {
             w.log(datalib_runs::LogRow {
-                run_id: Some("r1".into()),
+                invocation_id: Some("i1".into()),
                 step: Some("slack/ingest".into()),
                 level: level.into(),
                 ts_utc: format!("2026-08-31T09:00:{ts}.000000+00:00"),
@@ -828,22 +811,17 @@ async fn metrics_are_served_in_prometheus_text_format() {
     let tmp = tempfile::tempdir().unwrap();
     write_root(tmp.path(), CONFIG, None).await;
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            "r1",
-            "2026-08-31T09:00:00.000000+00:00",
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
         for (step, name, labels, value) in [
             ("slack/ingest", "api_requests_total", "", 7),
             ("slack/ingest", "rows_upserted_total", "table=messages", 12),
             ("slack/render_markdown", "items", "", 26),
             ("removed/step", "items", "", 1),
         ] {
-            w.metric(datalib_runs::MetricRow {
-                run_id: "r1".into(),
+            w.metric(datalib_runs::InvocationMetricRow {
+                invocation_id: "i1".into(),
                 step: step.into(),
                 name: name.into(),
                 labels: labels.into(),
@@ -1103,16 +1081,11 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
     for (run, stamp, items, documents) in
         [("r1", ago(30), 1000, 1100), ("r2", ago(2), 48_210, 1204)]
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            run,
-            run,
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        let metric = |name: &str, value: i64| datalib_runs::MetricRow {
-            run_id: run.into(),
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
+        let metric = |name: &str, value: i64| datalib_runs::InvocationMetricRow {
+            invocation_id: run.into(),
             step: "slack/render_markdown".into(),
             name: name.into(),
             labels: String::new(),
@@ -1152,8 +1125,8 @@ async fn item_counts_and_their_history_reach_the_rows_from_the_run_store() {
     }
 }
 
-/// The Modal spend cell sums what each run's `embed` came to, with the
-/// total climbing run by run behind it: the step's row and its group's
+/// The Modal spend cell sums what each invocation of `embed` came to,
+/// with the total climbing one by one behind it: the step's row and its group's
 /// show it, and a step that never used Modal stays blank.
 #[tokio::test]
 async fn modal_spend_adds_up_over_runs_and_reaches_the_rows() {
@@ -1172,16 +1145,19 @@ async fn modal_spend_adds_up_over_runs_and_reaches_the_rows() {
     for (run, stamp, micro_usd, sandboxes) in
         [("r1", ago(30), 30_000, 2), ("r2", ago(2), 8_250_000, 121)]
     {
-        let w = datalib_runs::RunWriter::start(
-            tmp.path(),
-            run,
-            run,
-            None,
-            datalib_runs::Retention::default(),
-        )
-        .unwrap();
-        let metric = |name: &str, value: i64| datalib_runs::MetricRow {
-            run_id: run.into(),
+        let w =
+            datalib_runs::LoopWriter::start(tmp.path(), None, datalib_runs::Retention::default())
+                .unwrap();
+        w.invocation(datalib_runs::InvocationRow {
+            invocation_id: run.into(),
+            step: "slack/embed".into(),
+            state: "succeeded".into(),
+            started_at_utc: stamp.clone(),
+            updated_at_utc: stamp.clone(),
+            ..Default::default()
+        });
+        let metric = |name: &str, value: i64| datalib_runs::InvocationMetricRow {
+            invocation_id: run.into(),
             step: "slack/embed".into(),
             name: name.into(),
             labels: "gpu=T4".into(),
@@ -1217,7 +1193,7 @@ async fn modal_spend_adds_up_over_runs_and_reaches_the_rows() {
     assert_eq!(totals, [30_000, 8_280_000]);
     let detail = embed["detail"].as_str().unwrap();
     assert!(
-        detail.starts_with("about $8.28 at Modal's list price over the 2 runs"),
+        detail.starts_with("about $8.28 at Modal's list price over the 2 invocations"),
         "{detail}"
     );
     assert!(
