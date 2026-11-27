@@ -218,7 +218,7 @@ async fn read_archives(
         .map(|(rel, size)| (rel.as_str(), *size));
     found.skipped(coverage::PART, coverage::report(listed, &opts.sync));
     let read = read_tree(opts, &root, found).await;
-    forget_fingerprints_under(&opts.cache, &root).await?;
+    delete_fingerprints_under(&opts.cache, &root).await?;
     let (mut summary, scan) = read?;
 
     let finished =
@@ -236,7 +236,7 @@ async fn read_archives(
 
 /// The host-wide cache keeps a fingerprint per path, and a temporary
 /// directory's paths are never seen again.
-async fn forget_fingerprints_under(cache: &FingerprintCache, root: &Path) -> Result<()> {
+async fn delete_fingerprints_under(cache: &FingerprintCache, root: &Path) -> Result<()> {
     let root = canonical_root(root);
     let cached = cache.load_under(&root).await?;
     let keys: Vec<String> = cached.paths().map(|rel| abs_key(&root, rel)).collect();
