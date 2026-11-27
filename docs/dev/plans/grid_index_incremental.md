@@ -137,9 +137,9 @@ keyword pass already reads a source whole when `read_at` is `None`.
   `DROP TABLE` alone, leaving the freed pages in the file for the refill
   to reuse, on a clone. If the keyword part is still slow to drop, give
   it a file of its own, deleted whole like today's index, and reach it
-  from the grid's queries with `ATTACH`. Check what
-  [`completed/search_index_from_ram.md`](completed/search_index_from_ram.md)
-  decided about keeping the two in one file before choosing.
+  from the grid's queries with `ATTACH`. Check why the two share one
+  file ([`search_index/README.md`](../../../datalib/backend/search_index/README.md)
+  § "Two files, two writers") before choosing.
 - **What reads across parts.** *Settled as built: the grid's keyword
   filter (`text_clause`) reads the keyword tables, so emptying them raises
   the grid's generation; the names people are known by are written again

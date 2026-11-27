@@ -1,9 +1,18 @@
 # The SQL census: every statement the tests run, and whether it scales
 
-**Status: proposed 2026-11-20, nothing built; tracked in #1942.** The pieces it builds on
-are in the tree or in review: `datalib_sql_work`'s statement counter and
+**Status: proposed 2026-11-20, checked against the tree on 2026-11-27:
+none of §5's steps is built; tracked in issue #1942.** The pieces it
+builds on are in the tree: `datalib_sql_work`'s statement counter and
 the fixture sync's scan census (#1933, #1936), and `record_under` with
-the grid index's small-beside-large test (#1937).
+the grid index's small-beside-large test (#1937). Two later changes
+move ground under it, and the text below has not been rewritten for
+them. #2030 named every statement where it is written (`sql!`,
+`Sql::dynamic`; clippy refuses a bare `sqlx::query*`), and
+`datalib_sql_work` now counts each statement's rows, the rows each of
+its loops visited and its time under that name, so §3's census and
+lister would key on names rather than on SQL text. #2005 writes a fixed
+`sqlite_stat1`, the same in every library, so §3.3's premise holds by
+declaration rather than because no `ANALYZE` runs.
 
 ## 1. The problem
 

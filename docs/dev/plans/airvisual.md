@@ -1,19 +1,14 @@
 # AirVisual (IQAir) air-quality monitors as a source
 
-**Status: Route C is built (2026-09-14); Route A is not.** The `airvisual`
-provider reads an AirVisual Pro's own history files off its Samba share
-into doltlite and renders them as one page of plots —
-[`providers/airvisual/INGEST.md`](../../../datalib/backend/etl/providers/airvisual/INGEST.md)
-is the reference for what the share holds and how the ingest reads it,
-and `datalib_etl_timeseries_render` is the crate yolink's render and
-this one now share. What follows is the investigation that led there,
-kept for the measurements of the cloud routes, which are the reason the
-device API (`api`) is still worth building for the *published* outdoor
-unit and nothing else. This is the
-second member of the time-series family that
-[`data_architecture_parse_and_render.md`](../data_architecture_parse_and_render.md)
-§"Examples where schema and data handling should be unified" lists as
-"IQ Air air quality planned", beside `yolink`. Every claim below about
+**Status: investigation (2026-09-14), checked against the tree on
+2026-11-27. Route C, the Pro's own files, is built; Route A, the device
+API, and Route B, the dashboard export, are not.** The `airvisual`
+provider reads an AirVisual Pro's history files off its Samba share
+into doltlite, and renders them as documents and as time series
+([`providers/airvisual/INGEST.md`](../../../datalib/backend/etl/providers/airvisual/INGEST.md)
+is the reference). What follows is kept for the measurements of the
+cloud routes, which are the reason the device API (`api`) is still
+worth building for the *published* outdoor unit and nothing else. Every claim below about
 IQAir's endpoints was measured on 2026-09-14: first against two
 *public* stations in Nakuru, Kenya (ids `6856994e52fb712759ff48a7` and
 `62b9caaf8e60f0ce6659e0c6`, taken from a public GitHub pipeline that
@@ -28,12 +23,10 @@ were not exercised here.
 Yes. An IQAir monitor that is registered in the IQAir dashboard has a
 **device API**, `GET https://device.iqair.com/v2/<device id>`, that
 needs no credential and returns the device's current reading plus four
-trailing windows of history. An ingest step that fetches that once per
-run and upserts every sample it carries into a doltlite store keyed
-`device#tier#ts#metric` is the `yolink` design with the window-walking
-removed, and the `yolink_render` page (one Plotly plot per physical
-quantity, one series per device) renders it with a different metric
-table. The one thing that is *worse* than yolink: the endpoint takes no
+trailing windows of history. An `api` method that fetches that once per
+run and upserts every sample it carries into the store Route C already
+fills is the `yolink` design with the window-walking removed. The one
+thing that is *worse* than yolink: the endpoint takes no
 date range, so there is no backfill and no re-walk. **The windows are
 the retention.** A minute-resolution station keeps one hour of
 minute-level samples; miss an hour and that hour is hourly averages
@@ -122,7 +115,7 @@ So for this fleet the routes divide by device, not by preference:
 ### Route A — device API (build this first)
 
 No credential, one request per device per run, JSON. Everything above.
-An `Origin` method called `api`, like yolink's.
+A method called `api`, reaching a service, like yolink's.
 
 The cost is the retention window, and the answer to it is cadence.
 Polled often enough, this route yields **complete** minute-level data,
@@ -150,12 +143,12 @@ rather than let a quiet lapse look like a quiet sensor. A `last_seen`
 column per device and per tier, compared against now, is the cheapest
 honest signal.
 
-**Nothing in Datalib runs a sync on a clock.** A sync starts when the
-Manage screen's button is pressed or `datalib-pipeline` is run; the
-"scheduler" in `dag/` orders steps within one run. So "fetch every 15
-minutes" is, today, a `launchd`/`cron` entry invoking `datalib-pipeline
-sync <root>` (or `POST /api/sync/jobs` against a running
-`datalib-http`), and the app itself never keeps the promise. yolink
+**Nothing in Datalib runs a sync on a clock** (still true on
+2026-11-27). A sync starts when someone opens a request: the Manage
+screen's Sync, `datalib-pipeline sync`, or `POST /api/requests` against
+a running `datalib-http` (`datalib/backend/dag/README.md` §"What the
+loop runs"). So "fetch every 15 minutes" is a `launchd`/`cron` entry
+doing one of those, and the app itself never keeps the promise. yolink
 has lived with the same gap. A periodic sync — a per-group interval
 the http worker honours while the app is open — is the feature this
 source makes worth building, and it is out of scope here beyond
@@ -214,33 +207,14 @@ two must agree on ids and timestamps, and it costs no credential
 handling at all. The CSV's columns have not been seen yet; one export
 of the outdoor unit would show them.
 
-### Route C — the Pro's Samba share (deep history; only for a Pro)
+### Route C — the Pro's Samba share: built
 
-An AirVisual **Pro** (the indoor unit with a screen) serves
-`smb://<ip>/airvisual` (user `airvisual`, password on the device) with
-one semicolon-separated file per month, `YYYYMM_AirVisual_values.txt`,
-"up to 5 years" per IQAir. Columns, from Home Assistant's `pyairvisual`
-fixture (*unverified* against a real unit):
-
-```
-Date;Time;Timestamp;PM2_5(ug/m3);AQI(US);AQI(CN);PM10(ug/m3);PM01(ug/m3);
-Outdoor AQI(US);Outdoor AQI(CN);Temperature(C);Temperature(F);
-Humidity(%RH);CO2(ppm);SGPCO2(ppm);VOC(ppb);SGPCO2LTC(ppm);VOCLTC(ppb)
-```
-
-This is a `Local` method (`export`, with a `path` to the mounted share
-or to copied files), the shape `fsindex`/`pdf`/`media` already have.
-Outdoor units have no share. **Two of the three devices on the real
-account are Pros, and it is the only route open to them**, so this is
-not optional. On a Mac the share mounts in Finder (⌘K,
-`smb://<ip>/airvisual`) and the step reads the mounted directory like
-any other folder; whether the files can be read while the device is
-also writing the current month's one, and what the columns are on a
-current-firmware Pro, are the two things to measure against a real
-unit before writing the parser. The offline Pro is the reminder that a
-share is only reachable while the device is up; a missed month is not
-lost the way a missed hour is on Route A, because the file is still on
-the device.
+An AirVisual **Pro** serves `smb://<ip>/airvisual` with one file per
+month of every sample it took. The `export` method reads that folder,
+mounted or copied; `airvisual/INGEST.md` has what the share holds, the
+device's clock, incrementality and the measurements. Outdoor units
+have no share, so for the two Pros on the real account it is the only
+route.
 
 ### Not routes
 
@@ -254,20 +228,21 @@ the device.
 
 ## Design (Route A)
 
-Mirror yolink's crates: `airvisual_config`, `airvisual`,
-`airvisual_render`.
+The first design here was written before Route C and assumed yolink's
+shape throughout: a JSON-payload readings table keyed
+`device#tier#ts#metric`, and a copy of `yolink_render`. Route C settled
+the store and the render instead (`airvisual/INGEST.md`): typed rows
+in `airvisual_samples` keyed `(device_id, ts_ms)`, and the shared
+`datalib_etl_timeseries_render` crate. What still stands for an `api`
+method:
 
 **Naming.** The house rule is *the product a person recognises, never
-the vendor* (`claude` not `anthropic`). The monitors are "AirVisual
-Outdoor" / "AirVisual Pro", the app is "IQAir AirVisual", the API host
-is `device.iqair.com`. `airvisual` is the product; `iqair` goes in the
-catalog keywords the way `anthropic` does. Open to being overruled —
-see §"Open questions" 5.
+the vendor*. The monitors are "AirVisual Outdoor" / "AirVisual Pro",
+the app is "IQAir AirVisual", the API host is `device.iqair.com`. The
+type is `airvisual`; `iqair` goes in the catalog keywords.
 
-**Config.** Two methods, one type, following the rule that a type
-names the thing mirrored and the method table says where it comes
-from. The real fleet needs both, on two groups, because a step carries
-one method:
+**Config.** One type, two methods. A step carries one method, so the
+real fleet needs two groups:
 
 ```toml
 [[groups]]
@@ -276,106 +251,46 @@ type = "airvisual"
 name = "Outdoor air"
 
 [[steps]]
-group = "air-outdoor"
-function = "ingest"
-[steps.params.api]
+id = "air-outdoor/ingest"
+command = "datalib-step run ingest airvisual"
 [[steps.params.api.devices]]
 name = "backyard"                      # row key; keep it stable
 device_id = "0123456789abcdef01234567" # the 24-hex id from the dashboard's device-API link
-
-[[groups]]
-id = "air-indoor"
-type = "airvisual"
-name = "Indoor air"
-
-[[steps]]
-group = "air-indoor"
-function = "ingest"
-[steps.params.export]
-path = "/Volumes/airvisual"            # a mounted Pro share, or copied *_AirVisual_values.txt files
 ```
 
-No `start`, no `window_days`, no `overlap` on `api` — there is nothing
-to walk. The `export` table will want a device `name` per share once
-there is more than one Pro, since the files do not carry one.
-`device_id` is not a secret in the yolink sense (it grants read access
-to the trailing windows of one device, which a public station already
-gives everyone), but it is the only thing between a stranger and a
-private device's readings, so keep it out of committed configs all the
-same.
+No `start`, no `window_days`, no `overlap`: there is nothing to walk.
+`device_id` grants read access to the trailing windows of one device,
+which a public station already gives everyone, but it is the only thing
+between a stranger and a private device's readings, so it stays out of
+committed configs.
 
-**Raw store.** `airvisual_devices` (`id` = name, `device_id`, plus
-`last_ts_ms` per tier as four nullable columns — the honest-lapse
-signal above) and `airvisual_readings` as a `WirePayloadRow`:
+**Parse.** Both device generations map to one set of measurements:
+`pm25.conc` and `p2` are both PM2.5; `p2_sum / p2_count` is the mean;
+`aqius` / `aqicn` under `pm25` are the AQI on the same timestamp; a
+sentinel in `errors` gives no value. How the coarser tiers sit beside
+the instant samples in `airvisual_samples` is still to decide: an
+hourly bucket and an instant sample can share a timestamp and are
+different facts, so either the tier joins the key or only the instant
+samples are kept, with coarser buckets filling the hours that have
+none.
 
-```
-id           "{device}#{tier}#{ts_ms}#{metric}"
-payload      the sample object as the wire had it, whole
-device_name
-tier         instant | hourly | daily | monthly
-ts_ms
-metric       pm25_ugm3 | pm10_ugm3 | pm1_ugm3 | co2_ppm | temperature_c
-             | humidity_pct | pressure_pa | aqi_us | aqi_cn
-value        f64
-```
+**The open buckets.** The newest hourly, daily and monthly bucket
+changes on every fetch until its period closes, so the upsert
+overwrites it and every run changes a few rows. That is correct; it
+only means "rows changed" is never zero.
 
-Normalising both generations to one metric vocabulary happens at
-parse: `pm25.conc` and `p2` are both `pm25_ugm3`; `p2_sum/p2_count` is
-the mean, with the raw pair still in `payload`; `aqius`/`aqicn` under
-`pm25` become `aqi_us`/`aqi_cn` on the same ts; a sentinel in `errors`
-emits no row. `tier` is in the key because an hourly bucket and an
-instant sample can share a timestamp and are different facts.
-
-The newest hourly/daily/monthly bucket is *open* — it changes on every
-fetch until the period closes — so the upsert overwrites it and
-`dolt_diff` shows one modified row per open bucket per run. That is
-correct and cheap; it just means "rows changed" is never zero.
-
-**Fetch.** Per device: one `curl` (plain, not latchkey — no
+**Fetch.** Per device, one plain `curl` (`HttpRequest::plain`: no
 credential, and `device.iqair.com` was not behind Cloudflare's
-challenge today), parse, one `bulk_upsert_in_tx`, then
-`UPDATE airvisual_devices SET last_<tier>_ts_ms = MAX(...)`. No cursor
-to resume from: every run fetches the same thing. The failure budget
-and the per-device `warn!` come over from yolink unchanged. Unlike
-yolink, a reset and resync cannot recover anything older than the
-windows, so it should say so in its summary rather than look like a
-backfill.
+challenge), parse, one upsert, and the device's newest sample per tier
+recorded (the honest-lapse signal above). Every run fetches the same
+thing, so there is no cursor. A reset and resync cannot recover
+anything older than the windows, so the run's summary should say so
+rather than look like a backfill.
 
-**Render.** `yolink_render` nearly as is: `parse.rs` reads the two
-tables through `open_reader`, `units.rs` gets a new `METRICS` table
-(three PM quantities on one plot, CO₂, temperature, humidity, pressure,
-AQI), `plot.rs` and `render.rs` are unchanged in kind. One page, one
-`Sensor Timeseries` grid row plus one `Sensor Device` row each. The
-tiers want either one trace per tier or the instant trace only with
-the coarser tiers filling the gaps where instant is missing; the second
-is what a person wants to see and is a few lines in `parse.rs`.
-
-This is the point at which the time-series family should stop being
-two copies. With a second provider the shared part is visible —
-`<p>_devices` + `<p>_readings` keyed `device#ts#metric`, the
-`Quantity`/`MetricSpec` tables, `plot.rs`, the one-page render and its
-HEAD-vs-cursor skip — and a `datalib_etl_timeseries_render` crate
-holding it, with each provider contributing only its metric table and
-its parser, is the refactor to do *after* AirVisual lands, not before
-(rule of two, and yolink's render is the golden that proves the
-extraction changed nothing).
-
-**Wiring.** The usual list, all of which yolink shows how to do:
-`SourceType`, `Provider`, `dispatch.rs`, `ingestMethods.json` (via the
-generator), `catalog.ts` (`wizard: false` first, as yolink), a stanza
-in `all_sources.toml`, and `schema_inventory`.
-
-**Tests.** The two captured responses are the fixtures: they cover
-both generations, and station B's stale-since-July `historical` is
-the dead-sensor case for free. Insta snapshots of the parser over each,
-an upsert-idempotency test, and a `render_e2e` like yolink's. A live
-test against a public station is possible (no key) but not needed for
-correctness; it would only guard against IQAir changing the shape,
-which the KB says it has done at least once.
-
-**Effort.** Config crate ~150 lines, ingest ~400 (yolink's 739 minus
-the windowing and signing), render mostly copy, wiring ~10 files. A
-day or two, most of it the metric table and the fixtures.
+**Tests.** Capture one response from each generation as fixtures:
+station B's stale `historical` is the dead-sensor case for free. A live
+test against a public station needs no key, and would only guard
+against IQAir changing the shape.
 
 ## Settled, and still open
 
@@ -383,14 +298,15 @@ Settled on 2026-09-14 from the real account: the fleet is one
 published Outdoor plus two private Pros; the outdoor unit's device API
 works and its export is offered; the Pros get neither on the free plan;
 the paid plan is a sales contact. Route C is built and measured against
-a real Pro (`INGEST.md`); the type is `airvisual`.
+a real Pro (`INGEST.md`); the type is `airvisual`; nothing runs a sync
+on a clock.
 
 Still open:
 
 1. **Route A, the `api` method**, for the published outdoor unit: one
    `curl` per run into the same `airvisual_samples` table, with the
-   tiers folded in as the plan above says. Its cadence argument stands,
-   and so does the missing periodic sync.
+   tiers folded in as §"Design (Route A)" says. Its cadence argument
+   stands, and so does the missing periodic sync.
 2. **The dashboard export's columns**, for the outdoor unit's one-time
    backfill. One export from the browser shows them; the job is created
    on the account, so it is the owner's to run.

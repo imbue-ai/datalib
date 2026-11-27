@@ -7,7 +7,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_linear::ingest::{self, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_linear::probe::probe;
 use datalib_etl_linear_config::{LinearConfig, LinearSync};
-use datalib_fake_services::{with_real_rate_limits, Fakes, Launch, LINEAR};
+use datalib_fake_services::{Fakes, LINEAR};
 use datalib_probe::{ProbeAsk, ProbeList};
 use datalib_sql::{test_sql_id, Sql};
 use serde_json::{json, Value};
@@ -227,21 +227,19 @@ async fn an_edit_and_a_new_issue_are_what_a_later_sync_writes() {
     db.close().await;
 }
 
-/// Linear's hourly request bucket drains at its rate and refuses a caller
-/// past it with a 429 and a Retry-After; shrunk to five requests over ten
-/// seconds here, so a sync of a dozen requests meets the refusal however
-/// slowly it runs, and has at most two seconds to wait out.
+/// Linear refuses a caller past its rate limit with a 429 and a
+/// Retry-After, and the download waits that out and completes. The fake
+/// refuses every fifth request that way, counted rather than timed: its
+/// leaky request bucket drains while a slow runner works, so a sync spread
+/// thinly enough never fills one (it did not on a loaded CI runner).
 #[tokio::test]
 async fn a_sync_past_linears_request_limit_waits_and_completes() {
-    let launch = Launch {
-        rate_limit_by_bucket: BTreeMap::from([("linear:requests".to_string(), 5)]),
-        rate_limit_window_seconds: Some(10),
-    };
-    let fakes = Fakes::start_with(
-        &BTreeMap::from([(LINEAR, with_real_rate_limits(seed()))]),
-        &launch,
-    )
-    .expect("the fakes serve");
+    let mut refusing = seed();
+    refusing["faults"] = json!({
+        "rate_limit_episode_every": 5,
+        "rate_limit_episode_seconds": 1,
+    });
+    let fakes = Fakes::start(&BTreeMap::from([(LINEAR, refusing)])).expect("the fakes serve");
     let dir = tempfile::tempdir().unwrap();
     let db = RawDb::open(&ingest::db_path_for(dir.path())).await.unwrap();
 
@@ -255,7 +253,7 @@ async fn a_sync_past_linears_request_limit_waits_and_completes() {
         "{}",
         serde_json::to_string(&summary).unwrap()
     );
-    let refused = fakes.health()["rate_limited"]["linear:requests"]
+    let refused = fakes.health()["faulted"]["linear:rate_limit_episode"]
         .as_u64()
         .unwrap_or(0);
     assert!(refused >= 1, "{}", fakes.health());

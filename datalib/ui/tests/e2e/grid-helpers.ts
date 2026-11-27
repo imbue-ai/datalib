@@ -345,6 +345,13 @@ export async function fillConfigEditor(page: Page, text: string) {
 /// through the editor asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
 
+/// How long a save of the config may take to answer. The server checks
+/// every step's params before it writes, running each step's program
+/// once (`datalib_dag::check`), and the fixture library has a download,
+/// a render and an embed per source: on a runner busy with other specs'
+/// syncs that is several seconds, past the default five.
+export const SAVE_ANSWERED = 15_000;
+
 /// How long the sources card may take to draw and load its rows after a
 /// navigation. Each sandboxed spec is a project of its own, so its first
 /// page is a cold browser's, and the first four start together on a

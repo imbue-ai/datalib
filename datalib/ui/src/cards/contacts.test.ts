@@ -413,17 +413,29 @@ describe("the card's edit calls", () => {
     expect(await draftOf("c1")).toBeNull();
   });
 
-  it("names the published commit the card showed when it saves", async () => {
+  it("names the published commit the card showed when it saves, and what is whose", async () => {
     const sent = answer(200, { outcome: "saved", commit: "abc" });
-    expect(await saveDraft("c 1", "seen-hash")).toEqual({ outcome: "saved", commit: "abc" });
+    const held = { "tel:+15550123456": "share" as const };
+    expect(await saveDraft("c 1", "seen-hash", held)).toEqual({ outcome: "saved", commit: "abc" });
     expect(sent).toEqual([
       {
         url: "/applet/datalib_contacts/contact/c%201/draft/save",
         method: "POST",
         type: "application/json",
-        body: JSON.stringify({ seen: "seen-hash" }),
+        body: JSON.stringify({ seen: "seen-hash", held }),
       },
     ]);
+  });
+
+  it("links a handle with the label and the card it came from", async () => {
+    const sent = answer(200, { ok: true });
+    const from = { label: "work", copied_from: { source_id: "contacts", key: "riker.vcf" } };
+    await linkHandle("email:riker@enterprise.test", "c1", undefined, from);
+    expect(JSON.parse(sent[0]!.body as string)).toEqual({
+      handle: "email:riker@enterprise.test",
+      contact_id: "c1",
+      ...from,
+    });
   });
 
   it("sends a photo as its own bytes and type, not as JSON", async () => {

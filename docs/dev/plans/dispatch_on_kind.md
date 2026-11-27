@@ -1,8 +1,10 @@
 # Dispatch on kind: one registry, and applets can join it
 
-*Mirror of the "Dispatch on kind" tab of the [Datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-22); nothing here is built.*
+*Mirror of the "Dispatch on kind" tab of the [Datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-22); one piece is built (see Status).*
 
 Adding a new kind of thing a link can name, such as a document or a sync run, means touching about eight places across the Rust backend and the UI. And the UI finds out whether the contacts app is configured by reading the gateway's error message for its name. This tab proposes one registry of kinds. Each kind has a few **facets** (how it is named, what a chip shows for it, what opening it does, where its bytes come from), and each facet is answered either by Datalib itself or by an applet that says it can. It came out of comparing notes between the links work (first two tabs) and the chips audit (PR #1304).
+
+**Status:** one piece is built. An applet's card metadata may list the kinds of name it `serves`, and the UI draws a `photo` name from whichever applet serves it (`ui/src/cards/photos.ts`, PR #1523). Nothing else here is: there is no registry and no `GET /api/kinds`, a chip's double-click and a Manage row's Browse are still chosen by `chipCardSource` and `appletBrowseSource`, and the UI still finds the contacts app by reading the gateway's 502 for `no applet "datalib_contacts"`.
 
 ## 1. What a kind needs today
 

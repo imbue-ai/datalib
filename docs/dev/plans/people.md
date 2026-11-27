@@ -1,7 +1,7 @@
 # Contacts: a simpler UI
 
 *Plan (2026-11-24, revised 2026-11-25 after Thad's notes and answers).
-Steps 1 and 2 of §"Order of work" are built, and
+Steps 1 to 3 of §"Order of work" are built, and
 [`../contacts.md`](../contacts.md) says how they work; the rest is not. "The problem" is as it was before. What the screens do was seen by using the TNG
 demo. The numbers are counts from copies of real libraries and from one
 real address book. If this is agreed, it replaces
@@ -286,12 +286,14 @@ what `from:` them finds. Counting every author from
 `grid_rows_by_author` takes 24 ms warm for 1,211 authors. The last date
 needs the stamp added to that index: without it the same read took 29 s.
 
-Today each document's record of a person carries a count of its own,
-`seen`. The two counts agree for 62 of 74 people in the fixture; the
-other 12 have more grid rows, for a reason not yet looked into, which
-comes first. Dropping `seen` altogether is worth doing but nothing here
-needs it. It also weighs which name a person goes by, so that one forged
-message renames nobody, and that would have to move to the grid's rows.
+Each document's record of a person carried a count of its own, `seen`,
+which counted messages and left out reactions, edit versions, comments,
+and everything from a source whose records counted nothing; it
+disagreed with `from:` for 27 of the fixture's 119 records. It is gone: the
+grid's rows are the one count (built,
+[`../contacts.md`](../contacts.md) §"How much someone wrote"), and the
+author index carries the stamp. A name is still weighed per document,
+so one forged message renames nobody.
 
 ## Order of work
 
@@ -305,14 +307,16 @@ Each step stands alone; the first two change no stored data.
    for a contact with no handle and for a card with none. A handle
    another contact has cannot be ticked yet (step 3), and the search
    finds a number however it is written, which was not in this plan.
-3. **Shared handles**, with the store's rung: built. Then **one line per
-   address** in the editor, which needs them. A handle added from a card
-   keeping its label and which card it came from goes with that: the
-   columns are new, so the open adds them and no rung is needed. Adding
-   many rows from an address book takes a card whose handle is on a
-   contact for that contact only when the names agree: Marie's card,
-   with the address Robert has, is skipped and named, and her page is
-   where the person says they share it.
+3. **Shared handles**, with the store's rung, then **one line per
+   address** in the editor: built. A handle added from a card keeps its
+   label and which card it came from; the columns are new, so the open
+   adds them and no rung was needed. A handle's label and its × change
+   it at once, as a link always has, and Discard does not undo them;
+   only what is typed waits for Save. *Use* beside each value replaced
+   *Use all*. Adding many rows from an address book takes a card whose
+   handle is on a contact for that contact only when the names agree:
+   Marie's card, with the address Robert has, is skipped and named, and
+   her page is where the person says they share it.
 4. **The list**: the three sorts, and *Unfiled*.
 5. **Suggestions.**
 6. **What goes, goes**, with the store's rung, the routes and

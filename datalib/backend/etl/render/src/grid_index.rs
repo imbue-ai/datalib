@@ -671,12 +671,14 @@ pub(crate) const DOCUMENT_LOOKUP_INDEXES: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS source_photos_by_photo ON source_photos (photo_uuid)",
 ];
 
-/// What [`crate::search_terms::write_people`] reads the grid's authors
-/// from, so a pass reads two short columns rather than every row's text
-/// (#1803). Only the index's, and never dropped for a remake, since the
-/// query names it.
-pub(crate) const AUTHORS_INDEX: &str =
-    "CREATE INDEX IF NOT EXISTS grid_rows_by_author ON grid_rows (author_handle, author)";
+/// Who wrote what, where and when: how much each person wrote, in each
+/// source and each document, and their newest row, read from this alone
+/// (docs/dev/contacts.md §"How much someone wrote"); and every name each
+/// handle wrote under, which [`crate::search_terms::write_people`] reads
+/// rather than every row's text (#1803). Only the index's, and never
+/// dropped for a remake, since the queries name it.
+pub(crate) const AUTHORS_INDEX: &str = "CREATE INDEX IF NOT EXISTS grid_rows_by_author \
+     ON grid_rows (author_handle, source_id, markdown_uuid, created_at_utc, author)";
 
 /// For listing a search's searchable documents from indexes alone. No
 /// statement reads by them now: they are kept for a count of the documents
@@ -4657,9 +4659,9 @@ mod source_cursor_tests {
     /// What a reader sees once a pass has returned: what its transactions
     /// committed, a rolled-back one leaving nothing.
     /// Each document's people as the grid index holds them.
-    async fn people(pool: &SqlitePool) -> Vec<(String, String, Option<i64>)> {
+    async fn people(pool: &SqlitePool) -> Vec<(String, String)> {
         test_sql!(
-            "SELECT d.markdown_uuid, r.contact_json, d.seen_items FROM document_contacts d \
+            "SELECT d.markdown_uuid, r.contact_json FROM document_contacts d \
              JOIN contact_records r USING (record_id) ORDER BY 1, 2"
         )
         .query_as()
@@ -5363,7 +5365,7 @@ mod work_tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
+    use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
     use datalib_etl::stop::StopFlag;
     use datalib_schema::data_nodes::{DataNodeRow, Lineage};
     use tempfile::tempdir;
@@ -5406,10 +5408,6 @@ mod work_tests {
         let mut author =
             NormalizedContact::new(source, format!("{source}-picard"), ContactKind::Person);
         author.handles = vec![ContactHandle::email(None, "picard@enterprise.org")];
-        author.seen = Some(Seen {
-            items: uuid.len() as u64,
-            last_at: Some(format!("2364-02-11 {uuid}")),
-        });
         d.contacts = vec![author];
         d
     }

@@ -267,6 +267,7 @@ pub fn http_request(
         bypass_latchkey: false,
         max_bytes: crate::http::DEFAULT_MAX_BYTES,
         latchkey: latchkey.clone(),
+        attempts: None,
     }
 }
 

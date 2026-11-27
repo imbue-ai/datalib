@@ -155,7 +155,7 @@ const CATALOG: &[Entry] = &[
     ),
     e("perseus", None, "Perseus Digital Library", Some("perseus")),
     // Not a provider: a group that renders what changed in another
-    // group's raw store between two commits (docs/dev/plans/completed/diff_renderer.md).
+    // group's raw store between two commits (docs/dev/config_model.md).
     e("diff", None, "Diff", Some("diff")),
 ];
 

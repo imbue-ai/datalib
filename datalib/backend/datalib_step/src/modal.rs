@@ -1,6 +1,6 @@
 //! `embed_on_modal_from_n_chunks`: an `embed` step that owes at least that
 //! many chunks sends them to the person's own Modal account, to be
-//! embedded on rented GPUs (docs/dev/plans/embed_on_modal.md). The step
+//! embedded on rented GPUs (docs/dev/embed_on_modal.md). The step
 //! keeps everything it does locally (what is owed, the prompts, the
 //! cache); only the embedding moves. A small driver on the bundled Node
 //! (`modal/embed_on_modal.mjs`) runs one Modal Sandbox per slice of

@@ -6,7 +6,7 @@ neither do the credentials you give them. The image is
 `ghcr.io/imbue-ai/datalib`, built for Linux on x86_64 and arm64, and it
 runs on macOS and Linux under Docker Desktop, Docker Engine, or Colima.
 
-It ships with a small demo data library already ingested — seven
+It ships with a small demo data library already synced — two dozen
 sources of Star Trek: TNG-themed fixture data — so you can see the app
 before you hand it anything of yours.
 
@@ -87,9 +87,13 @@ way a Jupyter server's URL carries one; your browser trades it for a
 cookie on the first load. The port is published on loopback only, so
 nothing else on your network can reach it.
 
-You are looking at Captain Picard's Claude conversations, a Gmail
-Takeout, Google Chat and Voice, texts and calls, a LinkedIn export,
-contacts and a folder of PDFs, all in one grid. The contacts app
+You are looking at the crew of the Enterprise's mail, chats, texts,
+calls, notes, calendars, contacts, PDFs and more, from two dozen
+sources, all in one grid. The sources that read files on disk read
+them again when you sync. The ones that stand in for a web service
+(Slack, Notion, GitHub and the like) cannot reach it, so their
+downloads are turned off and they keep what they already hold, as a
+source of yours does once its export is gone. The contacts app
 already knows a few of the crew, with Picard marked as you, so
 `from:me` and the person chips work; most of the people in the grid are
 linked to nobody yet, for you to try linking. Search by words and by

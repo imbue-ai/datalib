@@ -4,7 +4,7 @@
 //! (`datalib/backend/dag/README.md`).
 
 /// The `type` of a group that renders what changed in another group's raw
-/// store between two commits (`docs/dev/plans/completed/diff_renderer.md`).
+/// store between two commits (`docs/dev/config_model.md`).
 pub const DIFF_GROUP_TYPE: &str = "diff";
 
 /// The group the time-series index is filed under, and the tree it writes.

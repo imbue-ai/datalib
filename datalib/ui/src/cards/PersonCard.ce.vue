@@ -15,12 +15,14 @@ import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
 import ChipMenu from "./ChipMenu.ce.vue";
 import ContactEditor from "./ContactEditor.ce.vue";
-import { holds, sourceValues, valueText, type SourceValue } from "./contactFields";
+import { handleValueOf, holds, valueText, type SourceValue } from "./contactFields";
 import EntityChip from "./EntityChip.ce.vue";
 import { contactPageCell, contactPages } from "./contactPages";
 import {
   chipCell,
   contactCell,
+  addedSummary,
+  addPeople,
   contactsById,
   createContact,
   handleValue,
@@ -37,6 +39,7 @@ import {
   todayPartialDate,
   unlinkHandle,
   type ContactSummary,
+  type HandleFrom,
   type NormalizedContact,
   type WhenHeld,
 } from "./contacts";
@@ -177,20 +180,22 @@ adds nobody.</p>
 <p>An address several of your contacts share has a page of its own, with
 each of them on it. Their own pages say it is shared.</p>
 <p>Under <em>Your contact</em>, <em>Edit</em> changes its name, note and
-details. What you type is kept as a draft that only you see, even after a
-reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
-the contact was changed somewhere else meanwhile, Save says so and marks
-what changed rather than overwriting it. A photo is set or removed at
-once.</p>
+details. Each address and number on it is one line: its label and ×
+change it at once. Anything else you type is kept as a draft that only
+you see, even after a reload, until <em>Save</em> publishes it or
+<em>Discard</em> drops it. An address or number you type is theirs from
+the Save on, and when another contact has it, you say whether both have
+it or it moves here. If the contact was changed somewhere else
+meanwhile, Save says so and marks what changed rather than overwriting
+it. A photo is set or removed at once.</p>
 <p><em>This is me</em> says your contact is you: <code>from:me</code>,
 <code>to:me</code> and <code>with:me</code> then find every handle
 on it, an old address or a second number included. More than one
 contact can be you, such as a duplicate not merged yet.</p>
-<p>Under each source, <em>Use what it says</em> lists what that source
-says (a number, a title, an address), and <em>Use</em> puts one in your
-contact's draft; you pick where sources disagree. A value you use does
-not follow its source afterwards: the card says when the source now says
-something else.</p>
+<p>Beside what each source says (a number, a title, an address),
+<em>Use</em> puts it in your contact's draft; you pick where sources
+disagree. A value you use does not follow its source afterwards: the
+card says when the source now says something else.</p>
 <p>Every handle is a chip: pale blue when it is on a contact, grey when
 not. Right-click one to add it to your contact (beside whoever else has
 it, or moved off them), to say it is <em>not theirs</em>, or that it no
@@ -375,7 +380,7 @@ async function addAll(s: PersonSection) {
   const mine = model.value.mine;
   if (!mine) return;
   await act(async () => {
-    for (const h of linkable(s)) await linkHandle(h, mine.key);
+    for (const h of linkable(s)) await linkHandle(h, mine.key, undefined, saidBy(s, h));
   });
 }
 
@@ -452,19 +457,37 @@ async function findContacts() {
 const named = (c: ContactSummary) => c.name.toLowerCase() === newName.value.trim().toLowerCase();
 watch([canAdd, newName], findContacts);
 
+/// What the card an offered handle came from said of it.
+const offerSaid = (o: Offer): HandleFrom => ({ label: o.label, copied_from: o.card });
+
 const addTo = (c: ContactSummary) =>
   act(async () => {
-    for (const o of ticked.value) await linkHandle(o.handle, c.contact_id, whenHeld(o));
+    for (const o of ticked.value) {
+      await linkHandle(o.handle, c.contact_id, whenHeld(o), offerSaid(o));
+    }
   });
 const add = () =>
   act(async () => {
-    const free = ticked.value.filter((o) => !o.owners.length).map((o) => o.handle);
-    const id = await createContact(newName.value.trim(), free);
-    for (const o of ticked.value) {
-      if (o.owners.length) await linkHandle(o.handle, id, whenHeld(o));
+    const name = newName.value.trim();
+    if (ticked.value.length === 0) {
+      // Nothing but the contact names someone added with no handle.
+      written.value = contactSubject(await createContact(name, []));
+      return;
     }
-    // Nothing but the contact names someone added with no handle.
-    if (ticked.value.length === 0) written.value = contactSubject(id);
+    const held: Record<string, WhenHeld> = {};
+    for (const o of ticked.value) {
+      const when = whenHeld(o);
+      if (when) held[o.handle] = when;
+    }
+    const added = await addPeople([
+      {
+        name,
+        handles: ticked.value.filter((o) => !o.owners.length).map((o) => o.handle),
+        held,
+        said: Object.fromEntries(ticked.value.map((o) => [o.handle, offerSaid(o)])),
+      },
+    ]);
+    if (added.skipped.length) error.value = addedSummary(added);
   });
 function openContact(c: ContactSummary) {
   props.ctx.host.openCards(personSource(contactSubject(c.contact_id), { seenIn: null }));
@@ -490,13 +513,26 @@ watch(justOpened, () => {
 
 const editor = ref<InstanceType<typeof ContactEditor> | null>(null);
 
-function held(v: SourceValue): boolean {
+/// What *Use* beside a value copies, while your contact does not hold it.
+function usable(v: SourceValue | null): SourceValue | null {
+  if (!v || !model.value.mine) return null;
   const current = editor.value?.current;
-  return !!current && holds(current, v);
+  return current && holds(current, v) ? null : v;
 }
 
-async function copyFrom(s: PersonSection, values: SourceValue[], all = false) {
-  await editor.value?.copy(values, { source_id: s.sourceId, key: s.contact.key }, all);
+const nameValue = (c: NormalizedContact): SourceValue | null => {
+  const name = c.names[0]?.trim();
+  return name ? { part: "name", value: name } : null;
+};
+
+async function copyFrom(s: PersonSection, v: SourceValue) {
+  await editor.value?.copy(v, { source_id: s.sourceId, key: s.contact.key });
+}
+
+/// What a source's card says of one of its handles, which linking it keeps.
+function saidBy(s: PersonSection, handle: string): HandleFrom {
+  const h = s.contact.handles.find((x) => x.handle === handle);
+  return { label: h?.label ?? null, copied_from: { source_id: s.sourceId, key: s.contact.key } };
 }
 
 /// What the page says where it has nobody to show.
@@ -651,7 +687,7 @@ const headPhoto = computed(() => {
         />
         This is me
       </label>
-      <ul class="person-handles">
+      <ul v-if="!editor?.editing" class="person-handles">
         <li v-for="h in model.mine.handles" :key="h.value">
           <span
             v-if="h.handle"
@@ -659,6 +695,7 @@ const headPhoto = computed(() => {
             :ref="(el) => drawInto(el, h.handle!, shownValue(h), version)"
           ></span>
           <span v-else>{{ h.value }}</span>
+          <span v-if="h.label" class="person-muted">{{ h.label }}</span>
           <span v-if="othersNamed(h.handle)" class="person-muted">
             shared with {{ othersNamed(h.handle) }}
           </span>
@@ -713,7 +750,18 @@ const headPhoto = computed(() => {
           :title="model.mine ? 'Drag onto your contact’s photo to use it' : undefined"
         />
         <div>
-          <p class="person-record-name">{{ nameOf(s.contact) }}</p>
+          <p class="person-record-name">
+            {{ nameOf(s.contact) }}
+            <button
+              v-if="usable(nameValue(s.contact))"
+              type="button"
+              class="person-button person-use"
+              :aria-label="`Use ${valueText(nameValue(s.contact)!)}`"
+              @click.stop="copyFrom(s, nameValue(s.contact)!)"
+            >
+              Use
+            </button>
+          </p>
           <ul class="person-handles">
             <li v-for="h in s.contact.handles" :key="h.value">
               <span
@@ -729,6 +777,15 @@ const headPhoto = computed(() => {
               <span v-if="stateOf(h.handle) === 'other'" class="person-muted">
                 on {{ othersNamed(h.handle) }}
               </span>
+              <button
+                v-if="stateOf(h.handle) !== 'this' && usable(handleValueOf(h))"
+                type="button"
+                class="person-button person-use"
+                :aria-label="`Use ${valueText(handleValueOf(h)!)}`"
+                @click.stop="copyFrom(s, handleValueOf(h)!)"
+              >
+                Use
+              </button>
             </li>
           </ul>
           <button
@@ -748,35 +805,20 @@ const headPhoto = computed(() => {
           :key="line.label + line.value"
         >
           <dt>{{ line.label }}</dt>
-          <dd>{{ line.value }}</dd>
-        </template>
-      </dl>
-      <details v-if="model.mine && sourceValues(s.contact).length" class="person-copy">
-        <summary>Use what it says</summary>
-        <ul class="person-copy-values">
-          <li v-for="(v, i) in sourceValues(s.contact)" :key="i">
-            <span>{{ valueText(v) }}</span>
-            <span v-if="held(v)" class="person-muted">in your contact</span>
+          <dd>
+            {{ line.value }}
             <button
-              v-else
+              v-if="usable(line.use)"
               type="button"
-              class="person-button"
-              :aria-label="`Use ${valueText(v)}`"
-              @click.stop="copyFrom(s, [v])"
+              class="person-button person-use"
+              :aria-label="`Use ${valueText(line.use!)}`"
+              @click.stop="copyFrom(s, line.use!)"
             >
               Use
             </button>
-          </li>
-        </ul>
-        <button
-          type="button"
-          class="person-button"
-          :disabled="sourceValues(s.contact).every((v) => v.part === 'name' || held(v))"
-          @click.stop="copyFrom(s, sourceValues(s.contact), true)"
-        >
-          Use all
-        </button>
-      </details>
+          </dd>
+        </template>
+      </dl>
     </section>
 
     <p v-if="nothing" class="person-muted person-empty">{{ nothing }}</p>
@@ -981,25 +1023,10 @@ const headPhoto = computed(() => {
 .person-lines dd {
   margin: 0;
 }
-.person-copy {
-  margin-top: 0.4rem;
-}
-.person-copy summary {
-  cursor: pointer;
-  color: var(--datalib-muted);
-}
-.person-copy-values {
-  list-style: none;
-  margin: 0.3rem 0;
-  padding: 0;
-}
-.person-copy-values li {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-.person-copy-values li + li {
-  margin-top: 0.15rem;
+.person-use {
+  margin-left: 0.4rem;
+  padding: 0 0.4rem;
+  font-size: var(--datalib-font-size-small);
 }
 .person-empty {
   margin-top: 0.75rem;

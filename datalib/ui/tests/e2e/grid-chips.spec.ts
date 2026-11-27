@@ -128,12 +128,12 @@ test("a storage report's group and step are chips that open their cards", async 
 
   const group = (await inDocFrame(page, 'a.chip[data-entity="datalib:group/slack"]')).first();
   await expect(group).toHaveAttribute("title", /\(slack\)\n.+/, { timeout: 10_000 });
-  // The report names the step its store sits under, `slack/ingest`. This
-  // fixture root declares its sources render-only, so no such step is in
-  // its config and the chip stays as written: the step's name and id,
-  // nothing resolved. It still opens.
+  // The report names the step its store sits under, `slack/ingest`, which
+  // the library has, so the chip is resolved to it: its group and name.
   const step = (await inDocFrame(page, 'a.chip[data-entity="datalib:step/slack/ingest"]')).first();
-  await expect(step).toHaveAttribute("title", "ingest (slack/ingest)");
+  await expect(step).toHaveAttribute("title", /^slack · Ingest \(slack\/ingest\)\n/, {
+    timeout: 10_000,
+  });
 
   // The document's right-click menu on a group chip is the chip's.
   await stubClipboard(page);

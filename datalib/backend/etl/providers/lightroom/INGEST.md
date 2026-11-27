@@ -893,12 +893,12 @@ range; a Lightroom catalog (tens of MB) is nowhere near that.
 `lightroom_render` makes one grid row per image and writes no markdown;
 the `photos` applet draws the picture. How a photo's time gets its
 offset: [How Lightroom keeps a capture
-time](#how-lightroom-keeps-a-capture-time). What it reads and what goes
-into the search terms:
-[`docs/dev/plans/photos_applet.md`](/docs/dev/plans/photos_applet.md)
-and the crate's `src/read.rs`. Render reads only the mirror; the
-previews are read by the applet, live, from the `Previews.lrdata` beside
-the catalog, since their file names change on every edit.
+time](#how-lightroom-keeps-a-capture-time). What it reads: [Where a
+photo's facts are](#where-a-photos-facts-are) below, and the crate's
+`src/read.rs`. Render reads only the mirror and fills a
+`NormalizedPhoto` (`datalib_photo_schema`) for each image, which is all
+the `photos` applet reads of a source; the applet reads the previews
+itself, live ([The previews](#the-previews)).
 
 A photo's keywords are `keyword:` terms, the people tagged on its faces
 or by person keywords `pictured:` terms (which `with:` reads too), its
@@ -911,6 +911,92 @@ books, slideshows, prints and web galleries) and
 each with its `…Image` table of members. A smart collection has no
 member rows (its rules are in `AgLibraryCollectionContent`), so it is
 not one. Keywords, people and collections are `label:` terms as well.
+
+### Where a photo's facts are
+
+**One photo or video is one `Adobe_images` row**, named everywhere else
+by its `id_local`, mostly in a column called `image`; its `id_global` is
+a UUID. Render reads these, all of them whole, so a change to any one
+renders the catalog again (`read.rs::TABLES`). The test catalog named
+below is catalog 03 of the [four](#verified-against-four-real-catalogs),
+`more_face_tags_gps_edit`, which Bazel also fetches with its previews
+and originals (`@lightroom_catalog_03_previews`, for
+`lightroom_render:catalog_03` and `applets:photos_catalog_03`).
+
+| what | where |
+| --- | --- |
+| capture time | `Adobe_images.captureTime`, a clock reading with no offset; the offset only in the XMP ([The offset](#the-offset)) |
+| title, headline | only in the XMP: `dc:title`, `photoshop:Headline` |
+| the XMP | `Adobe_AdditionalMetadata.xmp`: a 4-byte big-endian length, then the packet, zlib-compressed (`xmp.rs`) |
+| last edited | `Adobe_images.touchTime`, seconds since 2001-01-01 UTC, so an instant |
+| rating, pick, color label, size | `Adobe_images.rating`, `.pick`, `.colorLabels`, `.fileWidth`, `.fileHeight` |
+| a virtual copy | `Adobe_images.copyName`, empty on the master |
+| caption, copyright | `AgLibraryIPTC.caption`, `.copyright` |
+| GPS | `AgHarvestedExifMetadata.gpsLatitude`, `.gpsLongitude`, where `.hasGPS = 1` |
+| camera, lens, exposure | the same row: `cameraModelRef` → `AgInternedExifCameraModel`, `lensRef` → `AgInternedExifLens`; `isoSpeedRating`, `focalLength`, and `shutterSpeed` and `aperture` as APEX values |
+| place names, creator | `AgHarvestedIptcMetadata` → `AgInternedIptcCity`, `…State`, `…Country`, `…Location`, `…Creator`. The test catalog's were filled by Lightroom from the GPS (`locationDataOrigination = 'gps'`). |
+| keywords | `AgLibraryKeywordImage` → `AgLibraryKeyword`, a tree by `parent` whose root has no name |
+| people | a keyword with `keywordType = 'person'`. A face is an `AgLibraryFace` row, its corners `tl_x`, `tl_y`, `br_x`, `br_y` as fractions of the picture, named through `AgLibraryKeywordFace.tag`; a face counts once a person confirmed it (`userPick = 1`, `userReject` not set) |
+| collections | above |
+| a video's length | `AgVideoInfo.duration` |
+| the file | `Adobe_images.rootFile` → `AgLibraryFile` (`id_global`, `baseName`, `extension`) → `AgLibraryFolder` (`pathFromRoot`, `rootFolder`) → `AgLibraryRootFolder` (`absolutePath`, and `relativePathFromCatalog` for a library that moved with its catalog) |
+| where the catalog is | `Adobe_variablesTable`'s `Adobe_lastScannedCatalogPath`, where Lightroom last opened it; a source's `catalog_path` wins, for a catalog moved or read from another machine |
+
+Not in any test catalog yet: a virtual copy, a RAW original, a photo
+with no preview.
+
+### The previews
+
+A **preview** is a JPEG Lightroom rendered from the original with the
+person's edits applied. It is kept in the `<name> Previews.lrdata`
+folder beside `<name>.lrcat`, which is how the applet finds it from the
+catalog's path. A **smart preview** is something else, a small DNG for
+editing offline that a browser cannot show, and nothing here reads it.
+
+**The file names.** A newer catalog (test catalog 03, version 1504001)
+keeps one JPEG per size, `<a>/<abcd>/<uuid>-<digest>_<long edge>`, such
+as `…-3219a2e1…_320` and `_756`. An older one (the 2020 catalogs in
+the test repository's history) keeps every size in one `<uuid>-<digest>.lrprev`, each JPEG a section behind a short `AgHg`
+header naming its level (`level_3`). `<uuid>` is the file's
+`AgLibraryFile.id_global`, not the image's (all seven photos of catalog
+03), and `<a>` and `<abcd>` are its first one and four characters
+(`applets/src/photos/pictures.rs`).
+
+**Which render is current is said by `previews.db`**, in the same
+folder. `ImageCacheEntry(imageId, uuid, digest, orientation)` gives one
+render per photo, `imageId` being `Adobe_images.id_local`;
+`PyramidLevel(uuid, digest, level, longDimension, …)` lists that
+render's sizes. The folder alone cannot say: catalog 03's holds up to
+five digests for one photo, older renders Lightroom has not yet thrown
+away. Its 19 current sizes are all on disk, and every file in the folder
+has a `PyramidLevel` row. `Pyramid.quality` (`thumbnail`, `smallRender`,
+`standard`, `final`) says how far a render got.
+
+**The current render can be smaller than the original**, since
+Lightroom renders a size when something asks for it: photo 87's goes up
+to 756 px of a 1,200 px original, while an older render of it has a
+1,200 px level. The photo card says so.
+
+**A preview is stored unturned.** `ImageCacheEntry.orientation` names
+how to show it, as the stored picture's corners the shown top edge runs
+between (`AB` upright, `BC` a quarter turn, the commonest in a real
+library); the applet writes the matching EXIF Orientation into the JPEG
+it serves.
+
+**Render stores no preview path.** A preview's name carries a digest
+that moves on every edit, and Lightroom deletes and rebuilds previews on
+its own schedule, so a path written at render would go stale between
+syncs. The applet looks the current render up on each request: it opens
+`previews.db` read-only, takes the smallest size at least 320 px across
+for a thumbnail and the largest for the full view, reads the loose file
+or else the `.lrprev`'s level, and builds every path from a uuid and a
+digest it checked the shape of, never from the request. With no preview
+it serves the original when a browser draws it, and says which in
+`X-Datalib-Image-From` (`preview` or `original`).
+
+`previews.db` in the test catalog is in rollback-journal mode, not WAL,
+so a read-only open needs no `-shm` file. Whether Lightroom keeps it so
+while it runs, and how long it holds a write lock, has not been tried.
 
 **`file_inventory` as a companion**, if you want to know whether the files the
 catalog points at are still there.

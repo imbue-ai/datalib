@@ -1,6 +1,7 @@
 //! A library is its files: copied while nothing runs on it, the copy works
-//! wherever it lands. Each test syncs the Docker image's demo library,
-//! laid out by the image's own `stage_demo.sh`, copies some or all of it
+//! wherever it lands. Each test syncs the Docker image's demo library, the
+//! TNG library, laid out by the image's own `stage_demo.sh` and
+//! `unpack.sh`, copies some or all of it
 //! the way a person backs one up (`cp -R`), and checks that the copy
 //! answers search, `from:me` and the curated stores as the original did.
 //! What to back up, and what these tests do not cover:
@@ -57,32 +58,54 @@ fn bin_dir() -> PathBuf {
     dir
 }
 
-/// The demo library as the image builds it, less the embeddings, which
-/// need the model and change nothing these tests compare: the inputs
-/// staged by `stage_demo.sh`, its config pointed at them, its curated
-/// stores laid in, then one sync.
-fn synced_demo() -> Demo {
-    let dir = match std::env::var_os("TEST_TMPDIR") {
+/// Where the image puts the files the file-reading sources read.
+const IMAGE_INPUTS: &str = "/opt/datalib/demo/inputs";
+
+fn temp_dir() -> tempfile::TempDir {
+    match std::env::var_os("TEST_TMPDIR") {
         Some(t) => tempfile::tempdir_in(t),
         None => tempfile::tempdir(),
     }
-    .expect("a temp dir");
-    let ctx = dir.path().join("ctx");
+    .expect("a temp dir")
+}
+
+/// The demo library as `stage_demo.sh` stages it into a build context
+/// under `dir`: its archive, its config and its curated stores.
+fn staged_demo(dir: &Path) -> PathBuf {
+    let ctx = dir.join("ctx");
+    let ingested = runfile("tests/fixtures/ingested/config_body.toml");
     let staged = Command::new(runfile("datalib/docker/stage_demo.sh"))
         .arg(&ctx)
+        .arg(ingested.parent().expect("the fixture build's folder"))
         .status()
         .expect("run stage_demo.sh");
     assert!(staged.success(), "stage_demo.sh failed");
-    let inputs = ctx.join("demo");
+    ctx.join("demo")
+}
+
+/// The demo library as the image builds it, less the embeddings, which
+/// need the model and change nothing these tests compare: staged by
+/// `stage_demo.sh`, unpacked by `unpack.sh`, then one sync. Its inputs
+/// are moved out beside it and its config pointed there, because they
+/// stand for a person's exports, which a copy of the library does not
+/// carry.
+fn synced_demo() -> Demo {
+    let dir = temp_dir();
     let library = dir.path().join("library");
-    std::fs::create_dir(&library).expect("make the library");
-    let config = std::fs::read_to_string(inputs.join("config.toml")).expect("the staged config");
-    let config = without_embeds(&config.replace("/opt/datalib/demo-sources", path_str(&inputs)));
-    std::fs::write(library.join("config.toml"), config).expect("write the config");
-    cp_r(
-        &inputs.join("datalib_curated"),
-        &library.join("datalib_curated"),
-    );
+    cp_r(&staged_demo(dir.path()), &library);
+    let unpacked = Command::new("sh")
+        .arg(library.join("unpack.sh"))
+        .arg(&library)
+        .status()
+        .expect("run unpack.sh");
+    assert!(unpacked.success(), "unpack.sh failed");
+    let inputs = dir.path().join("inputs");
+    std::fs::rename(library.join("inputs"), &inputs).expect("move the inputs out");
+    let config_path = library.join("config.toml");
+    let config = std::fs::read_to_string(&config_path).expect("the staged config");
+    assert!(config.contains(IMAGE_INPUTS), "the config names no inputs");
+    let config = without_embeds(&config.replace(IMAGE_INPUTS, path_str(&inputs)));
+    std::fs::write(&config_path, config).expect("write the config");
     let cache = dir.path().join("cache");
     let demo = Demo {
         _dir: dir,
@@ -103,6 +126,55 @@ fn without_embeds(config: &str) -> String {
     let steps = doc["steps"].as_array_mut().expect("[[steps]]");
     steps.retain(|s| !s["id"].as_str().expect("a step id").ends_with("/embed"));
     toml::to_string(&doc).expect("write the config")
+}
+
+/// The groups whose download is kept (`common.download = false`), and
+/// those whose download reads its inputs.
+fn kept_and_reading(library: &Path) -> (Vec<String>, Vec<String>) {
+    let text = std::fs::read_to_string(library.join("config.toml")).expect("read the config");
+    let doc: toml::Table = toml::from_str(&text).expect("the config parses");
+    let (mut kept, mut reading) = (Vec::new(), Vec::new());
+    for step in doc["steps"].as_array().expect("[[steps]]") {
+        let id = step["id"].as_str().expect("a step id");
+        let Some(group) = id.strip_suffix("/ingest") else {
+            continue;
+        };
+        let download = step
+            .get("params")
+            .and_then(|p| p.get("common"))
+            .and_then(|c| c.get("download"))
+            .and_then(toml::Value::as_bool)
+            .unwrap_or(true);
+        if download { &mut reading } else { &mut kept }.push(group.to_string());
+    }
+    kept.sort();
+    reading.sort();
+    assert!(
+        !kept.is_empty() && !reading.is_empty(),
+        "{kept:?} {reading:?}"
+    );
+    (kept, reading)
+}
+
+/// The config the image starts with is in the shape `datalib-http` leaves
+/// as written: one it would rewrite is rewritten on every start of a copy,
+/// with a `config.toml.bak` left each time.
+#[test]
+fn the_demo_config_is_in_the_shape_the_app_leaves_as_written() {
+    let dir = temp_dir();
+    let text = std::fs::read_to_string(staged_demo(dir.path()).join("config.toml"))
+        .expect("the staged config");
+    let upgrade = datalib_migrate_config::upgrade_unattended(&text);
+    assert!(
+        upgrade.done.is_empty() && upgrade.refused.is_empty(),
+        "datalib-http would rewrite the demo config on load: {:?} {:?}",
+        upgrade.done,
+        upgrade
+            .refused
+            .iter()
+            .map(|(why, e)| format!("{why}: {e:#}"))
+            .collect::<Vec<_>>()
+    );
 }
 
 fn path_str(p: &Path) -> &str {
@@ -341,10 +413,12 @@ fn an_older_copy_put_back_catches_up() {
     cp_r(&demo.library, &backup);
     let first = answers(&demo.library);
 
-    let contacts = demo.inputs.join("contacts");
-    std::fs::remove_dir_all(&contacts).expect("remove the first address books");
+    // The library's address books are the fixture's second ones; going
+    // back to the first is a change too.
+    let contacts = demo.inputs.join("tng_contacts/carddav_work");
+    std::fs::remove_dir_all(&contacts).expect("remove the address books");
     cp_r(
-        &runfile("datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng_v2"),
+        &runfile("datalib/backend/etl/providers/contacts/tests/fixtures/carddav_tng"),
         &contacts,
     );
     demo.sync(&demo.library);
@@ -353,7 +427,7 @@ fn an_older_copy_put_back_catches_up() {
     differences(&first, &moved_on, "", &mut changed);
     assert!(
         !changed.is_empty(),
-        "the second address books changed nothing, so this test checks nothing"
+        "the first address books changed nothing, so this test checks nothing"
     );
 
     std::fs::remove_dir_all(&demo.library).expect("remove the library");
@@ -365,9 +439,9 @@ fn an_older_copy_put_back_catches_up() {
 /// A backup needs the config, the raw stores and the curated stores, and
 /// nothing else Datalib wrote: put back on a machine without the exports
 /// it was made from, the library renders and indexes the rest and answers
-/// as before, and each download says its input is gone. The one input it
-/// still needs is the PDFs', which that source reads where they lie
-/// (`etl/providers/pdf/INGEST.md`).
+/// as before. A download whose input is gone may fail, and a kept one does
+/// not. The one input it still needs is the PDFs', which that source
+/// reads where they lie (`etl/providers/pdf/INGEST.md`).
 #[test]
 fn the_config_raw_and_curated_stores_are_the_backup() {
     let demo = synced_demo();
@@ -390,39 +464,43 @@ fn the_config_raw_and_curated_stores_are_the_backup() {
         }
     }
     raw.sort();
-    assert_eq!(
-        raw.len(),
-        7,
-        "the demo's seven sources each left a raw store: {raw:?}"
-    );
+    let (kept_sources, reading) = kept_and_reading(&demo.library);
+    let mut sources = [kept_sources, reading.clone()].concat();
+    sources.sort();
+    assert_eq!(raw, sources, "every source left a raw store");
     std::fs::remove_dir_all(&demo.library).expect("remove the original");
-    for input in std::fs::read_dir(&demo.inputs).expect("list the inputs") {
-        let input = input.expect("an input").path();
-        if input.is_dir() && !input.ends_with("pdfs") {
-            std::fs::remove_dir_all(&input).expect("remove an input");
-        }
-    }
+    remove_inputs_but(&demo.inputs, "tng_pdfs");
 
-    let (done, outcomes) = demo.sync_as_it_ends(&kept);
+    let (_done, outcomes) = demo.sync_as_it_ends(&kept);
     let failed: Vec<&String> = outcomes
         .iter()
         .filter(|(_, o)| o.starts_with("Failed"))
         .map(|(s, _)| s)
         .collect();
-    let gone: Vec<String> = raw
+    let gone: Vec<String> = reading
         .iter()
-        .filter(|g| g.as_str() != "pdfs")
+        .filter(|g| g.as_str() != "tng_pdfs")
         .map(|g| format!("{g}/ingest"))
         .collect();
     assert!(
-        !done && failed.iter().copied().eq(gone.iter()),
-        "only the downloads whose inputs are gone fail: {outcomes:#?}"
+        !failed.is_empty() && failed.iter().all(|s| gone.contains(s)),
+        "only downloads whose inputs are gone fail: {outcomes:#?}"
     );
     assert_same(
         &without_disk_use(before),
         &without_disk_use(answers(&kept)),
         "the library put back from its stores",
     );
+}
+
+/// Delete every source's inputs but `keep`'s.
+fn remove_inputs_but(inputs: &Path, keep: &str) {
+    for input in std::fs::read_dir(inputs).expect("list the inputs") {
+        let input = input.expect("an input").path();
+        if input.is_dir() && !input.ends_with(keep) {
+            std::fs::remove_dir_all(&input).expect("remove an input");
+        }
+    }
 }
 
 /// A copy of `from` as a backup tool that honours `CACHEDIR.TAG` makes
@@ -523,16 +601,11 @@ fn a_source_that_no_longer_downloads_keeps_what_it_has() {
     let before = answers(&demo.library);
     let config = demo.library.join("config.toml");
     let text = std::fs::read_to_string(&config).expect("read the config");
-    std::fs::write(&config, not_downloading(&text, &["pdfs"])).expect("write the config");
-    for input in std::fs::read_dir(&demo.inputs).expect("list the inputs") {
-        let input = input.expect("an input").path();
-        if input.is_dir() && !input.ends_with("pdfs") {
-            std::fs::remove_dir_all(&input).expect("remove an input");
-        }
-    }
+    std::fs::write(&config, not_downloading(&text, &["tng_pdfs"])).expect("write the config");
+    remove_inputs_but(&demo.inputs, "tng_pdfs");
 
-    // An edited step is stale, so what reads the six runs once and
-    // finds nothing new; after that, nothing runs.
+    // An edited step is stale, so what reads the ones edited runs once
+    // and finds nothing new; after that, nothing runs.
     let edited = demo.sync(&demo.library);
     let made_anew: Vec<_> = edited
         .iter()
