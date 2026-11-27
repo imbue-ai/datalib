@@ -37,7 +37,7 @@ pub struct RawDb {
 }
 
 impl RawDb {
-    /// Open this store to *read* it, for the render pass.
+    /// Open this store to *read* it, for the render step.
     ///
     /// The download step owns this store; render only reads it. An ordinary
     /// [`Self::open`] would discard the downloader's in-flight rows,
