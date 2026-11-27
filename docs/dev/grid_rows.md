@@ -134,7 +134,7 @@ From a checkout:
    bar work; `every_filter_key_is_served_by_an_index` then asks for an
    index or a place in its `SCANS` list.
 5. If it is a string, say whether a person reads it as a name or a
-   label: settle it in `settle_row` (`etl/render/src/names.rs`), which
+   label: add it to `settle_row` (`etl/render/src/names.rs`), which
    strips its bidi controls as the document is stored, or add it to
    that file's `KEPT` list as an id, a path, a stamp or a body.
    `every_grid_row_string_is_settled_or_kept` fails until it is one or
@@ -142,10 +142,11 @@ From a checkout:
 6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape
-only when the step that writes them runs. Each start of the loop asks
-each step (`--prepare`) whether its store's recorded shape is this
-build's; the app then offers to re-render them all, downloading
-nothing, and until then a source's own sync re-renders that source
+only when the step that writes them runs. Each start of the loop runs
+each step's command with `--prepare` appended, and the step compares
+its store's recorded shape with this build's; once every `--prepare`
+has exited, the loop opens one request that re-runs each step whose
+store is in another shape, downloading nothing
 ([the runner](../../datalib/backend/dag/README.md#upgrading-a-root)).
 The render step sees its own DDL hash moved (`_store_schema`, one of
 its params) and re-renders every document into the new shape, and the
@@ -294,8 +295,8 @@ workspace and its channel) is its tree, below.
 
 Every row sits in a tree of **containers**: the chat, thread, channel,
 page, calendar or label it lives in, each one row of the grid index's
-`nodes` table, by its uuid. `nodes` is settled from what the documents
-say: each carries a `data_nodes` row for every container it sits in, the
+`nodes` table, by its uuid. Each `nodes` row is recomputed from what
+the documents say: each carries a `data_nodes` row for every container it sits in, the
 way it carries its contacts, so a channel has one there under every
 thread. The document that holds a container's own grid row tells of it,
 else the newest that names it does. Every reader reads `nodes`;

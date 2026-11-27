@@ -101,7 +101,10 @@ Two things follow from sharing a process:
 * **Anything process-global is shared.** An environment variable
   one test sets is every test's ([`AGENTS.md`](/AGENTS.md) §"Tests wait
   on the observable, never on the clock" says what to do instead).
-  Playback is not one: a test points the future it
+  Playback is not one. A **tape** is a test's recorded HTTP
+  responses, one file per request at `<dir>/<service>/<key>.json`,
+  which `datalib_etl_web::playback` replays in place of the network.
+  A test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
   process. A tracing subscriber is the same story from the other side:
@@ -289,7 +292,8 @@ which is why it is three tests.
 ### Writing a spec that does not flake
 
 The page under test keeps changing on its own. The Manage grid is drawn
-again after every remount, whenever the loop's record moves, and on a
+again after every remount, whenever `system/supervisor.sqlite`
+changes, and on a
 clock, and a real `datalib-pipeline` runs the syncs. A month of CI
 (September 2026) had about a hundred flaky e2e failures, and nearly all
 of them were one of two mistakes: the test looked at the page between

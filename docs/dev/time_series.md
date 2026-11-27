@@ -269,8 +269,8 @@ What draws where:
 ## Rebuilding
 
 Both stores are derived. Each records its shape in `_datalib_meta`.
-When the shape changes, the step answers the `--prepare` the runner
-sends at each start that it needs to run again
+When the shape changes, the step's `--prepare`, which the runner runs
+at each start, reports `needs_rerun`
 (`datalib/backend/datalib_step/src/prepare.rs`), and the
 step's `store::open` drops each table whose shape changed and creates
 it empty, in the same file, before the step fills it again. Because the

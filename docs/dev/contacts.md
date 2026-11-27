@@ -672,12 +672,13 @@ Everything is in `datalib/ui/src/cards/`:
   everyone who used it. `people` is who each handle
   is, for the whole app: the resolver ([`chips.md`](chips.md)
   §"Resolving") over `/people` and the contacts app's `/resolve`; an
-  edit made in the page forgets the handles it touched. An edit made
+  edit made in the page drops the resolver's answers for the handles it
+  touched (`forget`). An edit made
   anywhere else (another window, an agent) reaches every page as the
-  live stream's `curated` frame, on which `people` asks again. The
-  gateway nudges `datalib-http`'s watch after every write it forwards
-  to an applet, and the watch sends the frame when a `datalib_curated/`
-  store's head moved (`http/src/watch.rs`); a draft's autosave is no
+  live stream's `curated` frame, on which `people` asks again. After
+  every write it forwards to an applet, the gateway sends
+  `datalib-http`'s watch a message on its channel (`watch::Nudge`), and
+  the watch sends the frame when a `datalib_curated/` store's head moved (`http/src/watch.rs`); a draft's autosave is no
   commit, so it sends none. `decorateHandles` draws a document's chips
   and `chipCell` a grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and

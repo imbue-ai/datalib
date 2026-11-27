@@ -47,8 +47,10 @@ brevity; type `datalib-doltlite` if that is what you installed.
 > **Always pass `-readonly`** when you're just exploring. A writable
 > CLI session does **not** get a branch of its own — it lands on the
 > file's default branch, `main`, which is the one every reader reads.
-> Its commits land on `main`, and the sync's next seal moves `main`
-> over them, so they vanish without an error. While it holds a
+> Its commits land on `main`, and the sync's next seal (a commit on the
+> writer's branch, `datalib_writer`, then `main` moved to it:
+> [`etl/README.md` §"A writer works on its own branch and publishes when it seals"](../../datalib/backend/etl/README.md#a-writer-works-on-its-own-branch-and-publishes-when-it-seals))
+> moves `main` over them, so they vanish without an error. While it holds a
 > transaction open, the sync's writes wait on it and can fail with
 > `database is locked` ([Locks and writers](#locks-and-writers)). The
 > writer lock in `datalib_etl::doltlite_raw` keeps a second *Rust*
@@ -449,7 +451,7 @@ The common-use subset:
 | `dolt_diff_<table>` | vtab | row-level diff for one table. Pass two refs, or leave them off for every adjacent pair on the branch. |
 | `dolt_merge(branch)` | scalar fn | merge a branch into the active one; returns the commit, or `Already up to date`. `'--squash'` first makes it one commit with one parent. See [Merging a branch](#merging-a-branch). |
 | `dolt_merge_base(a, b)` | scalar fn | the commit two branches split at. |
-| `dolt_conflicts_resolve('--ours' \| '--theirs', table)` | scalar fn | settles a merge's conflicts in one table, inside the merge's transaction, a whole row at a time; see [Merging a branch](#merging-a-branch). |
+| `dolt_conflicts_resolve('--ours' \| '--theirs', table)` | scalar fn | resolves a merge's conflicts in one table, inside the merge's transaction, a whole row at a time; see [Merging a branch](#merging-a-branch). |
 | `dolt_revert(hash)` | scalar fn | a new commit undoing one; see [Reverting a commit](#reverting-a-commit). |
 | `dolt_at_<table>(ref)` | table-valued fn | one table as it was at a commit. |
 | `dolt_history_<table>` | vtab | every committed version of every row in one table; a primary-key equality seeks per commit. |
@@ -979,7 +981,7 @@ index over the term's text alone, `content=''` and
 - **The join from a hit back to its term seeks the key**
   (`SEARCH … USING INTEGER PRIMARY KEY`), so filtering on a term's
   other columns costs nothing beyond the match.
-- **A contentless-delete index forgets a row by rowid**, so replacing a
+- **A contentless-delete index deletes a row by rowid**, so replacing a
   document's terms is: delete their rowids from the index (found
   through the plain table's index), delete them from the table, insert
   the new ones.
@@ -1182,14 +1184,14 @@ applying any DDL. Both halves are needed, and they split the way git's
 do: reset restores the tracked tables and leaves an untracked one
 alone, clean takes the untracked one. A writer that died after a
 `CREATE TABLE` and before its first commit leaves exactly that. Every
-commit is `-Am`, so anything left dirty here would ride into the schema
-commit a moment later; that is why the untracked tables go too.
+commit is `-Am`, so anything left dirty here would be committed with
+the schema commit a moment later; that is why the untracked tables go too.
 
 The rows it throws away were written after the last seal and never
 committed, so no reader — every reader pins a commit — was ever
 promised them. Keeping them would have meant committing a state the
 writer never vouched for: an entity row whose blobs never arrived, half
-a channel. The next pass owes them again.
+a channel. The next run owes them again.
 
 The other thing a dead writer can leave is a `dolt_commit` on its own
 branch that it never published: the kill landed between `commit_run`'s

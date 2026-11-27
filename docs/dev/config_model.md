@@ -81,8 +81,12 @@ since the runner infers nothing from the program's name:
   `embedding_map` and perseus's
   `render_markdown` read their inputs off disk and write
   `reads = "files"`. Every other step writes `reads = "pinned"`, even
-  while its `inputs` are empty (a fan-in's are, until a source is
-  added).
+  while its `inputs` are empty. A fan-in's are, until a source is
+  added: a **fan-in** is a step that reads one function of every
+  group, by a pattern such as `*/render_markdown`. The three are
+  `unified_grid_and_search_index` (`*/render_markdown`),
+  `embedding_map` (`*/embed`) and `time_series_index`
+  (`*/render_time_series`).
 - **`locks`.** `embed` writes `locks = ["embedder"]`, and every other
   step under a group with no `type` (`unified_grid_and_search_index`,
   `embedding_map`, `time_series_index`) writes `locks = ["index"]`. A
@@ -137,7 +141,8 @@ source's store, so comparing them again rebuilds it. Removing a diff
 group on the Manage screen therefore offers, checked by default, to
 delete the tree too (`POST /api/purge` with the group ids, once they
 are out of the config): the loop stops the group's steps, deletes
-`<root>/<group>/` and forgets the steps in its record
+`<root>/<group>/` and deletes the group's steps' rows from
+`system/supervisor.sqlite`
 ([`dag/README.md`](../../datalib/backend/dag/README.md#resets-and-purges)).
 Without that, a group re-added under the same id and definition would
 read as up to date and write nothing.
@@ -380,14 +385,14 @@ and may also hold the method it pairs with (Gmail's shows its Takeout).
 A test loads and plans every stanza.
 
 Neither the runner nor the server can read a step's params: they
-belong to its program. So both ask, through the `--check` verb
-(`step_protocol.md` § Check): `datalib-pipeline check`, `PUT
-/api/config` and `POST /api/config/check` invoke every step whose
+belong to its program. So both run the step's command with `--check`
+appended (`step_protocol.md` § Check): `datalib-pipeline check`, `PUT
+/api/config` and `POST /api/config/check` do it for every step whose
 program takes the verb, `datalib-step`'s included
 (`datalib/backend/dag/src/check.rs`). A step that would refuse its
 params is an ordinary `rejected` diagnostic at the misspelled key's
-line: the save is refused and the check exits 2. A warning it answers
-with, such as one of the keys below that no longer do anything, is a
+line: the save is refused and the check exits 2. A warning in its
+outcome line, such as one of the keys below that no longer do anything, is a
 `warning` there.
 
 ## `Reach`: origin or local
@@ -533,8 +538,8 @@ chunk names from the inference cache, and reports each searched
 source's documents and how many of them are not embedded yet; each
 `embed` reports what it left of its own. Nothing of a source's reads a step that reads
 every source, and that is what lets each source's `embed` finish on its
-own: the runner holds a step's finish back while anything upstream of
-it is still running, so a step downstream of a fan-in would finish only
+own: the runner does not count a step as finished while anything
+upstream of it is still running, so a step downstream of a fan-in would finish only
 when the slowest source did. Search by meaning is off for a source with
 no `embed`, or with its `embed` turned off; removing `unified_grid_and_search_index` takes
 every `embed` with it. A `qmd_index`, `keyword_index` or

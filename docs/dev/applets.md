@@ -94,10 +94,10 @@ One invocation, one process:
 **Write the directory, bind a port, then print
 `DATALIB_APPLET_PORT=<port>` to stdout** — in that order. The gateway
 waits for that line and then scans the store, so the line is its signal
-that the write finished. An applet that announced first would race the
+that the write finished. An applet that printed it first would race the
 scan and intermittently come up with no components.
 
-`-p 0` means "any port": the OS picks, and the announcement says
+`-p 0` means "any port": the OS picks, and the printed line says
 which. The port travels from child to gateway, never the other way: a
 port the gateway picked would have to be released and then raced for by
 the child, and "is anything accepting on that port?" is answered just as
@@ -112,7 +112,7 @@ outside.
 Everything on stdout other than that one line is logged and otherwise
 ignored. stderr is the log: the gateway forwards it line by line and
 keeps the tail, which becomes the error message if the applet never
-announces. A line of tracing JSON — what `datalib_obs::init` writes
+prints its port. A line of tracing JSON — what `datalib_obs::init` writes
 when stderr is a pipe, as `datalib-applet` does — is stored at its own
 level, the way the runner stores a step's; any other line at `info`.
 The lines belong to the server's `http` process, with `applet` naming
@@ -167,8 +167,8 @@ that uses them.
 Starts run in parallel, so boot waits for the slowest applet rather than
 the sum, and each is capped at 20 seconds, since the HTTP listener is
 already accepting and a hanging applet would otherwise leave requests
-queued with nothing logged. An applet that *exits* without announcing
-is reported at once.
+queued with nothing logged. An applet that *exits* without printing
+its port is reported at once.
 
 ## The frontend store
 
@@ -387,7 +387,7 @@ The gateway forwards an applet's stderr line by line as it arrives and
 keeps the tail, rather than reading the pipe to its end when the applet
 fails: the pipe is held by anything the applet spawned too, so a wrapper
 script's still-living child would block the read. Only for an applet
-that exits without announcing does the start path wait for the tail,
+that exits without printing its port does the start path wait for the tail,
 whose last words are the reason, and then for at most two seconds.
 
 ## An applet that contributes no components

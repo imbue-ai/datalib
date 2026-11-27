@@ -304,8 +304,8 @@ shared writers apply it for every source:
   `html::escape_name_inline` / `escape_name_text` for a name with no
   handle, a filename or a label, which each renderer calls where it
   writes one (calendar-common, contact-common, forge-render-common,
-  Notion, Todoist, Google Drive, PDF, Lightroom; chat-common settles
-  its chat and items first);
+  Notion, Todoist, Google Drive, PDF, Lightroom; chat-common strips
+  the bidi controls from its chat's and items' names first);
 - in the store: `grid_index::apply_page` (`apply_one` is a page of one),
   which every write of a document into a render store or the grid index
   goes through
@@ -317,8 +317,8 @@ shared writers apply it for every source:
   headline, copyright, creator, camera, lens, color label, keywords,
   people, albums, place names, file name and folder. A row's preview
   and a photo's caption are prose and keep their controls. A
-  `GridRow` string column is either settled there or listed as an
-  id, path, stamp or body in `every_grid_row_string_is_settled_or_kept`,
+  `GridRow` string column either has its bidi controls stripped there
+  or is listed as an id, path, stamp or body in `every_grid_row_string_is_settled_or_kept`,
   which fails on a new column that is in neither list.
 
 A change to what these write bumps
@@ -1014,8 +1014,9 @@ removes.
    see every row as removed, and that is the truth of the store at that
    moment; it cannot happen by accident, because render only runs
    downstream of its ingest. A reset of the render store itself
-   (`--reset <source>/render_markdown`) empties its tables and its
-   documents and forgets the cursor, so the next render is a first run.
+   (`--reset <source>/render_markdown`) empties its tables, the
+   `render_cursor` table among them, and its documents, so the next
+   render is a first run.
 
 3. **A store with tables but no commit.** Download ran but nothing
    was committed — a test that bypasses the runner. `pin::head`

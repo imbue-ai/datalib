@@ -120,7 +120,7 @@ arrives in the environment.
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
-| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each busy period (the stretch from idle to busy and back, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-pipeline` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each run (the stretch from taking a request while idle to having none left, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-pipeline` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
 | `DATALIB_DAG_ATTEMPT` | which attempt this is, starting at `1`; a retry counts up |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_PARAMS` | the entry's `params`, as JSON; unset when it has none |
@@ -193,13 +193,13 @@ What that means from your side:
   `render_markdown`. You are run again after each later seal, and
   once more when the producer ends if it moved since your last run;
   never twice at once.
-* **Or ask to start once it has all settled.** A step whose config entry
+* **Or start only once nothing upstream is running.** A step whose config entry
   says `start = "after_inputs_settle"` is not started on seals: it
   waits until nothing upstream of it is running or about to run, then
   runs once, on what its producers ended with. Unlike `reads = "files"`
-  it holds no writer back while it runs; if a sync that starts
-  meanwhile moves what it read, it runs again once that sync has
-  settled. The default,
+  it keeps no writer from starting while it runs; if a sync that starts
+  meanwhile moves what it read, it runs again once nothing upstream of
+  it is running or about to run. The default,
   `start = "on_each_seal"`, is the behaviour above.
 * **Reading pinned, read the commit you were started against, never
   `main`.**
@@ -221,7 +221,7 @@ What that means from your side:
   producer committed before it failed is a version like any other;
   `DATALIB_DAG_FAILED_INPUTS` lets you tell a partial input from a whole
   one. Only a step none of whose inputs has ever published anything is
-  held back (`blocked`).
+  not started (`blocked`).
 
 ## stdout: the event protocol (optional)
 
@@ -346,9 +346,9 @@ the `queued{from=<you>}` metric on every step that reads your output,
 counting up as you seal and down as they read — with no store opened
 to measure it. A step that cannot count leaves `rows` out; its
 consumers' queue then reads as unknown rather than wrong. A
-checkpoint you re-announce (which you should, until a consumer has
-run — one arriving while the consumer is mid-pass is dropped) counts
-once, and one that arrives after your outcome is ignored.
+checkpoint you report again (which you should, until a consumer has
+run — one arriving while the consumer's process is running is dropped)
+counts once, and one that arrives after your outcome is ignored.
 
 Everything above lands in `<data_root>/system/runs/runs.sqlite`, plain
 SQLite: one row per log line, the newest value per metric, every step's
@@ -425,7 +425,7 @@ There are two cases, and that is the whole protocol:
 **The version must be a function of the output's content.** Two runs
 that leave the same data behind must report the same string, because
 that string is the whole signal for "did this change?": a step that did
-nothing this pass reports what it reported last time, and its consumers
+nothing this run reports what it reported last time, and its consumers
 skip. A timestamp, a run id or a counter is not a version: it moves
 every run, which is what reporting nothing already gets you.
 
@@ -461,7 +461,7 @@ failure this is, which decides whether it retries:
 | `data` | bad input; retrying won't help | fail fast (the default when absent) |
 | `cancelled` | you were interrupted | fail fast; exit code 130 by convention |
 | `incomplete` | you gave up with work still owed, or part of the work failed, after committing what you got | fail fast: your own retries are what ran out, and the next run resumes |
-| `incompatible` | your answer to `--prepare`: what you wrote is in a shape you cannot use | the step is turned off until a later start's `--prepare` does not refuse (§ "Prepare") |
+| `incompatible` | your `--prepare` refused: what you wrote is in a shape you cannot use | the step is turned off until a later start's `--prepare` does not refuse (§ "Prepare") |
 
 `outputs` on a failure reports what you *did* commit. The scheduler
 records it, your dependents read it now, and the next run resumes from
@@ -530,9 +530,10 @@ line is where the Manage row's double-click opens the log. A step that
 exits after a cancel (`failure: cancelled`) is recorded as stopped, and
 its line is a `warn`.
 
-A step that reads a streaming producer runs once per seal, and a pass
-that fails runs again on the producer's next seal. The run reports the
-last pass, but a failed pass that was run again still shows: as an
+A step that reads a streaming producer is started once per seal, and
+a process of it that fails runs again on the producer's next seal. The
+run reports the last process, but a failed one that was run again
+still shows: as an
 `error` line of its own (`pass 1 failed: …`), as a warning on the Manage
 row, and in `datalib-pipeline`'s report.
 
@@ -609,9 +610,10 @@ it:
 Reset, `POST /api/reset`) empties what a step wrote so the next run
 does its work from the start. The runner invokes a step whose program
 takes the verb once with `--reset` appended, and deletes the tree of
-any other; then it forgets the step ever succeeded and records the
-version the reset reports, or a new one if it reports none, so
-everything reading the tree runs again. Given the verb, empty your
+any other; then it replaces the step's row in
+`system/supervisor.sqlite` with one that has never succeeded and
+holds the version the reset reports, or a new one if it reports none,
+so everything reading the tree runs again. Given the verb, empty your
 tree, keep whatever history you keep, commit if you commit, exit 0,
 and do nothing else; no sync follows.
 `datalib-step` deletes every row of the tree's store in one
@@ -655,9 +657,9 @@ it has exited, so the stores your step reads are already in this
 build's shape. Steps with no path between them may run `--prepare` at
 the same time.
 The runner does not know whether your program changed since the last
-start, so you are asked every time: answer quickly when there is
+start, so it runs `--prepare` every time: exit quickly when there is
 nothing to do. The runner knows nothing of what a step wrote; the
-step decides, and answers in its outcome line:
+step decides, and says which of these it did in its outcome line:
 
 * **nothing to do** — what it wrote is in this program's shape, or it
   has written nothing yet: exit 0, report nothing.
@@ -666,7 +668,7 @@ step decides, and answers in its outcome line:
   a run would. The runner records it and keeps the step's last success,
   so what reads the output is stale.
 * **needs a rerun** — what it wrote is in a shape it cannot reach in
-  place: add `"needs_rerun": true` to the outcome. The runner holds the
+  place: add `"needs_rerun": true` to the outcome. The runner keeps the
   step due until it next succeeds, and opens one request for every such
   step once the launch's prepare pass is over.
 * **refused** — what it wrote is in a shape this program cannot use,
@@ -679,30 +681,32 @@ step decides, and answers in its outcome line:
 {"event":"outcome","needs_rerun":true,"outputs":[]}
 ```
 
-`datalib-step` answers for each store it keeps by comparing the store's
+`datalib-step` decides for each store it keeps by comparing the store's
 `_datalib_meta` with this build's, so a store already in shape costs one
 read. An ingest whose raw store is older first says it is updating the
 store and downloading nothing, as a line and as its status, because its
 name reads as a download; it then opens its raw store with the
 provider's migration ladder and closes it: every rung, the additive DDL
 and an old blob store's conversion run, and each is sealed to `main`. A
-render step and the grid index answer `needs_rerun` when their store's
+render step and the grid index report `needs_rerun` when their store's
 tables or ladders differ from this build's (`_datalib_meta`); a derived
 store is rebuilt, never migrated. When only its indexes differ
 (`index_hash`), the step opens the store as its owner, which makes
-them, and answers nothing. The grid index also answers `needs_rerun` when the search
+them, and reports nothing. The grid index also reports `needs_rerun` when the search
 index's keyword tables are in another shape or a source's documents
 were drawn by another version, which its keyword pass reads again.
-`embedding_map` deletes a map this build does not read and answers
-`needs_rerun`, which lays it out afresh; `embed` has nothing to answer.
+`embedding_map` deletes a map this build does not read and reports
+`needs_rerun`, which lays it out afresh; `embed` keeps no store to
+bring up to date, and reports nothing.
 Any of them refuses a store a newer build wrote.
 
 ## Check
 
-`datalib-pipeline check`, and the app each time a config is saved, ask
-every step whose program takes the verb whether it would run its params
-as written, with `--check` appended and nothing yet run. The step
-reads its params as a run would, opens and writes nothing, and answers:
+`datalib-pipeline check`, and the app each time a config is saved, run
+the command of every step whose program takes the verb with `--check`
+appended, before anything runs, to learn whether it would run its
+params as written. The step reads its params as a run would, opens and
+writes nothing, and exits:
 
 * **runs as written**: exit 0. A key that does nothing, or anything
   else that runs but is probably a mistake, goes in the outcome's
@@ -717,7 +721,7 @@ reads its params as a run would, opens and writes nothing, and answers:
 {"event":"outcome","warnings":["`period` no longer does anything; delete it"],"outputs":[]}
 ```
 
-A step has thirty seconds to answer. Up to eight are asked at once.
+A step's `--check` has thirty seconds to exit. Up to eight run at once.
 `datalib-step` plans the params as a run would: its provider's config
 schema, its method tables, and the keys that no longer do anything,
 which it runs without and names as warnings.
@@ -766,14 +770,15 @@ answered within two minutes is killed.
 ## Compact and collect
 
 `datalib-pipeline free-disk-space`, or the app's `POST /api/free_disk_space`
-(the status bar's "Free up disk space…"), asks every step that takes the
-verbs to give back the disk its store holds, once each: with
+(the status bar's "Free up disk space…"), runs the command of every step
+that takes the verbs once, to give back the disk its store holds: with
 `--compact` appended when old versions of derived data are to be
 dropped (`--drop-old-versions-on-derived-data`,
 `"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
 that reads a store may be reading it while it is rewritten: the command line needs the root to
-itself, as `reset` does, and the app's loop holds the steps it asks
-and every step that reads them until it is done (`dag/README.md`
+itself, as `reset` does, and the app's loop stops and does not start
+the steps it runs this way, or any step that reads them, until it is
+done (`dag/README.md`
 §"Resets and purges"). The step decides what the verb means for what it
 wrote, runs nothing else, and reports its version as a run would; the
 runner records it, so a step that kept its content and reports a

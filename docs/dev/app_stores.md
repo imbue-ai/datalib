@@ -75,15 +75,16 @@
                                                   old file, copied aside when a new build
                                                   or a torn file made it start over
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
-                                                  and how it ended) and steps turned off: the
-                                                  mailbox the loop reads; and the loop's
-                                                  record — each step's state now, its
+                                                  and how it ended), steps turned off and
+                                                  wipes: the tables anyone may write and
+                                                  the loop reads; and the loop's own
+                                                  tables — each step's state now, its
                                                   last run and last success, each
                                                   sink's version,
                                                   the run in flight, every process it
-                                                  started (plain SQLite; anyone writes
-                                                  intent, only the loop's holder writes
-                                                  the record; every commit is announced)
+                                                  started (plain SQLite; only the process
+                                                  holding `runner-lock` writes the loop's
+                                                  own tables; every commit is announced)
 <data_root>/system/supervisor-listeners/          a FIFO per process waiting on the loop's
                                                   store: how it hears a commit
                                                   (`dag/README.md` § What wakes the loop)
