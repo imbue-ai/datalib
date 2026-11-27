@@ -263,7 +263,7 @@ impl RawDb {
 
     /// chatgpt.com no longer has the conversation: its row and its
     /// edges go. The loop takes the sidecar and the problem rows.
-    pub async fn forget_conversation(
+    pub async fn delete_conversation(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
         id: &str,

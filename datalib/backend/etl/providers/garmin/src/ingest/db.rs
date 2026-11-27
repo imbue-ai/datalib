@@ -272,7 +272,7 @@ impl RawDb {
     /// Drop the fetch problems of days outside `[since, end]`: the window
     /// no longer asks for them, so no run will fetch them and clear the
     /// row. Returns how many went.
-    pub async fn forget_daily_problems_outside(&self, since: &str, end: &str) -> Result<u64> {
+    pub async fn delete_daily_problems_outside(&self, since: &str, end: &str) -> Result<u64> {
         let done = sql!(
             "garmin.delete_daily_problems_outside_range",
             "DELETE FROM problems WHERE scope_kind = ? AND stage = ? \

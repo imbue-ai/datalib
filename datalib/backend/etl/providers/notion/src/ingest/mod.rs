@@ -465,7 +465,7 @@ impl Ctx<'_> {
             })
             .map(String::as_str)
             .collect();
-        self.db.forget_failed_pages(&database_roots).await?;
+        self.db.delete_page_stubs(&database_roots).await?;
         let root_set: HashSet<String> = ids.iter().cloned().collect();
         let under = scope::pages_under(&tree, &root_set);
         let unplaced: Vec<String> = ids

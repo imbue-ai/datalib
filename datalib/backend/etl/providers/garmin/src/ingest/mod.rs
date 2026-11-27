@@ -727,7 +727,7 @@ impl Walk<'_> {
     async fn daily(&self, s: &mut FetchSummary) -> Result<()> {
         let forgotten = self
             .db
-            .forget_daily_problems_outside(&ymd(self.since), &ymd(self.end))
+            .delete_daily_problems_outside(&ymd(self.since), &ymd(self.end))
             .await?;
         if forgotten > 0 {
             info!(event = "garmin_failed_days_forgotten", forgotten, since = %ymd(self.since), end = %ymd(self.end), "failed days outside the window no longer count as problems");

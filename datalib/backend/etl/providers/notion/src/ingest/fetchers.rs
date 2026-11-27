@@ -498,7 +498,7 @@ impl Fetcher<Blob> for Attachments<'_> {
                     };
                     self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
                 }
-                Outcome::Gone => self.0.db.forget_attachment(tx, &f.listed.key).await?,
+                Outcome::Gone => self.0.db.delete_attachment_edge(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }

@@ -1189,7 +1189,7 @@ async fn a_voice_attachment_not_in_the_export_is_tried_again() {
 /// rewritten, or the next run reads only what changed, deletes nothing,
 /// and the record the rewrite dropped stays for good.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_rewrite_seen_on_a_held_back_run_is_acted_on_by_the_next() {
+async fn a_rewrite_seen_on_a_run_that_deletes_nothing_is_acted_on_by_the_next() {
     let e = Export::new();
     e.sync().await;
     let before = e.count("voice_messages").await;

@@ -76,7 +76,7 @@ impl Fetcher<Conversation> for Conversations<'_> {
                     self.0.db.store_conversation(tx, c).await?;
                     self.0.remember_files(c);
                 }
-                Outcome::Gone => self.0.db.forget_conversation(tx, &f.listed.key).await?,
+                Outcome::Gone => self.0.db.delete_conversation(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }
