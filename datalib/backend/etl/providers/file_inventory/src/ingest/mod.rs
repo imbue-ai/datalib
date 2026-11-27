@@ -108,7 +108,11 @@ pub struct FetchSummary {
     pub bytes_skipped: u64,
 }
 
-async fn delete_gone_cache_entries(cache: &FingerprintCache, root: &Path, db: &RawDb) -> Result<(u64, u64)> {
+async fn delete_gone_cache_entries(
+    cache: &FingerprintCache,
+    root: &Path,
+    db: &RawDb,
+) -> Result<(u64, u64)> {
     let cached = cache.load_under(root).await?;
     let visited = db.all_entry_ids().await?;
 

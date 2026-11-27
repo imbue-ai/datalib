@@ -83,9 +83,10 @@ async fn a_second_scan_of_one_home_moves_no_content_table() {
     let second = scan_and_commit(&raw_path, &cache).await;
 
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
-    let changed = datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &cursor_deleted, &second)
-        .await
-        .unwrap();
+    let changed =
+        datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &cursor_deleted, &second)
+            .await
+            .unwrap();
     let read_again: i64 = test_sql!("SELECT COUNT(*) FROM ingested_files")
         .query_scalar()
         .fetch_one(db.pool())
