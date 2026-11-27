@@ -17,7 +17,8 @@ pub fn plan_render(
 }
 
 /// sms_backup_restore's render processor — renders the texts + calls as one
-/// chat per phone number through the fused-Load callback.
+/// chat per phone number, and emits each document through
+/// `RenderCtx::emit_doc`.
 struct SmsRender;
 
 #[async_trait]

@@ -49,4 +49,9 @@ mod tree;
 /// v15: ids are minted through `datalib_id` under `Content`, edges
 /// through `datalib_id::edge_id`, and every row carries its
 /// backpointer. Every uuid moved.
+/// v16: a row's Contents cell is its body as plain text
+///      (`datalib_schema::plain_text`), not the markdown.
+/// v17: an edition's title and text are escaped as markdown, so markup
+///      in them shows as typed.
+/// v18: the front matter's values are JSON-quoted (`yaml_scalar`).
 pub const RENDER_VERSION: u32 = 18;

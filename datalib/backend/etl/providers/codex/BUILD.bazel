@@ -1,9 +1,10 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# TNG-themed Codex rollouts in the layout `~/.codex` has: two threads
-# under `sessions/<YYYY>/<MM>/<DD>/`, one of them the parent of a spawned
-# sub-agent thread. Used by :codex_tests and the central fixture
-# pipeline at //tests/fixtures:ingested_tng.
+# TNG-themed Codex rollouts in the layout `~/.codex` has: three threads
+# and a sub-agent. Under `sessions/<YYYY>/<MM>/<DD>/`: a 0.115 thread,
+# the sub-agent it spawned, and a 0.155 thread; under
+# `archived_sessions/`, one more 0.115 thread. Used by :codex_tests and
+# the central fixture pipeline at //tests/fixtures:ingested_tng.
 filegroup(
     name = "tng_fixture",
     srcs = glob(["tests/fixtures/codex_tng/**/*"]),

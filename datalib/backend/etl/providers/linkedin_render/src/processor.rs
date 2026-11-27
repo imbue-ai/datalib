@@ -51,8 +51,8 @@ pub struct FeedOutcome {
 }
 
 /// LinkedIn's render processor — renders the four feeds (messages,
-/// connections, posts, skills) and emits each rendered markdown through the
-/// fused-Load callback.
+/// connections, posts, skills) and emits each rendered document through
+/// `RenderCtx::emit_doc`.
 struct LinkedinRender;
 
 #[async_trait]

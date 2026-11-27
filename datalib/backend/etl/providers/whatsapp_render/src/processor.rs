@@ -23,8 +23,8 @@ pub fn plan_render(
     ))
 }
 
-/// WhatsApp's render processor — reads the raw store and emits rendered
-/// markdown through the fused-Load callback.
+/// WhatsApp's render processor — reads the raw store and emits each
+/// rendered document through `RenderCtx::emit_doc`.
 struct WhatsappRender;
 
 #[async_trait]
