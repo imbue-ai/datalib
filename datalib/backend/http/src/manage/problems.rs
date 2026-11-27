@@ -4,8 +4,9 @@
 //! (`problem_mutes/README.md`), counted by the one function that also
 //! writes the grid's query, so a double-click opens exactly what was
 //! counted. A grey number beside them is what is in the step's log
-//! rather than in that grid: the passes of its last run that failed and
-//! were run again, and what a step that writes no problem rows counted.
+//! rather than in that grid: the processes of a streaming step's last
+//! run that failed and were started again, and what a step that writes no
+//! problem rows counted.
 //! A group's is the sum of its steps'. The System row's count is the
 //! config's own warnings.
 
@@ -25,8 +26,9 @@ pub struct ProblemCounts {
     pub warnings: i64,
     /// The run that count comes from; empty when it never counted.
     pub run_id: String,
-    /// Passes that failed and were run again in the last run that invoked
-    /// the step, which reports only its last pass.
+    /// A streaming step's processes that failed and were started again in
+    /// the last run that invoked the step, which reports only its last
+    /// process.
     pub failed_passes: i64,
     /// The run that count comes from.
     pub failed_passes_run_id: String,
@@ -375,8 +377,8 @@ mod tests {
 
     /// A step that writes no rows (a package's own program) keeps its
     /// own count, grey, since a double-click on it could list nothing;
-    /// and so does a pass that failed and was run again. Neither is in the
-    /// yellow number.
+    /// and so does a streaming process that failed and was started again.
+    /// Neither is in the yellow number.
     #[test]
     fn what_only_the_log_holds_is_grey_and_apart_from_the_rows() {
         let failed = |step: &str, value: i64, run: &str| MetricRow {

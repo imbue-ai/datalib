@@ -1,6 +1,7 @@
-//! Every launch on a root: the server's loop asks every step whose program
-//! takes the verb to `--prepare`, holding back only what it has not asked
-//! and what reads that, and runs the ones that answer `needs_rerun`
+//! Every launch on a root: the server's loop runs every step whose program
+//! takes the verb with `--prepare` appended, starts no other run of a step
+//! whose `--prepare` has not exited or of what reads one, and runs the
+//! steps whose `--prepare` reported `needs_rerun`
 //! (`dag/README.md` §"Upgrading a root").
 
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use tower::ServiceExt;
 const TOKEN: &str = "upgrade-on-launch-test-token";
 
 /// Stands in for `datalib-step` on the binary path: logs how it was
-/// invoked, and as `b`'s render answers that it needs to run again. While
+/// invoked, and as `b`'s render's `--prepare` reports `needs_rerun`. While
 /// a `hold` file is in the root, a prepare waits for it to go.
 const FAKE_STEP: &str = r#"#!/bin/sh
 case " $* " in *" --prepare "*) mode=prepare ;; *) mode=sync ;; esac
@@ -116,11 +117,12 @@ async fn get(state: &AppState, uri: &str) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// Every step is asked, producers first, and none syncs before it and
-/// every step it reads have been asked; the next launch asks every step
-/// again, since the runner cannot tell whether a program changed in
-/// between. `b`'s render, which says it needs to run again, is run on that
-/// launch without anyone asking — only `a` is synced — and leaves the list
+/// Every step's `--prepare` runs, producers first, and no step syncs
+/// before its own `--prepare` and those of every step it reads have
+/// exited; the next launch runs every step's `--prepare` again, since the
+/// runner cannot tell whether a program changed in between. `b`'s render,
+/// whose `--prepare` reports `needs_rerun`, is run on that launch without
+/// anyone pressing Sync on it — only `a` is synced — and leaves the list
 /// of what is behind once it has.
 #[tokio::test]
 async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
@@ -232,8 +234,8 @@ async fn until_caught_up(state: &AppState) -> serde_json::Value {
     }
 }
 
-/// While the downloads' `--prepare`s are still running, the run's record
-/// already lists every step the pass will run `--prepare` for, the rest as
+/// While the downloads' `--prepare`s are still running, the run's rows in
+/// the run store already list every step the pass will run `--prepare` for, the rest as
 /// pending, so a person can see how many are left (#1678: the pass's run
 /// listed only the steps reached).
 #[tokio::test]
@@ -282,9 +284,9 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
 
 /// While the pass runs, Sync stays offered. A sync of a source the pass
 /// has not reached waits for it, its step reading as waiting on the
-/// upgrade, and a step the pass does not hold runs at once. Before, every
-/// Sync was disabled until the whole pass was over, and the loop took no
-/// request at all until then.
+/// upgrade, and a step the pass is not keeping from starting runs at once.
+/// Before, every Sync was disabled until the whole pass was over, and the
+/// loop served no request at all until then.
 #[tokio::test]
 async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
     use datalib_dag::supervisor::tick::WaitKind;
@@ -344,10 +346,10 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// Two sources have no path between them, so their `--prepare`s run at
-/// the same time: with every `--prepare` held, both downloads' have
-/// started, and neither render's has. The pass once ran one at a time, so
-/// `b`'s waited for `a`'s and everything downstream of it.
+/// Two sources have no path between them, so their `--prepare`s run at the
+/// same time: with every `--prepare` kept waiting by the `hold` file, both
+/// downloads' have started, and neither render's has. The pass once ran one
+/// at a time, so `b`'s waited for `a`'s and everything downstream of it.
 #[tokio::test]
 async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
     let td = tempfile::tempdir().unwrap();
@@ -376,8 +378,8 @@ async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// A root with no config yet has no step to ask, so its pass is over at
-/// once. The first-run screen waits for `settled`; when the pass moved
+/// A root with no config yet has no step to run `--prepare` for, so its
+/// pass is over at once. The first-run screen waits for `settled`; when the pass moved
 /// into the loop, a loop that could not start for want of a config never
 /// said it, and the screen waited for good.
 #[tokio::test]

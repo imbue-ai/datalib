@@ -80,12 +80,12 @@ async fn until(at: Option<Instant>) {
     strum::VariantArray,
 )]
 pub enum Table {
-    /// `GET /api/dag`: the loop's record, in `system/supervisor.sqlite`,
+    /// `GET /api/dag`: the loop's store, `system/supervisor.sqlite`,
     /// written on every step state change, whoever runs the loop.
     #[serde(rename = "dag")]
     #[strum(serialize = "dag")]
     Dag,
-    /// `GET /api/manage/rows`: the join over the config, the record,
+    /// `GET /api/manage/rows`: the join over the config, the loop's store,
     /// the run store's runs, steps, metrics and the run's own log
     /// lines, and the storage samples. Not the server's log lines: a
     /// row never reads those, and a refetch that logged a line would
@@ -98,7 +98,7 @@ pub enum Table {
     #[strum(serialize = "runs")]
     Runs,
     /// `GET /api/requests` and `GET /api/requests/{id}`: the loop's
-    /// record and each step's progress in its current run. What an app
+    /// store and each step's progress in its current run. What an app
     /// waiting on the sync it asked for reads again.
     #[serde(rename = "requests")]
     #[strum(serialize = "requests")]
@@ -155,7 +155,7 @@ pub enum RootEvent {
     /// The grid index
     /// (`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`)
     /// has a new generation. Under streaming that happens many times per sync
-    /// -- a `unified_grid_and_search_index` pass per checkpoint -- and it is
+    /// -- once for each checkpoint `unified_grid_and_search_index` takes in -- and it is
     /// how rows reach the grid while the download that produced them is still
     /// running. The generation, not the file: a write in a transaction that has
     /// not committed is not something a reader can fetch yet.
@@ -164,8 +164,9 @@ pub enum RootEvent {
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
     /// has a new HEAD: the time series, or their points, moved.
     TimeSeriesIndexChanged,
-    /// A pass over the steps moved — the launch's migrate pass, or freeing
-    /// disk space: `/api/config`'s `upgrade` or `free_space` is new.
+    /// The launch's prepare pass moved, or so did a compaction or
+    /// collection (freeing disk space): `/api/config`'s `upgrade` or
+    /// `free_space` is new.
     PassChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
@@ -198,8 +199,8 @@ pub type RootTx = broadcast::Sender<RootFrame>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Moved {
     Config,
-    /// The loop's record and its mailbox, `system/supervisor.sqlite`:
-    /// heard by [`watch_record`], not seen by the filesystem.
+    /// The loop's store, `system/supervisor.sqlite`: heard by
+    /// [`watch_record`], not seen by the filesystem.
     Supervisor,
     /// A wipe opened, closed, or moved on to its next step: heard by
     /// [`watch_record`] in the announcement's words.
@@ -601,7 +602,7 @@ async fn expand(
 }
 
 /// Resolves once the watch reports: its watcher has delivered its own
-/// marker and the loop's record is being listened to. Never, if the
+/// marker and it listens for the loop store's announcements. Never, if the
 /// watcher could not be made (which it logs).
 pub struct Ready(tokio::sync::oneshot::Receiver<()>);
 
@@ -978,10 +979,10 @@ fn watch_dir(
     Some(watcher)
 }
 
-/// The loop's record moves on a commit, and every commit to it is
+/// The loop's store moves on a commit, and every commit to it is
 /// announced; the filesystem would report writes, and none at all to a
 /// file already held open. The lock and the config have announcements of
-/// their own that are not the record moving.
+/// their own that are not the store moving.
 async fn watch_record(
     root: PathBuf,
     moved: tokio::sync::mpsc::UnboundedSender<Moved>,
@@ -1289,7 +1290,7 @@ mod tests {
 
     /// The reason the directory watch filters by name at all: `system/`
     /// holds stores no frame is about, and reporting their writes as
-    /// `DagChanged` would make every reader refetch the loop's record
+    /// `DagChanged` would make every reader refetch the loop's store
     /// for nothing.
     #[test]
     fn the_stores_beside_the_runner_record_are_not_the_runner_record() {
@@ -1443,7 +1444,7 @@ mod tests {
         assert!(heard.iter().any(|l| l == CONFIG_CHANGED), "{heard:?}");
     }
 
-    /// The same for the loop's record, whoever runs the loop. The store is
+    /// The same for the loop's store, whoever runs the loop. The store is
     /// opened before the watch starts, as a running loop's is: its file
     /// appearing once is not what a subscriber needs to hear, its every
     /// commit is.
@@ -1643,15 +1644,15 @@ mod tests {
     }
 
     /// The grid index reports when its generation moves and not when its
-    /// file does. The step writes the file throughout a pass and raises
+    /// file does. The step writes the file throughout a run and raises
     /// the generation only in a transaction that changed what a reader
     /// sees; a grid told to refetch on every write would fetch the same
     /// rows again each time.
     #[tokio::test]
     async fn the_grid_index_reports_its_seals_and_not_its_writes() {
         let td = tempfile::tempdir().unwrap();
-        // The applet creates the directory at boot, before the first
-        // pass; the watch is armed on it from the start here too.
+        // The applet creates the directory at boot, before the step
+        // first runs; the watch is armed on it from the start here too.
         let db = datalib_core::layout::grid_index_db(td.path());
         std::fs::create_dir_all(db.parent().unwrap()).unwrap();
         let (mut rx, feed) = watching(td.path()).await;

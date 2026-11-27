@@ -1,12 +1,12 @@
 //! The Queue and ETA cells: how much work is ahead of a step, from the
 //! `queued` gauges, and when that work is done at the pace work has come
 //! off the queue lately. The pace is what came *off*, not how the queue
-//! changed: a queue the runner keeps for a consumer climbs seal by seal
-//! and falls to nothing when a pass ends, and its net change reads as
-//! growing at every peak. A group waits on the slowest of its steps and
-//! has no queue of its own: its steps count different things. Once a
-//! step is at rest, what its queue still held when it ended is what it
-//! owes.
+//! changed: a queue the runner keeps for a consumer rises seal by seal
+//! and falls to nothing when one of the consumer's processes ends, and
+//! its net change reads as growing at every peak. A group waits on the
+//! slowest of its steps and has no queue of its own: its steps count
+//! different things. Once a step is at rest, what its queue still held
+//! when it ended is what it owes.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -80,8 +80,8 @@ pub struct QueueDrain {
     /// from the drops the queue's samples recorded.
     pub counted: bool,
     /// Nothing came off in the recent window, so the stretch reaches back
-    /// to when the step started: a consumer in a pass longer than the
-    /// window takes its work off only when the pass ends.
+    /// to when the step started: a consumer whose process runs longer
+    /// than the window takes its work off only when that process ends.
     pub since_start: bool,
 }
 
@@ -527,9 +527,9 @@ mod tests {
         }
     }
 
-    /// A consumer's queue as the runner keeps it: seals pile on, and a
-    /// pass takes the whole pile off at once. 40 came off in the last two
-    /// minutes (at 03:40), and 60 are on it now.
+    /// A consumer's queue as the runner keeps it: seals pile on, and the
+    /// end of one process takes the whole pile off at once. 40 came off in
+    /// the last two minutes (at 03:40), and 60 are on it now.
     fn sawtooth() -> Vec<MetricSampleRow> {
         let from = "from=a/ingest";
         vec![
@@ -583,8 +583,8 @@ mod tests {
         assert_eq!((d.taken, d.counted), (40, false));
     }
 
-    /// A pass longer than the window takes nothing off inside it; the
-    /// pace then comes from the whole of the step's run.
+    /// A process that runs longer than the window takes nothing off
+    /// inside it; the pace then comes from the whole of the step's run.
     #[test]
     fn a_window_with_nothing_taken_off_reaches_back_to_the_start() {
         let samples = [
@@ -699,9 +699,10 @@ mod tests {
         assert_eq!(waiting.eta, blank("seconds"));
     }
 
-    /// A step between passes has caught up with its producer's seals and
-    /// has no process: its empty queue still shows, and its ETA never
-    /// reads stalled, however long the producer takes to seal again.
+    /// A step between two of its processes has caught up with its
+    /// producer's seals and has no process: its empty queue still shows,
+    /// and its ETA never reads stalled, however long the producer takes
+    /// to seal again.
     #[test]
     fn a_step_between_passes_shows_its_empty_queue_and_no_estimate() {
         let caught_up = step_cells(

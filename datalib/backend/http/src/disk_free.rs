@@ -3,12 +3,12 @@
 //!
 //! Unlike the root's size (`usage.rs`), this is sampled on a timer whether
 //! or not a run is going: every process on the volume moves it, nothing
-//! announces that, and a look is one `statvfs`, not a walk. Each recorded
+//! reports that, and a look is one `statvfs`, not a walk. Each recorded
 //! sample is appended to the `disk_free` table of
 //! `system/disk_stats.sqlite`, which seeds the line again after a restart.
 //!
-//! The loop holds every step while the disk is under the config's
-//! `[disk_space]` floor (`datalib_dag::disk_space`); this module only
+//! The loop starts no step, and stops the running ones, while the disk is
+//! under the config's `[disk_space]` floor (`datalib_dag::disk_space`); this module only
 //! reports it, and says `low` by the same two-line rule so the UI can say
 //! why.
 
@@ -28,9 +28,9 @@ use crate::watch::{RootEvent, RootFrame, RootTx, Table};
 
 pub const SAMPLE_EVERY: Duration = Duration::from_secs(10);
 
-/// A move smaller than this is not recorded, stored or announced: free
-/// space drifts by a few megabytes a minute on a busy volume, a frame is a
-/// refetch in every open window, and the store keeps every row.
+/// A move smaller than this is not stored, and no frame is sent for it:
+/// free space drifts by a few megabytes a minute on a busy volume, a frame
+/// is a refetch in every open window, and the store keeps every row.
 const MIN_RECORDED_MOVE: u64 = 10_000_000;
 
 /// How many rows to read back at startup: far more than the window holds
@@ -47,8 +47,8 @@ pub struct DiskFree {
     /// The config's `[disk_space]` lines, defaults filled in.
     pub pause_below_bytes: u64,
     pub resume_at_bytes: u64,
-    /// The steps are held: the disk went under the pause line and has not
-    /// yet climbed back to the resume line.
+    /// The loop starts no step: the disk went under the pause line and has
+    /// not yet risen back to the resume line.
     pub low: bool,
     /// Samples inside the window, oldest first, with the one before it
     /// as the carry-in, like every `history` in `usage.rs`.
@@ -73,7 +73,7 @@ pub struct DiskFreeMonitor {
 #[derive(Debug, Default, PartialEq)]
 pub struct Observed {
     /// A reader should fetch again: the value moved enough to record, the
-    /// steps were held or let go, or the floor moved.
+    /// disk crossed a line, or the floor moved.
     pub refetch: bool,
     /// The sample to append to the store, when the value moved enough.
     pub record: Option<DiskFreeRow>,
@@ -218,8 +218,8 @@ mod tests {
         }
     }
 
-    /// Drift under the recording step is neither stored nor announced,
-    /// but the number on screen is always the last look.
+    /// Drift under the recording step is neither stored nor sent as a
+    /// frame, but the number on screen is always the last look.
     #[tokio::test]
     async fn small_drift_is_not_recorded_but_is_shown() {
         let m = DiskFreeMonitor::default();
@@ -247,9 +247,9 @@ mod tests {
         assert!(!snap.low);
     }
 
-    /// The two lines, as the status bar sees them: held from under the
-    /// pause line until the resume line, and each crossing announced
-    /// however small the move that made it.
+    /// The two lines, as the status bar sees them: `low` from under the
+    /// pause line until the resume line, and a frame sent for each
+    /// crossing however small the move that made it.
     #[tokio::test]
     async fn held_from_the_pause_line_to_the_resume_line() {
         let m = DiskFreeMonitor::default();

@@ -3,7 +3,7 @@
 //! under it — plus one for `system/`, which no config names but which
 //! is on disk like the rest; with the status, timestamps, sizes and
 //! actions the screen draws, joined here from the config, the loop's
-//! record and requests, the run store, the usage sampler and the applet
+//! `steps` and `requests` tables, the run store, the usage sampler and the applet
 //! supervisor, and typed by the columns the response declares.
 //! What stays in the browser is what needs the wizard's descriptors:
 //! whether the form can edit a row, what Browse opens, and an ingest
@@ -348,15 +348,15 @@ async fn answer(
 }
 
 /// Every row of the Manage table as it stands: the config as written,
-/// the loop's record, the disk. What the table and a chip both read.
+/// the loop's store, the disk. What the table and a chip both read.
 async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refusal> {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
     let record = crate::dag_record(&s.root, &s.sync)
         .await
         .map_err(crate::unread)?;
-    // After the record: a request it names was opened before the record
-    // was saved, so it is there to read, open or not.
+    // After `record`: a request its steps name was opened before the loop
+    // saved those rows, so it is there to read, open or not.
     let requests_started = Instant::now();
     let requests = requests_named(s, &record).await;
     let assembly_started = Instant::now();
@@ -512,7 +512,7 @@ fn raw_stores(outputs: &[OutputStorage]) -> HashMap<String, String> {
         .collect()
 }
 
-/// The requests the record's steps are being run for, by id.
+/// The requests `record`'s steps are being run for, by id.
 async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, RequestRow> {
     let Ok(store) = s.sync.mailbox().await else {
         return HashMap::new();
@@ -1200,7 +1200,7 @@ impl RowCtx<'_> {
             }
             Entry::Applet(_) => {
                 // An applet's health is its own thing: it isn't
-                // scheduled, so the runner's record says nothing about
+                // scheduled, so the loop's store says nothing about
                 // it. The supervisor does. There is no history to show,
                 // which is why the timestamp stays null.
                 let status = if let Some(d) = dropped {

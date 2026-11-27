@@ -2,7 +2,8 @@
 //! §"Two locks, two files"): it keeps `datalib-pipeline serve` running as
 //! a child for as long as it is up, keeps what the child says on its
 //! stderr that no store holds — the prepare pass, whether a sync is
-//! running — and is how the handlers write to the loop's mailbox.
+//! running — and is how the handlers write the rows anyone may write
+//! in `system/supervisor.sqlite` (`requests`, `turned_off`, `wipes`).
 
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -41,7 +42,8 @@ pub struct Upgrade {
     /// run. False until the runner holds the runner lock, which another
     /// process may hold.
     pub settled: bool,
-    /// Every step the pass asks, in the order it asks them.
+    /// Every step the pass runs `--prepare` for, in the order it runs
+    /// them.
     pub steps: Vec<PassRow>,
 }
 
@@ -57,8 +59,8 @@ pub struct FreeSpace {
     pub running: bool,
     /// Why it was not done, once it is over.
     pub error: Option<String>,
-    /// Every step it asks, in the order it asks them; empty until the
-    /// loop takes it up.
+    /// Every step it runs with `--compact` or `--collect`, in order;
+    /// empty until the loop starts on it.
     pub steps: Vec<PassRow>,
 }
 
@@ -74,8 +76,9 @@ pub struct SyncControl {
     /// Why nothing can sync from this server: no runner found, or one
     /// that keeps stopping. Every Sync button says it.
     trouble: Arc<Mutex<Option<String>>>,
-    /// When this server started, as the record stamps: a free-space pass
-    /// opened before it is not this server's to report.
+    /// When this server started, stamped as the loop's store stamps a
+    /// row: a compaction or collection opened before it is not this
+    /// server's to report.
     started_at_utc: Arc<String>,
     /// The handlers' own connection, beside the loop's.
     mailbox: Arc<OnceCell<Store>>,
@@ -99,8 +102,9 @@ impl SyncControl {
         }
     }
 
-    /// Is a sync running on this root? This server's runner's answer
-    /// while it holds the lock; before that, whether anyone holds it — a
+    /// Is a sync running on this root? While this server's runner holds
+    /// the lock, whether that runner last reported a run or the prepare
+    /// pass under way; before that, whether anyone holds it — a
     /// `datalib-pipeline` that was running when the server started.
     pub fn running(&self) -> bool {
         if self.runs_the_loop.load(Ordering::SeqCst) {
@@ -165,7 +169,8 @@ impl SyncControl {
     }
 
     /// Delete the trees of `groups`, which the config no longer names, and
-    /// forget their steps ever ran, so a group re-added under the same id
+    /// their steps' rows in the loop's `steps` table, so a group re-added
+    /// under the same id
     /// starts from nothing. Checked against the config at once; done by the
     /// loop as soon as the groups' steps have stopped.
     pub async fn purge(&self, groups: &[String], by: &str) -> Result<WipeAnswer, String> {
@@ -178,8 +183,8 @@ impl SyncControl {
 
     /// Give back the disk no commit reaches in the stores of `targets`, or
     /// of every step that takes the verb when it names none; with
-    /// `drop_old_versions_on_derived_data`, fold each render store's history first. Holds
-    /// them and what reads them meanwhile.
+    /// `drop_old_versions_on_derived_data`, fold each render store's history first. The
+    /// loop starts none of them, nor what reads them, meanwhile.
     pub async fn free_disk_space(
         &self,
         targets: &[String],
@@ -194,8 +199,9 @@ impl SyncControl {
         self.wipe(kind, targets, by).await
     }
 
-    /// Ask the loop for a wipe and wait, up to [`WIPE_WAIT`], for it to
-    /// say how it went. Whichever process runs the loop carries it out.
+    /// Write a row to the `wipes` table and wait, up to [`WIPE_WAIT`], for
+    /// the loop to close it. Whichever process runs the loop carries it
+    /// out.
     async fn wipe(
         &self,
         kind: WipeKind,
@@ -257,11 +263,12 @@ pub struct HostConfig {
     pub pipeline: Option<PathBuf>,
     /// The step binaries' directory, ahead of the config's `binary_dir`.
     pub binary_dir: Option<PathBuf>,
-    /// Every busy period's "now", in place of the clock: what
+    /// Every run's "now", in place of the clock: what
     /// `datalib-pipeline --now` is to one run. For fixtures, whose output must
     /// not depend on the day they were built.
     pub now: Option<String>,
-    /// Where the prepare pass says it moved, so the page asks again.
+    /// The channel to `/api/sync/stream`, where a move of the prepare
+    /// pass is sent, so the page fetches `/api/config` again.
     pub announce: Option<crate::watch::RootTx>,
     /// Told each time the runner writes to the run store.
     pub nudge: Option<crate::watch::Nudge>,
@@ -514,8 +521,9 @@ mod tests {
     use super::*;
 
     /// With the server holding `runner-lock` for its life, "the lock is
-    /// held" would say a sync is running for ever. Running the loop, the
-    /// answer is the host's own; before that, the lock's.
+    /// held" would say a sync is running for ever. Once this server's
+    /// runner holds the lock, `running` is what that runner reports;
+    /// before that, whether the lock is held.
     #[test]
     fn a_sync_is_running_while_the_loop_is_busy_not_while_the_lock_is_held() {
         let td = tempfile::tempdir().unwrap();
@@ -544,10 +552,9 @@ mod tests {
         assert!(!lock.exists(), "the probe created {}", lock.display());
     }
 
-    /// A reset is not refused while another process runs the loop, as
-    /// it was when the server ran the loop itself: whichever process holds
-    /// the lock carries out the wipe row. With no loop to answer, it is
-    /// queued.
+    /// A reset is not refused while another process runs the loop:
+    /// whichever process holds the lock carries out the wipe row. With no
+    /// loop to close the row, it is queued.
     #[tokio::test]
     async fn a_reset_is_queued_for_whichever_process_runs_the_loop() {
         let td = tempfile::tempdir().unwrap();
@@ -586,9 +593,9 @@ mod tests {
         assert_eq!(control.trouble(), None);
     }
 
-    /// The prepare pass reaches `/api/config` as the loop says it: every
-    /// step waiting, then each as it runs and ends, Sync paused until the
-    /// pass is over, and `settled` only then.
+    /// The prepare pass reaches `/api/config` as the runner reports it on
+    /// stderr: every step waiting, then each as it runs and ends,
+    /// `running` true until the pass is over, and `settled` only then.
     #[test]
     fn the_prepare_pass_is_reported_as_the_loop_says_it() {
         use datalib_dag::supervisor::pass::PassState;

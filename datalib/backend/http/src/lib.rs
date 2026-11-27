@@ -78,8 +78,9 @@ pub struct AppState {
     /// and the store intent is written to.
     pub sync: supervisor::SyncControl,
     /// Fan-out channel for everything that changes in the data root — the
-    /// config, the loop's record, the component store — plus a heartbeat,
-    /// so a client can tell an idle stream from a dead one.
+    /// config, the loop's store (`system/supervisor.sqlite`), the
+    /// component store — plus a heartbeat, so a client can tell an idle
+    /// stream from a dead one.
     /// `GET /api/sync/stream` pushes it over SSE.
     pub root_tx: watch::RootTx,
     /// The chains of the requests logged since the watch last sent a
@@ -329,7 +330,7 @@ fn routes(state: AppState) -> Router {
         .fallback(embed::serve_ui)
         .with_state(state)
         // Outermost, so it covers every route plus the SPA fallback and the
-        // static mount. `CorsLayer::permissive()` is gone deliberately: with
+        // static mount. There is deliberately no CORS layer: with
         // the token gate in front a cross-origin page cannot get a usable
         // response anyway, and nothing in-tree needs cross-origin access.
         .layer(axum::middleware::from_fn_with_state(
@@ -538,8 +539,7 @@ pub struct PutLibRequest {
     pub title: Option<String>,
     /// Arguments the gallery entry should pass, as JSON values. This is
     /// what lets an authored component appear in the gallery *with*
-    /// arguments — the thing the old name-only format could not express,
-    /// and the reason `documentPickerView` had to exist as a stand-in.
+    /// arguments.
     #[serde(default)]
     pub component_args: Option<Vec<serde_json::Value>>,
     /// The icon the layouts draw beside the card's name (see
@@ -798,8 +798,8 @@ async fn agent_config_guide() -> (
 
 /// One entry in `GET /api/sync/sources`. Derived from the config file
 /// at the data root — the backend never persists this list to SQL. A
-/// source is any step with no declared inputs (a fringe step — the
-/// thing a sync can name), identified by its step id.
+/// source is any step with no declared inputs (the thing a sync can
+/// name), identified by its step id.
 #[derive(Debug, Serialize)]
 pub struct SourceInfo {
     pub id: String,
@@ -874,19 +874,21 @@ pub struct ConfigResponse {
     pub newer_root: Option<NewerRoot>,
     /// Number of data sources the user has configured (0 when the
     /// config is missing or invalid). See [`configured_source_count`]
-    /// for why this is not simply the fringe's length.
+    /// for why this is not simply the number of steps with no declared
+    /// inputs.
     pub source_count: usize,
     /// How the user should invoke the latchkey CLI on this install: the
     /// bundled launcher's absolute path when running from the packaged app,
     /// else `npx -y latchkey@<pin>`. The Setup UI splices it into its
     /// copy-pasteable snippets.
     pub latchkey_cli: String,
-    /// The launch's upgrade: the steps being asked to migrate, and the ones
-    /// that answered they need to run again, which the loop runs and the
-    /// page waits on.
+    /// The launch's upgrade: the steps the loop runs `--prepare` for, and
+    /// the ones whose `--prepare` reported `needs_rerun`, which the loop
+    /// runs and the page waits on.
     pub upgrade: UpgradeView,
     /// The newest "Free up disk space" since this server started, while
-    /// it runs and after: how each step it asks stands.
+    /// it runs and after: how each step it runs with `--compact` or
+    /// `--collect` stands.
     pub free_space: Option<supervisor::FreeSpace>,
 }
 
@@ -895,7 +897,7 @@ pub struct ConfigResponse {
 pub struct UpgradeView {
     #[serde(flatten)]
     pub pass: supervisor::Upgrade,
-    /// The steps that answered the pass with `needs_rerun` and have not run
+    /// The steps whose `--prepare` reported `needs_rerun` and have not run
     /// since (`round::rerun_offer`). Empty while the pass runs: the loop
     /// runs them after it.
     pub rerender: Vec<String>,
@@ -1041,10 +1043,11 @@ async fn check_config(
     Json(full_verdict(&s.root, &req.text).await)
 }
 
-/// [`config_verdict`], with each step whose program takes `--check` asked
-/// about its params (`datalib_dag::check`): a step that would refuse them
-/// is reported against its line like any other problem, and the text is
-/// not written; a warning it answers with is reported and writes.
+/// [`config_verdict`], with each step whose program takes `--check` run
+/// with `--check` appended on its params (`datalib_dag::check`): a step
+/// that would refuse them is reported against its line like any other
+/// problem, and the text is not written; a warning it prints is reported
+/// and the text is written.
 async fn full_verdict(root: &std::path::Path, text: &str) -> ConfigCheckResponse {
     let mut verdict = config_verdict(text);
     let checked = datalib_dag::config::check_text(text);
@@ -1136,8 +1139,8 @@ pub struct InitConfigResponse {
     /// file that was already there, or empty when `error` is set.
     pub text: String,
     /// Why nothing was written, when that is a decision rather than an
-    /// I/O failure (an I/O failure is a 5xx). Nothing sets it today; it
-    /// stays so a refusal has somewhere to go without a new shape.
+    /// I/O failure (an I/O failure is a 5xx). Nothing sets it; it is
+    /// kept so a refusal has somewhere to go without a new shape.
     pub error: Option<String>,
 }
 
@@ -1360,7 +1363,7 @@ pub struct DagResponse {
     pub run: Option<DagRunInfo>,
 }
 
-/// The runner's own record of what each step did and is doing, with
+/// The runner's own rows of what each step did and is doing, with
 /// the run store's live numbers laid over it. What `GET /api/dag` and
 /// `GET /api/manage/rows` both read.
 pub struct DagRecord {
@@ -1369,13 +1372,13 @@ pub struct DagRecord {
     pub run: Option<DagRunInfo>,
     /// step id → its state in the run `run` describes.
     pub states: std::collections::BTreeMap<String, String>,
-    /// step id → the loop's record of it: its state now, what it did the
-    /// last time a run reached it, when it last succeeded.
+    /// step id → its row in the loop's `steps` table: its state now, what
+    /// it did the last time a run reached it, when it last succeeded.
     pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
-    /// step id → what it last reported of its problems, and the passes of
-    /// its last run that failed and were run again.
+    /// step id → what it last reported of its problems, and the streaming
+    /// processes of its last run that failed and were started again.
     pub problems: std::collections::HashMap<String, manage::ProblemCounts>,
     /// The grid index's error and warning rows, by whose they are and
     /// whether muted: what a row's red and yellow numbers are.
@@ -1394,7 +1397,7 @@ pub struct DagRecord {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct RecordTimings {
-    /// The loop's record, in `system/supervisor.sqlite`.
+    /// The loop's store, `system/supervisor.sqlite`.
     pub loop_record: std::time::Duration,
     /// The rest is the run store, `system/runs/runs.sqlite`: the live
     /// run's progress, then the metrics behind Problems, Items and what a step owes.
@@ -1402,8 +1405,8 @@ pub struct RecordTimings {
     pub run_metrics: std::time::Duration,
 }
 
-/// An open run in the record while nothing is running is a run that died,
-/// so `live` is [`supervisor::SyncControl::running`].
+/// An open run in the loop's `runs` table while nothing is running is a
+/// run that died, so `live` is [`supervisor::SyncControl::running`].
 pub async fn dag_record(
     root: &std::path::Path,
     sync: &supervisor::SyncControl,
@@ -1482,7 +1485,7 @@ pub async fn dag_record(
 
 /// What each step has reported in `run`, the loop's run in flight or the
 /// one that finished last. Only when the run store's newest run is that
-/// one: in the window between a run opening its record and the runner
+/// one: in the window between a run opening its row and the runner
 /// writing its first row, the newest run in the store is still the run
 /// before, and painting its numbers onto this run's steps is worse than
 /// showing none at all.
@@ -1570,8 +1573,7 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
 /// the steps with no declared inputs, i.e. what a sync can target.
 /// Re-loaded on every call so a config edit in the Setup tab shows up
 /// without a backend restart. Returns an empty list (rather than 500)
-/// when the file is missing or fails to parse, mirroring the previous
-/// behavior.
+/// when the file is missing or fails to parse.
 async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     let Ok(checked) = load_dag_config(&s.config_path()) else {
         return Json(Vec::new());
@@ -1586,8 +1588,8 @@ async fn sync_sources(State(s): State<AppState>) -> Json<Vec<SourceInfo>> {
     )
 }
 
-/// The query a reading route takes only to refuse it: `refresh` was a
-/// GET flag once, and is a POST now.
+/// The query a reading route takes only to refuse it: `refresh`, which
+/// is a POST.
 #[derive(Debug, Deserialize)]
 pub struct RefreshParams {
     #[serde(default)]
@@ -1809,8 +1811,9 @@ async fn request_open(
             failed_step: None,
         });
     }
-    // Answered once the loop has taken them on, so rows read after this
-    // show their steps as wanted. A loop whose config lacks a root leaves
+    // Answered once the loop has started serving them (a step's row names
+    // the request, or it has closed), so rows read after this show their
+    // steps as wanted. A loop whose config lacks a root leaves
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     for id in &opened {
@@ -1924,8 +1927,9 @@ async fn purge_groups(
 /// keeping every commit; with `drop_old_versions_on_derived_data`, also fold each render
 /// store's history into one commit (`step_protocol.md` § Compact and
 /// collect). No targets is every step that takes the verb. 204 once done;
-/// 202 while it runs, once the steps it holds have stopped; 409, with the
-/// reason, for a step it cannot ask.
+/// 202 while it runs, once its steps and what reads them have stopped;
+/// 409, with the reason, for a step the config lacks or whose program does
+/// not take the verb.
 async fn free_disk_space(
     State(s): State<AppState>,
     Json(req): Json<FreeDiskSpaceRequest>,
@@ -2489,7 +2493,7 @@ mod tests {
             checked.render(std::path::Path::new("scaffold"))
         );
         // The `unified_grid_and_search_index` step has no source to read yet, so on a scaffolded
-        // root it *is* the fringe. It is what
+        // root it is the one step with no declared inputs. It is what
         // a sync can name until the first source is added — and
         // running it against nothing is a no-op, not an error.
         assert_eq!(
@@ -2506,9 +2510,9 @@ mod tests {
         );
     }
 
-    /// A scaffolded root has no *sources*, even though its two index
-    /// steps are the fringe. Counting the fringe would tell someone
-    /// with an empty library that they already have two data sources —
+    /// A scaffolded root has no *sources*, even though its index step has
+    /// no declared inputs. Counting those would tell someone
+    /// with an empty library that they already have a data source —
     /// the confusion `POST /api/config/init` exists to end.
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
