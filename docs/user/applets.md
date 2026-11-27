@@ -92,6 +92,8 @@ has the parameters.
 | `GET /places/{parent}?after=&limit=` | the places directly in a place, a page at a time; `source:<id>` for those at a source's top ([below](#places)) |
 | `GET /sources_with_places` | the sources that hold places, by id: the ones a library's tree opens |
 | `POST /people` | `{"handles": […]}`: every source's record of each handle, best first |
+| `GET /people/contacts` | `{counts: {<contact_id>: {items, last_at}}}`: how much each contact's handles wrote, what `from:contact:` finds |
+| `GET /people/unfiled` | everyone who wrote and is on no contact, most first, as a typed table; `?not_real=true` adds the senders marked not real |
 | `GET /problems?q=` | what a step could not fully do to a record; each row says whether a person muted it (`muted`), and `muted:no` leaves the muted ones out |
 | `GET /problems/groups`, `/problems/keys`, `/problems/values` | the same search over problems as the rows' above |
 | `POST /problems/mute` | `{"problem_uuids": […], "muted": true}` mutes those rows, `false` unmutes them; add `"agent": "<name>"` when an agent mutes for a person. A muted row stays listed and counts toward nothing until it changes |

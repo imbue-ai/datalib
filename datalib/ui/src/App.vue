@@ -67,9 +67,9 @@ watch(
 
 /// Only the newest answer is kept: an older "not ready" landing after a
 /// newer "ready" would put the gate up over a config that is fine. One
-/// fetch at a time, at most four a second: a pass over the steps sends
-/// two `pass_changed` per step, milliseconds apart, and the pill need not
-/// show every one.
+/// fetch at a time, at most four a second: every move of the loop's
+/// record sends a `pass_changed`, a pass over the steps moves it twice
+/// per step, milliseconds apart, and the pill need not show every one.
 const refresh = newestAnswer(
   () => fetchConfig().catch(() => null),
   (next) => {

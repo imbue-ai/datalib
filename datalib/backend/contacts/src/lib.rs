@@ -523,8 +523,14 @@ pub(crate) async fn search_in(
     );
     let rows = sql!(
         "contacts_app.search_contacts_by_name",
-        "SELECT contact_id, name, kind FROM contacts \
-          WHERE merged_into IS NULL AND name LIKE ? ESCAPE '\\' \
+        "SELECT contact_id, name, kind FROM contacts c \
+          WHERE merged_into IS NULL AND name LIKE ? ESCAPE '\\' AND NOT (agent IS NOT NULL \
+            AND EXISTS (SELECT 1 FROM handles h INDEXED BY handles_by_contact \
+                         WHERE h.contact_id = c.contact_id \
+                           AND h.linked_how = 'agent' AND h.reviewed_at_utc IS NULL) \
+            AND NOT EXISTS (SELECT 1 FROM handles h INDEXED BY handles_by_contact \
+                             WHERE h.contact_id = c.contact_id \
+                               AND (h.linked_how = 'manual' OR h.reviewed_at_utc IS NOT NULL))) \
           ORDER BY name COLLATE NOCASE LIMIT ?"
     )
     .query()
@@ -734,7 +740,8 @@ impl Store {
         .context("read whether a contact has a photo")?;
         let links = sql!(
             "contacts_app.list_handles_of_contact",
-            "SELECT handle, stopped_working_by, label FROM handles WHERE contact_id = ? \
+            "SELECT handle, stopped_working_by, label FROM handles INDEXED BY handles_by_contact \
+              WHERE contact_id = ? AND (linked_how = 'manual' OR reviewed_at_utc IS NOT NULL) \
               ORDER BY stopped_working_by IS NOT NULL, handle"
         )
         .query()
@@ -769,7 +776,14 @@ impl Store {
         let rows = sql!(
             "contacts_app.list_unmerged_contacts",
             "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
-               FROM contacts WHERE merged_into IS NULL ORDER BY name COLLATE NOCASE, contact_id"
+               FROM contacts c WHERE merged_into IS NULL AND NOT (agent IS NOT NULL \
+                AND EXISTS (SELECT 1 FROM handles h INDEXED BY handles_by_contact \
+                             WHERE h.contact_id = c.contact_id \
+                               AND h.linked_how = 'agent' AND h.reviewed_at_utc IS NULL) \
+                AND NOT EXISTS (SELECT 1 FROM handles h INDEXED BY handles_by_contact \
+                                 WHERE h.contact_id = c.contact_id \
+                                   AND (h.linked_how = 'manual' OR h.reviewed_at_utc IS NOT NULL))) \
+              ORDER BY name COLLATE NOCASE, contact_id"
         )
         .query()
         .fetch_all(&self.pool)
@@ -779,6 +793,7 @@ impl Store {
         for h in sql!(
             "contacts_app.list_all_handles",
             "SELECT contact_id, handle, stopped_working_by, label FROM handles \
+              WHERE linked_how = 'manual' OR reviewed_at_utc IS NOT NULL \
               ORDER BY contact_id, stopped_working_by IS NOT NULL, handle"
         )
         .query()
@@ -1370,7 +1385,10 @@ impl Store {
     }
 }
 
-/// The contacts that have `h`, by name.
+/// The contacts `h` is on, by name: each a person linked it to, or
+/// confirmed an agent's link to. An agent's link nobody has confirmed is
+/// a suggestion, and holds nothing (docs/dev/contacts.md §"Agents
+/// suggest").
 async fn holders<'e>(
     conn: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
     h: &Handle,
@@ -1378,13 +1396,78 @@ async fn holders<'e>(
     sql!(
         "contacts_app.find_handle_holders",
         "SELECT h.contact_id FROM handles h JOIN contacts c USING (contact_id) \
-          WHERE h.handle = ? ORDER BY c.name COLLATE NOCASE, h.contact_id"
+          WHERE h.handle = ? AND (h.linked_how = 'manual' OR h.reviewed_at_utc IS NOT NULL) \
+          ORDER BY c.name COLLATE NOCASE, h.contact_id"
     )
     .query_scalar()
     .bind(h.as_str())
     .fetch_all(conn)
     .await
     .context("read who holds a handle")
+}
+
+/// Every contact with a link to `h`, suggestions included: what an agent
+/// may not propose over, since it never shares a handle.
+pub(crate) async fn any_holders<'e>(
+    conn: impl sqlx::Executor<'e, Database = sqlx::Sqlite>,
+    h: &Handle,
+) -> Result<Vec<String>> {
+    sql!(
+        "contacts_app.find_handle_holders_and_suggestions",
+        "SELECT h.contact_id FROM handles h JOIN contacts c USING (contact_id) \
+          WHERE h.handle = ? ORDER BY c.name COLLATE NOCASE, h.contact_id"
+    )
+    .query_scalar()
+    .bind(h.as_str())
+    .fetch_all(conn)
+    .await
+    .context("read who holds or is suggested for a handle")
+}
+
+/// A person put `h` on `contact_id`: an agent's suggestion of it for that
+/// contact is now confirmed, and its suggestions for anyone else are
+/// withdrawn, as not theirs. Returns whether the contact had it as a
+/// suggestion, which is then the link.
+async fn settle_suggestions(
+    tx: &mut sqlx::SqliteConnection,
+    h: &Handle,
+    contact_id: &str,
+    now: &str,
+    tz: &str,
+) -> Result<bool> {
+    let suggested: Vec<String> = sql!(
+        "contacts_app.list_suggested_for_handle",
+        "SELECT contact_id FROM handles \
+          WHERE handle = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL"
+    )
+    .query_scalar()
+    .bind(h.as_str())
+    .fetch_all(&mut *tx)
+    .await
+    .context("read who an agent suggested a handle for")?;
+    let mut confirmed = false;
+    for id in suggested {
+        if id == contact_id {
+            sql!(
+                "contacts_app.confirm_suggested_link",
+                "UPDATE handles SET reviewed_at_utc = ?, tz_offset = ? \
+                  WHERE handle = ? AND contact_id = ?"
+            )
+            .query()
+            .bind(now)
+            .bind(tz)
+            .bind(h.as_str())
+            .bind(&id)
+            .execute(&mut *tx)
+            .await
+            .context("confirm a suggested link")?;
+            confirmed = true;
+        } else {
+            review::unlink_in(tx, h.as_str(), &id, now, tz).await?;
+            review::drop_if_emptied(tx, &id, false).await?;
+        }
+    }
+    Ok(confirmed)
 }
 
 /// Several contacts' names, for a sentence: "Robert Picard and Marie Picard".
@@ -1547,6 +1630,9 @@ async fn insert_handle(
     now: &str,
     tz: &str,
 ) -> Result<()> {
+    if by == Maker::Person && settle_suggestions(tx, h, contact_id, now, tz).await? {
+        return Ok(());
+    }
     let row = HandleRow {
         handle: h.as_str().to_string(),
         contact_id: contact_id.to_string(),
@@ -2133,7 +2219,16 @@ mod tests {
         assert!(matches!(saved, drafts::Saved::Saved { .. }), "{saved:?}");
         let marie = store.contact("marie").await.unwrap().unwrap();
         assert_eq!(marie.note.as_deref(), Some("runs the vineyard"));
-        assert_eq!(marie.handles.len(), 2, "the shared link survived the save");
+        let held: Vec<_> = marie
+            .handles
+            .iter()
+            .filter_map(|h| h.handle.as_ref())
+            .collect();
+        assert_eq!(
+            held,
+            [&vineyard],
+            "the shared link survived the save; the agent's address is a suggestion"
+        );
         store.close().await;
     }
 
