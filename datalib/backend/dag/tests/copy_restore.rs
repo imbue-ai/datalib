@@ -482,3 +482,93 @@ fn a_backup_that_skips_cache_directories_copies_the_whole_library() {
     assert_nothing_redone(&demo.sync(&restored));
     assert_same(&before, &answers(&restored), "the library put back");
 }
+
+/// `config` with every source's download but those `except` names set
+/// to `common.download = false`.
+fn not_downloading(config: &str, except: &[&str]) -> String {
+    let mut doc: toml::Table = toml::from_str(config).expect("the config parses");
+    for step in doc["steps"].as_array_mut().expect("[[steps]]") {
+        let id = step["id"].as_str().expect("a step id").to_string();
+        let Some(group) = id.strip_suffix("/ingest") else {
+            continue;
+        };
+        if except.contains(&group) {
+            continue;
+        }
+        let params = step
+            .as_table_mut()
+            .expect("a step table")
+            .entry("params")
+            .or_insert_with(|| toml::Table::new().into());
+        let common = params
+            .as_table_mut()
+            .expect("params are a table")
+            .entry("common")
+            .or_insert_with(|| toml::Table::new().into());
+        common
+            .as_table_mut()
+            .expect("common is a table")
+            .insert("download".into(), false.into());
+    }
+    toml::to_string(&doc).expect("write the config")
+}
+
+/// A source whose upstream is gone keeps what it has: with
+/// `common.download = false` and its input deleted, each sync ends done,
+/// redoes nothing and answers as before, and a reset, which nothing could
+/// fill again, is refused.
+#[test]
+fn a_source_that_no_longer_downloads_keeps_what_it_has() {
+    let demo = synced_demo();
+    let before = answers(&demo.library);
+    let config = demo.library.join("config.toml");
+    let text = std::fs::read_to_string(&config).expect("read the config");
+    std::fs::write(&config, not_downloading(&text, &["pdfs"])).expect("write the config");
+    for input in std::fs::read_dir(&demo.inputs).expect("list the inputs") {
+        let input = input.expect("an input").path();
+        if input.is_dir() && !input.ends_with("pdfs") {
+            std::fs::remove_dir_all(&input).expect("remove an input");
+        }
+    }
+
+    // An edited step is stale, so what reads the six runs once and
+    // finds nothing new; after that, nothing runs.
+    let edited = demo.sync(&demo.library);
+    let made_anew: Vec<_> = edited
+        .iter()
+        .filter(|(step, outcome)| {
+            !step.ends_with("/ingest")
+                && !matches!(
+                    outcome.as_str(),
+                    "SkippedUpToDate" | "Succeeded { changed: 0 }"
+                )
+        })
+        .collect();
+    assert!(
+        made_anew.is_empty(),
+        "the edit made something anew: {made_anew:#?}"
+    );
+    assert_nothing_redone(&demo.sync(&demo.library));
+    assert_same(&before, &answers(&demo.library), "the library kept");
+
+    let reset = Command::new(bin_dir().join("datalib-pipeline"))
+        .arg("reset")
+        .arg(&demo.library)
+        .arg("linkedin/ingest")
+        .env("PATH", bin_dir())
+        .env("DATALIB_CACHE_DIR", &demo.cache)
+        .output()
+        .expect("run datalib-pipeline reset");
+    let said = String::from_utf8_lossy(&reset.stderr);
+    assert!(
+        !reset.status.success() && said.contains("does not download"),
+        "a reset of a source that does not download: {}\n{}",
+        reset.status,
+        tail(&said)
+    );
+    assert_same(
+        &before,
+        &answers(&demo.library),
+        "the library after the reset",
+    );
+}

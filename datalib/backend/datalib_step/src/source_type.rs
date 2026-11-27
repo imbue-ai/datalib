@@ -173,6 +173,12 @@ impl SourceType {
         }
     }
 
+    /// Whether this type's raw store holds where each file is rather
+    /// than its bytes, so its render reads the files themselves.
+    pub const fn renders_files_where_they_lie(self) -> bool {
+        matches!(self, SourceType::Pdf)
+    }
+
     /// The known types, sorted, for an error message.
     pub fn known_list() -> String {
         let mut names: Vec<&str> = SourceType::VARIANTS.iter().map(|t| t.as_str()).collect();

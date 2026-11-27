@@ -36,7 +36,7 @@ impl Default for EventTapeConfig {
 /// is not here: that is the `path` of the method table that reads it
 /// (`[steps.params.export] path = …`), declared per provider. Strict: a
 /// misspelled knob is refused, not ignored.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SourceCommon {
     /// Where *we* keep this source's raw store (`entities.doltlite_db`,
@@ -60,6 +60,24 @@ pub struct SourceCommon {
     /// `ingest/events/`, for debugging. Off unless the table is written.
     #[serde(default)]
     pub event_tape: Option<EventTapeConfig>,
+    /// `false` once upstream is gone for good: the ingest step fetches
+    /// nothing and publishes the raw store it has, which each build's
+    /// prepare still brings to its shape (`docs/dev/config_model.md`
+    /// §"A source that no longer downloads").
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
+    pub download: bool,
+}
+
+impl Default for SourceCommon {
+    fn default() -> Self {
+        Self {
+            raw_path: None,
+            blob_size_limit_bytes: None,
+            download_params: DownloadParams::default(),
+            event_tape: None,
+            download: true,
+        }
+    }
 }
 
 /// Global base values for the propagatable [`SourceCommon`] knobs — the
@@ -396,6 +414,10 @@ fn default_true() -> bool {
     true
 }
 
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 /// `~/x` → `$HOME/x`; anything else unchanged. Every path a config
 /// names goes through this once, so a provider's method table calls it
 /// on its own `path`.
@@ -457,6 +479,26 @@ mod tests {
 
     /// `Reach` derives both strum and serde; the two spell the variants
     /// independently, so their agreement is a real check.
+    /// A source downloads unless its params say otherwise, and a config
+    /// written from a `SourceCommon` that downloads does not spell it out.
+    #[test]
+    fn a_source_downloads_unless_told_not_to() {
+        assert!(SourceCommon::default().download);
+        let read: SourceCommon = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(read.download);
+        assert_eq!(
+            serde_json::to_value(&read).unwrap()["download"],
+            serde_json::Value::Null
+        );
+        let off: SourceCommon =
+            serde_json::from_value(serde_json::json!({"download": false})).unwrap();
+        assert!(!off.download);
+        assert_eq!(
+            serde_json::to_value(&off).unwrap()["download"],
+            serde_json::json!(false)
+        );
+    }
+
     #[test]
     fn reach_spellings_agree_between_strum_and_serde() {
         for &r in Reach::VARIANTS {
