@@ -406,8 +406,8 @@ mod tests {
     ];
 
     /// A store whose sidecar tables were committed before any backup was
-    /// mirrored into it (the launch's migrate pass does this) renders
-    /// nothing; it used to fail with "no such table: jid".
+    /// mirrored into it (the prepare pass does this) renders nothing,
+    /// rather than failing with "no such table: jid".
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_store_no_backup_was_mirrored_into_renders_nothing() {
         let td = tempfile::tempdir().expect("tempdir");
@@ -489,7 +489,7 @@ mod tests {
         pool.close().await;
 
         // First render — cold start (no cursor). Both chats should
-        // render, and the pass hands back the commit it consumed.
+        // render, and the render hands back the commit it consumed.
         let (docs1, _, first_cursor) = render_capture(&raw_dir, None).await;
         assert_eq!(
             docs1.len(),
@@ -573,10 +573,9 @@ mod tests {
         );
     }
 
-    /// A store no download has filled — opened by the launch's migrate
-    /// pass, or by an ingest that then failed for want of its key —
-    /// renders nothing rather than failing on a msgstore table it lacks
-    /// (#1251).
+    /// A store no download has filled — opened by the prepare pass, or by
+    /// an ingest that then failed for want of its key — renders nothing
+    /// rather than failing on a msgstore table it lacks (#1251).
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_store_no_download_filled_renders_nothing() {
         let td = tempfile::tempdir().expect("tempdir");
@@ -796,7 +795,7 @@ mod tests {
     }
 
     /// Rendered markdown uuids, the chat JIDs reported gone, and the
-    /// commit the pass consumed.
+    /// commit the render consumed.
     async fn render_capture(
         raw_dir: &Path,
         cursor: Option<&str>,

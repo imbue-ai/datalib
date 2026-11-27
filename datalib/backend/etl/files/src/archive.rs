@@ -90,7 +90,8 @@ pub fn parts_in(dir: &Path) -> Result<Vec<String>> {
 }
 
 /// An entry's name as a relative path that stays inside wherever it is
-/// unpacked to, slash-separated, or `None` for one that climbs out.
+/// unpacked to, slash-separated, or `None` for one that would resolve
+/// outside it.
 pub fn safe_rel(name: &str) -> Option<String> {
     let mut parts = Vec::new();
     for c in Path::new(name.strip_prefix("./").unwrap_or(name)).components() {
@@ -264,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn a_name_that_climbs_out_has_no_rel() {
+    fn a_name_that_resolves_outside_has_no_rel() {
         assert_eq!(
             safe_rel("Takeout/Mail/All mail.mbox").as_deref(),
             Some("Takeout/Mail/All mail.mbox")
@@ -395,7 +396,7 @@ mod tests {
         }
     }
 
-    /// Through the public door, with the limits production runs under: a
+    /// Through the public functions, with the limits production runs under: a
     /// few hundred kilobytes that would come out at over 256 MiB.
     #[test]
     fn a_small_zip_bomb_is_refused_at_the_floor() {

@@ -1,4 +1,4 @@
-//! The render wave for the claude_code source: its planner and the
+//! The render step for the claude_code source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};

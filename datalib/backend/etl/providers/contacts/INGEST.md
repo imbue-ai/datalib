@@ -114,8 +114,8 @@ address book, and a changed photo is one more.
 asks for `=s512`. A `default` photo is a letter Google drew, and is not
 fetched. The link needs no sign-in and goes out plain, only to an https
 `googleusercontent.com` address. A photo that will not come, or is not an
-image, is a problem on its row, opens the contact's page, and is asked
-for again on the next run.
+image, is a problem on its row, shown in the banner above the contact's
+page, and is requested again on the next run.
 
 **A link is not a photo's name.** Most stay the same from one listing to
 the next, but Google signs some afresh every time (*measured*: 2 of 33,

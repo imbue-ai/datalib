@@ -1,4 +1,4 @@
-//! Schema-only config crate for the `linkedin` source (Program A goal #1).
+//! Schema-only config crate for the `linkedin` source.
 
 use anyhow::Result;
 use std::path::PathBuf;

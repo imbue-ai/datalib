@@ -213,10 +213,6 @@ mod tests {
     /// `GET /user` answers with the clock in the user's timezone, so
     /// two syncs five minutes apart differ — and this table has exactly
     /// one row, which would then be modified on every sync forever.
-    ///
-    /// The manual-e2e bake caught it on 2026-09-22: the
-    /// reset-then-resync stability check failed on
-    /// `self_identity.local_time`, `'5:13 AM' -> '5:18 AM'`.
     #[test]
     fn the_clock_does_not_move_the_content_payload() {
         let (early, early_volatile) =

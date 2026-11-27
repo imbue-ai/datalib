@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `linkedin` source.
+//! The `DataProcessor`s for the `linkedin` source.
 
 use std::path::PathBuf;
 
@@ -16,7 +16,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: always present — ingest the export CSVs.
+/// One download processor, always: it ingests the export CSVs.
 pub fn plan_ingest(
     ctx: PlanContext,
     config: LinkedinConfig,

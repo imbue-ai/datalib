@@ -1,6 +1,7 @@
 //! One stretch of time walked through `search.messages`, page by page,
-//! newest first. Each page settles a span of the stretch the way a
-//! history page does, so a search cut off part way leaves a smaller gap.
+//! newest first. Each page covers a span of the stretch, which is stored
+//! as a `coverage` span the way a history page's is, so a search cut off
+//! part way leaves a smaller gap.
 //! The reply search and the involves-me search both walk this way.
 
 use std::collections::BTreeMap;
@@ -13,7 +14,7 @@ use datalib_etl_web::coverage::Span;
 use datalib_etl_web::http::LatchkeySettings;
 
 use super::shapes::M_SEARCH;
-use super::{call, key_ts, settled};
+use super::{call, covered_by_page, key_ts};
 
 /// Slack serves no page of a search past this one.
 const MAX_PAGES: u64 = 100;
@@ -47,7 +48,7 @@ pub(super) fn days_clause(span: &Span) -> String {
 }
 
 /// One page of a [`SearchWalk`]: every match it returned, and the span
-/// of the stretch it settled.
+/// of the stretch it covered.
 pub(super) struct SearchPage {
     pub matches: Vec<Value>,
     pub covered: Option<Span>,
@@ -55,7 +56,7 @@ pub(super) struct SearchPage {
 
 /// The pages of one stretch. `query` names the stretch it is asked for:
 /// a walk that reaches Slack's last page before the bottom of the
-/// stretch asks again below what it settled.
+/// stretch asks again below what it covered.
 pub(super) struct SearchWalk<Q> {
     query: Q,
     stretch: Span,
@@ -78,9 +79,9 @@ impl<Q: Fn(&Span) -> String> SearchWalk<Q> {
         }
     }
 
-    /// The next page, or `None` when the stretch is settled. `counts`
-    /// says which matches settle the stretch: a match outside what was
-    /// searched for says nothing of it.
+    /// The next page, or `None` when the whole stretch is covered.
+    /// `counts` says which matches count toward what a page covers: a
+    /// match outside what was searched for says nothing of it.
     pub async fn next(
         &mut self,
         counts: impl Fn(&Value) -> bool,
@@ -136,7 +137,7 @@ impl<Q: Fn(&Span) -> String> SearchWalk<Q> {
             .filter_map(|m| m.get("ts").and_then(Value::as_str).map(super::ts_key))
             .filter(|key| *key >= self.stretch.lo && *key <= self.stretch.hi)
             .collect();
-        let covered = settled(&self.stretch, self.top.as_deref(), &in_stretch, last);
+        let covered = covered_by_page(&self.stretch, self.top.as_deref(), &in_stretch, last);
         if last {
             self.done = true;
         } else {
@@ -186,11 +187,11 @@ mod tests {
         .await
     }
 
-    /// Slack serves no page past the hundredth. A walk that settled some
-    /// of its stretch asks again below that; one that settled none of it
+    /// Slack serves no page past the hundredth. A walk that covered some
+    /// of its stretch asks again below that; one that covered none of it
     /// says so rather than asking the same thing for good.
     #[tokio::test]
-    async fn past_the_last_page_a_walk_asks_again_below_what_it_settled() {
+    async fn past_the_last_page_a_walk_asks_again_below_what_it_covered() {
         let mut lowered = past_the_last_page("70");
         assert!(next(&mut lowered).await.is_err(), "the tape is empty");
         assert_eq!(lowered.stretch, Span::new("20", "70"));

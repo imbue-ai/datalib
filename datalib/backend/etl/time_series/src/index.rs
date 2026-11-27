@@ -127,7 +127,7 @@ mod tests {
 
     /// Two sources' rows stack, keyed by source; a second pass after one
     /// source appended rewrites only that row and moves that source's
-    /// commit; a source no longer an input is forgotten, and one with no
+    /// commit; a source no longer an input is removed, and one with no
     /// store yet keeps what the index held.
     #[tokio::test(flavor = "multi_thread")]
     async fn the_index_follows_its_sources_and_holds_no_points() {

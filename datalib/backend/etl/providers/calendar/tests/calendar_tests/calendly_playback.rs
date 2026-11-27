@@ -354,7 +354,8 @@ async fn lists_meetings_reads_their_invitees_and_drops_what_is_gone() {
 }
 
 /// A meeting's invitees that would not come stay owed, with the failure
-/// on the record, and the next run asks again; the others are held.
+/// in a `problems` row keyed by the meeting, and the next run requests
+/// them again; the others are held.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn invitees_that_did_not_come_are_asked_for_again() {
     let d = tempfile::tempdir().expect("tempdir");

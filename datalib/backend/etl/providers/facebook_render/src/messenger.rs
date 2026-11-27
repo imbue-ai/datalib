@@ -598,8 +598,8 @@ mod tests {
         assert_eq!(a[2].1.as_deref(), Some("facebook:name/Worf"));
     }
 
-    /// A conversation was a document per year, each under a uuid minted
-    /// from the year; it is one document under the conversation's own.
+    /// A conversation is one document under the conversation's own uuid,
+    /// not a document per year under a uuid minted from the year.
     #[test]
     fn a_conversation_spanning_two_years_is_one_document_oldest_first() {
         // 2369-01-01 and 2370-01-01, roughly, in ms.

@@ -190,8 +190,8 @@ for an integer one**: `BulkUpsertable` keys on one column by contract
 (`ID_COLUMN` is the `ON CONFLICT` target and `id()` returns one `&str`).
 `disk_usage` is legitimately keyed on `(path, measured_at_utc)`, and the run
 store's `log` on `seq`, an `INTEGER` the store assigns as the rowid.
-Such a table still gets its DDL and column metadata; it just keeps
-writing itself.
+Such a table still gets its DDL and column metadata; its owner writes
+its rows with statements of its own.
 
 ## `RawStoreHandle`
 

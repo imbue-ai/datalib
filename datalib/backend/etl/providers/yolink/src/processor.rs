@@ -1,4 +1,5 @@
-//! Program-A `DataProcessor`s for the yolink source (download + render).
+//! The download `DataProcessor` for the yolink source; the render one is
+//! in `datalib_etl_yolink_render`.
 //! The source owns its raw store (open/commit/checkpoint); the orchestrator
 //! only drives `run`.
 
@@ -18,7 +19,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`.
+/// One download processor when `api` is set, none otherwise.
 pub fn plan_ingest(ctx: PlanContext, config: YolinkConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();

@@ -134,10 +134,10 @@ From a checkout:
    bar work; `every_filter_key_is_served_by_an_index` then fails until
    the key has an index or a place in its `SCANS` list.
 5. If it is a string, say whether a person reads it as a name or a
-   label: add it to `settle_row` (`etl/render/src/names.rs`), which
+   label: add it to `clean_row` (`etl/render/src/names.rs`), which
    strips its bidi controls as the document is stored, or add it to
    that file's `KEPT` list as an id, a path, a stamp or a body.
-   `every_grid_row_string_is_settled_or_kept` fails until it is one or
+   `every_grid_row_string_is_cleaned_or_kept` fails until it is one or
    the other.
 6. Rebuild the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 

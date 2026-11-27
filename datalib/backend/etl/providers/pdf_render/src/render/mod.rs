@@ -473,7 +473,7 @@ pub struct PdfScan {
     pub elapsed: Option<std::time::Duration>,
 }
 
-/// Ask the raw store which documents moved since the cursor.
+/// Diff the raw store against the cursor to find which documents changed.
 ///
 /// The render unit is the document's blake3, which is also its identity — for
 /// this provider "changed" and "different document" are the same

@@ -9,8 +9,8 @@ pub mod parse;
 // an accident: the directory is the pipeline STAGE (mirroring
 // `download/`), and the file is the rendering step within it, beside
 // `parse.rs`. Renaming it would break the symmetry in all twelve
-// providers. Allowed here rather than repo-wide so an unintentional
-// inception elsewhere still fails the build.
+// providers. Allowed here rather than repo-wide so a module named like
+// its parent anywhere else still fails the build.
 #[allow(clippy::module_inception)]
 pub mod render;
 
@@ -166,9 +166,7 @@ pub struct Message {
     pub user_id: Option<String>,
     pub text: String,
     /// The parsed `ts` as ISO-8601, or `None` when `ts` isn't a shape
-    /// we can read. Used as the primary sort key; `None` sorts first,
-    /// which is where an unreadable `ts` used to land anyway when it
-    /// was silently read as the epoch.
+    /// we can read. Used as the primary sort key; `None` sorts first.
     pub ts_iso: Option<String>,
     /// Original Slack message JSON, preserved verbatim. The renderer
     /// reaches into this for `files`, `reactions`, and any future
@@ -305,9 +303,9 @@ mod channel_display_tests {
         }
     }
 
-    /// Channels render exactly as they always have — including the
-    /// id fallback. This is what keeps the render goldens byte-stable
-    /// across the DM change.
+    /// A channel renders as `#name`, or `#` and its id when it has no
+    /// name: the DM path must leave channels alone, which keeps the
+    /// render goldens byte-stable.
     #[test]
     fn a_channel_is_hash_name() {
         let inputs = Inputs::default();

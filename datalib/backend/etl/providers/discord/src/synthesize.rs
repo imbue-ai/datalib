@@ -1,5 +1,6 @@
 //! Discord HTTP fixture synthesizer: a `world.json` saying what an
-//! account can see becomes every answer a download of it could ask for.
+//! account can see becomes the response to every request a download of
+//! it could send.
 //!
 //! ```json
 //! {"me": {…}, "guilds": [{…}], "dms": [{…}],

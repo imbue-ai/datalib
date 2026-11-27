@@ -27,7 +27,7 @@ pub struct Loaded {
     /// paths are under.
     pub scan: Option<(String, PathBuf)>,
     /// Paths this run was asked to render that no note holds any more:
-    /// each is declared with nothing, so its document goes.
+    /// each goes to `declare_empty`, so its document is deleted.
     pub gone: Vec<String>,
     /// The commit read.
     pub head: Option<String>,
@@ -53,8 +53,8 @@ pub async fn load(raw_dir: &Path, range: RawRange<'_>) -> Result<Option<Loaded>>
 async fn read(db: &RawDb, range: RawRange<'_>) -> Result<Loaded> {
     let pin = db.pin().expect("open_reader returns a pinned handle");
     // A render unit is a note's path, which is its row's key: the notes whose
-    // rows changed, joined with the ones the driver found stale (a new
-    // scan root makes every note stale, since every note read its row).
+    // rows changed, joined with the ones the render driver found stale
+    // (a new scan root makes every note stale, since every note read its row).
     let changed = changed_rows(db.pool(), range, pin, &[MARKDOWN_FILES]).await?;
     let forward = changed.map(|mut by_table| by_table.remove(MARKDOWN_FILES).unwrap_or_default());
     let render = range.narrow(forward.as_ref());

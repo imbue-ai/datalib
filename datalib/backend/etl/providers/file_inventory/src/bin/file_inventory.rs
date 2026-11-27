@@ -231,7 +231,7 @@ async fn main() -> Result<()> {
             summary.cache_path.display(),
             summary.cache_entries_loaded,
             summary.cache_entries_written,
-            summary.cache_entries_forgotten,
+            summary.cache_entries_deleted,
             ingest::human_growth(summary.cache_bytes_before, summary.cache_bytes_after),
         );
     }

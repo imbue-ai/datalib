@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the slack source (download + render).
+//! The `DataProcessor`s for the slack source (download + render).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`.
+/// The ingest step's processor: present iff `api`.
 pub fn plan_ingest(ctx: PlanContext, config: SlackConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
@@ -74,8 +74,7 @@ impl DataProcessor for SlackIngest {
         let mut db = ingest::RawDb::open(&entity_db).await?;
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
         // Slack owns its wire-event tape: mirror every upsert to JSONL when the
-        // resolved shared config leaves it enabled. (The orchestrator used to
-        // attach this; now the one provider that consumes it does.)
+        // resolved shared config leaves it enabled.
         if self.event_tape_enabled {
             let tape = Arc::new(datalib_etl::event_tape::EventTape::new(
                 datalib_etl::raw_layout::events_dir(&self.raw_path),

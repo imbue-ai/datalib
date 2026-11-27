@@ -1,4 +1,4 @@
-//! The render wave for the discord source: its planner and the
+//! The render step for the discord source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use std::path::Path;
@@ -19,7 +19,7 @@ use crate::ids;
 use crate::render::{render_store, RENDER_VERSION};
 use crate::store;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// One render processor, always: it renders whatever is in the raw store.
 pub fn plan_render(
     ctx: PlanContext,
     config: DiscordRenderConfig,

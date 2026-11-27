@@ -110,7 +110,8 @@ fn system_entry(label: &str) -> Option<(&'static str, LabelKind)> {
 /// The spelling to store for `label`, whatever spelling it arrived in.
 ///
 /// User labels pass through untouched — their name *is* the user's, and
-/// all three modes report it identically (`Work/Projects`).
+/// every spelling a label arrives in (a Takeout mbox's, the Gmail API's,
+/// the backslashed one) writes it identically (`Work/Projects`).
 pub fn canonical_name(label: &str) -> String {
     match system_entry(label) {
         Some((canonical, _)) => canonical.to_string(),
@@ -254,8 +255,8 @@ mod tests {
     }
 
     /// Every label the checked-in Takeout fixture actually carries must
-    /// canonicalize to itself — that is what makes this refactor a no-op
-    /// for raw stores already on disk (and why `jmap_mbox` still passes).
+    /// canonicalize to itself — that is what leaves raw stores already on
+    /// disk unchanged (and keeps `jmap_mbox` passing).
     #[test]
     fn leaves_the_takeout_fixtures_own_labels_untouched() {
         for label in [

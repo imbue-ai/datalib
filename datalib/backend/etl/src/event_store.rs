@@ -104,8 +104,8 @@ where
 /// Returns a `Vec` in **first-seen order**, with an `updated/` record
 /// replacing its predecessor in place rather than moving it to the end. That
 /// is document order for an append-only stream, and a synthesizer replaying
-/// a listing endpoint has to reproduce it. A `HashMap` here silently cost
-/// the notion fixture its reproducibility; a `BTreeMap` would reshape the
+/// a listing endpoint has to reproduce it. A `HashMap` here would shuffle
+/// a replay by the per-process hash seed; a `BTreeMap` would reshape the
 /// page. Callers wanting a lookup table should build one.
 ///
 /// An unkeyable record is an error, not a skip: every `key_of` is built from

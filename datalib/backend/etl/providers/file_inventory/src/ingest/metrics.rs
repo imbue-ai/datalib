@@ -33,7 +33,7 @@ impl WalkerCounters {
 }
 
 /// Tracks the maximum observed depth of the producer→consumer
-/// channel. The only direct saturation signal we have today: if the
+/// channel. The only direct saturation signal we have: if the
 /// HWM equals the channel capacity often, the writer is the
 /// bottleneck; if HWM stays near zero, the walker is.
 #[derive(Debug, Default)]

@@ -5,7 +5,7 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 #
 # This is the crate that knows `datalib_schema`. Keeping it out of
 # `//datalib/backend/etl` is the point — a downloader links that and
-# stops, so a `grid_rows` column moving no longer rebuilds it.
+# stops, so a `grid_rows` column moving does not rebuild it.
 rust_library(
     name = "datalib_etl_render",
     srcs = glob(

@@ -329,9 +329,9 @@ mod tests {
     /// `contacts:#10:0` — the `#` is the only thing saying *which*
     /// card, since every card in the file has the same file stem.
     ///
-    /// That key then goes to `composite_key`, which used to refuse a
-    /// part containing `#`: the live contacts source brought the whole
-    /// render step down with it. Dropping or flattening the `#`
+    /// That key then goes to `composite_key`. Guards against it refusing
+    /// a part containing `#`, which took the whole render step of a live
+    /// contacts source down with it. Dropping or flattening the `#`
     /// instead would be worse than the panic — every nameless card in
     /// the file would collapse onto one id and all but one would
     /// vanish from the grid.
@@ -391,9 +391,9 @@ mod tests {
         assert_ne!(ids[0], ids[1], "two nameless cards collapsed onto one id");
     }
 
-    /// A card with no `FN` used to be titled by its synthesized uid
-    /// (`contacts:#93:0`), which is how a real address book's
-    /// email-only cards rendered.
+    /// A card with no `FN` is titled by its name, email, number or
+    /// organization rather than by its synthesized uid (`contacts:#93:0`),
+    /// which says nothing on a real address book's email-only cards.
     #[test]
     fn nameless_card_is_titled_by_what_it_does_have() {
         let name = |block: &str| parse_block(block, "book").display_name;

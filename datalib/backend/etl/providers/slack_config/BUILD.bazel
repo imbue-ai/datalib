@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only config crate for slack_api (Program A goal #1). Bazel-only.
+# Schema-only config crate for slack_api. Bazel-only.
 rust_library(
     name = "datalib_etl_slack_config",
     srcs = glob(["src/**/*.rs"]),

@@ -465,7 +465,8 @@ mod tests {
         assert_eq!(uids(&db).await, vec!["picard"]);
         assert_eq!(addressbook_hrefs(&db).await, vec!["Bridge.vcf"]);
 
-        // The file's cursor entry went with it, so it is not removed twice.
+        // The file's `ingested_files` row went with it, so it is not
+        // removed twice.
         let third = fetch(opts()).await.unwrap();
         assert_eq!(third.files_removed, 0);
         assert_eq!(third.files_skipped, 1);
@@ -546,10 +547,10 @@ mod tests {
         db.close().await;
     }
 
-    // Google's vCard export carries no `UID:` — identity rides the
-    // first+last name instead. An edit to a *non-name* field must keep
-    // the same row (the ship-of-Theseus property the synthesized id
-    // buys us), not fork into a new contact.
+    // Google's vCard export carries no `UID:`, so the id is made from
+    // the first+last name instead. An edit to a *non-name* field must
+    // keep the same row, since the name and so the id are unchanged, not
+    // make a new contact.
     #[tokio::test]
     async fn synthesized_name_id_survives_field_edit_for_uidless_cards() {
         let dir = tempfile::tempdir().unwrap();
@@ -584,8 +585,9 @@ mod tests {
         db.close().await;
     }
 
-    /// Two UID-less cards sharing a first+last name used to collapse onto
-    /// one synthesized id, and one of the two people was lost.
+    /// Guards against two UID-less cards sharing a first+last name
+    /// collapsing onto one synthesized id, which lost one of the two
+    /// people.
     #[tokio::test]
     async fn same_name_uidless_cards_stay_two_rows() {
         let dir = tempfile::tempdir().unwrap();

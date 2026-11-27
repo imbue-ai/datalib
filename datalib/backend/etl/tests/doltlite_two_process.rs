@@ -164,7 +164,7 @@ fn a_writer_opens_and_commits_under_a_reader_that_is_already_open() {
 }
 
 /// A reader that keeps re-opening — the shape `unified_grid_and_search_index` has under
-/// streaming, one open/pin/diff/read/close per source per pass — for as long
+/// streaming, one open/pin/diff/read/close per source per run — for as long
 /// as a writer commits as fast as it can. Every reader step is a read, so the
 /// writer must never see `commit conflict`.
 ///
@@ -1218,11 +1218,11 @@ fn a_seal_a_killed_writer_committed_but_never_published_is_published_by_the_next
 /// connection that was open before the commit -- so a long-lived reader
 /// can pin per request without reopening.
 ///
-/// The `sql_committed` phase is the one that used to be frightening.
-/// A writer on `main` that `COMMIT`ed at the SQL level but had not yet
-/// `dolt_commit`ed showed its whole uncommitted batch to any working-set
-/// read in any process, which is most of why readers pin at all. Writers
-/// now work on `WRITER_BRANCH` and fast-forward `main` only at the seal,
+/// The `sql_committed` phase is the one this guards. A writer on `main`
+/// that `COMMIT`ed at the SQL level but had not yet `dolt_commit`ed would
+/// show its whole uncommitted batch to any working-set read in any
+/// process, which is most of why readers pin at all. Writers work on
+/// `WRITER_BRANCH` and fast-forward `main` only at the seal,
 /// so that phase shows a reader nothing: the working set it can see is
 /// `main`'s, and `main` does not move until the batch is sealed. This
 /// test is where that claim is checked against two real processes.

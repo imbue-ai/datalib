@@ -14,7 +14,7 @@ filegroup(
 
 # Subset of `fixtures` consumed by //tests/fixtures:ingested_tng — the
 # Star Trek themed Google Takeout mbox that drives the email extract
-# path end-to-end (mbox → raw → translate → render).
+# path end-to-end (mbox → raw store → render).
 filegroup(
     name = "tng_fixture",
     srcs = glob(["tests/fixtures/mbox/*.mbox"]),

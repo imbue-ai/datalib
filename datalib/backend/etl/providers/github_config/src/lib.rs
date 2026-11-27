@@ -1,6 +1,6 @@
-//! Provider-owned config schema for the `github` source (Program A goal
-//! #1). Schema-only (serde + anyhow), so the orchestrator can name
-//! `GithubConfig` without linking the provider.
+//! Provider-owned config schema for the `github` source. Schema-only
+//! (serde + anyhow), so the orchestrator can name `GithubConfig`
+//! without linking the provider.
 
 use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};
 use serde::{Deserialize, Serialize};

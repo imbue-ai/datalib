@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `perseus` source (Program A goal #1).
+//! Provider-owned config schema for the `perseus` source.
 //! Schema-only (serde + anyhow).
 
 use datalib_source_common::{RenderCommon, SourceCommon};

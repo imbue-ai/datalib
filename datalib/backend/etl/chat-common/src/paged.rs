@@ -17,8 +17,8 @@ use crate::types::NormalizedChat;
 pub struct Page<C> {
     pub conversations: Vec<C>,
     /// On a narrowed run, the documents this page looked at, by uuid: each
-    /// is declared empty first, so one with no message left goes. Empty
-    /// on a full walk, whose conversations all come from rows.
+    /// is declared empty first, so one with no message left is deleted.
+    /// Empty on a full walk, whose conversations all come from rows.
     pub looked_at: Vec<String>,
     pub unparsed: Vec<Unparsed>,
 }

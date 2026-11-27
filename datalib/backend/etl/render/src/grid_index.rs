@@ -51,13 +51,16 @@ mod nodes;
 mod page;
 mod planner_ranks;
 
-/// Serializes concurrent writers against one doltlite index pool, and
-/// optionally batches every write into one transaction.
+/// Serializes concurrent writers against one store's pool, and optionally
+/// batches every write into one transaction. A render store, which is
+/// doltlite, takes [`WriteLock::new`]; the grid index, plain SQLite, takes
+/// [`WriteLock::for_index`].
 ///
-/// Doltlite runs one write at a time per file, so per-task pool connections
-/// calling `apply_one` would queue for it and, past the busy timeout, fail
-/// with `database is locked`. Batching matters as much: every transaction
-/// rewrites each page it touched (docs/dev/doltlite.md#what-a-write-costs).
+/// Both engines run one write at a time per file, so per-task pool
+/// connections calling `apply_one` would queue for it and, past the busy
+/// timeout, fail with `database is locked`. Batching matters as much: in
+/// doltlite every transaction rewrites each page it touched
+/// (docs/dev/doltlite.md#what-a-write-costs).
 ///
 /// The counters answer "where is the time going": `total_wait` high against
 /// wall time means writers are queuing, and `total_hold / acquisitions` is the
@@ -506,7 +509,7 @@ async fn record_unreadable_store(
 pub enum Part {
     /// The rows, documents, edges, nodes, filings, photos, problems,
     /// cursors and terms. Emptying it empties [`Part::Contacts`] too: the
-    /// people ride on the grid's documents, and a document the refill no
+    /// people are kept per grid document, and a document the refill no
     /// longer finds would leave its people behind.
     Grid,
     /// The people the documents carry (`contact_records`), with a cursor
@@ -1049,8 +1052,9 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
 
 /// Opens the index as its owner when some of its parts are in another
 /// shape and the rest are this build's, which empties the moved parts and
-/// keeps the rest readable while the step fills them again: what the
-/// launch's prepare pass does before it asks for that run. Whether it did.
+/// keeps the rest readable while the step fills them again. The index
+/// step's `--prepare` calls it, then reports `needs_rerun`, so the loop
+/// runs the step to fill them. Whether it emptied any.
 pub async fn empty_moved_parts(db_path: &Path) -> Result<bool> {
     if !matches!(refill_of(db_path).await?, Refill::Parts(_)) {
         return Ok(false);
@@ -1233,8 +1237,8 @@ pub async fn close_index(pool: SqlitePool) -> Result<()> {
 }
 
 /// Raise the index's generation inside the transaction on `conn`, which
-/// changed what a reader sees, and return it. This is the index's seal:
-/// what a doltlite commit was.
+/// changed what a reader sees, and return it. This is the index's seal,
+/// in place of a doltlite commit.
 async fn bump_generation(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> Result<i64> {
     sql!(
         "etl.render.grid.bump_generation",
@@ -1374,8 +1378,8 @@ fn misfiled(md: &RenderedMarkdown) -> Option<String> {
 }
 
 /// Write one rendered document into the index unconditionally. Every
-/// document reaches a render store or the grid index through here, so its
-/// names are settled and its rows filed under their source here
+/// document reaches a render store or the grid index through here, so the
+/// names in it are cleaned and its rows filed under their source here
 /// ([`crate::names`]).
 pub async fn apply_one(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
     apply_page(write_lock, std::slice::from_ref(md)).await
@@ -1435,7 +1439,7 @@ pub async fn build_grid_index(
 /// source with no store yet is skipped: its render step has not produced
 /// one.
 ///
-/// **Each source is asked what changed, not read whole**, via `dolt_diff`
+/// **Each source's store is diffed, not read whole**, via `dolt_diff`
 /// between the commit `source_cursors` last consumed and the store's HEAD,
 /// so a document a source stopped holding can be named and deleted.
 ///
@@ -1659,7 +1663,7 @@ async fn retire_source(
         let remade = remove_documents(write_lock, source, &documents, Some(held), progress).await?;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        nodes::settle(conn, write_lock)
+        nodes::rewrite_touched(conn, write_lock)
             .await
             .with_context(|| format!("drop {source}'s nodes"))?;
         if remade {
@@ -1773,8 +1777,8 @@ enum SourceRead {
         /// longer does.
         removed: Vec<String>,
         /// The commit read and its tree. `None` when `dolt_log()` did not
-        /// answer, and an unwritten cursor cold-starts the next pass — the
-        /// safe direction.
+        /// answer, and an unwritten cursor makes the next pass read the
+        /// store whole — the safe direction.
         head: Option<(String, String)>,
         /// `to_read` is every document the store holds.
         whole: bool,
@@ -2048,15 +2052,15 @@ async fn apply_source(
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
         if !to_read.is_empty() || !removed.is_empty() {
-            let settled = nodes::settle(conn, write_lock)
+            let rewritten = nodes::rewrite_touched(conn, write_lock)
                 .await
                 .with_context(|| format!("settle {stanza}'s nodes"))?;
             tracing::debug!(
                 source = %stanza,
-                touched = settled.touched,
-                changed = settled.changed,
-                rows_kept = settled.rows_kept,
-                rows_dropped = settled.rows_dropped,
+                touched = rewritten.touched,
+                changed = rewritten.changed,
+                rows_kept = rewritten.rows_kept,
+                rows_dropped = rewritten.rows_dropped,
                 "nodes settled"
             );
         }
@@ -2463,9 +2467,9 @@ async fn write_source_cursor(
 }
 
 /// Remove documents and everything hanging off them: the deletes
-/// `apply_page` runs before re-inserting, without the insert. Only
-/// reachable because the index diffs rather than re-reads — a deleted
-/// conversation used to stay in the grid forever.
+/// `apply_page` runs before re-inserting, without the insert. Called for
+/// the documents a source no longer has ([`remove_documents`]); without
+/// it a deleted conversation would stay in the grid.
 pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
     let removed = delete_document_rows(guard.conn(), write_lock.store(), markdown_uuids).await?;
@@ -2714,12 +2718,12 @@ mod open_index_tests {
         pool.close().await;
     }
 
-    /// Every statement that settles nodes reads each by its uuid, also
+    /// Every statement `nodes::rewrite_touched` runs reads each node by its uuid, also
     /// while a build has the read indexes dropped, which is when it runs.
     /// Read by anything wider it was seconds on each source of a large
     /// index (#1926), or quadratic in a first build.
     #[tokio::test]
-    async fn the_nodes_are_settled_by_their_uuids_through_a_build() {
+    async fn the_nodes_are_rewritten_by_their_uuids_through_a_build() {
         let td = tempfile::tempdir().unwrap();
         let pool = open_index(&td.path().join("db.sqlite"))
             .await
@@ -2732,7 +2736,7 @@ mod open_index_tests {
         assert_searched_by_index(
             &pool,
             &[
-                nodes::SETTLE.clone(),
+                nodes::WRITE_FROM_BEST_ACCOUNT.clone(),
                 nodes::UNCARRIED,
                 nodes::ORPHANED,
                 nodes::WITHOUT_A_ROW,
@@ -4348,13 +4352,13 @@ mod source_cursor_tests {
             .collect()
     }
 
-    /// Only the nodes a pass touched are settled, so after each change the
+    /// Only the nodes a pass touched are rewritten, so after each change the
     /// index holds what one built from nothing holds: a node is told of by
     /// the document that holds its row, else by its newest, whichever
     /// comes, changes or goes, and a page whose document goes while its
     /// subpages still name it becomes a row of its own.
     #[tokio::test(flavor = "multi_thread")]
-    async fn touched_nodes_settle_as_a_build_from_nothing_would() {
+    async fn touched_nodes_are_rewritten_as_a_build_from_nothing_would() {
         use datalib_schema::data_nodes::{DataNodeRow, Lineage};
         let td = tempdir().unwrap();
         let root = td.path();
@@ -5493,7 +5497,7 @@ mod work_tests {
         assert!(
             alone
                 .keys()
-                .any(|(sql, _)| sql == super::nodes::SETTLE.as_str()),
+                .any(|(sql, _)| sql == super::nodes::WRITE_FROM_BEST_ACCOUNT.as_str()),
             "the pass settles no nodes; this test checks nothing: {:#?}",
             alone.keys()
         );

@@ -1,4 +1,4 @@
-//! The render wave for the signal source: its planner and the
+//! The render step for the signal source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -23,8 +23,8 @@ pub fn plan_render(
 }
 
 /// Signal's render processor — reads the raw store (driven by the render
-/// cursor's commit) and emits one rendered markdown per chat through the
-/// fused-Load callback.
+/// cursor's commit) and emits one rendered document per chat through
+/// `RenderCtx::emit_doc`.
 struct SignalRender;
 
 #[async_trait]

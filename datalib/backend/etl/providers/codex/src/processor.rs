@@ -1,4 +1,4 @@
-//! The ingest wave for the `codex` source: its planner and the
+//! The download step for the `codex` source: its planner and the
 //! [`DataProcessor`] it plans.
 
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};

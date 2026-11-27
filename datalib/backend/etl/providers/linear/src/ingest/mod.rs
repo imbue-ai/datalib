@@ -8,8 +8,8 @@
 //! record's `updatedAt`. Then the big ones — issues with their history,
 //! comments, documents, project updates, attachments — are each walked
 //! newest first over what no earlier run has covered (`walk`), so a run
-//! after the first reads only what changed. INGEST.md has the whole
-//! account.
+//! after the first reads only what changed. INGEST.md has the
+//! details.
 
 pub mod client;
 pub mod db;

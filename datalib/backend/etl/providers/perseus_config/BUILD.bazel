@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only config crate for perseus (Program A goal #1). Bazel-only.
+# Schema-only config crate for perseus. Bazel-only.
 rust_library(
     name = "datalib_etl_perseus_config",
     srcs = glob(["src/**/*.rs"]),

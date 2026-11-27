@@ -5,8 +5,8 @@ use datalib_etl_render::inputs::Input;
 use datalib_schema::problems::{Problem, Reason};
 use serde::Serialize;
 
-/// What flavor of item this is. Collapses each provider's richer event
-/// taxonomy into three render units the renderer knows how to lay out.
+/// What kind of item this is. Collapses each provider's richer event
+/// taxonomy into the three kinds the renderer knows how to lay out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum ItemKind {
     Text,
@@ -297,7 +297,7 @@ impl Replies {
 /// read is a coercion failure, and goes into `problems` so the row's
 /// empty time is never mistaken for a record that had none. Callers
 /// apply their own fallback (the previous item's stamp, say) to the
-/// result the same way they did before.
+/// result.
 pub fn own_stamp_ms(
     raw: Option<&str>,
     field: &str,

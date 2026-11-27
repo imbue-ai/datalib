@@ -17,8 +17,8 @@ use crate::types::NormalizedChat;
 pub struct ChangedChats {
     /// Every chat the run looked at, and every stale render unit whose rows
     /// are gone, with no inputs: a chat with nothing left builds no
-    /// documents, and chat-common never sees it, so this is what makes
-    /// its old ones go. The rendered chats' render units follow and replace
+    /// documents, and chat-common never sees it, so this is what deletes
+    /// its old ones. The rendered chats' render units follow and replace
     /// these.
     pub render_units: RenderUnits,
     pub chats: Vec<NormalizedChat>,

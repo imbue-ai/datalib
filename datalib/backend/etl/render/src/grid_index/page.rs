@@ -1,8 +1,8 @@
 //! Writing a page of documents into a store that holds documents, a render
 //! store or the grid index: every check over the whole page first, then
 //! each table's rows in a few statements rather than one a row. The page is
-//! written as if its documents were written one after another, in order,
-//! which is what `apply_one` (a page of one) did before pages.
+//! written as if its documents were written one after another, in order;
+//! `apply_one` writes a page of one.
 
 use std::collections::{HashMap, HashSet};
 
@@ -22,11 +22,11 @@ use super::{
 /// A document named twice is written twice, the later over the earlier.
 /// Returns how many grid rows the page holds.
 pub(super) async fn apply_page(write_lock: &WriteLock, page: &[RenderedMarkdown]) -> Result<usize> {
-    let settled: Vec<_> = page.iter().map(crate::names::settled).collect();
+    let cleaned: Vec<_> = page.iter().map(crate::names::cleaned).collect();
     let mut rows = 0;
     let mut run: Vec<&RenderedMarkdown> = Vec::new();
     let mut in_run: HashSet<&str> = HashSet::new();
-    for md in settled.iter().map(|md| &**md) {
+    for md in cleaned.iter().map(|md| &**md) {
         if !in_run.insert(md.markdown_uuid.as_str()) {
             rows += apply_run(write_lock, &run).await?;
             run.clear();
@@ -41,7 +41,7 @@ pub(super) async fn apply_page(write_lock: &WriteLock, page: &[RenderedMarkdown]
 /// What a run of documents, each named once, writes: the checks every
 /// document has to pass, made before anything is written.
 struct Checked<'a> {
-    /// Documents that end with no rows: absent, and their rows go.
+    /// Documents that end with no rows: absent, and their rows are deleted.
     empty: Vec<String>,
     kept: Vec<&'a RenderedMarkdown>,
 }
@@ -113,7 +113,7 @@ async fn apply_run(write_lock: &WriteLock, run: &[&RenderedMarkdown]) -> Result<
     let checked = check(run)?;
     // Inside `begin_transaction` every guard hands back the same
     // connection, so the page joins the batch; otherwise it auto-commits
-    // statement by statement, as a single document always did.
+    // statement by statement, as a single document does.
     let mut guard = write_lock.acquire().await?;
     let pool_conn = guard.conn();
     if !checked.empty.is_empty() {
@@ -151,7 +151,7 @@ async fn apply_run(write_lock: &WriteLock, run: &[&RenderedMarkdown]) -> Result<
 
 /// Each document's rows: only the rows it no longer has are deleted, the
 /// rest are written where they differ, and one that did not change is not
-/// written at all. A uuid another document holds is settled by who wrote
+/// written at all. A uuid another document holds is decided by who wrote
 /// that document: one an earlier run wrote means the row moved (a message
 /// re-bucketed into another period, a chat whose document id is minted
 /// from a name that changed), and this document takes it over; one this
@@ -200,7 +200,7 @@ async fn put_grid_rows(
 }
 
 /// Writes `rows`, each where it differs from what the index holds, and
-/// settles a uuid another document holds by who wrote that document (see
+/// decides a uuid another document holds by who wrote that document (see
 /// [`put_grid_rows`]). The uuids in `rows` are distinct.
 pub(super) async fn write_grid_rows(
     conn: &mut SqliteConnection,

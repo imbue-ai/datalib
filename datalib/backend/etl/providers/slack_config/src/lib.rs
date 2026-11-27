@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `slack` source (Program A goal #1).
+//! Provider-owned config schema for the `slack` source.
 //! Schema-only (serde + anyhow).
 
 use datalib_source_common::{LatchkeySettings, SourceCommon};

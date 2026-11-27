@@ -19,11 +19,10 @@ use datalib_sql::test_sql;
 /// every message here, so the window pass re-walks the whole channel.
 ///
 /// Deliberately in the 10-digit-epoch era. Slack timestamps are compared
-/// as *strings* throughout this provider — in the window bounds and in the
-/// `ts BETWEEN` the prune issues — so a `since` before 2001-09-09 sorts
-/// above every real message ("946..." > "17...") and the window silently
-/// matches nothing. Every genuine Slack ts is 10 digits, so this only ever
-/// bites a fixture; it cost an afternoon here, hence the note.
+/// as *strings* in the prune's `ts >= ? AND ts < ?`, so a `since` before
+/// 2001-09-09 sorts above every real message ("946..." > "17...") and the
+/// window silently matches nothing. Every genuine Slack ts is 10 digits,
+/// so this only ever bites a fixture.
 const SINCE: &str = "2020-01-01";
 const TS_A: &str = "1700000000.000000";
 const TS_B: &str = "1700000100.000000";

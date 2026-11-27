@@ -1,4 +1,4 @@
-//! The render wave for the codex source: its planner and the
+//! The render step for the codex source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};

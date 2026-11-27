@@ -612,8 +612,8 @@ mod tests {
         assert_eq!(chats[0].render_units.len(), 1);
     }
 
-    /// A conversation was one document per month, each minted from the
-    /// month; it is one document, whose uuid is the conversation's.
+    /// A conversation is one document, whose uuid is the conversation's,
+    /// not one document per month minted from the month.
     #[test]
     fn a_conversation_spanning_two_months_is_one_document() {
         let messages = vec![

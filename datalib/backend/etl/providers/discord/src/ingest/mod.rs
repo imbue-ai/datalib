@@ -6,9 +6,9 @@
 //! their threads, the direct messages. Every listing names each
 //! conversation's newest message, so one with nothing new costs no
 //! request. Then it walks what is owed newest first across every
-//! conversation, a page at a time, each page stored with the stretch it
-//! settles, and fetches each page's files. INGEST.md has the whole
-//! account.
+//! conversation, a page at a time, each page stored with the stretch of
+//! ids it shows read whole, and fetches each page's files. INGEST.md has
+//! the full description.
 
 pub mod api;
 pub mod db;
@@ -157,7 +157,7 @@ impl Ctx<'_> {
             Ok(answer) => Ok(Some(answer)),
             Err(_) if self.stopped() => Ok(None),
             Err(e) if e.ends_the_run() => Err(RunEnded::new(&e, e.upstream()).into()),
-            Err(e) if e.is_settled() => {
+            Err(e) if e.retrying_changes_nothing() => {
                 self.found.listing_cut_off(name, e.to_string());
                 Ok(None)
             }
@@ -196,7 +196,7 @@ impl Ctx<'_> {
         let now = IsoOffsetTimestamp::now_local();
         let tx = self.writes.tx().await?;
         db::write_account(tx, &[(&id, &me)], &now).await?;
-        db::forget_other_accounts(tx, &id).await?;
+        db::delete_other_accounts(tx, &id).await?;
         db::write_users(tx, &[(&id, &me)], &now).await?;
         self.writes.wrote(2).await?;
         Ok(Some(id))
@@ -359,8 +359,8 @@ impl Ctx<'_> {
             let tips: Vec<u64> = threads.iter().filter_map(tip_of).collect();
             let top_here = top.or(tips.iter().copied().max());
             let oldest = tips.iter().copied().min();
-            // The listing's last page, or one past `since`, settles it to
-            // the bottom.
+            // The listing's last page, or one past `since`, covers it down
+            // to the floor.
             let ends = !more || threads.is_empty() || oldest.is_some_and(|o| o < self.floor);
             let bottom = match oldest {
                 Some(oldest) if !ends => oldest,
@@ -470,8 +470,8 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// One page of one conversation, with the stretch it settles; then its
-    /// files. Answers with the threads its messages started.
+    /// One page of one conversation, with the stretch of ids it shows read
+    /// whole; then its files. Returns the threads its messages started.
     async fn store_page(
         &mut self,
         walk: &mut Walk,
@@ -483,7 +483,7 @@ impl Ctx<'_> {
             .iter()
             .filter_map(|m| snowflake::parse(id_of(m)?))
             .collect();
-        let Some(settled) = walk.page(&ids) else {
+        let Some(page_read) = walk.page(&ids) else {
             return Ok(Vec::new());
         };
         let kept: Vec<&Value> = page
@@ -491,7 +491,7 @@ impl Ctx<'_> {
             .filter(|m| {
                 id_of(m)
                     .and_then(snowflake::parse)
-                    .is_some_and(|id| id >= settled.floor)
+                    .is_some_and(|id| id >= page_read.floor)
             })
             .collect();
         let people = people_in(&kept);
@@ -503,7 +503,7 @@ impl Ctx<'_> {
             .collect();
         let now = IsoOffsetTimestamp::now_local();
         let run_now = self.opts.now.clone();
-        let stamp = match settled.reread {
+        let stamp = match page_read.reread {
             Some(_) => Stamp::FirstSeen,
             None => Stamp::Fetched,
         };
@@ -511,11 +511,11 @@ impl Ctx<'_> {
         db::write_users(tx, &people, &now).await?;
         db::write_channels(tx, &threads, &now).await?;
         db::write_messages(tx, &channel, &kept, stamp, &now).await?;
-        if let Some((lo, below)) = settled.reread {
+        if let Some((lo, below)) = page_read.reread {
             s.pruned += db::prune_messages(tx, &channel, lo, below, &ids).await?;
         }
-        coverage::cover(tx, &history_scope(&channel), settled.span).await?;
-        if settled.refreshed {
+        coverage::cover(tx, &history_scope(&channel), page_read.span).await?;
+        if page_read.refreshed {
             db::SWEEPS
                 .record(&mut **tx, &refresh_key(&channel), &run_now)
                 .await?;

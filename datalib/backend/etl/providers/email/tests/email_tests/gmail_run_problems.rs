@@ -164,9 +164,9 @@ async fn a_refused_credential_ends_the_fetch() {
     assert!(problems(&m).await.is_empty());
 }
 
-/// The same refusal once something is mirrored was the run's error too,
-/// and a failed run commits nothing: the messages the run had fetched
-/// went with it. It is a `phase:` row now, and what was fetched stays.
+/// The same refusal once something is mirrored is a `phase:` row, not
+/// the run's error: a failed run commits nothing, so the messages the
+/// run had fetched would go with it. What was fetched stays.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_refused_credential_keeps_what_the_run_fetched() {
     let m = Mirror::new();

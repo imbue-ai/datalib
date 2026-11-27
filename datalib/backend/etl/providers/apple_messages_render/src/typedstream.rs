@@ -92,7 +92,8 @@ mod tests {
     }
 
     /// A message whose body Messages archived as mutable strings (seen on
-    /// macOS 26) was reported as "not a typedstream archive".
+    /// macOS 26) decodes, rather than being reported as "not a
+    /// typedstream archive".
     #[test]
     fn a_mutable_archive_decodes() {
         let text = "y".repeat(200);

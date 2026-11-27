@@ -254,8 +254,7 @@ async fn initial_scan_and_incremental_rescan() {
 /// pass: a dir whose cascade enables `stamp_me_with_uuid` gets a UUID
 /// breadcrumb written into it and its `dirs.identity_uuid` set. A
 /// second scan is idempotent — it reuses the existing breadcrumb and
-/// writes no new ones. This is the path that used to be the untested
-/// `legacy_inmemory` branch.
+/// writes no new ones.
 #[tokio::test]
 async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     let tmp = TempDir::new().unwrap();
@@ -321,8 +320,8 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
 }
 
-/// The cache is keyed by ABSOLUTE path, which is what makes it one
-/// chain per host rather than one per root. A relative `--root` must
+/// The cache is keyed by ABSOLUTE path, which is what lets every root on
+/// the host share one cache. A relative `--root` must
 /// not produce relative keys: the same relative name used from two
 /// directories would put two unrelated trees on one key.
 #[tokio::test]
@@ -506,7 +505,7 @@ async fn the_summary_accounts_for_the_cache() {
         .unwrap();
     assert_eq!(cold.cache_entries_loaded, 0);
     assert_eq!(cold.cache_entries_written, 6);
-    assert_eq!(cold.cache_entries_forgotten, 0);
+    assert_eq!(cold.cache_entries_deleted, 0);
     assert_eq!(
         cold.cache_path,
         cache_path.canonicalize().unwrap(),
@@ -519,9 +518,9 @@ async fn the_summary_accounts_for_the_cache() {
         .unwrap();
     assert_eq!(warm.cache_entries_loaded, 6);
     assert_eq!(warm.cache_entries_written, 6);
-    assert_eq!(warm.cache_entries_forgotten, 0);
+    assert_eq!(warm.cache_entries_deleted, 0);
 
-    // Delete two: read the old six, write the surviving four, forget two.
+    // Delete two: read the old six, write the surviving four, drop two.
     std::fs::remove_file(root.join("f0.txt")).unwrap();
     std::fs::remove_file(root.join("f1.txt")).unwrap();
     let after = ingest::fetch(fetch_opts(&db, &root, cache.clone()))
@@ -530,7 +529,7 @@ async fn the_summary_accounts_for_the_cache() {
     assert_eq!(after.cache_entries_loaded, 6);
     assert_eq!(after.cache_entries_written, 4);
     assert_eq!(
-        after.cache_entries_forgotten, 2,
+        after.cache_entries_deleted, 2,
         "the two deleted paths should have been forgotten"
     );
 }

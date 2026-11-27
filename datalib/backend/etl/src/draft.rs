@@ -165,7 +165,8 @@ pub type Finish = Box<
 /// publish it, and delete the branch. Where the draft and the writer
 /// both changed a cell, the draft's value is kept, and every other
 /// change on either side survives. `finish` runs between the merge and
-/// the commit. `None` when nothing changed; the branch goes either way.
+/// the commit. `None` when nothing changed; the branch is deleted either
+/// way.
 pub async fn save(
     pool: &SqlitePool,
     branch: &str,
@@ -275,7 +276,7 @@ async fn merge_draft_wins(
     Ok(saved)
 }
 
-/// Settle every conflict of the merge in progress cell by cell, the
+/// Resolve every conflict of the merge in progress cell by cell, the
 /// draft's value winning wherever the draft changed it. Not
 /// `dolt_conflicts_resolve('--theirs')`, which takes the draft's whole
 /// row and loses the writer's change to its other cells.
@@ -312,10 +313,10 @@ async fn draft_wins(conn: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-/// The statements that settle `table`'s conflicts, the draft winning:
-/// a row the draft deleted goes, a row the writer deleted and the draft
-/// changed comes back as the draft has it, and in a row both kept each
-/// cell the draft changed takes the draft's value. `columns` is every
+/// The statements that resolve `table`'s conflicts, the draft winning:
+/// a row the draft deleted is deleted, a row the writer deleted and the
+/// draft changed comes back as the draft has it, and in a row both kept
+/// each cell the draft changed takes the draft's value. `columns` is every
 /// column, with whether it is part of the key.
 fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
     let t = quote_ident(table);
@@ -740,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn every_name_in_the_settling_sql_is_quoted() {
+    fn every_name_in_the_resolving_sql_is_quoted() {
         let sql = draft_wins_sql("p", &[("id".into(), true), ("a\"b".into(), false)]);
         assert!(sql.iter().any(|s| s.contains("\"a\"\"b\"")), "{sql:?}");
         assert!(sql.iter().all(|s| !s.contains(" a\"b")), "{sql:?}");

@@ -59,7 +59,7 @@ pub struct WalkerError {
     pub message: String,
     /// The entry is there and could not be read, so its row and every
     /// row beneath it keep what the last scan wrote.
-    pub holds: bool,
+    pub keeps_rows: bool,
 }
 
 /// A directory's children as `(name, root-relative id)`.
@@ -217,8 +217,9 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
         );
         let dir_effective = dir_cascade.effective();
         // Whether this directory lost a child this run. Its fingerprint
-        // then asks the next run for a real readdir, which is the only
-        // way that run can find the child again (or fail again, and say so).
+        // is then stamped `StampKind::Rescan`, so the next run does a
+        // real readdir, which is the only way that run can find the
+        // child again (or fail again, and say so).
         let mut rescan = false;
         let mut listed = true;
 
@@ -262,7 +263,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         table: "dirs",
                         id: dir_rel.to_string(),
                         message: format!("readdir: {e}"),
-                        holds: true,
+                        keeps_rows: true,
                     });
                     rescan = true;
                     listed = false;
@@ -283,14 +284,14 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     // A cached child that has vanished: not emitting its
                     // row is the deletion, made by the prune after the
                     // walk. NotFound on the skip path is benign; anything
-                    // else is a real error, and holds the child's rows.
+                    // else is a real error, and keeps the child's rows.
                     if e.kind() != std::io::ErrorKind::NotFound {
                         self.counters.stat_errors.fetch_add(1, Ordering::Relaxed);
                         self.errors.push(WalkerError {
                             table: "files",
                             id: child_rel.clone(),
                             message: format!("stat: {e}"),
-                            holds: true,
+                            keeps_rows: true,
                         });
                         rescan = true;
                     }
@@ -308,7 +309,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                 continue;
             };
 
-            // Ignore filter, with the same semantics as before: a dir is
+            // Ignore filter: a dir is
             // tested against its own cascade (which includes its own
             // breadcrumb frame); a file/symlink against this dir's.
             let ignored = if matches!(kind, EntryKind::Dir) {
@@ -363,7 +364,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                                     table: "files",
                                     id: child_rel.clone(),
                                     message: format!("hash: {e:#}"),
-                                    holds: true,
+                                    keeps_rows: true,
                                 });
                                 rescan = true;
                                 continue;
@@ -383,7 +384,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                                 table: "files",
                                 id: child_rel.clone(),
                                 message: format!("read_link: {e}"),
-                                holds: true,
+                                keeps_rows: true,
                             });
                             rescan = true;
                             continue;
@@ -456,8 +457,8 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
             identity_uuid,
         };
         // Directories carry the same `(inode, dev)` identity files do.
-        // Without it the readdir-skip above can only ask "did the mtime
-        // change", which cannot tell one directory from a *different*
+        // Without it the readdir-skip above can only check whether the
+        // mtime changed, which cannot tell one directory from a *different*
         // directory that happens to share an mtime — see
         // [`same_dir_unmodified`].
         let stamp_kind = if rescan {
@@ -508,7 +509,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     table: "files",
                     id: rel_of(&name_os.to_string_lossy()),
                     message: "the name is not UTF-8, so it cannot be indexed".to_string(),
-                    holds: false,
+                    keeps_rows: false,
                 });
                 continue;
             };
@@ -548,7 +549,7 @@ fn cascade_for_dir(
                         message: format!(
                             "{OPTIONS_FILENAME} did not parse, so it was not applied: {err:#}"
                         ),
-                        holds: false,
+                        keeps_rows: false,
                     });
                     None
                 }
@@ -908,10 +909,12 @@ mod tests {
         );
     }
 
-    /// Pokes the skip boundary on a 3-deep tree (root → mid → inner):
-    /// a change inside `mid` must re-examine `mid` while the untouched
-    /// `root` and `mid/inner` keep benefiting from the cache. Also pins
-    /// the important distinction between the two kinds of change:
+    /// Walks a 3-deep tree (root → mid → inner) to fill the cache, then
+    /// again after each of two changes under `mid`, each time against
+    /// the cache of the walk before. Adding a file under `mid` must
+    /// re-`readdir` `mid` while the untouched `root` and `mid/inner`
+    /// keep taking their children from the cache. The two changes are
+    /// the two kinds:
     ///   * a STRUCTURAL change (adding/removing/renaming an entry) bumps
     ///     the directory's mtime, so that directory is re-`readdir`ed;
     ///   * an in-place CONTENT edit does NOT change any directory's

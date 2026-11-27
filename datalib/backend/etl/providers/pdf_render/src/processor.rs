@@ -1,4 +1,4 @@
-//! The render wave for the pdf source: its planner and the
+//! The render step for the pdf source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use crate::render;

@@ -893,8 +893,8 @@ async fn an_unchanged_catalog_commits_nothing() -> Result<()> {
 }
 
 /// A live catalog the mirror refuses — here, a table named like the
-/// store's own `problems` — failed the step with nothing on its Manage
-/// row; now it leaves HEAD as it was and is a problem.
+/// store's own `problems` — leaves HEAD as it was and is a problem on
+/// its Manage row, rather than failing the step with nothing there.
 #[tokio::test]
 async fn a_live_catalog_the_mirror_refuses_is_a_problem() -> Result<()> {
     let f = Fixture::new();

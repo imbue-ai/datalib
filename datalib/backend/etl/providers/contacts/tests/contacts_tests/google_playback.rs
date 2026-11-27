@@ -436,7 +436,7 @@ async fn chosen_labels_mirror_only_the_contacts_with_one() {
     assert_eq!(strings(&store, TOKEN).await, ["s2"]);
 }
 
-/// A token vouches for the choice it was listed under: a delta does not
+/// A token covers only the choice it was listed under: a delta does not
 /// name the contacts a new choice takes in, so a changed choice lists
 /// everyone, and drops what it leaves out.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -50,7 +50,7 @@ The scan goes on, and what it could not do is a `problems` row:
   `listing:files` row, and **that scan does not truncate `pdf_paths`**:
   what it saw is upserted over what was there and nothing falls out.
   **A file that would not open** is `record:pdf_paths:<path>`; it keeps its
-  path row and holds back no other deletion. These are the rules of
+  path row and prevents no other deletion. These are the rules of
   [`file_changes_scan`](../../files/README.md#answering-did-it-change-for-a-file-backed-source).
   The next clean walk truncates as usual and clears the listing row
   (`a_walk_with_errors_drops_no_path`); a file's row goes the scan that
@@ -84,9 +84,10 @@ The scan goes on, and what it could not do is a `problems` row:
 
 ## A PDF can be made by anyone
 
-A person may be handed a PDF, and two kilobytes of one can ask a parser for
-gigabytes. `max_bytes` says nothing about that: it caps the file on disk, and a
-stream inflates a thousand times, or a million behind two layers of Flate.
+A person may be handed a PDF, and two kilobytes of one can make a parser
+allocate gigabytes. `max_bytes` says nothing about that: it caps the file on
+disk, and a stream inflates a thousand times, or a million behind two layers of
+Flate.
 `pdf-inspector` limits what it loads and a page's content, but it takes bytes
 and no limit and inflates fonts, CMaps and forms without one. So
 [`src/ingest/expansion.rs`](src/ingest/expansion.rs) measures a file before
@@ -188,7 +189,7 @@ the engine provides:
    0.4% and 26%; a floor around 60% separates them with enormous margin,
    and catches what `ocr_confidence` misses.
 
-The seam for that work is `RENDER_VERSION` in
+The place that work starts is `RENDER_VERSION` in
 `../pdf_render/src/render/convert.rs`: bumping it re-renders every
 document with no migration.
 
@@ -280,8 +281,9 @@ unreadable as a grid cell either way. The full value stays in
   strips running heads/feet that repeat on their own line, but the
   extractor fuses roughly 80% of them into a body line instead
   (measured: 40 of 48 surviving instances across 4 print-to-PDF
-  documents). Those stay in the text. See that module's docs for why
-  a regex-based fix was rejected.
+  documents). Those stay in the text: removing them means editing
+  inside a line on a timestamp-shaped pattern, which would eventually
+  delete a real date from real prose.
 - **Floated layout scrambles reading order.** A Wikipedia infobox or a
   right-floated figure caption can interleave into the adjacent
   paragraph, because the extractor groups by Y-coordinate. Affects
@@ -358,7 +360,7 @@ $dl -readonly $db "SELECT pdf_type, has_encoding_issues, COUNT(*) FROM pdf_docum
 $dl -readonly $db "SELECT blake3, COUNT(*) c, GROUP_CONCAT(id) FROM pdf_paths
          GROUP BY blake3 HAVING c > 1;"
 
-# Ship of Theseus: every revision of one conceptual document.
+# Every revision of one document, however its metadata changed.
 $dl -readonly $db "SELECT blake3, title, doc_modified_at
            FROM pdf_documents
           WHERE content_blake3 = (SELECT content_blake3 FROM pdf_documents

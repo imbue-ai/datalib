@@ -341,7 +341,7 @@ pub async fn drop_unkept_threads(
         return Ok(0);
     }
     let mut tx = pool.begin().await.context("begin unkept threads tx")?;
-    let n = forget_in_tx(&mut tx, now, &gone, email_id_of).await?;
+    let n = delete_gone_messages_in_tx(&mut tx, now, &gone, email_id_of).await?;
     tx.commit().await.context("commit unkept threads tx")?;
     Ok(n)
 }
@@ -493,7 +493,7 @@ pub async fn write_batch_in_tx(
 
 /// Upstream no longer has these messages: the listing, what is held and
 /// the email rows go together. Returns how many emails went.
-pub async fn forget_in_tx(
+pub async fn delete_gone_messages_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     now: &IsoOffsetTimestamp,
     ids: &[String],
@@ -614,8 +614,8 @@ pub async fn save_token_in_tx(
 /// no longer replay. So nothing is listed whole any more, and the delta
 /// starts again from `token`, the account's state now. With `refetch`,
 /// what changed while no delta was replaying is taken to be unknown:
-/// every listed message is listed again and nothing held answers for
-/// it. Without, what is held stands.
+/// every listed message is listed again under `token` and its
+/// `held_version` cleared. Without, what is held stands.
 pub async fn start_over(
     pool: &SqlitePool,
     token_scope: &str,
@@ -728,7 +728,7 @@ pub async fn close_enumeration(
             .filter(|id| !named.contains(*id))
             .cloned()
             .collect();
-        gone = forget_in_tx(&mut tx, now, &unnamed, email_id_of).await?;
+        gone = delete_gone_messages_in_tx(&mut tx, now, &unnamed, email_id_of).await?;
         datalib_etl::prune::record("listed messages", listed.len(), unnamed.len());
         if let Some(account_id) = rows_of {
             let named_rows: BTreeSet<String> = named.iter().map(|id| email_id_of(id)).collect();
@@ -902,8 +902,8 @@ pub async fn migrate_held_into_the_sidecar(conn: &mut SqliteConnection) -> Resul
 /// Builds before this rung compared `only_extract_labels` written as
 /// Gmail's ids (`INBOX`) with the labels' names (`Inbox`), so a walk
 /// listed a label's mail and the fetch then dropped every message, its
-/// listing with it, while the label stayed listed whole. Forgetting
-/// which labels were listed whole has the next run walk them again,
+/// listing with it, while the label stayed listed whole. Deleting the
+/// `listed_whole` rows of a Gmail store has the next run walk them again,
 /// which lists what was dropped; what is held stays held. A JMAP store
 /// is left alone.
 pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<()> {
@@ -985,11 +985,12 @@ pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection)
 
 /// Builds before this rung stored a Gmail thread id in decimal, the way a
 /// Takeout's `X-GM-THRID` spells it, and so kept the API's spelling of
-/// the message and thread ids in columns of their own. Now a thread id is
-/// keyed as a message id is (`envelope::GmailId::key`), and those columns
-/// say nothing `id` and `thread_id` do not. A JMAP store's thread ids are
-/// its server's, and stay. So does a thread id an mbox minted from the
-/// email's own id, which is the email's id and so not a Gmail thread's.
+/// the message and thread ids in columns of their own. This build keys a
+/// thread id as it keys a message id (`envelope::GmailId::key`), and
+/// those columns say nothing `id` and `thread_id` do not. A JMAP store's
+/// thread ids are its server's, and stay. So does a thread id an mbox
+/// minted from the email's own id, which is the email's id and so not a
+/// Gmail thread's.
 pub async fn migrate_gmail_thread_ids_to_hex(conn: &mut SqliteConnection) -> Result<()> {
     for column in ["gmail_message_id", "gmail_thread_id"] {
         let has: bool = sql!(
@@ -1130,8 +1131,8 @@ mod tests {
         db.close().await;
     }
 
-    /// A store an older build wrote climbs the whole ladder with its
-    /// tokens intact and nothing to fetch again: what `gmail_messages`
+    /// A store an older build wrote, migrated through every rung, keeps its
+    /// tokens and has nothing to fetch again: what `gmail_messages`
     /// mapped and what a JMAP account's state covered are listed and
     /// held, a Gmail message recorded as unfetched is owed, an mbox
     /// import's email is left alone, and the state the old cursors kept

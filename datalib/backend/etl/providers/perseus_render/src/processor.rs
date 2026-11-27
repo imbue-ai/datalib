@@ -1,4 +1,4 @@
-//! The render wave for the perseus source: its planner and the
+//! The render step for the perseus source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -52,8 +52,7 @@ impl SourceRender for PerseusRender {
         // Within-section sentence alignment is opt-in and dominates runtime; it
         // is async (model load + hf-hub fetch). We're driven by `futures`'
         // executor (the render phase), which enters no tokio context, so we
-        // drive the async aligner with tokio's `block_on` here — the same shape
-        // the old synchronous renderer used.
+        // drive the async aligner with tokio's `block_on` here.
         let alignments = tokio::runtime::Handle::current()
             .block_on(align::align_all(&parsed, &self.pairs))
             .context("perseus align_all")?;

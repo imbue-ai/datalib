@@ -1,13 +1,13 @@
 //! "N queued" on the Manage screen is the DAG runner subtracting a
-//! step's progress increments from the last total that step announced,
+//! step's progress increments from the last total that step reported,
 //! and its ETA is that queue over the pace increments arrive. These
 //! tests replay the runner's own arithmetic over the events a run emits.
 //!
-//! Two ways it has gone wrong: one bar per channel, each announcing its
-//! own size, pinned the count at zero after the first channel; and
-//! counting messages, which Slack names no total for, made each page
-//! done the moment it was known, so a run with most of its channels
-//! still to walk read "1s left".
+//! Two ways it has gone wrong: one bar per channel, each reporting its
+//! own size as the total, pinned the count at zero after the first
+//! channel; and counting messages, which Slack names no total for, made
+//! each page done the moment it was known, so a run with most of its
+//! channels still to walk read "1s left".
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -61,7 +61,7 @@ impl Recorder {
     /// per progress event. Mirrors `RunStoreSink::publish_sugar`:
     /// `done` accumulates every increment, `total` is replaced
     /// wholesale, and `queued` is their saturating difference — with no
-    /// entry at all while no total has been announced.
+    /// entry at all while no total has been reported.
     fn queued_series(&self) -> Vec<u64> {
         let mut done: u64 = 0;
         let mut total: Option<u64> = None;
@@ -78,10 +78,11 @@ impl Recorder {
         out
     }
 
-    /// The most the run ever announced, and everything it counted done.
-    fn announced_and_done(&self) -> (u64, u64) {
+    /// The largest total the run ever reported, and everything it counted
+    /// done.
+    fn largest_total_and_done(&self) -> (u64, u64) {
         let events = self.events.lock().unwrap();
-        let announced = events
+        let largest_total = events
             .iter()
             .filter_map(|ev| match ev {
                 Ev::Length(t) => *t,
@@ -96,7 +97,7 @@ impl Recorder {
                 Ev::Length(_) => 0,
             })
             .sum();
-        (announced, done)
+        (largest_total, done)
     }
 }
 
@@ -152,7 +153,7 @@ async fn the_count_reaches_zero_once_at_the_end_not_after_the_first_channel() {
 async fn the_bar_counts_channels_threads_and_files_and_never_a_message() {
     let recorder = run().await;
     assert_eq!(
-        recorder.announced_and_done(),
+        recorder.largest_total_and_done(),
         (UNITS, UNITS),
         "one tick per channel walked, thread read and file fetched; \
          a message is none of them",

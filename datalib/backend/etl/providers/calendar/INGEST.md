@@ -42,12 +42,12 @@ calendar added to the list has no token and is listed whole.
 What a CalDAV listing named is `dav_resources`, one row per object with
 the etag it was listed at; the etag the stored object satisfies is
 `held_version` in that table's `_bookkeeping` sidecar, written in the
-transaction that stored it. What is owed is the difference, asked of
-the store each run and never stored: an object the listing named
-without its data and a `multiget` did not return stays owed after the
-token has moved on. A listing that stops short leaves what it never
-reached in `dav_unconfirmed`, and nothing is deleted by absence until a
-later run carries the listing to its end. Both tables are
+transaction that stored it. What is owed is the difference, a query
+over the store each run whose answer is never stored: an object the
+listing named without its data and a `multiget` did not return stays
+owed after the token has moved on. A listing that stops short leaves
+what it never reached in `dav_unconfirmed`, and nothing is deleted by
+absence until a later run carries the listing to its end. Both tables are
 `datalib_etl_web::dav::state`.
 
 ## A window (`since` / `until`)
@@ -162,7 +162,8 @@ listing cut off before its last page kept no token and starts again.
   7 calendars. One without cannot be stored, and could be any stored
   event, so a listing that meets one deletes nothing it did not name,
   leaves the sync token where it was, says so on the calendar's
-  `listing:` row and ends the run `incomplete`; the next asks again.
+  `listing:` row and ends the run `incomplete`; the next run lists the
+  calendar again.
 - A whole sync of the 7 calendars stored 10,332 events in 10 requests
   (two calendars ran past one 2,500-event page); the next, incremental,
   changed nothing in 8.
@@ -235,8 +236,9 @@ run and says how to store a token.
    `GET /scheduled_events/{uuid}/invitees?count=100&sort=created_at:asc`,
    every page, through `datalib_etl_web::owed`, one meeting at a time.
    A meeting whose listing entry has not moved costs no request. One
-   that fails stays owed with its error on the record; ten failures in
-   a row end the loop for the run.
+   that fails stays owed, its error in `last_error` on its
+   `calendly_invitees_bookkeeping` row and in a `problems` row; ten
+   failures in a row end the loop for the run.
 
 So a second run with nothing new costs `1 + ⌈meetings / 100⌉`
 requests. Rate limits are 500 requests a minute per user on a paid
