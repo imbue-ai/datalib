@@ -385,7 +385,8 @@ source or a document, and the newest, from the index alone. Every
 place that says how much someone wrote reads it: a source contact's
 `seen` in `/people` (that source's rows by the record's handles), the
 person page's *Seen* line and a chip's "· 4 items", and the order of a
-conversation's people (their rows in that conversation). A reaction, a
+conversation's people (their rows in that conversation), and the
+contacts list's *Items* and *Last* (§"The contacts list"). A reaction, a
 comment and an edit's version are rows, so they count, as `from:` finds
 them. No source counts on its own: a render once kept its own tally of
 messages per document, which left out reactions and edits and
@@ -749,7 +750,43 @@ Everything is in `datalib/ui/src/cards/`:
   chip (`contactCell`, through `contactsById`), and one marked as you
   wears a "me" chip. Its right-click deletes the rows it aims at, or
   merges every other selected row into the one clicked. Your contacts
-  are not in the search grid: nothing renders this store.
+  are not in the search grid: nothing renders this store. Its tabs are
+  the list, *Unfiled* and *Review* (§"The contacts list").
+
+### The contacts list
+
+The contacts card's list and its *Unfiled* tab say how much each person
+wrote, read from the index by two routes of the
+`unified_grid_and_search_index` applet
+(`applets/src/unified_grid_and_search_index/people_list.rs`). Both count
+the grid's rows (§"How much someone wrote", `authors.rs` in
+`unified_grid_and_search_index`), and read who is filed from the
+contacts store (`ContactsReader::filing`, a detached read):
+
+- **`GET /people/contacts`** answers `{counts: {<contact_id>: {items,
+  last_at}}}`: the rows written by every handle the contact reaches, as
+  `from:contact:<id>` reads them (a merged-away contact's and a group's
+  members' too). A contact whose handles wrote nothing is absent. The
+  card puts *Items* and *Last* right after the person and sorts by
+  *Most recent* (the default), *Most items* or *A–Z*
+  (`contactsTable.ts::sortList`); a header click still sorts by any
+  column. It fetches the list and the counts together, because the grid
+  keeps the layout it drew and puts a later column last. A library with
+  no index yet shows the list without them.
+- **`GET /people/unfiled`** answers a typed table of everyone the grid's
+  rows were written by who is on no contact, the most first: not the
+  library's own accounts (`account_handles`), `me` or a model, and no
+  sender marked not real (a `real` label out, by a person or an agent)
+  unless `?not_real=true`, which marks them. One row per handle, named
+  by the name it wrote the most under. *Unfiled* (`UnfiledList.ce.vue`)
+  sorts it as the list does; selecting rows and *Add selected to
+  contacts*, or *Add to contacts* on the right-click, adds each with
+  every handle a source's record of them says is theirs and what that
+  record said of each (`contactsTable.ts::peopleToAdd`, through `POST
+  /contacts/add`). Rows whose handles meet, or that have one name, case
+  aside, are one person. A handle a source ties to nobody else, such as
+  a Facebook name, stays unfiled until it is added, even when a contact
+  has the same name: the name alone does not say it is theirs.
 - The grid's Author column is a chip too: `grid_rows.author_handle`
   (which `from:` finds through the search terms) comes with each
   message's row and each reaction's, and
