@@ -9,7 +9,7 @@ import type {
   DagRunState,
   PassState,
   RunKind,
-  WipeKind,
+  JobKind,
 } from "./generated/enums";
 import { ApiError, errorDetail, FailureError } from "./apiError";
 import { pushToast } from "./toasts";
@@ -18,7 +18,7 @@ import { pushToast } from "./toasts";
 // Rust enums into `./generated/enums`, and re-exported here so callers
 // keep one import. A variant added in Rust reaches these without a hand
 // edit; `bazel run //datalib/backend/http:ui_enums.update` regenerates.
-export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState, PassState, WipeKind };
+export type { ChipKind, ColumnType, ConnectPhase, ConnectState, DagRunState, PassState, JobKind };
 
 // `DiffStatus` in datalib_schema, hand-kept in step.
 export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
@@ -956,7 +956,7 @@ export type Upgrade = {
 export type FreeSpace = {
   id: string;
   // `compact` when old versions of rendered documents go too.
-  kind: WipeKind;
+  kind: JobKind;
   // The loop is still on it.
   running: boolean;
   // Why it was not done, once it is over.

@@ -194,8 +194,9 @@ step's `PATH`, so a bare `command` like `datalib-step` resolves there;
 defaults to the config's `binary_dir`, else the directory
 `datalib-pipeline` itself is in). The other verbs that run steps are
 `reset <data_root> <step-id>…` (see **Resetting** below) and
-`free-disk-space` (see **Giving back disk** below); each is refused
-while the app is up. A sync that fails with "has a shape this build's
+`free-disk-space` (see **Giving back disk** below); like a sync, each
+is done by the app's loop when the app is up, and otherwise by one it
+runs itself. A sync that fails with "has a shape this build's
 DDL cannot be reached from by adding columns" is a raw store an older
 build wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `datalib-pipeline reset <data_root>
@@ -309,10 +310,11 @@ the step is stopped if it runs and emptied at once, and the request that
 carries the emptiness downstream is opened. It answers 204 once the
 store is empty, or 202 if the step had not stopped within ten seconds and
 is emptied once it has. The
-Manage screen's row menu offers the same. With no app up,
-`datalib-pipeline reset <data_root> slack/ingest` empties the store and
-nothing else; `datalib-pipeline sync <data_root> slack/ingest` then
-downloads it again.
+Manage screen's row menu offers the same, and so does
+`datalib-pipeline reset <data_root> slack/ingest`, with or without the
+app up: it waits until the store is emptied and what reads it has run.
+`datalib-pipeline sync <data_root> slack/ingest` then downloads it
+again.
 
 **Giving back disk.** A doltlite store never edits in place, so every
 sync leaves chunks behind that no commit reaches; a store that refills
@@ -330,7 +332,7 @@ loses their history, which nothing but the History card reads. The grid
 index is plain SQLite and is not touched.
 
 ```sh
-datalib-pipeline free-disk-space ~/datalib                      # app not running
+datalib-pipeline free-disk-space ~/datalib
 datalib-pipeline free-disk-space ~/datalib --drop-old-versions-on-derived-data
 ```
 

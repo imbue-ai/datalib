@@ -10,8 +10,8 @@ other type's is still `datalib-step probe`), item 8 (applets and probes
 get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
 crate of its own is decided, not done) and item 9 (the lint checks are
 in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
-in section 10, steps 1 and 2 are done (#2033, #2034); steps 3 to 6
-are not.
+in section 10, steps 1 to 3 are done (#2033, #2034, #2036, #2038,
+#2040); steps 4 to 6 are not.
 
 ## The end state
 
@@ -388,7 +388,7 @@ pieces already exist; the change is mainly what gets removed.
 | **observed** | `steps` (reads, fingerprint, last success, needs-rerun), `sinks` (versions), `invocations`, `job_steps` | the loop only |
 
 `jobs` replaces `wipes` and also holds the prepare pass; `job_steps`
-replaces `wipe_steps` and the server's in-memory `Upgrade`. The config
+replaces `job_steps` and the server's in-memory `Upgrade`. The config
 file is wanted state too: the loop reads it on `config changed`.
 
 #### The loop
@@ -497,11 +497,12 @@ Each step ships alone, and the harness stays green throughout.
    and the queue ledger is keyed by step id.
 3. **Everything goes through the mailbox.** Done so far: the prepare
    pass runs inside the loop and holds only what it has not reached
-   (open question 3). Still to do: turn `wipes` into `jobs`
-   and add prepare, with its progress in `job_steps` instead of the
-   server's memory. Make the CLI's reset and shrink write jobs. Put
-   both hosts on `supervisor::run`. Item 6 did not wait for this: the
-   prepare pass's progress reaches the server as `ServeEvent` lines.
+   (open question 3); `wipes` are `jobs`, and the pass is one, with its
+   progress in `job_steps`, which the server reads instead of
+   `ServeEvent` lines. The CLI's `sync`, `reset` and `free-disk-space`
+   write their request or job and follow it; with no loop running, each
+   runs the same host as `datalib-pipeline serve`
+   (`serve::run_until_idle`) until nothing is open. **(done)**
 4. **Invocations and requests replace runs** in the run store, the
    record, the server's routes and the UI. This is the largest step.
    The run store is history, not data a person built, so the old rows
@@ -533,8 +534,9 @@ now outside the loop.
    host's loop beside everything else, up to four `--prepare` processes
    at once, each started after those of the steps upstream of it have
    exited. A step whose `--prepare` has not exited, and every step
-   downstream of one, waits (`Wait::Prepare`), and Sync stays offered. The CLI's sync still asks every step first, until it becomes
-   a client.
+   downstream of one, waits (`Wait::Prepare`), and Sync stays offered.
+   A CLI sync that finds no loop running runs the same loop until it is
+   idle, with the same pass.
 4. **Retries and locks.** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it
    lets another step take the slot in between. Check whether any
