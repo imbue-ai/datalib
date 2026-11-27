@@ -223,7 +223,7 @@ mod tests {
     /// the last reaches the bottom of the stretch, whether it is past it
     /// or empty.
     #[test]
-    fn pages_settle_the_stretch_from_the_top_down() {
+    fn pages_read_the_stretch_whole_from_the_top_down() {
         let mut w = Walk::new("c", owed(10, 90, &[], None), None);
         assert_eq!((w.next_before(), w.next_key()), (None, Some(90)));
         // A message came in after the listing named 90 the newest.
@@ -241,7 +241,7 @@ mod tests {
     /// one that came back counts as read all the same, so it is not
     /// requested again.
     #[test]
-    fn a_deleted_newest_message_is_settled_by_the_page_that_lacks_it() {
+    fn a_deleted_newest_message_is_covered_by_the_page_that_lacks_it() {
         let mut w = Walk::new("c", owed(10, 90, &[span(10, 60)], None), None);
         let s = w.page(&[60, 55]).unwrap();
         assert_eq!(s.span, span(60, 90));
@@ -250,7 +250,7 @@ mod tests {
 
     /// An empty page says there is nothing older anywhere.
     #[test]
-    fn an_empty_page_settles_every_stretch_below_it() {
+    fn an_empty_page_covers_every_stretch_below_it() {
         let mut w = Walk::new("c", owed(10, 90, &[span(40, 50)], Some(70)), None);
         let s = w.page(&[]).unwrap();
         assert_eq!(s.span, span(10, 90));
