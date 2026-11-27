@@ -1,15 +1,18 @@
 //! Which ingest method a step's params hold, and what it reaches.
 //!
 //! The declarations are the provider config crates' (`IngestMethods` in
-//! `datalib_source_common`); this module maps a source type to its list
-//! and applies the one rule the UI applies too
-//! (`datalib/ui/src/config/ingestMethods.ts`): a method is held when its
-//! path is written and its value is neither `null` nor `false`. It also
+//! `datalib_source_common`); this module maps a source type to its list.
+//! The rule for which of them a step's params hold is
+//! `datalib_source_common::held`, which the server's Sources rows apply
+//! too and the wizard mirrors (`datalib/ui/src/config/ingestMethods.ts`):
+//! a method is held when its path is written and its value is neither
+//! `null` nor `false`. This module also
 //! refuses the keys an earlier config shape wrote, naming the tool that
 //! rewrites them, and drops the ones that are only inert.
 
 use anyhow::Result;
-use datalib_source_common::{IngestMethod, IngestMethods, Reach};
+pub use datalib_source_common::{held, reach_of};
+use datalib_source_common::{json_pointer, IngestMethod, IngestMethods, Reach};
 
 use crate::source_type::SourceType;
 
@@ -127,35 +130,6 @@ pub fn drop_inert_params(params: &mut serde_json::Value) -> Vec<&'static str> {
                 .is_some_and(|table| table.remove(key).is_some())
         })
         .collect()
-}
-
-pub fn held<'a>(params: &serde_json::Value, methods: &'a [IngestMethod]) -> Vec<&'a IngestMethod> {
-    methods
-        .iter()
-        .filter(|m| is_held(params.pointer(&json_pointer(m.path))))
-        .collect()
-}
-
-fn is_held(value: Option<&serde_json::Value>) -> bool {
-    !matches!(
-        value,
-        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false))
-    )
-}
-
-fn json_pointer(dotted: &str) -> String {
-    format!("/{}", dotted.replace('.', "/"))
-}
-
-/// Origin if anything held reaches one, else Local, else None.
-pub fn reach_of(held: &[&IngestMethod]) -> Option<Reach> {
-    if held.iter().any(|m| m.reach == Reach::Origin) {
-        Some(Reach::Origin)
-    } else if held.is_empty() {
-        None
-    } else {
-        Some(Reach::Local)
-    }
 }
 
 pub fn reach_or_refuse(source_type: SourceType, held: &[&IngestMethod]) -> Result<Reach> {

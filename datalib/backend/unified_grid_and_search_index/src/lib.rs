@@ -2,6 +2,7 @@
 //! language over them, and the repo that reads them.
 
 pub mod at_node;
+pub mod authors;
 pub mod db;
 pub mod dolt_repo;
 pub mod embedding_map;

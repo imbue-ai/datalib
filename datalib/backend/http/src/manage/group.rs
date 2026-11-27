@@ -3,8 +3,10 @@
 //! shows, the instants it calls "last synced" and "last success", and
 //! the steps a sync of the group starts at. docs/dev/config_model.md
 //! § "What the Manage screen and the wizard make of it" states the
-//! rules in prose. Nothing here does arithmetic across children: a
-//! group's bytes come from its own measured series.
+//! rules in prose. A group's bytes come from its own measured series,
+//! never a sum of its children's.
+
+use datalib_dag::RunState;
 
 use super::status::{compare_stamps, StatusView};
 
@@ -110,6 +112,58 @@ fn read(child: &ChildStatus) -> (StatusView, String) {
         ..child.status.clone()
     };
     (status, child.id.clone())
+}
+
+/// Where one of a group's steps stands in the sync under way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InSync {
+    /// Turned off, or this sync does not reach it.
+    Outside,
+    /// It has work left in an open request, or is running.
+    Left,
+    /// It ran in this run and has no work left.
+    Complete,
+}
+
+impl InSync {
+    /// `run_state` is the step's state in the run under way, absent when
+    /// it has not run in it or no run is under way.
+    pub fn of(on: bool, has_work_left: bool, run_state: Option<RunState>) -> Self {
+        match run_state {
+            _ if !on => InSync::Outside,
+            _ if has_work_left => InSync::Left,
+            Some(s) if s.is_terminal() => InSync::Complete,
+            Some(_) => InSync::Left,
+            None => InSync::Outside,
+        }
+    }
+}
+
+/// How many of the steps this sync reaches it has finished, and how many
+/// it reaches; `None` when it reaches none.
+pub fn sync_progress(steps: &[InSync]) -> Option<(usize, usize)> {
+    let reached = steps.iter().filter(|s| **s != InSync::Outside).count();
+    let complete = steps.iter().filter(|s| **s == InSync::Complete).count();
+    (reached > 0).then_some((complete, reached))
+}
+
+/// What a group row says while it is busy: the word of the step it reads
+/// its status from, that step's name, and how far the sync has got
+/// through the group ("Running: Download · 1/3 complete"). `None` for a
+/// group at rest, which keeps its child's word alone.
+pub fn busy_label(
+    status: &StatusView,
+    step_name: &str,
+    progress: Option<(usize, usize)>,
+) -> Option<String> {
+    if !matches!(status.key.as_str(), "running" | "waiting" | "queued") {
+        return None;
+    }
+    let named = format!("{}: {step_name}", status.label);
+    Some(match progress {
+        Some((complete, reached)) => format!("{named} \u{b7} {complete}/{reached} complete"),
+        None => named,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +318,73 @@ mod tests {
     fn pipeline_order_does_not_spin_on_a_cycle() {
         let out = pipeline_order(&[step("s/a", &["s/b"]), step("s/b", &["s/a"])]);
         assert_eq!(ids(&out), ["s/a", "s/b"]);
+    }
+
+    #[test]
+    fn a_step_is_complete_once_it_ran_in_this_run_and_has_no_work_left() {
+        use InSync::{Complete, Left, Outside};
+        assert_eq!(InSync::of(true, false, Some(RunState::Succeeded)), Complete);
+        assert_eq!(
+            InSync::of(true, false, Some(RunState::SkippedUpToDate)),
+            Complete
+        );
+        assert_eq!(InSync::of(true, false, Some(RunState::Failed)), Complete);
+        assert_eq!(InSync::of(true, false, Some(RunState::Running)), Left);
+        // Ran earlier in this run, and an open request has more for it.
+        assert_eq!(InSync::of(true, true, Some(RunState::Succeeded)), Left);
+        assert_eq!(InSync::of(true, true, None), Left);
+        assert_eq!(InSync::of(true, false, None), Outside);
+        assert_eq!(InSync::of(false, true, Some(RunState::Running)), Outside);
+    }
+
+    #[test]
+    fn sync_progress_counts_only_the_steps_the_sync_reaches() {
+        use InSync::{Complete, Left, Outside};
+        assert_eq!(
+            sync_progress(&[Complete, Left, Left, Outside]),
+            Some((1, 3))
+        );
+        assert_eq!(sync_progress(&[Left, Left, Left]), Some((0, 3)));
+        assert_eq!(sync_progress(&[Outside, Outside]), None);
+        assert_eq!(sync_progress(&[]), None);
+    }
+
+    /// A busy group said only "Running", leaving which step, and how far
+    /// the sync had got through the group, to the tooltip.
+    #[test]
+    fn a_busy_group_names_its_step_and_how_far_the_sync_has_got() {
+        let running = StatusView {
+            label: "Running".into(),
+            ..view("running", None, None)
+        };
+        assert_eq!(
+            busy_label(&running, "Download", Some((0, 3))).as_deref(),
+            Some("Running: Download \u{b7} 0/3 complete")
+        );
+        let queued = StatusView {
+            label: "Queued".into(),
+            ..view("queued", None, None)
+        };
+        assert_eq!(
+            busy_label(&queued, "Render markdown", Some((1, 3))).as_deref(),
+            Some("Queued: Render markdown \u{b7} 1/3 complete")
+        );
+        assert_eq!(
+            busy_label(&queued, "Render markdown", None).as_deref(),
+            Some("Queued: Render markdown")
+        );
+        for at_rest in [
+            "succeeded",
+            "failed",
+            "skipped_up_to_date",
+            "never_run",
+            "off",
+        ] {
+            assert_eq!(
+                busy_label(&view(at_rest, None, None), "Download", Some((3, 3))),
+                None
+            );
+        }
     }
 
     #[test]

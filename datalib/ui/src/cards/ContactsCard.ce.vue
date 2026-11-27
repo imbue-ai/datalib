@@ -1,12 +1,14 @@
 <script setup lang="ts">
 // `contactsView()`: every contact in the contacts app, read straight from
 // it (`GET /applet/datalib_contacts/contacts`), so an edit made anywhere
-// shows at once. The person is a chip, as in any grid: a double-click on
-// a row opens the person card, a right-click offers
-// the card, everything with them, copying the name, merging the selected
-// rows into the one clicked, and deleting. A new contact is made from the
-// box at the top. Review switches to what agents proposed
-// (`ContactsReview.ce.vue`).
+// shows at once, with how much each wrote from the index
+// (`GET …/people/contacts`), and sorted by recency, by that count or by
+// name. The person is a chip, as in any grid: a double-click on a row
+// opens the person card, a right-click offers the card, everything with
+// them, copying the name, merging the selected rows into the one
+// clicked, and deleting. A new contact is made from the box at the top.
+// Unfiled lists everyone else who wrote (`UnfiledList.ce.vue`). While an
+// agent's suggestions wait, a banner opens them (`SuggestionsList.ce.vue`).
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { copyToClipboard } from "@/clipboard";
 import { confirmAction } from "@/desktop";
@@ -19,6 +21,7 @@ import type { ColumnSpec } from "@/api";
 import { contactSubject, personSource, searchSource } from "./cardSources";
 import {
   CONTACTS_APPLET,
+  contactCounts,
   contactsById,
   createContact,
   deleteContact,
@@ -28,9 +31,21 @@ import {
   people,
   type NormalizedContact,
 } from "./contacts";
-import { filterContacts, mergeInto, rowHandle, type ContactRow } from "./contactsTable";
-import type { ReviewRow } from "./contactsReview";
-import ContactsReview from "./ContactsReview.ce.vue";
+import {
+  contactSortKey,
+  filterContacts,
+  LIST_SORTS,
+  mergeInto,
+  sortList,
+  withCountColumns,
+  withCounts,
+  type ContactRow,
+  type ListSort,
+  type Wrote,
+} from "./contactsTable";
+import { loadSuggestions, type Suggestion } from "./suggestions";
+import SuggestionsList from "./SuggestionsList.ce.vue";
+import UnfiledList from "./UnfiledList.ce.vue";
 import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
 import type { CardCtx } from "./types";
@@ -40,19 +55,28 @@ props.ctx.setTitle("Contacts");
 props.ctx.setHelp(`
 <p>The people you have added, and nobody else: no source fills this list.
 To add someone, double-click them anywhere and choose <em>Add to
-contacts</em>, or type a new name above. Double-click a row for the
-person's page: your contact, and what every source says about them.
-Right-click for everything with them, or to delete the contact. To merge
-duplicates, select them all and right-click the one to keep.</p>
-<p><b>Review</b> lists what agents proposed: contacts they made, handles
-they put on one, and whether each person or sender is <i>real</i>, which is
-to say not spam. A label is in, out, or not decided. Confirm agrees with the agent; Reject takes off the
-handles it put on and flips its labels, and both are written down so no agent
-proposes the same again. Select many rows to act on them at once.</p>
+contacts</em>, pick them from <b>Unfiled</b>, or type a new name above.
+Double-click a row for the person's page: your contact, and what every
+source says about them. Right-click for everything with them, or to
+delete the contact. To merge duplicates, select them all and right-click
+the one to keep.</p>
+<p><em>Items</em> is how much someone wrote, which is what
+<code>from:</code> finds, and <em>Last</em> when they last did; sort by
+either, or by name.</p>
+<p><b>Unfiled</b> lists everyone else who wrote something here, the most
+first. Select some and <em>Add selected to contacts</em>: each comes with
+every handle a source says is theirs. Right-click a sender and <em>Hide
+this sender</em> to say they are not real (spam). Senders you or an agent
+marked not real are left out unless you ask for them.</p>
+<p>When an agent has suggested people, handles for one of yours, or which
+senders are not real, a banner above the list says how many. Nothing an
+agent suggests is a contact until you say <em>Yes</em>: until then its
+chips stay grey and searches for your contacts leave it out. <em>No</em>
+is remembered, so no agent suggests the same again.</p>
 `);
 
-const mode = ref<"contacts" | "review">("contacts");
-const waitingReview = ref<number | null>(null);
+const mode = ref<"contacts" | "unfiled" | "suggestions">("contacts");
+const suggestions = ref<Suggestion[]>([]);
 
 const columns = ref<ColumnSpec[]>([]);
 const rows = ref<ContactRow[]>([]);
@@ -60,9 +84,20 @@ const error = ref<string | null>(null);
 /// This library's config has no contacts app.
 const absent = ref(false);
 const filter = ref("");
+const sort = ref<ListSort>("recent");
+/// How much each contact wrote; null until the index answers, or where
+/// it cannot.
+const counts = ref<Record<string, Wrote> | null>(null);
 const newName = ref("");
 const creating = ref(false);
-const shown = computed(() => filterContacts(rows.value, filter.value));
+const loaded = ref(false);
+const shown = computed(() => {
+  const counted = counts.value ? withCounts(rows.value, counts.value) : rows.value;
+  return sortList(filterContacts(counted, filter.value), sort.value, contactSortKey);
+});
+const shownColumns = computed(() =>
+  counts.value ? withCountColumns(columns.value) : columns.value,
+);
 const cardEl = ref<HTMLElement | null>(null);
 const grid = shallowRef<TableGridApi<ContactRow> | null>(null);
 
@@ -70,32 +105,47 @@ let asked = 0;
 async function load() {
   const mine = ++asked;
   try {
-    const r = await fetch(`${CONTACTS_APPLET}/contacts`);
+    // Together, so the grid's first columns hold the counts: a column
+    // that comes later goes after any the grid has laid out.
+    const [r, wrote] = await Promise.all([
+      fetch(`${CONTACTS_APPLET}/contacts`),
+      // A library with no index yet shows the list without them.
+      contactCounts().catch(() => null),
+    ]);
     const text = await r.text();
     if (mine === asked) absent.value = isAbsent(r.status, text);
     if (absent.value) return;
     if (!r.ok) throw new Error(`contacts → ${r.status}: ${text}`);
     const t = JSON.parse(text) as { columns: ColumnSpec[]; rows: ContactRow[] };
     if (mine !== asked) return;
+    counts.value = wrote;
     if (JSON.stringify(t.columns) !== JSON.stringify(columns.value)) columns.value = t.columns;
     rows.value = t.rows;
     error.value = null;
   } catch (e) {
     if (mine === asked) error.value = (e as Error).message;
+  } finally {
+    if (mine === asked) loaded.value = true;
   }
-  void countReview();
+  void loadWaiting();
 }
 
-/** How many review rows wait for you, for the switch's label. */
-async function countReview() {
+/** What agents suggested that waits for the person, for the banner. */
+async function loadWaiting() {
   try {
-    const r = await fetch(`${CONTACTS_APPLET}/review`);
-    if (!r.ok) return;
-    const t = (await r.json()) as { rows: ReviewRow[] };
-    waitingReview.value = t.rows.filter((row) => row.awaiting).length;
+    suggestions.value = await loadSuggestions();
   } catch {
-    // An applet from before the review answers 404; the switch says no count.
+    // An applet from before suggestions answers 404: no banner.
+    suggestions.value = [];
   }
+  if (mode.value === "suggestions" && suggestions.value.length === 0) mode.value = "contacts";
+}
+
+function suggestionsBanner(): string {
+  const n = suggestions.value.length;
+  const agents = [...new Set(suggestions.value.flatMap((s) => s.agents))];
+  const who = agents.length === 1 ? agents[0] : "Agents";
+  return `${who} ${agents.length === 1 ? "suggests" : "suggest"} ${n === 1 ? "one change" : `${n} changes`} to your contacts.`;
 }
 
 async function create() {
@@ -114,8 +164,7 @@ async function create() {
 }
 
 function openPerson(row: ContactRow) {
-  const subject = rowHandle(row) ?? contactSubject(row.key);
-  props.ctx.host.openCards(personSource(subject, { seenIn: null }));
+  props.ctx.host.openCards(personSource(contactSubject(row.key), { seenIn: null }));
 }
 
 function everythingWith(row: ContactRow) {
@@ -227,18 +276,27 @@ onBeforeUnmount(() => {
       <button
         role="tab"
         class="contacts-mode"
-        :aria-selected="mode === 'review'"
-        @click="mode = 'review'"
+        :aria-selected="mode === 'unfiled'"
+        @click="mode = 'unfiled'"
       >
-        Review<span v-if="waitingReview" class="contacts-waiting">{{ waitingReview }} waiting</span>
+        Unfiled
       </button>
     </div>
-    <ContactsReview
-      v-if="!absent && mode === 'review'"
+    <UnfiledList v-if="!absent && mode === 'unfiled'" :ctx="props.ctx" @added="load" />
+    <SuggestionsList
+      v-else-if="!absent && mode === 'suggestions'"
       :ctx="props.ctx"
-      @waiting="(n) => (waitingReview = n)"
+      :suggestions="suggestions"
+      @changed="load"
+      @back="mode = 'contacts'"
     />
     <template v-else-if="!absent">
+      <div v-if="suggestions.length" class="contacts-banner" role="status">
+        <span>{{ suggestionsBanner() }}</span>
+        <button type="button" class="contacts-button" @click="mode = 'suggestions'">
+          {{ suggestions.length === 1 ? "See it" : "See them" }}
+        </button>
+      </div>
       <div class="contacts-bar">
         <input
           v-model="filter"
@@ -247,6 +305,9 @@ onBeforeUnmount(() => {
           placeholder="Filter by name, address, number or note"
           aria-label="Filter contacts"
         />
+        <select v-model="sort" class="contacts-input contacts-sort" aria-label="Sort contacts">
+          <option v-for="s in LIST_SORTS" :key="s.sort" :value="s.sort">{{ s.label }}</option>
+        </select>
         <span class="contacts-count">
           {{ shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}` }}
           {{ rows.length === 1 ? "contact" : "contacts" }}
@@ -264,9 +325,13 @@ onBeforeUnmount(() => {
         </form>
       </div>
       <div v-if="error" class="contacts-error">{{ error }}</div>
+      <p v-if="loaded && !error && rows.length === 0" class="contacts-empty">
+        No contacts yet. Double-click anyone in a message and choose <em>Add to contacts</em>, or
+        pick people from <b>Unfiled</b>.
+      </p>
       <div class="contacts-grid">
         <TableGrid
-          :columns="columns"
+          :columns="shownColumns"
           :rows="shown"
           rowKey="key"
           :selectable="true"
@@ -316,13 +381,13 @@ onBeforeUnmount(() => {
   background: var(--datalib-surface);
   color: var(--datalib-fg);
 }
-.contacts-waiting {
-  margin-left: 0.4rem;
-  padding: 0 0.4rem;
-  border-radius: 999px;
-  background: var(--datalib-accent);
-  color: var(--datalib-accent-fg, #fff);
-  font-size: 0.85em;
+.contacts-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--datalib-border-soft);
+  background: var(--datalib-surface);
 }
 .contacts-bar {
   display: flex;
@@ -371,5 +436,25 @@ onBeforeUnmount(() => {
   position: relative;
   flex: 1 1 auto;
   min-height: 0;
+}
+.contacts-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.contacts-bar > .contacts-sort {
+  flex: 0 0 auto;
+}
+.contacts-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--datalib-muted);
+}
+.contacts-empty {
+  margin: 0;
+  padding: 0.6rem 0.75rem;
+  color: var(--datalib-muted);
 }
 </style>
