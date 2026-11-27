@@ -104,8 +104,8 @@ fn warm<'a>(cursor: Option<&'a str>, none: &'a HashSet<String>) -> RawRange<'a> 
     }
 }
 
-/// One render pass from `cursor`. Returns the documents emitted, the
-/// render units the pass rendered, and the commit it consumed — what the
+/// One render run from `cursor`. Returns the documents emitted, the
+/// render units the run rendered, and the commit it consumed — what the
 /// render step would record as the next cursor.
 fn render_once(
     raw: &Path,

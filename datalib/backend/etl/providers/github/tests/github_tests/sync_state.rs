@@ -76,10 +76,10 @@ fn the_scope_whole() -> Vec<(String, String)> {
 }
 
 /// GitHub's search answers at most 1000 results, newest first. A scope
-/// with more than that used to list the newest 1000, leave an error row
-/// on the Manage screen, and wait for the next run to list the rest. The
-/// search carries on below its oldest result instead, as many times as
-/// the scope needs, and nothing failed, so no row says it did.
+/// with more than that must not stop at the newest 1000, leave an error
+/// row on the Manage screen, and wait for the next run to list the rest.
+/// The search carries on below its oldest result, as many times as the
+/// scope needs, and nothing failed, so no row says it did.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_search_cut_off_at_githubs_cap_carries_on_in_the_same_run() {
     let d = tempdir().unwrap();

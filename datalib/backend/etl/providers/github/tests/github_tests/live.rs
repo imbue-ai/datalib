@@ -9,7 +9,7 @@
 //! the target skips that prefix. `bazel run //datalib/backend/etl/providers/github:github_live` runs
 //! exactly these. Deliberately not `#[ignore]` — that flag is one bit
 //! for the whole binary, and the snapshot `.update` targets already
-//! spend it.
+//! use it.
 
 use datalib_etl_github::ingest::{self as github, parse_pr_ref, FetchOptions};
 use datalib_etl_github_render::render::{parse_api_dir, render_github};
