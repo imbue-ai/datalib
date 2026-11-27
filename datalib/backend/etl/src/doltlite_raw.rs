@@ -1225,7 +1225,7 @@ async fn open_inner(
     // clear.
     let first_open = created.len() == plans.len();
     if !recreated.is_empty() || (!created.is_empty() && !first_open) {
-        forget_cursors(&pool, &created, &recreated).await?;
+        clear_cursors(&pool, &created, &recreated).await?;
     }
     // Indexes last, so they see the reconciled columns — and so a
     // recreate costs no index.
@@ -1750,7 +1750,7 @@ pub const CURSOR_TABLES: &[&str] = &["sync_scope_state", "ingested_files"];
 /// changes, with nothing saying why. So either clears every cursor in
 /// the store, and the next run walks from the start into every table,
 /// which the unchanged ones absorb as no-op upserts.
-async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[String]) -> Result<()> {
+async fn clear_cursors(pool: &SqlitePool, created: &[String], recreated: &[String]) -> Result<()> {
     let mut cleared = Vec::new();
     for table in CURSOR_TABLES {
         if table_columns(pool, table).await?.is_empty() {
@@ -5497,7 +5497,7 @@ mod tests {
     /// store then stays empty until upstream changes, with nothing saying
     /// why. Recreating clears every cursor in the store.
     #[tokio::test]
-    async fn a_recreate_forgets_the_stores_cursors() {
+    async fn a_recreate_clears_the_stores_cursors() {
         let d = tempdir().unwrap();
         let p = d.path().join("recreate_cursors.doltlite_db");
         store_with_cursors(&p, &[STALE_WIDGETS_DDL]).await;

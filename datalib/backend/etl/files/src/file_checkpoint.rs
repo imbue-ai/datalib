@@ -359,7 +359,7 @@ mod tests {
     /// A cursor table missing from that list would survive a schema
     /// change and let the next run skip files the table no longer has.
     #[test]
-    fn the_store_forgets_this_cursor_on_a_schema_change() {
+    fn the_store_clears_this_cursor_on_a_schema_change() {
         assert!(datalib_etl::doltlite_raw::CURSOR_TABLES.contains(&INGESTED_FILES_TABLE));
     }
 

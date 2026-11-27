@@ -627,7 +627,7 @@ mod tests {
     /// The version reported has to be the commit the seal just made —
     /// that string is what a consumer pins to.
     #[tokio::test]
-    async fn a_seal_announces_the_commit_it_made() {
+    async fn a_seal_reports_the_commit_it_made() {
         let dir = tempfile::tempdir().unwrap();
         let entities = store(&dir.path().join("entities.doltlite_db")).await;
         if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
