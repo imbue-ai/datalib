@@ -10,8 +10,9 @@ use uuid::Uuid;
 /// Entity tables — each gets a paired `<table>_bookkeeping` sidecar.
 pub const DATA_TABLES: &[&str] = &["sms_messages", "sms_calls"];
 
-/// Per-provider CAS edge tables. Emptied by a reset alongside
-/// [`DATA_TABLES`] (CAS bytes survive).
+/// Per-provider CAS edge tables. A reset empties them with every other
+/// table of the store (`doltlite_raw::reset_store`); the blob bytes are
+/// in `blobs.sqlite` beside it, which a reset does not touch.
 pub const EDGE_TABLES: &[&str] = &["sms_attachments"];
 
 /// The prefix of every file-cursor scope this provider owns

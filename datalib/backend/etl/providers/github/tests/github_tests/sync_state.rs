@@ -1,7 +1,9 @@
 //! What is owed is what the searches listed minus what the store holds
-//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch"). Each test here was written against
-//! the old code and watched failing before the mechanism it names was
-//! replaced.
+//! (docs/dev/data_architecture_ingestion.md, "What is left to fetch").
+//! These tests cover a search GitHub cuts off at its result cap: it
+//! carries on below its oldest result in the same run, stops at the
+//! floor, ends with a warning when it gets no further, and keeps the
+//! spans it covered when it fails part-way.
 
 use std::fs;
 use std::path::Path;

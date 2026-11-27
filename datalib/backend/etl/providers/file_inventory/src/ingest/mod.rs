@@ -153,8 +153,8 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     }
 
     // Canonicalize the root before anything keys off it. The
-    // fingerprint cache is keyed by ABSOLUTE path — that is what makes
-    // it one chain per host rather than one per root — so a relative
+    // fingerprint cache is keyed by ABSOLUTE path — that is what lets
+    // every root on the host share one cache — so a relative
     // `--root` would store relative keys, and the same relative name
     // used from two directories would have two unrelated trees fighting
     // over one key. It also collapses `.`, `..`, a trailing slash and a

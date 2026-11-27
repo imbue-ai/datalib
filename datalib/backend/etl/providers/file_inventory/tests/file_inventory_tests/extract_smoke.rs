@@ -320,8 +320,8 @@ async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     );
 }
 
-/// The cache is keyed by ABSOLUTE path, which is what makes it one
-/// chain per host rather than one per root. A relative `--root` must
+/// The cache is keyed by ABSOLUTE path, which is what lets every root on
+/// the host share one cache. A relative `--root` must
 /// not produce relative keys: the same relative name used from two
 /// directories would put two unrelated trees on one key.
 #[tokio::test]

@@ -185,8 +185,11 @@ that the next run which reads the thing clears:
   table prunes only while every one of them is there. A table none of
   whose files is in the export was left out of it, and keeps its rows.
   An export that really has fewer parts of a table than the last one
-  looks the same as a partial unpack; resetting the source empties
-  the store, those `ingested_files` rows with it.
+  looks the same as a partial unpack. Resetting the ingest step
+  (`datalib-pipeline reset <data_root> <group>/ingest`) deletes every
+  row of its store, those `ingested_files` rows included
+  (`doltlite_raw::reset_store`), so the next run stores the export as
+  it is.
 - **A directory the walk could not list** (or an entry it could not
   stat) is a `listing:files` row, and no table is pruned that run.
 - **An export path with nothing at it** fails the run: there is nothing
