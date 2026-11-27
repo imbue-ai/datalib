@@ -58,6 +58,7 @@ sh_binary(
         ":serve",
         "//datalib/backend/applets:datalib_applet",
         "//tests/fixtures:materialize_tng_root",
+        "//tests/fixtures/curated:tng",
     ] + DEV_RUNTIME_DATA,
     env = DEV_RUNTIME_ENV,
     deps = ["@bazel_tools//tools/bash/runfiles"],

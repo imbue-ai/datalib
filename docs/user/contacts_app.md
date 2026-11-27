@@ -133,7 +133,9 @@ curl -H "Authorization: Bearer $TOKEN" "<origin>/applet/datalib_contacts/not_lin
   tell you about this person's idea of a duplicate.
 
 `POST /resolve` with `{"handles": […]}` answers which of those handles
-have a contact already.
+have a contact already, as a list per handle: an address two people
+share is on both. A proposal never shares one: a handle another contact
+has is skipped, and whether both have it is the person's to say.
 
 ## 3. Propose
 

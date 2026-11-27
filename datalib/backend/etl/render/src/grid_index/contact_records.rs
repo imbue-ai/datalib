@@ -8,7 +8,8 @@
 
 use anyhow::{Context, Result};
 use datalib_contact_schema::NormalizedContact;
-use sqlx::SqliteConnection;
+use datalib_sql::{sql, sql_id, Sql};
+use sqlx::{Row, SqliteConnection};
 
 /// `contact_json` is the record with no `seen`, which is the document's:
 /// null `seen_items` says the source counts nothing.
@@ -25,7 +26,67 @@ pub(super) const DDL: &[&str] = &[
     // handle: its digits (`datalib_handle::home_digits`).
     "CREATE TABLE IF NOT EXISTS contact_record_numbers (record_id INTEGER NOT NULL, \
      digits TEXT NOT NULL, PRIMARY KEY (record_id, digits)) WITHOUT ROWID",
+    // The render commit each source's contacts are in line with: the
+    // grid's cursor's, written with it, or absent when these tables were
+    // made new and the source's contacts are owed (`grid_index::Part`).
+    "CREATE TABLE IF NOT EXISTS contact_cursors (source_id TEXT PRIMARY KEY, \
+     store_commit TEXT NOT NULL)",
 ];
+
+/// Whether `table` is one of these: an older build's included, by name.
+pub(super) fn holds(table: &str) -> bool {
+    table.starts_with("contact_") || table == "document_contacts"
+}
+
+/// The commit each source's contacts were last brought in line with.
+pub(super) async fn cursors(
+    pool: &sqlx::SqlitePool,
+) -> Result<std::collections::HashMap<String, String>> {
+    let rows: Vec<(String, String)> = sql!(
+        "etl.render.grid.list_contact_cursors",
+        "SELECT source_id, store_commit FROM contact_cursors"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("read where each source's contacts stand")?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Records that `source_id`'s contacts are in line with `commit`; `None`
+/// forgets it.
+pub(super) async fn set_cursor(
+    conn: &mut SqliteConnection,
+    source_id: &str,
+    commit: Option<&str>,
+) -> Result<()> {
+    let done = match commit {
+        Some(commit) => {
+            sql!(
+                "etl.render.grid.upsert_contact_cursor",
+                "INSERT INTO contact_cursors (source_id, store_commit) VALUES (?, ?) \
+                 ON CONFLICT (source_id) DO UPDATE SET store_commit = excluded.store_commit"
+            )
+            .query()
+            .bind(source_id)
+            .bind(commit)
+            .execute(&mut *conn)
+            .await
+        }
+        None => {
+            sql!(
+                "etl.render.grid.delete_contact_cursor",
+                "DELETE FROM contact_cursors WHERE source_id = ?"
+            )
+            .query()
+            .bind(source_id)
+            .execute(&mut *conn)
+            .await
+        }
+    };
+    done.with_context(|| format!("record where {source_id}'s contacts stand"))?;
+    Ok(())
+}
 
 pub(super) const INDEXES: &[&str] = &[
     // A chip asks who a handle is.
@@ -58,84 +119,148 @@ pub(super) const ORPHANED: &[&str] = &[
      WHERE d.record_id = contact_records.record_id)",
 ];
 
-/// Record that `markdown_uuid` carries `contact`.
-pub(super) async fn insert(
+/// Record that each document carries each contact, `(markdown_uuid,
+/// contact)`: a record new to the index with its handles and numbers, and
+/// a row for each document that carries it. Two accounts of one person in
+/// one document are one row, the later winning.
+pub(super) async fn insert_page(
     conn: &mut SqliteConnection,
-    markdown_uuid: &str,
-    contact: &NormalizedContact,
+    carried: &[(&str, &NormalizedContact)],
 ) -> Result<()> {
-    let record_id = record_id(conn, contact)
-        .await
-        .with_context(|| format!("record source contact {}", contact.key))?;
-    let seen = contact.seen.as_ref();
-    sqlx::query(
-        "INSERT OR REPLACE INTO document_contacts \
-         (markdown_uuid, record_id, seen_items, last_seen_at) VALUES (?, ?, ?, ?)",
+    let jsons = carried
+        .iter()
+        .map(|(_, c)| {
+            serde_json::to_string(&NormalizedContact {
+                seen: None,
+                ..(*c).clone()
+            })
+            .context("serialize a source contact")
+        })
+        .collect::<Result<Vec<String>>>()?;
+    let mut seen = std::collections::HashSet::new();
+    let records: Vec<(&NormalizedContact, &String)> = carried
+        .iter()
+        .zip(&jsons)
+        .filter(|(_, json)| seen.insert(json.as_str()))
+        .map(|((_, c), json)| (*c, json))
+        .collect();
+    let made: std::collections::HashMap<String, i64> = datalib_sql::values::fetch(
+        conn,
+        sql_id!("etl.render.grid.insert_contact_records"),
+        "INSERT INTO contact_records (source_id, contact_key, name, contact_json)",
+        4,
+        "ON CONFLICT (contact_json) DO NOTHING RETURNING contact_json, record_id",
+        &records,
+        |q, (c, json)| q.bind(&c.source_id).bind(&c.key).bind(c.name()).bind(*json),
     )
-    .bind(markdown_uuid)
-    .bind(record_id)
-    .bind(seen.map(|s| s.items as i64))
-    .bind(seen.and_then(|s| s.last_at.as_deref()))
-    .execute(&mut *conn)
     .await
-    .with_context(|| format!("insert source contact {}", contact.key))?;
-    Ok(())
-}
-
-async fn record_id(conn: &mut SqliteConnection, contact: &NormalizedContact) -> Result<i64> {
-    let json = serde_json::to_string(&NormalizedContact {
-        seen: None,
-        ..contact.clone()
-    })
-    .context("serialize a source contact")?;
-    let held: Option<i64> =
-        sqlx::query_scalar("SELECT record_id FROM contact_records WHERE contact_json = ?")
-            .bind(&json)
-            .fetch_optional(&mut *conn)
-            .await?;
-    if let Some(held) = held {
-        return Ok(held);
-    }
-    let record_id: i64 = sqlx::query_scalar(
-        "INSERT INTO contact_records (source_id, contact_key, name, contact_json) \
-         VALUES (?, ?, ?, ?) RETURNING record_id",
+    .context("record the source contacts")?
+    .iter()
+    .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+    .collect::<Result<_, sqlx::Error>>()?;
+    let new: Vec<(&NormalizedContact, i64)> = records
+        .iter()
+        .filter_map(|(c, json)| Some((*c, *made.get(json.as_str())?)))
+        .collect();
+    let handles: Vec<(i64, &str)> = new
+        .iter()
+        .flat_map(|(c, id)| {
+            c.handles
+                .iter()
+                .filter_map(|h| h.handle.as_ref())
+                .map(move |h| (*id, h.as_str()))
+        })
+        .collect();
+    datalib_sql::values::fetch(
+        conn,
+        sql_id!("etl.render.grid.insert_contact_record_handles"),
+        "INSERT OR IGNORE INTO contact_record_handles (record_id, handle)",
+        2,
+        "",
+        &handles,
+        |q, (id, handle)| q.bind(*id).bind(*handle),
     )
-    .bind(&contact.source_id)
-    .bind(&contact.key)
-    .bind(contact.name())
-    .bind(&json)
-    .fetch_one(&mut *conn)
-    .await?;
-    for handle in contact.handles.iter().filter_map(|h| h.handle.as_ref()) {
-        sqlx::query(
-            "INSERT OR IGNORE INTO contact_record_handles (record_id, handle) VALUES (?, ?)",
-        )
-        .bind(record_id)
-        .bind(handle.as_str())
-        .execute(&mut *conn)
-        .await
-        .with_context(|| format!("insert handle {handle}"))?;
-    }
-    for digits in contact.handles.iter().filter_map(|h| h.home_digits()) {
-        sqlx::query(
-            "INSERT OR IGNORE INTO contact_record_numbers (record_id, digits) VALUES (?, ?)",
-        )
-        .bind(record_id)
-        .bind(digits)
-        .execute(&mut *conn)
-        .await
-        .context("insert a number without its country code")?;
-    }
-    Ok(record_id)
+    .await
+    .context("insert the records' handles")?;
+    // A number a record writes without its country code makes no handle.
+    let numbers: Vec<(i64, String)> = new
+        .iter()
+        .flat_map(|(c, id)| {
+            c.handles
+                .iter()
+                .filter_map(|h| Some((*id, h.home_digits()?)))
+        })
+        .collect();
+    datalib_sql::values::fetch(
+        conn,
+        sql_id!("etl.render.grid.insert_record_numbers"),
+        "INSERT OR IGNORE INTO contact_record_numbers (record_id, digits)",
+        2,
+        "",
+        &numbers,
+        |q, (id, digits)| q.bind(*id).bind(digits),
+    )
+    .await
+    .context("insert the numbers without their country code")?;
+    let ids: std::collections::HashMap<String, i64> = sql!(
+        "etl.render.grid.find_contact_records_by_json",
+        "SELECT contact_json, record_id FROM contact_records \
+          WHERE contact_json IN (SELECT value FROM json_each(?))"
+    )
+    .query_as::<(String, i64)>()
+    .bind(serde_json::to_string(
+        &records
+            .iter()
+            .map(|(_, json)| json.as_str())
+            .collect::<Vec<_>>(),
+    )?)
+    .fetch_all(&mut *conn)
+    .await
+    .context("look up the source contacts' records")?
+    .into_iter()
+    .collect();
+    let carrying = carried
+        .iter()
+        .zip(&jsons)
+        .map(|((md, c), json)| {
+            let id = ids
+                .get(json)
+                .with_context(|| format!("no record for source contact {}", c.key))?;
+            Ok((*md, *id, *c))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    datalib_sql::values::fetch(
+        conn,
+        sql_id!("etl.render.grid.upsert_document_contacts"),
+        "INSERT OR REPLACE INTO document_contacts \
+         (markdown_uuid, record_id, seen_items, last_seen_at)",
+        4,
+        "",
+        &carrying,
+        |q, (md, id, c)| {
+            let seen = c.seen.as_ref();
+            q.bind(*md)
+                .bind(*id)
+                .bind(seen.map(|s| s.items as i64))
+                .bind(seen.and_then(|s| s.last_at.as_deref()))
+        },
+    )
+    .await
+    .context("record which documents carry them")?;
+    Ok(())
 }
 
 /// Drop the records no document carries any more.
 pub(crate) async fn sweep(conn: &mut SqliteConnection) -> Result<()> {
     for &sql in ORPHANED {
-        sqlx::query(sql)
-            .execute(&mut *conn)
-            .await
-            .context("drop the contact records no document carries")?;
+        Sql::dynamic(
+            sql_id!("etl.render.grid.delete_uncarried_contact_records"),
+            sql,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await
+        .context("drop the contact records no document carries")?;
     }
     Ok(())
 }
@@ -147,6 +272,7 @@ mod tests {
     use crate::grid_index::{apply_one, delete_markdowns, open_index, seal, WriteLock};
     use datalib_contact_schema::{ContactHandle, ContactKind, Seen};
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     fn riker(names: &[&str], seen: Option<(u64, &str)>) -> NormalizedContact {
         let mut c = NormalizedContact::new("src", "U_RIKER", ContactKind::Person);
         c.names = names.iter().map(|n| n.to_string()).collect();
@@ -164,7 +290,8 @@ mod tests {
 
     async fn count(pool: &sqlx::SqlitePool, table: &str) -> i64 {
         // Audited: `table` is a literal of this test.
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT count(*) FROM {table}")))
+        Sql::dynamic(test_sql_id!(), format!("SELECT count(*) FROM {table}"))
+            .query_scalar()
             .fetch_one(pool)
             .await
             .unwrap()
@@ -218,7 +345,8 @@ mod tests {
             .unwrap();
         seal(&lock).await.unwrap();
         assert_eq!(held(&pool).await, (1, 2, 1, 1), "a re-render replaces it");
-        let names: Vec<String> = sqlx::query_scalar("SELECT name FROM contact_records")
+        let names: Vec<String> = test_sql!("SELECT name FROM contact_records")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();

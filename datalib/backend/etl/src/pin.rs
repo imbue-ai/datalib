@@ -84,8 +84,9 @@ mod reader_tests {
     use super::*;
     use crate::doltlite_raw;
 
-    async fn count(pool: &sqlx::SqlitePool, sql: &'static str) -> Result<i64, sqlx::Error> {
-        sqlx::query_scalar::<_, i64>(sql).fetch_one(pool).await
+    use datalib_sql::{test_sql, Sql};
+    async fn count(pool: &sqlx::SqlitePool, sql: Sql) -> Result<i64, sqlx::Error> {
+        sql.query_scalar::<i64>().fetch_one(pool).await
     }
 
     // A doltlite file with nothing written into it yet, which
@@ -123,11 +124,13 @@ mod reader_tests {
         if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-        sqlx::query("INSERT INTO users VALUES ('u1', 'ann')")
+        test_sql!("INSERT INTO users VALUES ('u1', 'ann')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO msgs VALUES ('m1', 'u1')")
+        test_sql!("INSERT INTO msgs VALUES ('m1', 'u1')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -138,11 +141,13 @@ mod reader_tests {
 
         // Dirty the store the way a producer mid-run would, including a table
         // that did not exist at the commit at all.
-        sqlx::query("INSERT INTO users VALUES ('u2', 'bob')")
+        test_sql!("INSERT INTO users VALUES ('u2', 'bob')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE later (id TEXT PRIMARY KEY)")
+        test_sql!("CREATE TABLE later (id TEXT PRIMARY KEY)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -152,26 +157,30 @@ mod reader_tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            count(&pool, "SELECT COUNT(*) FROM users").await.unwrap(),
+            count(&pool, test_sql!("SELECT COUNT(*) FROM users"))
+                .await
+                .unwrap(),
             2,
             "working set"
         );
         assert_eq!(
-            count(&reader, "SELECT COUNT(*) FROM users").await.unwrap(),
+            count(&reader, test_sql!("SELECT COUNT(*) FROM users"))
+                .await
+                .unwrap(),
             1,
             "the commit"
         );
         assert_eq!(
             count(
                 &reader,
-                "SELECT COUNT(*) FROM users u JOIN msgs m ON m.who = u.id"
+                test_sql!("SELECT COUNT(*) FROM users u JOIN msgs m ON m.who = u.id")
             )
             .await
             .unwrap(),
             1,
             "a join reads one commit on both sides"
         );
-        let e = count(&reader, "SELECT COUNT(*) FROM later")
+        let e = count(&reader, test_sql!("SELECT COUNT(*) FROM later"))
             .await
             .unwrap_err();
         assert!(
@@ -200,19 +209,20 @@ mod reader_tests {
         if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-        let dirty = "SELECT count(*) FROM dolt_status";
+        let dirty = test_sql!("SELECT count(*) FROM dolt_status");
         assert_eq!(
-            count(&pool, dirty).await.unwrap(),
+            count(&pool, dirty.clone()).await.unwrap(),
             0,
             "the open seals itself"
         );
 
-        sqlx::query("INSERT INTO entities VALUES ('never-sealed')")
+        test_sql!("INSERT INTO entities VALUES ('never-sealed')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         assert_eq!(
-            count(&pool, dirty).await.unwrap(),
+            count(&pool, dirty.clone()).await.unwrap(),
             1,
             "a row nobody committed has to be visible as dirtiness, or the \
              reader has nothing at all to warn about"
@@ -223,7 +233,7 @@ mod reader_tests {
             .unwrap()
             .unwrap();
         assert_eq!(
-            count(&reader, "SELECT COUNT(*) FROM entities")
+            count(&reader, test_sql!("SELECT COUNT(*) FROM entities"))
                 .await
                 .unwrap(),
             0,
@@ -231,7 +241,11 @@ mod reader_tests {
         );
         reader.close().await;
         doltlite_raw::commit_run(&pool, "seal").await.unwrap();
-        assert_eq!(count(&pool, dirty).await.unwrap(), 0, "sealing cleans it");
+        assert_eq!(
+            count(&pool, dirty.clone()).await.unwrap(),
+            0,
+            "sealing cleans it"
+        );
         pool.close().await;
     }
 
@@ -254,7 +268,8 @@ mod reader_tests {
         }
 
         for i in 0..8 {
-            sqlx::query("INSERT INTO entities VALUES (?, 'x')")
+            test_sql!("INSERT INTO entities VALUES (?, 'x')")
+                .query()
                 .bind(format!("e{i}"))
                 .execute(&pool)
                 .await
@@ -274,7 +289,7 @@ mod reader_tests {
                 "head must name the commit just sealed, not a same-second sibling"
             );
             assert_eq!(
-                count(&reader, "SELECT count(*) FROM entities")
+                count(&reader, test_sql!("SELECT count(*) FROM entities"))
                     .await
                     .unwrap(),
                 i64::from(i) + 1,
@@ -322,11 +337,13 @@ mod reader_tests {
         if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-        sqlx::query("CREATE TABLE entities (id TEXT PRIMARY KEY, body TEXT)")
+        test_sql!("CREATE TABLE entities (id TEXT PRIMARY KEY, body TEXT)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO entities VALUES ('a', 'x')")
+        test_sql!("INSERT INTO entities VALUES ('a', 'x')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -361,7 +378,7 @@ mod reader_tests {
             .unwrap()
             .expect("open commits the schema, so the store is readable");
         assert_eq!(
-            count(&reader, "SELECT count(*) FROM entities")
+            count(&reader, test_sql!("SELECT count(*) FROM entities"))
                 .await
                 .unwrap(),
             0,
@@ -386,7 +403,8 @@ mod reader_tests {
         if !doltlite_raw::has_dolt_extensions(&pool).await {
             return;
         }
-        sqlx::query("INSERT INTO entities VALUES ('a')")
+        test_sql!("INSERT INTO entities VALUES ('a')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -395,18 +413,20 @@ mod reader_tests {
             .await
             .unwrap()
             .unwrap();
-        sqlx::query("INSERT INTO entities VALUES ('b')")
+        test_sql!("INSERT INTO entities VALUES ('b')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         doltlite_raw::commit_run(&pool, "two").await.unwrap();
         assert_eq!(
-            count(&reader, "SELECT count(*) FROM entities")
+            count(&reader, test_sql!("SELECT count(*) FROM entities"))
                 .await
                 .unwrap(),
             1
         );
-        let e = sqlx::query("INSERT INTO entities VALUES ('c')")
+        let e = test_sql!("INSERT INTO entities VALUES ('c')")
+            .query()
             .execute(&*reader)
             .await
             .unwrap_err();

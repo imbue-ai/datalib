@@ -834,6 +834,7 @@ mod tests {
     use datalib_schema::providers::Provider;
     use datalib_search_index::chunk::four_bytes_a_token;
 
+    use datalib_sql::test_sql;
     const GROUP: &str = "ten-forward";
 
     /// A second source, beside `GROUP`.
@@ -1358,10 +1359,12 @@ mod tests {
         .await
         .unwrap();
         for sql in [
-            "ALTER TABLE markdowns DROP COLUMN content_hash",
-            "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'",
+            test_sql!("ALTER TABLE markdowns DROP COLUMN content_hash"),
+            test_sql!(
+                "UPDATE _datalib_meta SET value = 'an-older-shape' WHERE key = 'schema_hash'"
+            ),
         ] {
-            sqlx::query(sql).execute(&writer).await.unwrap();
+            sql.query().execute(&writer).await.unwrap();
         }
         datalib_etl::doltlite_raw::commit_run(&writer, "an older build's shape")
             .await
@@ -1686,7 +1689,8 @@ mod tests {
             .connect_with(opts)
             .await
             .unwrap();
-        let rows: Vec<(String, Vec<u8>)> = sqlx::query_as("SELECT hash, vector FROM vectors")
+        let rows: Vec<(String, Vec<u8>)> = test_sql!("SELECT hash, vector FROM vectors")
+            .query_as()
             .fetch_all(&pool)
             .await
             .unwrap();

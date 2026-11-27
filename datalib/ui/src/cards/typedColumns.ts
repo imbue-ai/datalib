@@ -444,6 +444,37 @@ export function copyText(type: ColumnType, value: unknown): string {
   }
 }
 
+/// What a column's rows group by: a plain value as itself, and a value
+/// drawn from an object by the words it shows, since the grid keys a
+/// group by its value as a string and every object reads
+/// "[object Object]". A status groups by its label alone, not by when
+/// each row reached it.
+function groupGetter<T extends Record<string, unknown>>(
+  type: ColumnType,
+  f: string,
+): string | ((row: T) => string) {
+  switch (type) {
+    case "status":
+      return (row) => (row[f] as StatusView | null)?.label ?? "";
+    case "identity":
+    case "identities":
+    case "chips":
+    case "timeseries":
+    case "quantity":
+    case "membership":
+    case "actions":
+      return (row) => copyText(type, row[f]);
+    case "image":
+    case "text":
+    case "count":
+    case "number":
+    case "bytes":
+    case "timestamp":
+    case "datetime":
+      return f;
+  }
+}
+
 /// The column a tree hangs its chevrons off: the first one that is not
 /// a row of buttons, so an `actions` column never becomes the tree
 /// wherever it sits.
@@ -483,13 +514,18 @@ export function typedColumns<T extends Record<string, unknown>>(
         ? { editor: { model: Editors.text } }
         : {}),
       ...(opts.groupable
-        ? { grouping: { getter: f, formatter: groupTitle(spec.header), collapsed: false } }
+        ? {
+            grouping: {
+              getter: groupGetter<T>(spec.type, f),
+              formatter: groupTitle(spec.header),
+              collapsed: false,
+            },
+          }
         : {}),
     };
     const typed: Partial<Column<T>> = (() => {
       switch (spec.type) {
         case "identity": {
-          const label = (v: unknown) => (v as Identity | null)?.label ?? "";
           const badges = spec.badges;
           const inner: Formatter<T> = (_r, _c, _v, _col, row) => {
             const v = row?.[f] as Identity | null;
@@ -526,7 +562,7 @@ export function typedColumns<T extends Record<string, unknown>>(
             ...(opts.groupable
               ? {
                   grouping: {
-                    getter: (row: T) => label(row[f]),
+                    ...base.grouping,
                     // The value as its chip, read off the group's first row,
                     // where the rows are loaded and it names one. The grid's
                     // group carries its rows; its declared type leaves them out.
@@ -551,15 +587,6 @@ export function typedColumns<T extends Record<string, unknown>>(
               ),
             sortComparer: (a, b, dir) =>
               compareText(identitiesText(a), identitiesText(b), dir ?? 1),
-            ...(opts.groupable
-              ? {
-                  grouping: {
-                    getter: (row: T) => identitiesText(row[f]),
-                    formatter: groupTitle(spec.header),
-                    collapsed: false,
-                  },
-                }
-              : {}),
           };
         case "status":
           return {

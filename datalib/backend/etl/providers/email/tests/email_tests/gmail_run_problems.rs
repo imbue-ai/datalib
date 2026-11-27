@@ -15,6 +15,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, put_gmail_all_mail, put_gmail_response, Mirror,
 };
+use datalib_sql::test_sql;
 
 const PICARD: &str = "18c9f2a1b2c3d701";
 const RIKER: &str = "18c9f2a1b2c3d702";
@@ -323,7 +324,8 @@ async fn problems(m: &Mirror) -> Vec<String> {
 /// Each `problems` row: its key, severity and reason.
 async fn severities(m: &Mirror) -> Vec<(String, String, String)> {
     m.read(|db: RawDb| async move {
-        sqlx::query_as("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap()
@@ -333,7 +335,8 @@ async fn severities(m: &Mirror) -> Vec<(String, String, String)> {
 
 async fn listed_whole(m: &Mirror) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT scope FROM listed_whole ORDER BY scope")
+        test_sql!("SELECT scope FROM listed_whole ORDER BY scope")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()

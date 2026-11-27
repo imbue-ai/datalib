@@ -11,6 +11,7 @@ use app_schema::remote_media::media::RemoteMediaRow;
 use app_schema::remote_media::{AllowScope, DDL as REMOTE_MEDIA_DDL};
 use app_schema::{DISK_STATS_DDL, DISK_STATS_INDEXES};
 use async_trait::async_trait;
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_store_meta::StoreKind;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -102,7 +103,8 @@ impl AppStore {
                 .await
                 .map_err(internal)?;
             if changed && has_dolt && kind == StoreKind::RemoteMedia {
-                sqlx::query("SELECT dolt_commit('-Am', ?)")
+                sql!("core.commit_meta_on_open", "SELECT dolt_commit('-Am', ?)")
+                    .query()
                     .bind(format!(
                         "meta: written by Datalib {}",
                         datalib_runtime::build_id::DATALIB_VERSION
@@ -126,7 +128,8 @@ impl AppStore {
         if !self.has_dolt {
             return Ok(());
         }
-        sqlx::query("SELECT dolt_commit('-Am', ?)")
+        sql!("core.commit_app_store", "SELECT dolt_commit('-Am', ?)")
+            .query()
             .bind(message)
             .execute(&mut **conn)
             .await
@@ -135,13 +138,19 @@ impl AppStore {
     }
     async fn init_disk_stats_tables(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in DISK_STATS_DDL.iter().chain(DISK_STATS_INDEXES) {
-            sqlx::query(*ddl).execute(&self.disk_stats_pool).await?;
+            Sql::dynamic(sql_id!("core.create_disk_stats_table"), *ddl)
+                .query()
+                .execute(&self.disk_stats_pool)
+                .await?;
         }
         Ok(())
     }
     async fn init_remote_media_tables(&self) -> Result<(), sqlx::Error> {
         for (_table, ddl) in REMOTE_MEDIA_DDL {
-            sqlx::query(*ddl).execute(&self.remote_media_pool).await?;
+            Sql::dynamic(sql_id!("core.create_remote_media_table"), *ddl)
+                .query()
+                .execute(&self.remote_media_pool)
+                .await?;
         }
         Ok(())
     }
@@ -165,10 +174,12 @@ impl AppRepo for AppStore {
             // walk, so a second walk finishing inside the same
             // whole-microsecond would otherwise fail the whole batch
             // over a duplicate that carries the same number anyway.
-            sqlx::query(
+            sql!(
+                "core.upsert_disk_usage",
                 "INSERT OR REPLACE INTO disk_usage (path, measured_at_utc, tz_offset, bytes) \
-                 VALUES (?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?)"
             )
+            .query()
             .bind(&row.path)
             .bind(&row.measured_at_utc)
             .bind(&row.tz_offset)
@@ -189,22 +200,26 @@ impl AppRepo for AppStore {
         // is also at or before it. That later one is the series' value from
         // the cutoff on: the carry-in any range after it opens with
         // (`disk_usage_between`), for a tree that has not moved since.
-        let usage = sqlx::query(
+        let usage = sql!(
+            "core.delete_superseded_disk_usage",
             "DELETE FROM disk_usage INDEXED BY disk_usage_by_time \
              WHERE measured_at_utc < ? AND EXISTS ( \
                SELECT 1 FROM disk_usage AS later WHERE later.path = disk_usage.path \
                AND later.measured_at_utc > disk_usage.measured_at_utc \
-               AND later.measured_at_utc <= ?)",
+               AND later.measured_at_utc <= ?)"
         )
+        .query()
         .bind(before_utc)
         .bind(before_utc)
         .execute(&mut *tx)
         .await
         .map_err(internal)?;
-        let free = sqlx::query(
+        let free = sql!(
+            "core.delete_superseded_disk_free",
             "DELETE FROM disk_free WHERE measured_at_utc < ( \
-               SELECT MAX(measured_at_utc) FROM disk_free WHERE measured_at_utc <= ?)",
+               SELECT MAX(measured_at_utc) FROM disk_free WHERE measured_at_utc <= ?)"
         )
+        .query()
         .bind(before_utc)
         .execute(&mut *tx)
         .await
@@ -214,11 +229,13 @@ impl AppRepo for AppStore {
     }
 
     async fn recent_disk_usage(&self, limit: usize) -> Result<Vec<DiskUsageRow>, RepoError> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "core.list_recent_disk_usage",
             "SELECT path, measured_at_utc, tz_offset, bytes \
              FROM disk_usage INDEXED BY disk_usage_by_time \
-             ORDER BY measured_at_utc DESC LIMIT ?",
+             ORDER BY measured_at_utc DESC LIMIT ?"
         )
+        .query()
         .bind(limit as i64)
         .fetch_all(&self.disk_stats_pool)
         .await
@@ -235,20 +252,24 @@ impl AppRepo for AppStore {
         since_utc: &str,
         until_utc: &str,
     ) -> Result<Vec<DiskUsageRow>, RepoError> {
-        let before = sqlx::query(
+        let before = sql!(
+            "core.read_disk_usage_before",
             "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
-             WHERE path = ? AND measured_at_utc < ? ORDER BY measured_at_utc DESC LIMIT 1",
+             WHERE path = ? AND measured_at_utc < ? ORDER BY measured_at_utc DESC LIMIT 1"
         )
+        .query()
         .bind(path)
         .bind(since_utc)
         .fetch_all(&self.disk_stats_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
-        let during = sqlx::query(
+        let during = sql!(
+            "core.list_disk_usage_between",
             "SELECT path, measured_at_utc, tz_offset, bytes FROM disk_usage \
              WHERE path = ? AND measured_at_utc >= ? AND measured_at_utc <= ? \
-             ORDER BY measured_at_utc",
+             ORDER BY measured_at_utc"
         )
+        .query()
         .bind(path)
         .bind(since_utc)
         .bind(until_utc)
@@ -264,10 +285,12 @@ impl AppRepo for AppStore {
     }
 
     async fn record_disk_free(&self, row: &DiskFreeRow) -> Result<(), RepoError> {
-        sqlx::query(
+        sql!(
+            "core.upsert_disk_free",
             "INSERT OR REPLACE INTO disk_free \
-             (measured_at_utc, tz_offset, available_bytes, total_bytes) VALUES (?, ?, ?, ?)",
+             (measured_at_utc, tz_offset, available_bytes, total_bytes) VALUES (?, ?, ?, ?)"
         )
+        .query()
         .bind(&row.measured_at_utc)
         .bind(&row.tz_offset)
         .bind(row.available_bytes)
@@ -279,10 +302,12 @@ impl AppRepo for AppStore {
     }
 
     async fn recent_disk_free(&self, limit: usize) -> Result<Vec<DiskFreeRow>, RepoError> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "core.list_recent_disk_free",
             "SELECT measured_at_utc, tz_offset, available_bytes, total_bytes FROM disk_free \
-             ORDER BY measured_at_utc DESC LIMIT ?",
+             ORDER BY measured_at_utc DESC LIMIT ?"
         )
+        .query()
         .bind(limit as i64)
         .fetch_all(&self.disk_stats_pool)
         .await
@@ -294,10 +319,12 @@ impl AppRepo for AppStore {
     }
 
     async fn list_remote_allows(&self) -> Result<Vec<RemoteMediaAllowRow>, RepoError> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "core.list_remote_media_allows",
             "SELECT allow_uuid, scope, key, created_at_utc, tz_offset FROM remote_media_allow \
-             ORDER BY created_at_utc DESC",
+             ORDER BY created_at_utc DESC"
         )
+        .query()
         .fetch_all(&self.remote_media_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
@@ -317,10 +344,12 @@ impl AppRepo for AppStore {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let existing = sqlx::query(
+        let existing = sql!(
+            "core.find_remote_media_allow",
             "SELECT allow_uuid, scope, key, created_at_utc, tz_offset FROM remote_media_allow \
-             WHERE scope = ? AND key = ?",
+             WHERE scope = ? AND key = ?"
         )
+        .query()
         .bind(scope.as_str())
         .bind(key)
         .fetch_optional(&mut *conn)
@@ -338,10 +367,12 @@ impl AppRepo for AppStore {
             created_at_utc,
             tz_offset: Some(tz_offset),
         };
-        sqlx::query(
+        sql!(
+            "core.insert_remote_media_allow",
             "INSERT INTO remote_media_allow (allow_uuid, scope, key, created_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?)"
         )
+        .query()
         .bind(&row.allow_uuid)
         .bind(&row.scope)
         .bind(&row.key)
@@ -361,11 +392,15 @@ impl AppRepo for AppStore {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        let done = sqlx::query("DELETE FROM remote_media_allow WHERE allow_uuid = ?")
-            .bind(allow_uuid)
-            .execute(&mut *conn)
-            .await
-            .map_err(|e| RepoError::Internal(format!("delete remote_media_allow: {e}")))?;
+        let done = sql!(
+            "core.delete_remote_media_allow",
+            "DELETE FROM remote_media_allow WHERE allow_uuid = ?"
+        )
+        .query()
+        .bind(allow_uuid)
+        .execute(&mut *conn)
+        .await
+        .map_err(|e| RepoError::Internal(format!("delete remote_media_allow: {e}")))?;
         if done.rows_affected() == 0 {
             return Ok(false);
         }
@@ -375,10 +410,12 @@ impl AppRepo for AppStore {
     }
 
     async fn get_remote_media(&self, url: &str) -> Result<Option<RemoteMediaRow>, RepoError> {
-        let row = sqlx::query(
+        let row = sql!(
+            "core.read_remote_media",
             "SELECT url, sha256, content_type, byte_size, fetched_at_utc, tz_offset \
-             FROM remote_media WHERE url = ?",
+             FROM remote_media WHERE url = ?"
         )
+        .query()
         .bind(url)
         .fetch_optional(&self.remote_media_pool)
         .await
@@ -390,10 +427,12 @@ impl AppRepo for AppStore {
     }
 
     async fn list_remote_media(&self) -> Result<Vec<RemoteMediaRow>, RepoError> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "core.list_remote_media",
             "SELECT url, sha256, content_type, byte_size, fetched_at_utc, tz_offset \
-             FROM remote_media ORDER BY fetched_at_utc DESC",
+             FROM remote_media ORDER BY fetched_at_utc DESC"
         )
+        .query()
         .fetch_all(&self.remote_media_pool)
         .await
         .map_err(|e| RepoError::Internal(e.to_string()))?;
@@ -409,11 +448,13 @@ impl AppRepo for AppStore {
             .acquire()
             .await
             .map_err(|e| RepoError::Internal(format!("acquire: {e}")))?;
-        sqlx::query(
+        sql!(
+            "core.upsert_remote_media",
             "INSERT OR REPLACE INTO remote_media \
              (url, sha256, content_type, byte_size, fetched_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?)"
         )
+        .query()
         .bind(&row.url)
         .bind(&row.sha256)
         .bind(&row.content_type)
@@ -478,9 +519,11 @@ fn media_row(r: &sqlx::sqlite::SqliteRow) -> Result<RemoteMediaRow, sqlx::Error>
 /// it. Probe failures fall through to `false` — we'd rather skip the
 /// audit trail than refuse to start.
 async fn probe_dolt_extensions(pool: &SqlitePool) -> bool {
-    let res = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
+    let res = sql!(
+        "core.probe_dolt_extensions",
+        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'"
     )
+    .query_scalar::<i64>()
     .fetch_one(pool)
     .await;
     matches!(res, Ok(n) if n > 0)
@@ -491,6 +534,7 @@ mod tests {
     use super::*;
     use app_schema::disk_usage::ROOT_PATH;
 
+    use datalib_sql::test_sql;
     fn sample(path: &str, at: &str, bytes: i64) -> DiskUsageRow {
         DiskUsageRow {
             path: path.to_string(),
@@ -695,11 +739,12 @@ mod tests {
             let td = tempfile::tempdir().unwrap();
             let recording = datalib_sql_work::record_under(td.path());
             let store = AppStore::open(td.path()).await.unwrap();
-            sqlx::query(
+            test_sql!(
                 "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?) \
                  INSERT INTO disk_usage (path, measured_at_utc, bytes) \
-                 SELECT 'step-' || (i % 40), printf('2026-09-02T00:00:00.%09d+00:00', i), i FROM n",
+                 SELECT 'step-' || (i % 40), printf('2026-09-02T00:00:00.%09d+00:00', i), i FROM n"
             )
+            .query()
             .bind(samples)
             .execute(&store.disk_stats_pool)
             .await
@@ -777,7 +822,8 @@ mod tests {
         let commits = |pool: &SqlitePool| {
             let pool = pool.clone();
             async move {
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM dolt_log()")
+                test_sql!("SELECT count(*) FROM dolt_log()")
+                    .query_scalar::<i64>()
                     .fetch_one(&pool)
                     .await
                     .unwrap()
@@ -786,7 +832,8 @@ mod tests {
         let first = commits(&store.remote_media_pool).await;
         // Newest first without an ORDER BY: `date` is whole seconds and
         // this test fits inside one.
-        let message: String = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 1")
+        let message: String = test_sql!("SELECT message FROM dolt_log() LIMIT 1")
+            .query_scalar()
             .fetch_one(&store.remote_media_pool)
             .await
             .unwrap();
@@ -812,7 +859,8 @@ mod tests {
         let usage = open_plain_pool(&crate::layout::disk_stats_db(td.path()))
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+        test_sql!("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+            .query()
             .execute(&usage)
             .await
             .unwrap();

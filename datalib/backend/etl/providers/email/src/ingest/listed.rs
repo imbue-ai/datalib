@@ -30,6 +30,7 @@ use sqlx::{Sqlite, SqliteConnection, SqlitePool, Transaction};
 
 use super::db::{delete_emails_in_tx, refresh_email_joins};
 use super::schema_raw::{EmailRow, FetchedEmail, ThreadRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const LISTED: &str = "listed_messages";
 
@@ -80,18 +81,22 @@ pub async fn list_in_tx(
     stamp: Option<&str>,
     named: Named,
 ) -> Result<u64> {
-    let sql = match named {
-        Named::Changed => {
-            "INSERT INTO listed_messages (id, stamp) VALUES (?, ?)
+    let sql = Sql::dynamic(
+        sql_id!("email.listed.upsert_listed_messages"),
+        match named {
+            Named::Changed => {
+                "INSERT INTO listed_messages (id, stamp) VALUES (?, ?)
              ON CONFLICT(id) DO UPDATE SET stamp = excluded.stamp"
-        }
-        Named::Exists => {
-            "INSERT INTO listed_messages (id, stamp) VALUES (?, ?) ON CONFLICT(id) DO NOTHING"
-        }
-    };
+            }
+            Named::Exists => {
+                "INSERT INTO listed_messages (id, stamp) VALUES (?, ?) ON CONFLICT(id) DO NOTHING"
+            }
+        },
+    );
     let mut wrote = 0;
     for id in ids {
-        wrote += sqlx::query(sql)
+        wrote += sql
+            .query()
             .bind(id)
             .bind(stamp)
             .execute(&mut **tx)
@@ -109,10 +114,12 @@ pub async fn member_in_tx(
     members: &[(String, String)],
 ) -> Result<()> {
     for (id, thread_id) in members {
-        sqlx::query(
+        sql!(
+            "email.listed.upsert_thread_member",
             "INSERT INTO thread_members (id, thread_id) VALUES (?, ?)
-             ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id",
+             ON CONFLICT(id) DO UPDATE SET thread_id = excluded.thread_id"
         )
+        .query()
         .bind(id)
         .bind(thread_id)
         .execute(&mut **tx)
@@ -124,11 +131,15 @@ pub async fn member_in_tx(
 
 pub async fn unmember_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
     for id in ids {
-        sqlx::query("DELETE FROM thread_members WHERE id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("forget the thread of message {id}"))?;
+        sql!(
+            "email.listed.delete_thread_member",
+            "DELETE FROM thread_members WHERE id = ?"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget the thread of message {id}"))?;
     }
     Ok(())
 }
@@ -138,21 +149,29 @@ pub async fn unmember_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) ->
 /// index is whole. One transaction. Returns how many members went.
 pub async fn close_thread_index(pool: &SqlitePool, named: &BTreeSet<String>) -> Result<usize> {
     let mut tx = pool.begin().await.context("begin thread index close tx")?;
-    let held: Vec<String> = sqlx::query_scalar("SELECT id FROM thread_members")
-        .fetch_all(&mut *tx)
-        .await
-        .context("select the thread members")?;
+    let held: Vec<String> = sql!(
+        "email.listed.list_thread_member_ids",
+        "SELECT id FROM thread_members"
+    )
+    .query_scalar()
+    .fetch_all(&mut *tx)
+    .await
+    .context("select the thread members")?;
     let gone: Vec<String> = held
         .iter()
         .filter(|id| !named.contains(*id))
         .cloned()
         .collect();
     unmember_in_tx(&mut tx, &gone).await?;
-    sqlx::query("INSERT INTO listed_whole (scope) VALUES (?) ON CONFLICT(scope) DO NOTHING")
-        .bind(THREAD_INDEX)
-        .execute(&mut *tx)
-        .await
-        .context("record the thread index as listed whole")?;
+    sql!(
+        "email.listed.mark_thread_index_whole",
+        "INSERT INTO listed_whole (scope) VALUES (?) ON CONFLICT(scope) DO NOTHING"
+    )
+    .query()
+    .bind(THREAD_INDEX)
+    .execute(&mut *tx)
+    .await
+    .context("record the thread index as listed whole")?;
     tx.commit().await.context("commit thread index close tx")?;
     datalib_etl::prune::record("thread members", held.len(), gone.len());
     Ok(gone.len())
@@ -218,11 +237,15 @@ pub async fn kept_threads(
     keeps: Keeps<'_>,
 ) -> Result<std::collections::HashSet<String>> {
     // Audited: the clause is one of `Keeps`'s literals; values are bound.
-    let sql = format!(
-        "SELECT DISTINCT e.thread_id FROM emails e WHERE e.account_id = ?1 AND {}",
-        keeps.kept_sql()
+    let sql = Sql::dynamic(
+        sql_id!("email.listed.list_threads_the_filter_keeps"),
+        format!(
+            "SELECT DISTINCT e.thread_id FROM emails e WHERE e.account_id = ?1 AND {}",
+            keeps.kept_sql()
+        ),
     );
-    let rows: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let rows: Vec<String> = sql
+        .query_scalar()
         .bind(account_id)
         .bind(keeps.ids()?)
         .fetch_all(pool)
@@ -241,15 +264,19 @@ pub async fn list_kept_threads(
     stamp: Option<&str>,
 ) -> Result<u64> {
     // Audited: the clause is one of `Keeps`'s literals; values are bound.
-    let sql = format!(
-        "INSERT INTO listed_messages (id, stamp)
+    let sql = Sql::dynamic(
+        sql_id!("email.listed.relist_messages_of_kept_threads"),
+        format!(
+            "INSERT INTO listed_messages (id, stamp)
          SELECT m.id, ?3 FROM thread_members m
          WHERE m.thread_id IN (SELECT e.thread_id FROM emails e WHERE e.account_id = ?1 AND {})
          AND NOT EXISTS (SELECT 1 FROM listed_messages l WHERE l.id = m.id)
          ON CONFLICT(id) DO NOTHING",
-        keeps.kept_sql()
+            keeps.kept_sql()
+        ),
     );
-    let listed = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let listed = sql
+        .query()
         .bind(account_id)
         .bind(keeps.ids()?)
         .bind(stamp)
@@ -271,22 +298,25 @@ pub async fn drop_unkept_threads(
 ) -> Result<usize> {
     let key = keeps.listing_key_sql();
     // Audited: the clauses are `Keeps`'s literals; values are bound.
-    let sql = format!(
-        "SELECT e.thread_id, {key}, l.stamp, l.id IS NOT NULL
+    let sql = Sql::dynamic(
+        sql_id!("email.listed.find_threads_no_longer_kept"),
+        format!(
+            "SELECT e.thread_id, {key}, l.stamp, l.id IS NOT NULL
          FROM emails e LEFT JOIN listed_messages l ON l.id = {key}
          WHERE e.account_id = ?1 AND e.thread_id IN (
             SELECT e.thread_id FROM emails e WHERE e.account_id = ?1 GROUP BY e.thread_id
             HAVING min({known}) = 1 AND max({kept}) = 0)",
-        known = keeps.known_sql(),
-        kept = keeps.kept_sql(),
+            known = keeps.known_sql(),
+            kept = keeps.kept_sql(),
+        ),
     );
-    let rows: Vec<(String, String, Option<String>, bool)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(sql))
-            .bind(account_id)
-            .bind(keeps.ids()?)
-            .fetch_all(pool)
-            .await
-            .context("select the threads the filter no longer keeps")?;
+    let rows: Vec<(String, String, Option<String>, bool)> = sql
+        .query_as()
+        .bind(account_id)
+        .bind(keeps.ids()?)
+        .fetch_all(pool)
+        .await
+        .context("select the threads the filter no longer keeps")?;
     let listing: Vec<Listed> = rows
         .iter()
         .filter(|(_, _, _, listed)| *listed)
@@ -325,10 +355,12 @@ pub async fn recount_threads(pool: &SqlitePool, now: &IsoOffsetTimestamp) -> Res
         tx.commit().await.context("commit recount tx")?;
         return Ok(0);
     }
-    let stale: BTreeSet<(String, String)> = sqlx::query_as(
+    let stale: BTreeSet<(String, String)> = sql!(
+        "email.listed.find_threads_to_recount",
         "SELECT account_id, id FROM threads t WHERE upstream_email_count IS NOT
-            (SELECT nullif(count(*), 0) FROM thread_members m WHERE m.thread_id = t.id)",
+            (SELECT nullif(count(*), 0) FROM thread_members m WHERE m.thread_id = t.id)"
     )
+    .query_as()
     .fetch_all(&mut *tx)
     .await
     .context("select the threads to recount")?
@@ -348,22 +380,30 @@ pub async fn thread_index_is_whole(pool: &SqlitePool) -> Result<bool> {
 }
 
 async fn thread_index_whole(tx: &mut Transaction<'_, Sqlite>) -> Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM listed_whole WHERE scope = ?)")
-        .bind(THREAD_INDEX)
-        .fetch_one(&mut **tx)
-        .await
-        .context("ask whether the thread index is whole")
+    sql!(
+        "email.listed.is_thread_index_whole",
+        "SELECT EXISTS(SELECT 1 FROM listed_whole WHERE scope = ?)"
+    )
+    .query_scalar()
+    .bind(THREAD_INDEX)
+    .fetch_one(&mut **tx)
+    .await
+    .context("ask whether the thread index is whole")
 }
 
 /// Every listed message at its stamp, as `owed::owed` takes it: in id
 /// order, or newest first.
 pub async fn listing(pool: &SqlitePool, newest_first: bool) -> Result<Vec<Listed>> {
-    let sql = if newest_first {
-        "SELECT id, stamp FROM listed_messages ORDER BY id DESC"
-    } else {
-        "SELECT id, stamp FROM listed_messages ORDER BY id"
-    };
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(sql)
+    let sql = Sql::dynamic(
+        sql_id!("email.listed.list_listed_messages_by_id"),
+        if newest_first {
+            "SELECT id, stamp FROM listed_messages ORDER BY id DESC"
+        } else {
+            "SELECT id, stamp FROM listed_messages ORDER BY id"
+        },
+    );
+    let rows: Vec<(String, Option<String>)> = sql
+        .query_as()
         .fetch_all(pool)
         .await
         .context("select the listed messages")?;
@@ -375,18 +415,26 @@ pub async fn listing(pool: &SqlitePool, newest_first: bool) -> Result<Vec<Listed
 
 /// Whether upstream has listed anything.
 pub async fn lists_any(pool: &SqlitePool) -> Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM listed_messages)")
-        .fetch_one(pool)
-        .await
-        .context("ask whether any message is listed")
+    sql!(
+        "email.listed.any_message_listed",
+        "SELECT EXISTS(SELECT 1 FROM listed_messages)"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await
+    .context("ask whether any message is listed")
 }
 
 /// Whether the store holds any email at all.
 pub async fn holds_any(pool: &SqlitePool) -> Result<bool> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM emails)")
-        .fetch_one(pool)
-        .await
-        .context("ask whether any email is held")
+    sql!(
+        "email.listed.any_email_held",
+        "SELECT EXISTS(SELECT 1 FROM emails)"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await
+    .context("ask whether any email is held")
 }
 
 /// Write what a batch came to: the email rows, their joins and read
@@ -414,18 +462,25 @@ pub async fn write_batch_in_tx(
 
     let mut emails = Vec::new();
     for id in gone {
-        sqlx::query("DELETE FROM listed_messages WHERE id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("unlist message {id}"))?;
+        sql!(
+            "email.listed.unlist_message",
+            "DELETE FROM listed_messages WHERE id = ?"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("unlist message {id}"))?;
         let email_id = email_id_of(id);
-        let held: Option<(String, String)> =
-            sqlx::query_as("SELECT account_id, thread_id FROM emails WHERE id = ?")
-                .bind(&email_id)
-                .fetch_optional(&mut **tx)
-                .await
-                .with_context(|| format!("look up the email of message {id}"))?;
+        let held: Option<(String, String)> = sql!(
+            "email.listed.find_thread_of_email",
+            "SELECT account_id, thread_id FROM emails WHERE id = ?"
+        )
+        .query_as()
+        .bind(&email_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .with_context(|| format!("look up the email of message {id}"))?;
         if let Some(thread) = held {
             threads.insert(thread);
             emails.push(email_id);
@@ -462,12 +517,16 @@ pub(super) async fn rebuild_threads_in_tx(
 ) -> Result<()> {
     let mut rows = Vec::new();
     for (account_id, thread_id) in threads {
-        let sql = if thread_index_whole(tx).await? {
-            "SELECT nullif(count(*), 0) FROM thread_members WHERE thread_id = ?"
-        } else {
-            "SELECT upstream_email_count FROM threads WHERE id = ?"
-        };
-        let upstream: Option<i64> = sqlx::query_scalar(sql)
+        let sql = Sql::dynamic(
+            sql_id!("email.listed.count_upstream_emails_of_thread"),
+            if thread_index_whole(tx).await? {
+                "SELECT nullif(count(*), 0) FROM thread_members WHERE thread_id = ?"
+            } else {
+                "SELECT upstream_email_count FROM threads WHERE id = ?"
+            },
+        );
+        let upstream: Option<i64> = sql
+            .query_scalar()
             .bind(thread_id)
             .fetch_optional(&mut **tx)
             .await
@@ -477,10 +536,16 @@ pub(super) async fn rebuild_threads_in_tx(
             Some(row) => rows.push(row),
             None => {
                 for sql in [
-                    "DELETE FROM threads WHERE id = ?",
-                    "DELETE FROM threads_bookkeeping WHERE id = ?",
+                    sql!(
+                        "email.rebuild_threads_in_tx.delete_threads",
+                        "DELETE FROM threads WHERE id = ?"
+                    ),
+                    sql!(
+                        "email.rebuild_threads_in_tx.delete_threads_bookkeeping",
+                        "DELETE FROM threads_bookkeeping WHERE id = ?"
+                    ),
                 ] {
-                    sqlx::query(sql)
+                    sql.query()
                         .bind(thread_id)
                         .execute(&mut **tx)
                         .await
@@ -498,10 +563,12 @@ async fn thread_row_in_tx(
     thread_id: &str,
     upstream_email_count: Option<i64>,
 ) -> Result<Option<ThreadRow>> {
-    let email_ids: Vec<String> = sqlx::query_scalar(
+    let email_ids: Vec<String> = sql!(
+        "email.listed.list_email_ids_of_thread",
         "SELECT id FROM emails WHERE thread_id = ? AND account_id = ?
-         ORDER BY coalesce(received_at, ''), id",
+         ORDER BY coalesce(received_at, ''), id"
     )
+    .query_scalar()
     .bind(thread_id)
     .bind(account_id)
     .fetch_all(&mut **tx)
@@ -527,11 +594,13 @@ pub async fn save_token_in_tx(
     token: &str,
 ) -> Result<()> {
     let stamp = datalib_time::split_stamp(token);
-    sqlx::query(
+    sql!(
+        "email.listed.upsert_scope_token",
         "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
          ON CONFLICT(scope) DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc,
-            tz_offset = excluded.tz_offset",
+            tz_offset = excluded.tz_offset"
     )
+    .query()
     .bind(scope)
     .bind(&stamp.utc)
     .bind(&stamp.tz_offset)
@@ -554,31 +623,47 @@ pub async fn start_over(
     refetch: bool,
 ) -> Result<()> {
     let mut tx = pool.begin().await.context("begin start-over tx")?;
-    sqlx::query("DELETE FROM listed_whole")
-        .execute(&mut *tx)
-        .await
-        .context("forget which scopes were listed whole")?;
+    sql!(
+        "email.listed.start_over.forget_listed_whole",
+        "DELETE FROM listed_whole"
+    )
+    .query()
+    .execute(&mut *tx)
+    .await
+    .context("forget which scopes were listed whole")?;
     match token {
         Some(token) => save_token_in_tx(&mut tx, token_scope, token).await?,
         None => {
-            sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-                .bind(token_scope)
-                .execute(&mut *tx)
-                .await
-                .context("forget the token")?;
+            sql!(
+                "email.listed.start_over.forget_scope_token",
+                "DELETE FROM sync_scope_state WHERE scope = ?"
+            )
+            .query()
+            .bind(token_scope)
+            .execute(&mut *tx)
+            .await
+            .context("forget the token")?;
         }
     }
     if refetch {
         let token = token.context("listing every message again needs a token to list it under")?;
-        sqlx::query("UPDATE listed_messages SET stamp = ?")
-            .bind(token)
-            .execute(&mut *tx)
-            .await
-            .context("list every message again")?;
-        sqlx::query("UPDATE listed_messages_bookkeeping SET held_version = NULL")
-            .execute(&mut *tx)
-            .await
-            .context("let nothing held answer for its listing")?;
+        sql!(
+            "email.listed.start_over.relist_every_message",
+            "UPDATE listed_messages SET stamp = ?"
+        )
+        .query()
+        .bind(token)
+        .execute(&mut *tx)
+        .await
+        .context("list every message again")?;
+        sql!(
+            "email.listed.start_over.clear_held_versions",
+            "UPDATE listed_messages_bookkeeping SET held_version = NULL"
+        )
+        .query()
+        .execute(&mut *tx)
+        .await
+        .context("let nothing held answer for its listing")?;
     }
     tx.commit().await.context("commit start-over tx")
 }
@@ -587,16 +672,24 @@ pub async fn start_over(
 /// config no longer admits loses its row: its mail is no longer kept up,
 /// so admitting it again must list it again.
 pub async fn scopes_owed(pool: &SqlitePool, admitted: &BTreeSet<String>) -> Result<Vec<String>> {
-    let held: Vec<String> = sqlx::query_scalar("SELECT scope FROM listed_whole")
-        .fetch_all(pool)
-        .await
-        .context("select the scopes listed whole")?;
+    let held: Vec<String> = sql!(
+        "email.listed.list_scopes_listed_whole",
+        "SELECT scope FROM listed_whole"
+    )
+    .query_scalar()
+    .fetch_all(pool)
+    .await
+    .context("select the scopes listed whole")?;
     for scope in held.iter().filter(|s| !admitted.contains(*s)) {
-        sqlx::query("DELETE FROM listed_whole WHERE scope = ?")
-            .bind(scope)
-            .execute(pool)
-            .await
-            .with_context(|| format!("forget scope {scope}"))?;
+        sql!(
+            "email.listed.forget_unadmitted_scope",
+            "DELETE FROM listed_whole WHERE scope = ?"
+        )
+        .query()
+        .bind(scope)
+        .execute(pool)
+        .await
+        .with_context(|| format!("forget scope {scope}"))?;
     }
     Ok(admitted
         .iter()
@@ -622,10 +715,14 @@ pub async fn close_enumeration(
     let mut tx = pool.begin().await.context("begin enumeration close tx")?;
     let mut gone = 0;
     if let Some(named) = named {
-        let listed: Vec<String> = sqlx::query_scalar("SELECT id FROM listed_messages")
-            .fetch_all(&mut *tx)
-            .await
-            .context("select the listed messages")?;
+        let listed: Vec<String> = sql!(
+            "email.listed.close.list_listed_message_ids",
+            "SELECT id FROM listed_messages"
+        )
+        .query_scalar()
+        .fetch_all(&mut *tx)
+        .await
+        .context("select the listed messages")?;
         let unnamed: Vec<String> = listed
             .iter()
             .filter(|id| !named.contains(*id))
@@ -635,12 +732,15 @@ pub async fn close_enumeration(
         datalib_etl::prune::record("listed messages", listed.len(), unnamed.len());
         if let Some(account_id) = rows_of {
             let named_rows: BTreeSet<String> = named.iter().map(|id| email_id_of(id)).collect();
-            let rows: Vec<String> =
-                sqlx::query_scalar("SELECT id FROM emails WHERE account_id = ?")
-                    .bind(account_id)
-                    .fetch_all(&mut *tx)
-                    .await
-                    .context("select the account's emails")?;
+            let rows: Vec<String> = sql!(
+                "email.listed.close.list_email_ids_of_account",
+                "SELECT id FROM emails WHERE account_id = ?"
+            )
+            .query_scalar()
+            .bind(account_id)
+            .fetch_all(&mut *tx)
+            .await
+            .context("select the account's emails")?;
             let unnamed_rows: Vec<String> = rows
                 .iter()
                 .filter(|id| !named_rows.contains(*id))
@@ -651,11 +751,15 @@ pub async fn close_enumeration(
         }
     }
     for scope in scopes {
-        sqlx::query("INSERT INTO listed_whole (scope) VALUES (?) ON CONFLICT(scope) DO NOTHING")
-            .bind(scope)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("record scope {scope} as listed whole"))?;
+        sql!(
+            "email.listed.close.mark_scope_listed_whole",
+            "INSERT INTO listed_whole (scope) VALUES (?) ON CONFLICT(scope) DO NOTHING"
+        )
+        .query()
+        .bind(scope)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("record scope {scope} as listed whole"))?;
     }
     tx.commit().await.context("commit enumeration close tx")?;
     Ok(gone)
@@ -684,9 +788,11 @@ const SECOND_RUNG_DDL: &[&str] = &[
 /// unfetched is listed and not held, which makes it owed.
 pub async fn migrate_from_cursors(conn: &mut SqliteConnection) -> Result<()> {
     let has = |table: &'static str| {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+        sql!(
+            "email.migrate_cursors.table_exists",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)"
         )
+        .query_scalar::<bool>()
         .bind(table)
     };
     let listing_bookkeeping = dr::bookkeeping_ddl_for(LISTED);
@@ -696,7 +802,8 @@ pub async fn migrate_from_cursors(conn: &mut SqliteConnection) -> Result<()> {
         .chain([listing_bookkeeping.as_str()])
     {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl.to_string()))
+        Sql::dynamic(sql_id!("email.migrate_cursors.create_listing_tables"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
@@ -734,7 +841,13 @@ pub async fn migrate_from_cursors(conn: &mut SqliteConnection) -> Result<()> {
         );
     }
     for sql in steps {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        Sql::dynamic(
+            sql_id!("email.migrate_cursors.move_cursors_into_listing"),
+            sql,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -745,32 +858,44 @@ pub async fn migrate_from_cursors(conn: &mut SqliteConnection) -> Result<()> {
 /// row already counts. A message a build could not store is held at
 /// nothing, so it is owed once more.
 pub async fn migrate_held_into_the_sidecar(conn: &mut SqliteConnection) -> Result<()> {
-    let has_held_version: bool = sqlx::query_scalar(
+    let has_held_version: bool = sql!(
+        "email.migrate_held.has_held_version_column",
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('listed_messages_bookkeeping')
-         WHERE name = 'held_version')",
+         WHERE name = 'held_version')"
     )
+    .query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if !has_held_version {
-        sqlx::query("ALTER TABLE listed_messages_bookkeeping ADD COLUMN held_version TEXT NULL")
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "email.migrate_held.add_held_version_column",
+            "ALTER TABLE listed_messages_bookkeeping ADD COLUMN held_version TEXT NULL"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     let (now, _) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
+    sql!(
+        "email.migrate_held.move_fetched_into_sidecar",
         "INSERT INTO listed_messages_bookkeeping (id, attempt_count, held_version, fetched_at_utc)
          SELECT f.id, 0, f.fetched_for, coalesce(e.fetched_at_utc, ?1)
          FROM fetched_messages f LEFT JOIN emails_bookkeeping e ON e.id = f.email_id
          WHERE f.email_id IS NOT NULL
          ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version,
-            fetched_at_utc = excluded.fetched_at_utc",
+            fetched_at_utc = excluded.fetched_at_utc"
     )
+    .query()
     .bind(&now)
     .execute(&mut *conn)
     .await?;
-    sqlx::query("DROP TABLE fetched_messages")
-        .execute(&mut *conn)
-        .await?;
+    sql!(
+        "email.migrate_held.drop_fetched_messages",
+        "DROP TABLE fetched_messages"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -782,10 +907,12 @@ pub async fn migrate_held_into_the_sidecar(conn: &mut SqliteConnection) -> Resul
 /// which lists what was dropped; what is held stays held. A JMAP store
 /// is left alone.
 pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "email.migrate_relist_gmail_scopes",
         "DELETE FROM listed_whole WHERE EXISTS (SELECT 1 FROM sync_scope_state
-            WHERE scope LIKE 'gmail:%:historyId')",
+            WHERE scope LIKE 'gmail:%:historyId')"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -800,27 +927,40 @@ pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection)
         ("emails", "label_ids", "TEXT NULL"),
         ("threads", "upstream_email_count", "INTEGER NULL"),
     ] {
-        let has: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = ?)")
-                .bind(table)
-                .bind(column)
-                .fetch_one(&mut *conn)
-                .await?;
+        let has: bool = sql!(
+            "email.migrate_gmail_labels.has_column",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = ?)"
+        )
+        .query_scalar()
+        .bind(table)
+        .bind(column)
+        .fetch_one(&mut *conn)
+        .await?;
         if !has {
             // Audited: names and declarations are the literals above.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE {table} ADD COLUMN {column} {decl}"
-            )))
+            Sql::dynamic(
+                sql_id!("email.migrate_gmail_labels.add_column"),
+                format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"),
+            )
+            .query()
             .execute(&mut *conn)
             .await?;
         }
     }
     for ddl in THREAD_MEMBERS_DDL {
-        sqlx::query(ddl).execute(&mut *conn).await?;
+        Sql::dynamic(
+            sql_id!("email.migrate_gmail_labels.create_thread_members"),
+            ddl,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT id, account_id, json(payload) FROM emails WHERE payload ->> '$._source.via' = ?",
+    let rows: Vec<(String, String, String)> = sql!(
+        "email.migrate_gmail_labels.list_gmail_emails",
+        "SELECT id, account_id, json(payload) FROM emails WHERE payload ->> '$._source.via' = ?"
     )
+    .query_as()
     .bind(super::schema_raw::GMAIL_API_VIA)
     .fetch_all(&mut *conn)
     .await?;
@@ -830,11 +970,15 @@ pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection)
         let Some(row) = EmailRow::from_jmap_envelope(&account_id, &envelope) else {
             continue;
         };
-        sqlx::query("UPDATE emails SET label_ids = ? WHERE id = ?")
-            .bind(&row.label_ids)
-            .bind(&id)
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "email.migrate_gmail_labels.set_label_ids",
+            "UPDATE emails SET label_ids = ? WHERE id = ?"
+        )
+        .query()
+        .bind(&row.label_ids)
+        .bind(&id)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -848,34 +992,38 @@ pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection)
 /// email's own id, which is the email's id and so not a Gmail thread's.
 pub async fn migrate_gmail_thread_ids_to_hex(conn: &mut SqliteConnection) -> Result<()> {
     for column in ["gmail_message_id", "gmail_thread_id"] {
-        let has: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('emails') WHERE name = ?)",
+        let has: bool = sql!(
+            "email.migrate_thread_hex.has_email_column",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('emails') WHERE name = ?)"
         )
+        .query_scalar()
         .bind(column)
         .fetch_one(&mut *conn)
         .await?;
         if has {
             // Audited: the names are the literals above.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE emails DROP COLUMN {column}"
-            )))
+            Sql::dynamic(
+                sql_id!("email.migrate_thread_hex.drop_email_column"),
+                format!("ALTER TABLE emails DROP COLUMN {column}"),
+            )
+            .query()
             .execute(&mut *conn)
             .await?;
         }
     }
-    sqlx::query(
+    sql!(
+        "email.migrate_thread_hex.strip_gmail_ids_from_payload",
         "UPDATE emails SET payload = jsonb_remove(payload,
             '$._source.gmailMessageId', '$._source.gmailThreadId')
-         WHERE payload ->> '$._source.via' = ?",
+         WHERE payload ->> '$._source.via' = ?"
     )
+    .query()
     .bind(super::schema_raw::GMAIL_API_VIA)
     .execute(&mut *conn)
     .await?;
 
-    let jmap: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_state')
-            AND EXISTS(SELECT 1 FROM sync_scope_state WHERE scope LIKE 'jmap:%')",
-    )
+    let jmap: bool = sql!("email.migrate_thread_hex.is_jmap_store", "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_state')
+            AND EXISTS(SELECT 1 FROM sync_scope_state WHERE scope LIKE 'jmap:%')").query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if jmap {
@@ -885,24 +1033,36 @@ pub async fn migrate_gmail_thread_ids_to_hex(conn: &mut SqliteConnection) -> Res
     // leading zero nor a number past SQLite's integers; every Gmail id is
     // under 2^63, which `printf`'s `%x` spells in full.
     for sql in [
-        "UPDATE threads_bookkeeping SET id = printf('%016x', CAST(id AS INTEGER))
+        sql!(
+            "email.migrate_gmail_thread_ids_to_hex.update_threads_bookkeeping",
+            "UPDATE threads_bookkeeping SET id = printf('%016x', CAST(id AS INTEGER))
          WHERE id NOT GLOB '*[^0-9]*' AND CAST(CAST(id AS INTEGER) AS TEXT) = id
            AND EXISTS (SELECT 1 FROM emails e WHERE e.thread_id = threads_bookkeeping.id
-                       AND e.id != e.thread_id)",
-        "UPDATE threads SET id = printf('%016x', CAST(id AS INTEGER)),
+                       AND e.id != e.thread_id)"
+        ),
+        sql!(
+            "email.migrate_gmail_thread_ids_to_hex.update_threads",
+            "UPDATE threads SET id = printf('%016x', CAST(id AS INTEGER)),
             payload = jsonb_set(payload, '$.id', printf('%016x', CAST(id AS INTEGER)))
          WHERE id NOT GLOB '*[^0-9]*' AND CAST(CAST(id AS INTEGER) AS TEXT) = id
            AND EXISTS (SELECT 1 FROM emails e WHERE e.thread_id = threads.id
-                       AND e.id != e.thread_id)",
-        "UPDATE emails SET thread_id = printf('%016x', CAST(thread_id AS INTEGER)),
+                       AND e.id != e.thread_id)"
+        ),
+        sql!(
+            "email.migrate_gmail_thread_ids_to_hex.update_emails",
+            "UPDATE emails SET thread_id = printf('%016x', CAST(thread_id AS INTEGER)),
             payload = jsonb_set(payload, '$.threadId', printf('%016x', CAST(thread_id AS INTEGER)))
          WHERE thread_id != id AND thread_id NOT GLOB '*[^0-9]*'
-           AND CAST(CAST(thread_id AS INTEGER) AS TEXT) = thread_id",
-        "UPDATE thread_members SET thread_id = printf('%016x', CAST(thread_id AS INTEGER))
+           AND CAST(CAST(thread_id AS INTEGER) AS TEXT) = thread_id"
+        ),
+        sql!(
+            "email.migrate_gmail_thread_ids_to_hex.update_thread_members",
+            "UPDATE thread_members SET thread_id = printf('%016x', CAST(thread_id AS INTEGER))
          WHERE thread_id NOT GLOB '*[^0-9]*'
-           AND CAST(CAST(thread_id AS INTEGER) AS TEXT) = thread_id",
+           AND CAST(CAST(thread_id AS INTEGER) AS TEXT) = thread_id"
+        ),
     ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        sql.query().execute(&mut *conn).await?;
     }
     Ok(())
 }
@@ -913,14 +1073,10 @@ mod tests {
     use crate::ingest::schema_raw::full_ddl;
     use crate::ingest::RawDb;
 
-    fn strings(db: &RawDb, sql: &'static str) -> impl std::future::Future<Output = Vec<String>> {
+    use datalib_sql::{test_sql, test_sql_id, Sql};
+    fn strings(db: &RawDb, sql: Sql) -> impl std::future::Future<Output = Vec<String>> {
         let pool = db.pool().clone();
-        async move {
-            sqlx::query_scalar::<_, String>(sql)
-                .fetch_all(&pool)
-                .await
-                .unwrap()
-        }
+        async move { sql.query_scalar::<String>().fetch_all(&pool).await.unwrap() }
     }
 
     async fn owed_ids(db: &RawDb) -> Vec<String> {
@@ -998,20 +1154,24 @@ mod tests {
             let pool = dr::open(&path, &ddl).await.unwrap();
             for sql in [
                 // The columns the first rung drops.
-                "ALTER TABLE mailboxes ADD COLUMN total_emails INTEGER NULL",
-                "ALTER TABLE mailboxes ADD COLUMN unread_emails INTEGER NULL",
-                "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
+                test_sql!("ALTER TABLE mailboxes ADD COLUMN total_emails INTEGER NULL"),
+                test_sql!("ALTER TABLE mailboxes ADD COLUMN unread_emails INTEGER NULL"),
+                test_sql!(
+                    "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
                     ('M1', jsonb('{}'), 'A1', 'T1', 'B1'),
                     ('picard', jsonb('{}'), 'g@example.test', 'T2', 'B2'),
-                    ('from-takeout', jsonb('{}'), 'takeout', 'T3', 'B3')",
-                "INSERT INTO gmail_messages VALUES ('18c9', 'picard', 'T2')",
-                "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES
+                    ('from-takeout', jsonb('{}'), 'takeout', 'T3', 'B3')"
+                ),
+                test_sql!("INSERT INTO gmail_messages VALUES ('18c9', 'picard', 'T2')"),
+                test_sql!(
+                    "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES
                     ('jmap:A1:state:Email', 'email-7'),
                     ('jmap:A1:state:Thread', 'thread-7'),
                     ('gmail:g@example.test:historyId', '9001'),
-                    ('gmail:g@example.test:unstorable:18ca', 'an older build')",
+                    ('gmail:g@example.test:unstorable:18ca', 'an older build')"
+                ),
             ] {
-                sqlx::query(sql).execute(&pool).await.unwrap();
+                sql.query().execute(&pool).await.unwrap();
             }
             let stop = datalib_etl::stop::StopFlag::new();
             datalib_etl::run_problems::collecting(&pool, &stop, |found| async move {
@@ -1028,13 +1188,13 @@ mod tests {
 
         let db = RawDb::open(&path).await.expect("the rungs carry it");
         assert_eq!(
-            strings(&db, "SELECT id FROM listed_messages ORDER BY id").await,
+            strings(&db, test_sql!("SELECT id FROM listed_messages ORDER BY id")).await,
             ["18c9", "18cb", "M1"]
         );
         assert_eq!(
             strings(
                 &db,
-                "SELECT id || '=' || coalesce(held_version, '') FROM listed_messages_bookkeeping ORDER BY id"
+                test_sql!("SELECT id || '=' || coalesce(held_version, '') FROM listed_messages_bookkeeping ORDER BY id")
             )
             .await,
             ["18c9=", "M1="],
@@ -1042,15 +1202,19 @@ mod tests {
         );
         assert_eq!(owed_ids(&db).await, ["18cb"]);
         assert_eq!(
-            strings(&db, "SELECT scope FROM sync_scope_state ORDER BY scope").await,
+            strings(
+                &db,
+                test_sql!("SELECT scope FROM sync_scope_state ORDER BY scope")
+            )
+            .await,
             ["gmail:g@example.test:historyId", "jmap:A1:state:Email"]
         );
-        assert!(strings(&db, "SELECT scope_key FROM problems")
+        assert!(strings(&db, test_sql!("SELECT scope_key FROM problems"))
             .await
             .is_empty());
         assert!(strings(
             &db,
-            "SELECT name FROM sqlite_master WHERE name IN ('gmail_messages', 'fetched_messages')"
+            test_sql!("SELECT name FROM sqlite_master WHERE name IN ('gmail_messages', 'fetched_messages')")
         )
         .await
         .is_empty());
@@ -1084,17 +1248,23 @@ mod tests {
             let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
             let pool = dr::open(&path, &ddl).await.unwrap();
             for sql in [
-                "INSERT INTO listed_messages (id, stamp) VALUES
-                    ('data', 'h2'), ('picard', 'h2'), ('riker', 'h2'), ('worf', 'h2')",
-                "INSERT INTO fetched_messages (id, email_id, fetched_for, unstorable_by) VALUES
+                test_sql!(
+                    "INSERT INTO listed_messages (id, stamp) VALUES
+                    ('data', 'h2'), ('picard', 'h2'), ('riker', 'h2'), ('worf', 'h2')"
+                ),
+                test_sql!(
+                    "INSERT INTO fetched_messages (id, email_id, fetched_for, unstorable_by) VALUES
                     ('picard', 'picard', 'h2', NULL),
                     ('riker', 'riker', 'h1', NULL),
-                    ('worf', NULL, 'h2', 'an older build')",
-                "INSERT INTO listed_messages_bookkeeping (id, attempt_count, last_error)
-                    VALUES ('riker', 3, 'HTTP 500')",
-                "UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'",
+                    ('worf', NULL, 'h2', 'an older build')"
+                ),
+                test_sql!(
+                    "INSERT INTO listed_messages_bookkeeping (id, attempt_count, last_error)
+                    VALUES ('riker', 3, 'HTTP 500')"
+                ),
+                test_sql!("UPDATE _datalib_meta SET value = '2' WHERE key = 'schema_version'"),
             ] {
-                sqlx::query(sql).execute(&pool).await.unwrap();
+                sql.query().execute(&pool).await.unwrap();
             }
             dr::commit_run(&pool, "the second rung's rows")
                 .await
@@ -1106,8 +1276,10 @@ mod tests {
         assert_eq!(
             strings(
                 &db,
-                "SELECT id || '=' || coalesce(held_version, '') || '/' || attempt_count
+                test_sql!(
+                    "SELECT id || '=' || coalesce(held_version, '') || '/' || attempt_count
                  FROM listed_messages_bookkeeping ORDER BY id"
+                )
             )
             .await,
             ["picard=h2/0", "riker=h1/3"]
@@ -1115,7 +1287,7 @@ mod tests {
         assert_eq!(owed_ids(&db).await, ["data", "riker", "worf"]);
         assert!(strings(
             &db,
-            "SELECT name FROM sqlite_master WHERE name = 'fetched_messages'"
+            test_sql!("SELECT name FROM sqlite_master WHERE name = 'fetched_messages'")
         )
         .await
         .is_empty());
@@ -1137,21 +1309,20 @@ mod tests {
                 let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
                 let pool = dr::open(&path, &ddl).await.unwrap();
                 for sql in [
-                    "INSERT INTO listed_whole (scope) VALUES ('mb-1')",
-                    "INSERT INTO listed_messages (id, stamp) VALUES ('picard', NULL)",
-                    "INSERT INTO listed_messages_bookkeeping (id, attempt_count, fetched_at_utc)
-                        VALUES ('picard', 0, '2369-04-14T00:00:00')",
-                    "UPDATE _datalib_meta SET value = '4' WHERE key = 'schema_version'",
+                    test_sql!("INSERT INTO listed_whole (scope) VALUES ('mb-1')"),
+                    test_sql!("INSERT INTO listed_messages (id, stamp) VALUES ('picard', NULL)"),
+                    test_sql!("INSERT INTO listed_messages_bookkeeping (id, attempt_count, fetched_at_utc)
+                        VALUES ('picard', 0, '2369-04-14T00:00:00')"),
+                    test_sql!("UPDATE _datalib_meta SET value = '4' WHERE key = 'schema_version'"),
                 ] {
-                    sqlx::query(sql).execute(&pool).await.unwrap();
+                    sql.query().execute(&pool).await.unwrap();
                 }
-                sqlx::query(
-                    "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, '7')",
-                )
-                .bind(token_scope)
-                .execute(&pool)
-                .await
-                .unwrap();
+                test_sql!("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, '7')")
+                    .query()
+                    .bind(token_scope)
+                    .execute(&pool)
+                    .await
+                    .unwrap();
                 dr::commit_run(&pool, "the fourth rung's rows")
                     .await
                     .unwrap();
@@ -1160,7 +1331,7 @@ mod tests {
 
             let db = RawDb::open(&path).await.expect("the fifth rung carries it");
             assert_eq!(
-                strings(&db, "SELECT scope FROM listed_whole").await,
+                strings(&db, test_sql!("SELECT scope FROM listed_whole")).await,
                 whole_after,
                 "{token_scope}"
             );
@@ -1182,10 +1353,11 @@ mod tests {
             let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
             let pool = dr::open(&path, &ddl).await.unwrap();
             for sql in [
-                "ALTER TABLE emails DROP COLUMN label_ids",
-                "ALTER TABLE threads DROP COLUMN upstream_email_count",
-                "DROP TABLE thread_members",
-                "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
+                test_sql!("ALTER TABLE emails DROP COLUMN label_ids"),
+                test_sql!("ALTER TABLE threads DROP COLUMN upstream_email_count"),
+                test_sql!("DROP TABLE thread_members"),
+                test_sql!(
+                    "INSERT INTO emails (id, payload, account_id, thread_id, blob_id) VALUES
                     ('18c9f2a1b2c3d901', jsonb('{
                         \"id\": \"18c9f2a1b2c3d901\", \"blobId\": \"B1\",
                         \"threadId\": \"1786225503531948289\",
@@ -1198,13 +1370,16 @@ mod tests {
                     ('picard@enterprise.test', jsonb('{
                         \"id\": \"picard@enterprise.test\", \"blobId\": \"B2\",
                         \"threadId\": \"T2\", \"mailboxIds\": {}, \"keywords\": {}}'),
-                     'takeout', 'T2', 'B2')",
-                "INSERT INTO threads (id, payload, account_id, email_count) VALUES
+                     'takeout', 'T2', 'B2')"
+                ),
+                test_sql!(
+                    "INSERT INTO threads (id, payload, account_id, email_count) VALUES
                     ('1786225503531948289', jsonb('{}'), 'g@example.test', 1),
-                    ('T2', jsonb('{}'), 'takeout', 1)",
-                "UPDATE _datalib_meta SET value = '5' WHERE key = 'schema_version'",
+                    ('T2', jsonb('{}'), 'takeout', 1)"
+                ),
+                test_sql!("UPDATE _datalib_meta SET value = '5' WHERE key = 'schema_version'"),
             ] {
-                sqlx::query(sql).execute(&pool).await.unwrap();
+                sql.query().execute(&pool).await.unwrap();
             }
             dr::commit_run(&pool, "the fifth rung's rows")
                 .await
@@ -1216,7 +1391,7 @@ mod tests {
         assert_eq!(
             strings(
                 &db,
-                "SELECT id || '=' || coalesce(label_ids, '-') FROM emails ORDER BY id"
+                test_sql!("SELECT id || '=' || coalesce(label_ids, '-') FROM emails ORDER BY id")
             )
             .await,
             [
@@ -1224,7 +1399,7 @@ mod tests {
                 "picard@enterprise.test=-",
             ]
         );
-        assert!(strings(&db, "SELECT id FROM thread_members")
+        assert!(strings(&db, test_sql!("SELECT id FROM thread_members"))
             .await
             .is_empty());
         db.close().await;
@@ -1250,7 +1425,8 @@ mod tests {
             .iter()
             .chain(rows)
             {
-                sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+                Sql::dynamic(test_sql_id!(), sql)
+                    .query()
                     .execute(&pool)
                     .await
                     .unwrap();
@@ -1303,9 +1479,11 @@ mod tests {
         assert_eq!(
             strings(
                 &gmail,
-                "SELECT id || '>' || thread_id || '/' || (payload ->> '$.threadId') || '/'
+                test_sql!(
+                    "SELECT id || '>' || thread_id || '/' || (payload ->> '$.threadId') || '/'
                     || coalesce(json(payload -> '$._source'), '-')
                  FROM emails ORDER BY id"
+                )
             )
             .await,
             [
@@ -1317,7 +1495,7 @@ mod tests {
         assert_eq!(
             strings(
                 &gmail,
-                "SELECT id || '/' || (payload ->> '$.id') FROM threads ORDER BY id"
+                test_sql!("SELECT id || '/' || (payload ->> '$.id') FROM threads ORDER BY id")
             )
             .await,
             [
@@ -1327,13 +1505,17 @@ mod tests {
             ]
         );
         assert_eq!(
-            strings(&gmail, "SELECT id FROM threads_bookkeeping ORDER BY id").await,
+            strings(
+                &gmail,
+                test_sql!("SELECT id FROM threads_bookkeeping ORDER BY id")
+            )
+            .await,
             ["1701", "18c9f2a1b2c3d901"]
         );
         assert_eq!(
             strings(
                 &gmail,
-                "SELECT id || '>' || thread_id FROM thread_members ORDER BY id"
+                test_sql!("SELECT id || '>' || thread_id FROM thread_members ORDER BY id")
             )
             .await,
             [
@@ -1343,7 +1525,7 @@ mod tests {
         );
         assert!(strings(
             &gmail,
-            "SELECT name FROM pragma_table_info('emails') WHERE name LIKE 'gmail_%'"
+            test_sql!("SELECT name FROM pragma_table_info('emails') WHERE name LIKE 'gmail_%'")
         )
         .await
         .is_empty());
@@ -1365,8 +1547,10 @@ mod tests {
         assert_eq!(
             strings(
                 &jmap,
-                "SELECT e.thread_id || '/' || t.id || '/' || m.thread_id
+                test_sql!(
+                    "SELECT e.thread_id || '/' || t.id || '/' || m.thread_id
                  FROM emails e, threads t, thread_members m"
+                )
             )
             .await,
             ["7/7/7"]

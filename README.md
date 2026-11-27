@@ -319,6 +319,8 @@ the commit history and per-sync diffs in
   the CLI and mirror your own data.
 - [**Getting your data**](docs/user/getting_your_data.md) — per-source
   credentials and exports.
+- [**Backing up a library**](docs/user/backing_up.md) — what to copy,
+  and what a sync rebuilds.
 - [**Running in Docker**](docs/user/docker.md) — the sandboxed way in:
   the demo, your own exports, credentials in the container.
 - [**Agent user guide**](docs/agent_user.md) — for AI agents operating

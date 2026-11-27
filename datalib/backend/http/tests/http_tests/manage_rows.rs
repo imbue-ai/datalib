@@ -10,6 +10,7 @@ use std::path::Path;
 use tower::ServiceExt;
 
 use crate::support::{state, TEST_TOKEN};
+use datalib_sql::{test_sql_id, Sql};
 
 async fn get_rows(root: &Path) -> serde_json::Value {
     rows_of(state(root).await).await
@@ -447,16 +448,16 @@ async fn index_problems(root: &Path, rows: &[&datalib_problems::ProblemRow]) {
     let columns: Vec<&str> = std::iter::once(ProblemRow::ID_COLUMN)
         .chain(ProblemRow::TYPED_COLUMNS.iter().copied())
         .collect();
-    let sql = format!(
-        "INSERT INTO problems ({}) VALUES ({})",
-        columns.join(", "),
-        vec!["?"; columns.len()].join(", ")
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!(
+            "INSERT INTO problems ({}) VALUES ({})",
+            columns.join(", "),
+            vec!["?"; columns.len()].join(", ")
+        ),
     );
     for row in rows {
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql.clone())))
-            .execute(&index)
-            .await
-            .unwrap();
+        row.bind_into(sql.query()).execute(&index).await.unwrap();
     }
     datalib_etl_render::grid_index::seal(&datalib_etl_render::grid_index::WriteLock::for_index(
         index.clone(),

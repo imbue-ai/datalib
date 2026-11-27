@@ -5,6 +5,7 @@
 //! [`insert_sql`] for the one path that deliberately does not upsert.
 
 use anyhow::{Context, Result};
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::Value;
 use sqlx::{Sqlite, Transaction};
@@ -32,7 +33,7 @@ pub const SQL_CHUNK: usize = 400;
 /// every small test and fails on the user with the big mailbox (#1156);
 /// bind an IN list as one JSON array instead (`etl/README.md`
 /// §"Binding a set of values").
-pub const SQLITE_MAX_VARIABLES: usize = 32_766;
+pub const SQLITE_MAX_VARIABLES: usize = datalib_sql::values::MAX_VARIABLES;
 
 pub fn push_placeholders(sql: &mut String, count: usize, cols: usize) {
     for i in 0..count {
@@ -92,7 +93,7 @@ where
         ));
         // Audited: only `bk_table` (= `{table}_bookkeeping`) is interpolated, and
         // the VALUES run is `push_placeholders` over `chunk.len()`. All bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("etl.bulk.mark_fetched_batch"), sql).query();
         for id in chunk {
             q = q
                 .bind(*id)
@@ -117,11 +118,13 @@ async fn clear_fetch_problems(
     ids: &[&str],
 ) -> Result<()> {
     let keys: Vec<String> = ids.iter().map(|id| format!("{table}:{id}")).collect();
-    sqlx::query(
+    sql!(
+        "etl.bulk.delete_fetch_problems_of_ids",
         "DELETE FROM problems INDEXED BY problems_by_scope \
          WHERE scope_kind = ? AND stage = ? \
-           AND scope_key IN (SELECT value FROM json_each(?))",
+           AND scope_key IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(datalib_problems::ScopeKind::Entity.as_str())
     .bind(datalib_problems::Stage::Fetch.as_str())
     .bind(serde_json::to_string(&keys)?)
@@ -166,7 +169,7 @@ where
         // Audited: only `bk_table` (= `{table}_bookkeeping`) is
         // interpolated, and the VALUES run is `push_placeholders` over
         // `chunk.len()`. All bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("etl.bulk.mark_first_fetched_batch"), sql).query();
         for id in chunk {
             q = q
                 .bind(*id)
@@ -317,7 +320,7 @@ async fn upsert_entity_rows<T: BulkUpsertable>(
         // Audited: `table`, `id_col`, `cols_csv` and `set_csv` all derive from the
         // `BulkUpsert` impl's associated consts, not from row data; the per-row
         // `tuple` is a `(?,?,?)` run. Every value is bound by `bind_into`.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("etl.bulk.upsert_rows_batch"), sql).query();
         for row in chunk {
             q = row.bind_into(q);
         }

@@ -4,15 +4,19 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use datalib_sql::sql;
 use serde::Serialize;
 use sqlx::SqlitePool;
 
 pub async fn snapshot(pool: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT scope, last_seen_at_utc FROM sync_scope_state")
-            .fetch_all(pool)
-            .await
-            .context("snapshot sync_scope_state")?;
+    let rows: Vec<(String, String)> = sql!(
+        "etl.scope_state.list_last_seen",
+        "SELECT scope, last_seen_at_utc FROM sync_scope_state"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("snapshot sync_scope_state")?;
     Ok(rows.into_iter().collect())
 }
 

@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_etl::processor::RunCtx;
+use datalib_etl::progress::Progress;
 use datalib_schema::problems::{Severity, METRIC};
 
 use crate::dispatch::{PlannedSource, Wave};
@@ -17,11 +18,13 @@ pub async fn run(
     control: &datalib_etl::control::DownloadControl,
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
-    let Wave::Ingest(processors) = &planned.processors else {
-        anyhow::bail!(
+    let processors = match &planned.processors {
+        Wave::Ingest(processors) => processors,
+        Wave::Kept => return keep(planned, tree_rel, emitter).await,
+        Wave::Render(_) => anyhow::bail!(
             "the download driver was handed source {:?}'s render wave",
             planned.name
-        );
+        ),
     };
     anyhow::ensure!(
         !processors.is_empty(),
@@ -91,11 +94,48 @@ pub async fn run(
         .unfinished
         .filter(|_| planned.reach == Some(datalib_source_common::Reach::Origin));
 
-    // What the download could not fetch, counted the way every render
-    // step counts its own: the Manage row's errors and warnings. Whole
-    // store, zero included; never a reason to fail the step.
+    report_problems(&progress, &planned.raw_path).await;
+
+    // What it got is committed; failing now is how the Manage row says
+    // the rest is not, and the outcome still reports the version.
+    if let Some(said) = gave_up {
+        return Err(datalib_etl::run_problems::GaveUp(said).into());
+    }
+    if let Some(said) = unfinished {
+        return Err(datalib_etl::run_problems::Unfinished(said).into());
+    }
+
+    published(planned, tree_rel).await
+}
+
+/// A source that no longer downloads: what its last download left is what
+/// it publishes, so everything reading it stays up to date.
+async fn keep(
+    planned: &PlannedSource,
+    tree_rel: &str,
+    emitter: &Emitter,
+) -> Result<Vec<OutputClaim>> {
+    let store = datalib_etl::raw_layout::entities_db(&planned.raw_path);
+    anyhow::ensure!(
+        store.exists(),
+        "source {:?} does not download (`common.download = false`), and has no raw store to \
+         keep at {}",
+        planned.name,
+        store.display()
+    );
+    tracing::info!(source = %planned.name, "not downloading: the raw store is kept as it is");
+    let progress = emitter.progress();
+    progress.set_message("Not downloading: keeps what it has");
+    report_problems(&progress, &planned.raw_path).await;
+    published(planned, tree_rel).await
+}
+
+/// What the download could not fetch, counted the way every render step
+/// counts its own: the Manage row's errors and warnings. Whole store, zero
+/// included; never a reason to fail the step.
+async fn report_problems(progress: &Progress, raw_path: &Path) {
     match datalib_etl::doltlite_raw::problem_counts_at_path(&datalib_etl::raw_layout::entities_db(
-        &planned.raw_path,
+        raw_path,
     ))
     .await
     {
@@ -113,19 +153,12 @@ pub async fn run(
             "could not count the raw store's problems; the Manage row shows none"
         ),
     }
+}
 
-    // What it got is committed; failing now is how the Manage row says
-    // the rest is not, and the outcome still reports the version.
-    if let Some(said) = gave_up {
-        return Err(datalib_etl::run_problems::GaveUp(said).into());
-    }
-    if let Some(said) = unfinished {
-        return Err(datalib_etl::run_problems::Unfinished(said).into());
-    }
-
-    // Never fail the step here: the download itself has completed and
-    // committed. A version we cannot read costs its consumers a run they
-    // may not have needed, not hours of successful work.
+/// The raw store's version, as the step's output claim. A version that
+/// cannot be read costs the readers a run they may not have needed, so
+/// it never fails the step.
+async fn published(planned: &PlannedSource, tree_rel: &str) -> Result<Vec<OutputClaim>> {
     match raw_store_version(&planned.raw_path).await {
         Ok(Some(version)) => Ok(vec![OutputClaim {
             path: tree_rel.to_string(),

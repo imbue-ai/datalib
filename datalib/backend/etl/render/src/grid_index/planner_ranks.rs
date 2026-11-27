@@ -6,6 +6,7 @@
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// How many rows one value of an index's first column has, against the
 /// others. Only their order matters, so they are far apart, and all far
@@ -101,12 +102,17 @@ pub(super) fn statements() -> &'static [String] {
 pub(super) async fn write(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     // Makes the table, and gathers nothing.
     load(conn).await?;
-    sqlx::query("DELETE FROM sqlite_stat1")
-        .execute(&mut *conn)
-        .await
-        .context("clear the planner's ranks")?;
+    sql!(
+        "etl.render.grid.clear_planner_stats",
+        "DELETE FROM sqlite_stat1"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await
+    .context("clear the planner's ranks")?;
     for sql in statements() {
-        sqlx::query(sql.as_str())
+        Sql::dynamic(sql_id!("etl.render.grid.insert_planner_stat"), sql.as_str())
+            .query()
             .execute(&mut *conn)
             .await
             .with_context(|| format!("tell the planner: {sql}"))?;
@@ -116,10 +122,14 @@ pub(super) async fn write(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 
 /// Have this connection plan by what `sqlite_stat1` says.
 pub(super) async fn load(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    sqlx::query("ANALYZE sqlite_schema")
-        .execute(&mut *conn)
-        .await
-        .context("load the planner's ranks")?;
+    sql!(
+        "etl.render.grid.load_planner_stats",
+        "ANALYZE sqlite_schema"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await
+    .context("load the planner's ranks")?;
     Ok(())
 }
 
@@ -131,15 +141,17 @@ mod tests {
 
     use super::*;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn every_index_of_the_grids_rows_has_a_rank_and_no_other() {
         let dir = tempfile::tempdir().unwrap();
         let pool = crate::grid_index::open_index(&dir.path().join("db.sqlite"))
             .await
             .unwrap();
-        let made: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'grid_rows'",
+        let made: Vec<String> = test_sql!(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'grid_rows'"
         )
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -149,7 +161,8 @@ mod tests {
             made.iter().map(String::as_str).collect::<BTreeSet<_>>(),
             ranked
         );
-        let told: Vec<String> = sqlx::query_scalar("SELECT idx FROM sqlite_stat1")
+        let told: Vec<String> = test_sql!("SELECT idx FROM sqlite_stat1")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -171,14 +184,16 @@ mod tests {
         // Which, with no ranks, starts at the source.
         let plan = || async {
             // An EXPLAIN reads no page, so it would not see the schema move.
-            sqlx::query("SELECT count(*) FROM grid_rows")
+            test_sql!("SELECT count(*) FROM grid_rows")
+                .query()
                 .fetch_one(&reader)
                 .await
                 .unwrap();
-            let rows = sqlx::query(
+            let rows = test_sql!(
                 "EXPLAIN QUERY PLAN SELECT author, count(*) FROM grid_rows \
-                 WHERE source_id = 'a' AND channel = 'b' GROUP BY 1",
+                 WHERE source_id = 'a' AND channel = 'b' GROUP BY 1"
             )
+            .query()
             .persistent(false)
             .fetch_all(&reader)
             .await

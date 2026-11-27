@@ -27,6 +27,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use super::ids;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// What `parse` returns to render: the chat tree, the commit it was
 /// read at, which render reads the chats' attachment bytes at, and the
@@ -138,12 +139,16 @@ async fn parse_async(
     //    was read in points it at the seed row, `_id` 1.
     let has_read_mark =
         datalib_etl::doltlite_raw::column_exists(&pool, "chat", "last_read_message_row_id").await?;
-    let chat_sql = if has_read_mark {
-        "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM chat ORDER BY _id"
-    } else {
-        "SELECT _id, jid_row_id, subject, NULL AS last_read_message_row_id FROM chat ORDER BY _id"
-    };
-    let chat_rows = sqlx::query(chat_sql)
+    let chat_sql = Sql::dynamic(
+        sql_id!("whatsapp_render.list_chats"),
+        if has_read_mark {
+            "SELECT _id, jid_row_id, subject, last_read_message_row_id FROM chat ORDER BY _id"
+        } else {
+            "SELECT _id, jid_row_id, subject, NULL AS last_read_message_row_id FROM chat ORDER BY _id"
+        },
+    );
+    let chat_rows = chat_sql
+        .query()
         .fetch_all(&pool)
         .await
         .context("select chat")?;
@@ -197,11 +202,13 @@ async fn parse_async(
 
     // 2) Messages. Read once into natural keys; the rowid map is what the
     //    child tables below join through.
-    let msg_rows = sqlx::query(
+    let msg_rows = sql!(
+        "whatsapp_render.list_messages",
         "SELECT _id, chat_row_id, key_id, from_me, sender_jid_row_id, timestamp, \
                 message_type, text_data \
-         FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id",
+         FROM message ORDER BY chat_row_id, sort_id, timestamp, key_id"
     )
+    .query()
     .fetch_all(&pool)
     .await
     .context("select message")?;
@@ -251,12 +258,14 @@ async fn parse_async(
     //    the ingest stored alongside the blob_cas put. That blake3 IS the
     //    `blob_refs.ref_id`, so chat-common can stream the bytes out at
     //    render time without render touching disk.
-    let media_rows = sqlx::query(
+    let media_rows = sql!(
+        "whatsapp_render.list_message_media_with_blake3",
         "SELECT m.message_row_id, m.file_path, m.mime_type, m.file_size, \
                 m.media_caption, m.media_name, f.blake3 \
          FROM message_media m \
-         LEFT JOIN wa_media_files f ON f.relative_path = m.file_path",
+         LEFT JOIN wa_media_files f ON f.relative_path = m.file_path"
     )
+    .query()
     .fetch_all(&pool)
     .await
     .context("select message_media")?;
@@ -314,13 +323,15 @@ async fn parse_async(
     }
 
     // 4) Reactions: an add-on row keyed like a message, plus its emoji.
-    let react_rows = sqlx::query(
+    let react_rows = sql!(
+        "whatsapp_render.list_reactions",
         "SELECT a._id, a.chat_row_id, a.key_id, a.from_me, a.sender_jid_row_id, \
                 a.parent_message_row_id, a.timestamp, r.reaction \
          FROM message_add_on a \
          JOIN message_add_on_reaction r ON r.message_add_on_row_id = a._id \
-         WHERE a.parent_message_row_id IS NOT NULL",
+         WHERE a.parent_message_row_id IS NOT NULL"
     )
+    .query()
     .fetch_all(&pool)
     .await
     .context("select message_add_on")?;
@@ -547,10 +558,10 @@ fn build_item(
     //   9  document
     //  13  animated gif
     //  20  sticker
-    //  >50 system events (chat_renamed etc.)
-    // For the first cut: treat 1/2/3/9/13/20 + any attachment-present
-    // case as Attachment; non-zero-without-attachment + system-range
-    // codes as System; everything else as Text.
+    //  50+ system events (chat_renamed etc.)
+    // A message with a `message_media` row is an Attachment whatever its
+    // type; without one, a type of 50 or more is System and every other
+    // type, a media type included, is Text.
     let kind = if !attachments.is_empty() {
         ItemKind::Attachment
     } else {
@@ -616,11 +627,14 @@ struct ChatHeader {
 /// `jid._id -> raw_string`. A few seed rows carry a NULL `raw_string`;
 /// `user@server` is spelled for those so a row still has a key.
 async fn load_jids(pool: &SqlitePool) -> Result<HashMap<i64, String>> {
-    let rows =
-        sqlx::query("SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM jid")
-            .fetch_all(pool)
-            .await
-            .context("select jid")?;
+    let rows = sql!(
+        "whatsapp_render.list_jids",
+        "SELECT _id, coalesce(raw_string, user || '@' || server) AS jid FROM jid"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("select jid")?;
     Ok(rows
         .iter()
         .map(|r| (r.get::<i64, _>("_id"), r.get::<String, _>("jid")))
@@ -663,10 +677,14 @@ impl JidNames {
         // Older msgstore versions have neither LID table, and a backup may
         // come without wa.db: absent is "nothing to map", not a failed render.
         if table_exists(pool, "lid_display_name").await? {
-            let rows = sqlx::query("SELECT lid_row_id, display_name FROM lid_display_name")
-                .fetch_all(pool)
-                .await
-                .context("select lid_display_name")?;
+            let rows = sql!(
+                "whatsapp_render.list_lid_display_names",
+                "SELECT lid_row_id, display_name FROM lid_display_name"
+            )
+            .query()
+            .fetch_all(pool)
+            .await
+            .context("select lid_display_name")?;
             for r in &rows {
                 let name: String = r.get("display_name");
                 if let Some(lid) = jids.get(&r.get::<i64, _>("lid_row_id")) {
@@ -678,11 +696,14 @@ impl JidNames {
         }
         if table_exists(pool, "wa_db_contacts").await? {
             out.has_contacts = true;
-            let rows: Vec<(String, String)> =
-                sqlx::query_as("SELECT jid, rows FROM wa_db_contacts")
-                    .fetch_all(pool)
-                    .await
-                    .context("select wa_db_contacts")?;
+            let rows: Vec<(String, String)> = sql!(
+                "whatsapp_render.list_wa_db_contacts",
+                "SELECT jid, rows FROM wa_db_contacts"
+            )
+            .query_as()
+            .fetch_all(pool)
+            .await
+            .context("select wa_db_contacts")?;
             for (jid, contact_rows) in rows {
                 let contact_rows: Vec<serde_json::Value> =
                     serde_json::from_str(&contact_rows).unwrap_or_default();
@@ -704,10 +725,14 @@ impl JidNames {
             }
         }
         if table_exists(pool, "jid_map").await? {
-            let rows = sqlx::query("SELECT lid_row_id, jid_row_id FROM jid_map")
-                .fetch_all(pool)
-                .await
-                .context("select jid_map")?;
+            let rows = sql!(
+                "whatsapp_render.list_lid_to_jid_map",
+                "SELECT lid_row_id, jid_row_id FROM jid_map"
+            )
+            .query()
+            .fetch_all(pool)
+            .await
+            .context("select jid_map")?;
             for r in &rows {
                 let lid = jids.get(&r.get::<i64, _>("lid_row_id"));
                 let jid = jids.get(&r.get::<i64, _>("jid_row_id"));

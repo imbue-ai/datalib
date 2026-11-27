@@ -20,6 +20,7 @@ use sqlx::{ConnectOptions, Connection, SqliteConnection};
 use super::search_tests::fixture_root;
 use super::tests::{index_over, search, search_part, Part};
 use super::*;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// Which sources each search was checked on, and with how many rows.
 #[derive(Default)]
@@ -118,11 +119,12 @@ async fn read_rows(
         searchable: Option<bool>,
         group_id: Option<String>,
     }
-    let read: Vec<Read> = sqlx::query_as(
+    let read: Vec<Read> = test_sql!(
         "SELECT g.uuid, g.source_id, g.markdown_uuid, g.is_document, m.searchable, \
                 m.source_id AS group_id \
-           FROM grid_rows g LEFT JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid",
+           FROM grid_rows g LEFT JOIN markdowns m ON m.markdown_uuid = g.markdown_uuid"
     )
+    .query_as()
     .fetch_all(&mut grid)
     .await
     .unwrap();
@@ -182,10 +184,14 @@ fn drawn_texts(
 async fn values_of(root: &std::path::Path, column: &str) -> BTreeMap<String, BTreeSet<String>> {
     let mut grid = open_read_only(&datalib_runtime::layout::grid_index_db(root)).await;
     // Audited: `column` is a `GridRowColumn`'s name.
-    let pairs: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "SELECT uuid, CAST({column} AS TEXT) FROM grid_rows \
+    let pairs: Vec<(String, String)> = Sql::dynamic(
+        test_sql_id!(),
+        format!(
+            "SELECT uuid, CAST({column} AS TEXT) FROM grid_rows \
          WHERE {column} IS NOT NULL AND CAST({column} AS TEXT) != ''"
-    )))
+        ),
+    )
+    .query_as()
     .fetch_all(&mut grid)
     .await
     .unwrap();
@@ -206,10 +212,11 @@ async fn terms_of(root: &std::path::Path) -> BTreeMap<(String, String), BTreeSet
         .connect()
         .await
         .unwrap();
-    let read: Vec<(String, i64, String)> = sqlx::query_as(
+    let read: Vec<(String, i64, String)> = test_sql!(
         "SELECT r.uuid, t.kind, v.value FROM terms t \
-         JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id",
+         JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id"
     )
+    .query_as()
     .fetch_all(&mut terms)
     .await
     .unwrap();
@@ -233,7 +240,8 @@ async fn names_of(root: &std::path::Path) -> HashMap<String, Vec<String>> {
         .connect()
         .await
         .unwrap();
-    let read: Vec<(String, String)> = sqlx::query_as("SELECT handle, name FROM names")
+    let read: Vec<(String, String)> = test_sql!("SELECT handle, name FROM names")
+        .query_as()
         .fetch_all(&mut terms)
         .await
         .unwrap();

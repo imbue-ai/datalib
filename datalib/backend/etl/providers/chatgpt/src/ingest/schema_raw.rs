@@ -9,6 +9,7 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const ME: &str = "me";
 pub const CONVERSATIONS: &str = "conversations";
@@ -93,35 +94,40 @@ pub const LADDER: &[Migration] = &[Migration {
 /// in its sidecar, so the next run fetches only what moved.
 async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for table in [CONVERSATIONS, ATTACHMENTS] {
-        let has_column: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')",
+        let has_column: bool = sql!(
+            "chatgpt.migrate.sidecar_has_held_version",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')"
         )
+        .query_scalar()
         .bind(format!("{table}_bookkeeping"))
         .fetch_one(&mut *conn)
         .await?;
         if !has_column {
             // Audited: `table` is one of this module's constants.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"
-            )))
+            Sql::dynamic(
+                sql_id!("chatgpt.migrate.add_held_version_to_sidecar"),
+                format!("ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"),
+            )
+            .query()
             .execute(&mut *conn)
             .await?;
         }
     }
     // The listing's `update_time` reduces to whole seconds; the detail's
     // is the same instant as an epoch float, which the row kept.
-    sqlx::query(
+    sql!(
+        "chatgpt.migrate.set_held_version_from_update_time",
         "UPDATE conversations_bookkeeping SET held_version = \
             (SELECT CASE WHEN c.update_time GLOB '[0-9]*' \
                     THEN CAST(CAST(c.update_time AS INTEGER) AS TEXT) END \
              FROM conversations c WHERE c.id = conversations_bookkeeping.id) \
-         WHERE fetched_at_utc IS NOT NULL",
+         WHERE fetched_at_utc IS NOT NULL"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
     let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    sqlx::query(
-        "INSERT INTO chatgpt_attachments_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
+    sql!("chatgpt.migrate.insert_held_attachment_bookkeeping", "INSERT INTO chatgpt_attachments_bookkeeping (id, attempt_count, fetched_at_utc, held_version) \
          SELECT a.id, 0, ?, b.held_version FROM chatgpt_attachments a \
          JOIN conversations_bookkeeping b ON b.id = a.conversation_id \
          WHERE a.blake3 IS NOT NULL \
@@ -129,8 +135,7 @@ async fn held_into_the_sidecar(conn: &mut sqlx::SqliteConnection) -> anyhow::Res
                         WHERE scope_kind = ? AND reason = ? AND scope_key LIKE 'chatgpt_attachments:%') \
          ON CONFLICT(id) DO UPDATE SET held_version = excluded.held_version, \
             fetched_at_utc = COALESCE(chatgpt_attachments_bookkeeping.fetched_at_utc, \
-                                      excluded.fetched_at_utc)",
-    )
+                                      excluded.fetched_at_utc)").query()
     .bind(&now)
     .bind(datalib_problems::ScopeKind::Entity.as_str())
     .bind(datalib_problems::Reason::NotFound.as_str())

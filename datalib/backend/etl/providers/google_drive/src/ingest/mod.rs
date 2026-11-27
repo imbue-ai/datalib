@@ -119,10 +119,10 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 /// The run's own record in `sync_runs`: its config, its summary, and what
 /// it changed in each table, so a run that fetched nothing says so.
 async fn walk(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let run = DownloadRun::start(opts.db.pool(), &serde_json::to_value(&opts.api)?).await?;
+    let run = DownloadRun::start(&found, opts.db.pool(), &serde_json::to_value(&opts.api)?).await?;
     let mut summary = FetchSummary::default();
     let result = walk_files(&opts, &found, &mut summary).await;
-    run.finish(found.ended_early(), &result, &summary).await;
+    run.summarize(&summary);
     result.map(|()| summary)
 }
 

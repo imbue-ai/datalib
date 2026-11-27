@@ -31,6 +31,7 @@ use super::schema_raw::{
     READ_STATE_VOLATILE_PATHS, THREADS, USER_VOLATILE_PATHS,
 };
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_sql::{sql, sql_id, Sql};
 
 #[derive(Clone, Debug, RawStoreHandle)]
 pub struct RawDb {
@@ -112,11 +113,13 @@ impl RawDb {
     }
 
     pub async fn cached_team_id(&self) -> Result<Option<String>> {
-        let row = sqlx::query(
+        let row = sql!(
+            "slack.find_latest_team_id",
             "SELECT w.id FROM workspaces w \
              LEFT JOIN workspaces_bookkeeping b ON b.id = w.id \
-             ORDER BY b.fetched_at_utc DESC LIMIT 1",
+             ORDER BY b.fetched_at_utc DESC LIMIT 1"
         )
+        .query()
         .fetch_optional(self.pool())
         .await
         .context("select cached team_id")?;
@@ -126,11 +129,14 @@ impl RawDb {
     }
 
     pub async fn load_workspace(&self) -> Result<Option<Value>> {
-        let row =
-            sqlx::query("SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1")
-                .fetch_optional(self.pool())
-                .await
-                .context("select workspace")?;
+        let row = sql!(
+            "slack.load_workspace",
+            "SELECT id, json(payload) AS payload FROM workspaces ORDER BY id LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("select workspace")?;
         let Some(row) = row else { return Ok(None) };
         let payload: Option<String> = row.try_get("payload").context("workspace payload")?;
         payload
@@ -161,11 +167,14 @@ impl RawDb {
     /// `users.info` has answered for, each listed with no version: a
     /// user only has to have been fetched.
     pub async fn users_owed(&self, conn: &mut SqliteConnection) -> Result<Vec<Listed>> {
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM users WHERE payload IS NULL ORDER BY id")
-                .fetch_all(conn)
-                .await
-                .context("select the users owed")?;
+        let ids: Vec<String> = sql!(
+            "slack.list_users_owed",
+            "SELECT id FROM users WHERE payload IS NULL ORDER BY id"
+        )
+        .query_scalar()
+        .fetch_all(conn)
+        .await
+        .context("select the users owed")?;
         Ok(ids
             .into_iter()
             .map(|id| Listed::new(id, None::<String>))
@@ -175,10 +184,12 @@ impl RawDb {
     /// Clears the failed lookup of each user a `users.list` has since
     /// returned. Returns how many.
     pub async fn settle_listed_users(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<usize> {
-        let ids: Vec<String> = sqlx::query_scalar(
+        let ids: Vec<String> = sql!(
+            "slack.list_listed_users_with_error",
             "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id \
-             WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL",
+             WHERE u.payload IS NOT NULL AND b.last_error IS NOT NULL"
         )
+        .query_scalar()
         .fetch_all(&mut **tx)
         .await
         .context("select the listed users with a failed lookup")?;
@@ -233,11 +244,14 @@ impl RawDb {
     /// for, each listed with no version: a bot only has to have been
     /// fetched.
     pub async fn bots_owed(&self, conn: &mut SqliteConnection) -> Result<Vec<Listed>> {
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM bots WHERE payload IS NULL ORDER BY id")
-                .fetch_all(conn)
-                .await
-                .context("select the bots owed")?;
+        let ids: Vec<String> = sql!(
+            "slack.list_bots_owed",
+            "SELECT id FROM bots WHERE payload IS NULL ORDER BY id"
+        )
+        .query_scalar()
+        .fetch_all(conn)
+        .await
+        .context("select the bots owed")?;
         Ok(ids
             .into_iter()
             .map(|id| Listed::new(id, None::<String>))
@@ -378,7 +392,8 @@ impl RawDb {
         sql.push_str(" ORDER BY id");
         // Audited: `sql` is a static base with further `&'static str` clauses
         // appended by the `members_only` / `include_archived` flags.
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let rows = Sql::dynamic(sql_id!("slack.list_channels_to_fetch"), sql)
+            .query()
             .fetch_all(self.pool())
             .await
             .context("select channels_for_fetch")?;
@@ -402,9 +417,11 @@ impl RawDb {
     /// progress lines. Typed columns only — no payload parse, since
     /// this runs before the walk on every DM-enabled run.
     pub async fn user_directory(&self) -> Result<Vec<UserDirectoryEntry>> {
-        let rows = sqlx::query(
-            "SELECT id, name, real_name, display_name FROM users WHERE payload IS NOT NULL",
+        let rows = sql!(
+            "slack.load_user_directory",
+            "SELECT id, name, real_name, display_name FROM users WHERE payload IS NOT NULL"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select user_directory")?;
@@ -514,10 +531,12 @@ impl RawDb {
         queries: &[&str],
     ) -> Result<Vec<(String, String, Option<String>)>> {
         let names = serde_json::to_string(queries).context("serialize query names")?;
-        sqlx::query_as(
+        sql!(
+            "slack.list_involving_by_query",
             "SELECT channel_id, ts, thread_ts FROM involving \
-             WHERE query IN (SELECT value FROM json_each(?))",
+             WHERE query IN (SELECT value FROM json_each(?))"
         )
+        .query_as()
         .bind(names)
         .fetch_all(self.pool())
         .await
@@ -532,10 +551,12 @@ impl RawDb {
     ) -> Result<HashMap<String, Option<String>>> {
         let mut out = HashMap::new();
         for key in keys {
-            let row: Option<(String, Option<String>)> = sqlx::query_as(
+            let row: Option<(String, Option<String>)> = sql!(
+                "slack.read_latest_reply_of_root",
                 "SELECT id, json_extract(payload, '$.latest_reply') FROM messages \
-                 WHERE id = ? AND is_thread_root = 1",
+                 WHERE id = ? AND is_thread_root = 1"
             )
+            .query_as()
             .bind(key)
             .fetch_optional(self.pool())
             .await
@@ -553,12 +574,14 @@ impl RawDb {
     /// returned, so a root stored by a run that died before its replies
     /// is owed.
     pub async fn threads_listed(&self, channel_id: &str) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "slack.list_threads_of_channel",
             "SELECT id, json_extract(payload, '$.latest_reply') FROM messages \
              WHERE channel_id = ? AND is_thread_root = 1 \
                AND json_extract(payload, '$.reply_count') > 0 \
-             ORDER BY ts",
+             ORDER BY ts"
         )
+        .query_as()
         .bind(channel_id)
         .fetch_all(self.pool())
         .await
@@ -583,11 +606,15 @@ impl RawDb {
             let Outcome::Got(thread) = &f.outcome else {
                 continue;
             };
-            sqlx::query("INSERT OR IGNORE INTO threads (id) VALUES (?)")
-                .bind(&f.listed.key)
-                .execute(&mut **tx)
-                .await
-                .with_context(|| format!("list the thread {}", f.listed.key))?;
+            sql!(
+                "slack.insert_thread",
+                "INSERT OR IGNORE INTO threads (id) VALUES (?)"
+            )
+            .query()
+            .bind(&f.listed.key)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("list the thread {}", f.listed.key))?;
             let page = prepare(&thread.rows)?;
             write_messages(tx, &page).await?;
             let returned: HashSet<String> = page
@@ -637,20 +664,26 @@ impl RawDb {
     }
 
     pub async fn count_messages(&self) -> Result<i64> {
-        sqlx::query_scalar("SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL")
-            .fetch_one(self.pool())
-            .await
-            .context("count messages")
+        sql!(
+            "slack.count_messages",
+            "SELECT COUNT(*) FROM messages WHERE payload IS NOT NULL"
+        )
+        .query_scalar()
+        .fetch_one(self.pool())
+        .await
+        .context("count messages")
     }
 
     pub async fn load_messages(&self) -> Result<Vec<LoadedMessage>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "slack.load_messages",
             "SELECT id, team_id, channel_id, ts, thread_ts, is_thread_root, user_id,
                     json(payload) AS payload
              FROM messages
              WHERE payload IS NOT NULL
-             ORDER BY channel_id, ts",
+             ORDER BY channel_id, ts"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select messages")?;
@@ -740,14 +773,16 @@ impl RawDb {
     /// mark laid back over it: the whole `client.counts` entry, keyed by
     /// conversation id.
     pub async fn load_read_states(&self) -> Result<Vec<Value>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "slack.load_read_states",
             "SELECT json(r.payload) AS payload, json(b.volatile_payload) AS volatile, \
                     m.read_through AS last_read \
              FROM channel_read_states r \
              LEFT JOIN channel_read_states_bookkeeping b ON b.id = r.id \
              LEFT JOIN read_marks m ON m.id = r.id \
-             WHERE r.payload IS NOT NULL ORDER BY r.id",
+             WHERE r.payload IS NOT NULL ORDER BY r.id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select channel_read_states")?;
@@ -813,11 +848,13 @@ impl RawDb {
     /// every one we already hold bookmarks for, so a bar emptied upstream
     /// is still asked about once more.
     pub async fn channels_to_list_bookmarks(&self) -> Result<HashSet<String>> {
-        let ids: Vec<String> = sqlx::query_scalar(
+        let ids: Vec<String> = sql!(
+            "slack.list_channels_with_bookmarks",
             "SELECT c.id FROM channels c, json_each(c.payload, '$.properties.tabs') t \
              WHERE json_extract(t.value, '$.type') IN ('bookmarks', 'folder') \
-             UNION SELECT channel_id FROM bookmarks",
+             UNION SELECT channel_id FROM bookmarks"
         )
+        .query_scalar()
         .fetch_all(self.pool())
         .await
         .context("select channels with a bookmarks tab")?;
@@ -863,10 +900,14 @@ impl RawDb {
             bulk_upsert_with_tape(self.pool(), self.tape_ref(), &rows, &pairs).await?;
         }
 
-        let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, item_id FROM saved_items")
-            .fetch_all(self.pool())
-            .await
-            .context("select saved_items")?;
+        let stored: Vec<(String, String)> = sql!(
+            "slack.list_saved_items",
+            "SELECT id, item_id FROM saved_items"
+        )
+        .query_as()
+        .fetch_all(self.pool())
+        .await
+        .context("select saved_items")?;
         let mut keep: HashSet<String> = rows.iter().map(|r| r.id_and_payload.id.clone()).collect();
         keep.extend(
             stored
@@ -903,10 +944,12 @@ impl RawDb {
         let from = slack_message_key(team_id, channel_id, "");
         // `$` is the character after `#`.
         let to = format!("{team_id}#{channel_id}$");
-        let keys: Vec<String> = sqlx::query_scalar(
+        let keys: Vec<String> = sql!(
+            "slack.list_files_owed_in_range",
             "SELECT id FROM slack_attachments WHERE id >= ? AND id < ? AND blake3 IS NULL \
-             ORDER BY id",
+             ORDER BY id"
         )
+        .query_scalar()
         .bind(&from)
         .bind(&to)
         .fetch_all(self.pool())
@@ -944,10 +987,12 @@ impl RawDb {
             return Ok(Vec::new());
         }
         let keys: Vec<&String> = ts_of.keys().collect();
-        let owed: Vec<String> = sqlx::query_scalar(
+        let owed: Vec<String> = sql!(
+            "slack.list_files_owed_by_keys",
             "SELECT id FROM slack_attachments \
-             WHERE id IN (SELECT value FROM json_each(?)) AND blake3 IS NULL ORDER BY id",
+             WHERE id IN (SELECT value FROM json_each(?)) AND blake3 IS NULL ORDER BY id"
         )
+        .query_scalar()
         .bind(serde_json::to_string(&keys)?)
         .fetch_all(conn)
         .await
@@ -973,16 +1018,19 @@ impl RawDb {
         for chunk in keys.chunks(datalib_etl::bulk::SQL_CHUNK) {
             // Audited: the placeholders are one `?` per key, every key
             // bound.
-            let sql = format!(
-                "SELECT a.id, a.message_uuid, json(f.value) AS file \
+            let sql = Sql::dynamic(
+                sql_id!("slack.read_file_objects_of_attachments"),
+                format!(
+                    "SELECT a.id, a.message_uuid, json(f.value) AS file \
                  FROM slack_attachments a \
                  JOIN messages m ON m.id = a.message_uuid \
                  JOIN json_each(m.payload, '$.files') f \
                    ON json_extract(f.value, '$.id') = a.file_id \
                  WHERE a.id IN ({}) ORDER BY a.id",
-                vec!["?"; chunk.len()].join(",")
+                    vec!["?"; chunk.len()].join(",")
+                ),
             );
-            let mut q = sqlx::query_as::<_, (String, String, String)>(sqlx::AssertSqlSafe(sql));
+            let mut q = sql.query_as::<(String, String, String)>();
             for key in chunk {
                 q = q.bind(*key);
             }
@@ -1196,20 +1244,24 @@ async fn write_messages(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>])
             .filter_map(super::api::served_file_id)
         {
             let id = SlackAttachmentRow::pk_recipe(message_uuid, file_id);
-            sqlx::query(
+            sql!(
+                "slack.insert_attachment_edge",
                 "INSERT INTO slack_attachments (id, message_uuid, file_id) VALUES (?, ?, ?) \
-                 ON CONFLICT(id) DO NOTHING",
+                 ON CONFLICT(id) DO NOTHING"
             )
+            .query()
             .bind(&id)
             .bind(message_uuid)
             .bind(file_id)
             .execute(&mut **tx)
             .await
             .with_context(|| format!("list the file {id}"))?;
-            sqlx::query(
+            sql!(
+                "slack.insert_attachment_sidecar",
                 "INSERT INTO slack_attachments_bookkeeping (id, attempt_count) VALUES (?, 0) \
-                 ON CONFLICT(id) DO NOTHING",
+                 ON CONFLICT(id) DO NOTHING"
             )
+            .query()
             .bind(&id)
             .execute(&mut **tx)
             .await
@@ -1229,22 +1281,30 @@ async fn list_authors(tx: &mut Transaction<'_, Sqlite>, page: &[Prepared<'_>]) -
         .filter_map(|p| p.row.user_id.as_deref())
         .collect();
     for id in authors {
-        sqlx::query("INSERT INTO users (id) VALUES (?) ON CONFLICT(id) DO NOTHING")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list the author {id}"))?;
+        sql!(
+            "slack.insert_author_user",
+            "INSERT INTO users (id) VALUES (?) ON CONFLICT(id) DO NOTHING"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list the author {id}"))?;
     }
     let bots: BTreeSet<&str> = page
         .iter()
         .filter_map(|p| p.payload.get("bot_id")?.as_str())
         .collect();
     for id in bots {
-        sqlx::query("INSERT INTO bots (id) VALUES (?) ON CONFLICT(id) DO NOTHING")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list the bot {id}"))?;
+        sql!(
+            "slack.insert_author_bot",
+            "INSERT INTO bots (id) VALUES (?) ON CONFLICT(id) DO NOTHING"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list the bot {id}"))?;
     }
     Ok(())
 }
@@ -1260,10 +1320,12 @@ async fn prune_enumerated(
     stretch: &Enumerated,
     returned: &HashSet<&str>,
 ) -> Result<usize> {
-    let top_level: Vec<(String, String)> = sqlx::query_as(
+    let top_level: Vec<(String, String)> = sql!(
+        "slack.list_roots_in_stretch",
         "SELECT ts, thread_root_uuid FROM messages \
-         WHERE channel_id = ? AND ts >= ? AND (ts < ? OR (? AND ts = ?)) AND is_thread_root = 1",
+         WHERE channel_id = ? AND ts >= ? AND (ts < ? OR (? AND ts = ?)) AND is_thread_root = 1"
     )
+    .query_as()
     .bind(channel_id)
     .bind(&stretch.oldest)
     .bind(&stretch.latest)
@@ -1421,6 +1483,7 @@ mod tests {
     use crate::ingest::schema_raw::split_key;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn event_tape_mirrors_upserts_to_jsonl() {
         let d = tempfile::tempdir().unwrap();
@@ -1502,7 +1565,8 @@ mod tests {
             .expect("a parsed workspace");
         assert_eq!(w["team"], "Enterprise");
 
-        sqlx::query(r#"UPDATE workspaces SET payload = '{"team_id": "T1", "warp": 1e999}'"#)
+        test_sql!(r#"UPDATE workspaces SET payload = '{"team_id": "T1", "warp": 1e999}'"#)
+            .query()
             .execute(db.pool())
             .await
             .unwrap();
@@ -1542,7 +1606,8 @@ mod tests {
         db.upsert_channel(&json!({"id": "C1", "name": "general", "is_member": true}))
             .await
             .unwrap();
-        let row = sqlx::query("SELECT typeof(payload) AS t FROM channels WHERE id='C1'")
+        let row = test_sql!("SELECT typeof(payload) AS t FROM channels WHERE id='C1'")
+            .query()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -1742,7 +1807,8 @@ mod tests {
             .unwrap();
 
         let problems = || async {
-            sqlx::query_scalar::<_, String>("SELECT scope_key FROM problems")
+            test_sql!("SELECT scope_key FROM problems")
+                .query_scalar::<String>()
                 .fetch_all(db.pool())
                 .await
                 .unwrap()
@@ -1766,18 +1832,19 @@ mod tests {
 
     async fn message_payload_and_volatile(db: &RawDb, ts: &str) -> (String, Option<Value>) {
         let key = slack_message_key("T1", "C1", ts);
-        let payload: String = sqlx::query_scalar("SELECT json(payload) FROM messages WHERE id = ?")
+        let payload: String = test_sql!("SELECT json(payload) FROM messages WHERE id = ?")
+            .query_scalar()
             .bind(&key)
             .fetch_one(db.pool())
             .await
             .unwrap();
-        let volatile: Option<String> = sqlx::query_scalar(
-            "SELECT json(volatile_payload) FROM messages_bookkeeping WHERE id = ?",
-        )
-        .bind(&key)
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let volatile: Option<String> =
+            test_sql!("SELECT json(volatile_payload) FROM messages_bookkeeping WHERE id = ?")
+                .query_scalar()
+                .bind(&key)
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         (payload, volatile.map(|v| serde_json::from_str(&v).unwrap()))
     }
 
@@ -1886,7 +1953,8 @@ mod tests {
         assert!(db.files_listed("T1", "C10").await.unwrap().is_empty());
 
         let hash = "a".repeat(64);
-        sqlx::query("UPDATE slack_attachments SET blake3 = ? WHERE file_id = 'F1'")
+        test_sql!("UPDATE slack_attachments SET blake3 = ? WHERE file_id = 'F1'")
+            .query()
             .bind(&hash)
             .execute(db.pool())
             .await

@@ -8,6 +8,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl_file_inventory::ingest::{self, FetchOptions, FetchSummary, RawDb};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use tempfile::TempDir;
 
 struct Env {
@@ -58,21 +59,22 @@ impl Env {
     }
 
     async fn problem_keys(&self) -> Vec<String> {
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
             .fetch_all(self.db.pool())
             .await
             .unwrap()
     }
 
     async fn ids(&self, table: &str) -> Vec<String> {
-        let sql = match table {
-            "files" => "SELECT id FROM files ORDER BY id",
-            _ => "SELECT id FROM dirs ORDER BY id",
-        };
-        sqlx::query_scalar(sql)
-            .fetch_all(self.db.pool())
-            .await
-            .unwrap()
+        let sql = Sql::dynamic(
+            test_sql_id!(),
+            match table {
+                "files" => "SELECT id FROM files ORDER BY id",
+                _ => "SELECT id FROM dirs ORDER BY id",
+            },
+        );
+        sql.query_scalar().fetch_all(self.db.pool()).await.unwrap()
     }
 }
 
@@ -91,7 +93,8 @@ async fn a_bad_options_file_costs_its_folder_only() {
     assert_eq!(s.errors, 1, "{s:?}");
     assert_eq!(env.problem_keys().await, ["record:dirs:engineering"]);
     let stamped: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM dirs WHERE identity_uuid IS NOT NULL ORDER BY id")
+        test_sql!("SELECT id FROM dirs WHERE identity_uuid IS NOT NULL ORDER BY id")
+            .query_scalar()
             .fetch_all(env.db.pool())
             .await
             .unwrap();
@@ -160,7 +163,8 @@ async fn a_folder_that_would_not_list_keeps_its_rows() {
         "the folder's files stay; the one that went from a folder that listed goes"
     );
     assert_eq!(env.ids("dirs").await, dirs);
-    let entries: i64 = sqlx::query_scalar("SELECT entries FROM dirs WHERE id = 'holodeck'")
+    let entries: i64 = test_sql!("SELECT entries FROM dirs WHERE id = 'holodeck'")
+        .query_scalar()
         .fetch_one(env.db.pool())
         .await
         .unwrap();

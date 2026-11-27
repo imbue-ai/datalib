@@ -31,8 +31,8 @@ the first ignore pattern, `MarkdownConfig::scan_ignores`): `.obsidian/`
 holds the editor's state, `.trash/` deleted notes, `.git/` and a sync
 tool's `.stversions/` old copies. A note found there would be a stale
 second copy of one found outside it. `ignore` adds gitignore-shaped
-patterns, and a `.gitignore` inside a git repository counts as git
-would read it.
+patterns. A `.gitignore` inside a git repository counts as git would
+read it, and so does an `.ignore` file anywhere in the tree.
 
 ## The store
 

@@ -148,6 +148,7 @@ fn main() {
         ..Default::default()
     };
     datalib_sql_work::install();
+    datalib_embedder::look_for_cuda_module(datalib_runtime::cuda_module::find);
     let _obs = match datalib_obs::init(&obs, "datalib-applet") {
         Ok(guard) => Some(guard),
         Err(e) => {

@@ -14,6 +14,7 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_lightroom::ingest::sync::{self, SyncRun};
 use datalib_etl_lightroom::ingest::{mirror, unpack, MirrorOptions};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 struct Fixture {
     dir: tempfile::TempDir,
@@ -123,7 +124,8 @@ async fn write_catalog(path: &Path, edits: &[&str]) {
     let pool = mirror::open_sqlite(path, false).await.unwrap();
     for e in edits {
         // Test: `edits` are literal catalog edits written by the test.
-        sqlx::query(sqlx::AssertSqlSafe(*e))
+        Sql::dynamic(test_sql_id!(), *e)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -148,9 +150,10 @@ fn options() -> MirrorOptions {
 /// `(message, date)` of every commit, oldest first, without the store's
 /// initialization commit.
 async fn log(pool: &SqlitePool) -> Vec<(String, String)> {
-    let mut rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT message, date FROM dolt_log WHERE message NOT LIKE 'Initialize data repository%'",
+    let mut rows: Vec<(String, String)> = test_sql!(
+        "SELECT message, date FROM dolt_log WHERE message NOT LIKE 'Initialize data repository%'"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .unwrap();
@@ -159,14 +162,16 @@ async fn log(pool: &SqlitePool) -> Vec<(String, String)> {
 }
 
 async fn head(pool: &SqlitePool) -> String {
-    sqlx::query_scalar("SELECT commit_hash FROM dolt_log LIMIT 1")
+    test_sql!("SELECT commit_hash FROM dolt_log LIMIT 1")
+        .query_scalar()
         .fetch_one(pool)
         .await
         .unwrap()
 }
 
 async fn rating_of_picard(pool: &SqlitePool) -> Option<i64> {
-    sqlx::query_scalar("SELECT rating FROM Adobe_images WHERE id_global = 'IMAGE-0101-PICARD'")
+    test_sql!("SELECT rating FROM Adobe_images WHERE id_global = 'IMAGE-0101-PICARD'")
+        .query_scalar()
         .fetch_one(pool)
         .await
         .unwrap()
@@ -246,28 +251,30 @@ async fn each_backup_is_a_commit_dated_when_it_was_taken() -> Result<()> {
         ]
     );
 
-    let history: Vec<(String, Option<i64>)> = sqlx::query_as(
+    let history: Vec<(String, Option<i64>)> = test_sql!(
         "SELECT commit_date, rating FROM dolt_history_Adobe_images \
-          WHERE id_global = 'IMAGE-0101-PICARD' ORDER BY commit_date",
+          WHERE id_global = 'IMAGE-0101-PICARD' ORDER BY commit_date"
     )
+    .query_as()
     .fetch_all(&pool)
     .await?;
     let ratings: Vec<Option<i64>> = history.iter().map(|(_, r)| *r).collect();
     assert_eq!(ratings.first(), Some(&Some(5)), "{history:?}");
     assert_eq!(ratings.last(), Some(&Some(1)), "{history:?}");
 
-    let keywords: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
+    let keywords: i64 = test_sql!(
+        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'"
     )
+    .query_scalar()
     .fetch_one(&pool)
     .await?;
     assert_eq!(keywords, 1, "HEAD is the newest backup");
 
-    let ledger: Vec<(String, String, String)> = sqlx::query_as(
-        "SELECT snapshot, taken_at, file FROM lightroom_snapshots ORDER BY taken_at",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let ledger: Vec<(String, String, String)> =
+        test_sql!("SELECT snapshot, taken_at, file FROM lightroom_snapshots ORDER BY taken_at")
+            .query_as()
+            .fetch_all(&pool)
+            .await?;
     assert_eq!(
         ledger,
         [
@@ -393,10 +400,11 @@ async fn an_older_backup_is_replayed_and_the_newest_put_back_on_top() -> Result<
              mirrored again to put the newest back on top",
         ]
     );
-    let keyword_history: Vec<String> = sqlx::query_scalar(
+    let keyword_history: Vec<String> = test_sql!(
         "SELECT diff_type FROM dolt_diff_AgLibraryKeyword \
-          WHERE coalesce(to_id_global, from_id_global) = 'KEYWORD-9001-HOLODECK'",
+          WHERE coalesce(to_id_global, from_id_global) = 'KEYWORD-9001-HOLODECK'"
     )
+    .query_scalar()
     .fetch_all(&pool)
     .await?;
     assert_eq!(
@@ -404,9 +412,10 @@ async fn an_older_backup_is_replayed_and_the_newest_put_back_on_top() -> Result<
         2,
         "added, then removed: {keyword_history:?}"
     );
-    let keywords: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
+    let keywords: i64 = test_sql!(
+        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'"
     )
+    .query_scalar()
     .fetch_one(&pool)
     .await?;
     assert_eq!(keywords, 0, "HEAD is the 2022 backup again");
@@ -456,11 +465,11 @@ async fn a_backup_is_mirrored_with_the_keys_its_catalog_declares() -> Result<()>
     f.sync(&options()).await?;
 
     let pool = f.read().await;
-    let key: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM pragma_table_info('SyncedPayload') WHERE pk > 0 ORDER BY pk",
-    )
-    .fetch_all(&pool)
-    .await?;
+    let key: Vec<String> =
+        test_sql!("SELECT name FROM pragma_table_info('SyncedPayload') WHERE pk > 0 ORDER BY pk")
+            .query_scalar()
+            .fetch_all(&pool)
+            .await?;
     assert_eq!(key, ["image", "payloadKey"]);
     pool.close().await;
     Ok(())
@@ -516,7 +525,8 @@ async fn a_folder_with_no_backups_fails_the_run() {
 
 async fn problem_keys(f: &Fixture) -> Vec<String> {
     let pool = f.read().await;
-    let keys = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+    let keys = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -711,13 +721,12 @@ async fn a_stopped_run_leaves_the_last_runs_problems() -> Result<()> {
 }
 
 async fn table_exists(pool: &SqlitePool, name: &str) -> bool {
-    sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
-    )
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .unwrap()
+    test_sql!("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
+        .query_scalar::<i64>()
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap()
         == 1
 }
 
@@ -764,9 +773,10 @@ async fn the_live_catalog_lands_on_top_of_the_backups() -> Result<()> {
         })
         .collect();
     assert_eq!(order, ["backup", "backup", "catalog"], "{messages:?}");
-    let keywords: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
+    let keywords: i64 = test_sql!(
+        "SELECT count(*) FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'"
     )
+    .query_scalar()
     .fetch_one(&pool)
     .await?;
     assert_eq!(keywords, 1, "HEAD is the live catalog");
@@ -815,11 +825,11 @@ async fn late_backups_replay_under_the_live_catalog() -> Result<()> {
     assert!(run.live.is_some(), "the unchanged catalog goes back on top");
 
     let pool = f.read().await;
-    let name: String = sqlx::query_scalar(
-        "SELECT name FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'",
-    )
-    .fetch_one(&pool)
-    .await?;
+    let name: String =
+        test_sql!("SELECT name FROM AgLibraryKeyword WHERE id_global = 'KEYWORD-9001-HOLODECK'")
+            .query_scalar()
+            .fetch_one(&pool)
+            .await?;
     assert_eq!(name, "Holodeck", "the live catalog, not a backup, is HEAD");
     assert_eq!(rating_of_picard(&pool).await, Some(5));
     pool.close().await;

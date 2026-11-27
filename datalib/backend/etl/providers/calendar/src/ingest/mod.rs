@@ -15,6 +15,7 @@ use std::collections::HashSet;
 
 use anyhow::Result;
 use datalib_etl::download_problems;
+use datalib_etl::download_run::DownloadRun;
 use datalib_etl::run_problems::RunProblems;
 
 pub use db::{db_path_for, RawDb};
@@ -60,20 +61,20 @@ pub struct FetchSummary {
     pub files_removed: usize,
     pub errors: usize,
     pub requests: usize,
-    /// For the run's `sync_runs.status`, which the processor writes
-    /// outside the collector that knows.
-    #[serde(skip)]
-    pub ended_early: bool,
 }
 
-/// `body`'s summary, with how its run ended on it.
-pub(crate) async fn noting_how_it_ended(
+/// `body`, with its run's row in `sync_runs`; `config` is what the run
+/// was asked to do.
+pub(crate) async fn recorded(
     found: RunProblems,
+    pool: &sqlx::SqlitePool,
+    config: &serde_json::Value,
     body: impl std::future::Future<Output = Result<FetchSummary>>,
 ) -> Result<FetchSummary> {
-    let mut summary = body.await?;
-    summary.ended_early = found.ended_early();
-    Ok(summary)
+    let run = DownloadRun::start(&found, pool, config).await?;
+    let result = body.await;
+    run.summarize(&result.as_ref().cloned().unwrap_or_default());
+    result
 }
 
 impl FetchSummary {

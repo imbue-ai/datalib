@@ -1801,7 +1801,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             "after_s": o.after.map(|a| a.num_seconds()),
         })),
     });
-    let run = datalib_etl::download_run::DownloadRun::start(db.pool(), &run_config).await?;
+    let run = datalib_etl::download_run::DownloadRun::start(&found, db.pool(), &run_config).await?;
 
     let blake3_by_file = Mutex::new(db.load_attachment_blake3s().await?);
 
@@ -2440,7 +2440,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     // optimisation, to overflow a worker thread's stack beside the
     // futures a caller wraps it in.
     let result = Box::pin(work).await;
-    run.finish(found.ended_early(), &result, &grand).await;
+    run.summarize(&grand);
     result?;
 
     info!(

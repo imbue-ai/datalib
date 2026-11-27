@@ -21,6 +21,7 @@ use datalib_etl_render::section::join;
 use datalib_etl_sqlite_mirror::mirror;
 use datalib_schema::edges::EdgeKind;
 use datalib_source_common::LocalPath;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const RIKER: &str = "iMessage;-;+14155550142";
 const BRIDGE: &str = "iMessage;+;chat240603120915";
@@ -70,7 +71,10 @@ impl Fixture {
         let pool = mirror::open_sqlite(&self.db, false).await?;
         for s in stmts {
             // Test: literal edits written by the test itself.
-            sqlx::query(sqlx::AssertSqlSafe(*s)).execute(&pool).await?;
+            Sql::dynamic(test_sql_id!(), *s)
+                .query()
+                .execute(&pool)
+                .await?;
         }
         pool.close().await;
         Ok(())
@@ -292,7 +296,8 @@ async fn the_newest_message_is_read_out_of_the_wal() -> Result<()> {
     let main_only = bare.path().join("chat.db");
     stage_writable(&fixture_db(), &main_only);
     let pool = mirror::open_sqlite(&main_only, false).await?;
-    let without_wal: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM message WHERE ROWID = 12")
+    let without_wal: i64 = test_sql!("SELECT COUNT(*) FROM message WHERE ROWID = 12")
+        .query_scalar()
         .fetch_one(&pool)
         .await?;
     pool.close().await;
@@ -363,7 +368,8 @@ async fn the_join_tables_are_keyed_on_their_unique_pair() -> Result<()> {
         ("message_attachment_join", ["message_id", "attachment_id"]),
     ] {
         let got: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+            test_sql!("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .query_scalar()
                 .bind(table)
                 .fetch_all(&pool)
                 .await?;
@@ -401,7 +407,10 @@ async fn a_message_in_no_chat_is_reported() -> Result<()> {
         let db = fx.db.clone();
         async move {
             let pool = mirror::open_sqlite(&db, false).await?;
-            let rows: Vec<i64> = sqlx::query_scalar(sql).fetch_all(&pool).await?;
+            let rows: Vec<i64> = Sql::dynamic(test_sql_id!(), sql)
+                .query_scalar()
+                .fetch_all(&pool)
+                .await?;
             pool.close().await;
             anyhow::Ok(rows)
         }

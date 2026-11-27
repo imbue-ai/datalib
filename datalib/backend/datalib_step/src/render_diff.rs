@@ -189,7 +189,6 @@ pub async fn run(
         "diff: documents written"
     );
     progress.metric("documents_removed_total", &[], report.removed as i64);
-    datalib_core::layout::mark_derived_cache(&rendered_root);
     Ok(crate::render::claims(&env.step, &report))
 }
 

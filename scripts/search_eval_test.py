@@ -1,16 +1,19 @@
 """The checks `search_eval.py` trusts: an order check that cannot fail would
 report a wrong order as a pass, a left-out source that hid a target would
 report a miss the search never made, and a statement filed under the wrong
-query would send someone to read the wrong plan."""
+query, or its work added up wrong, would send someone to read the wrong plan."""
 
 import datetime
 import json
 import unittest
 
 from search_eval import (
+    add_work,
     attribute,
     left_out,
     out_of_order,
+    sql_work_of,
+    sql_work_table,
     statement_from_log_line,
     statement_from_run_store,
     statements_table,
@@ -165,3 +168,46 @@ class Statements(unittest.TestCase):
             rows[0],
         )
         self.assertEqual(statements_table([none]), [])
+
+
+LOOKUP: dict[str, object] = {
+    "runs": 2,
+    "rows": 4,
+    "rows_scanned": 40,
+    "vm_steps": 300,
+    "micros": 1500,
+    "max_micros": 900,
+    "loops": {"SEARCH search_terms USING INDEX terms_by_value (value=?)": 40},
+}
+
+
+class SqlWork(unittest.TestCase):
+    """What each answer's statements did, from the applet's header, added
+    up per query."""
+
+    def test_answers_add_up_name_by_name_and_loop_by_loop(self):
+        total = {}
+        for header in [json.dumps({"search_index.read.rank": LOOKUP})] * 2:
+            add_work(total, sql_work_of(header))
+        w = total["search_index.read.rank"]
+        self.assertEqual((w["runs"], w["rows_scanned"], w["micros"]), (4, 80, 3000))
+        self.assertEqual(w["max_micros"], 900)
+        self.assertEqual(
+            w["loops"], {"SEARCH search_terms USING INDEX terms_by_value (value=?)": 80}
+        )
+
+    def test_a_missing_or_broken_header_is_no_work(self):
+        self.assertEqual(sql_work_of(None), {})
+        self.assertEqual(sql_work_of("not json"), {})
+
+    def test_the_report_puts_the_costliest_statement_first_with_its_index(self):
+        cheap = dict(LOOKUP, micros=10, loops={})
+        results = [
+            {"sql_work": {"a.cheap": cheap, "b.costly": LOOKUP}},
+            {"sql_work": {"b.costly": LOOKUP}},
+        ]
+        table = sql_work_table(results)
+        rows = [line for line in table if line.startswith("| ") and "---" not in line]
+        self.assertTrue(rows[1].startswith("| b.costly | 4 | 80 |"), rows)
+        self.assertIn("USING INDEX terms_by_value", rows[1])
+        self.assertTrue(rows[2].startswith("| a.cheap |"), rows)

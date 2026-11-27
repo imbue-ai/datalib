@@ -38,6 +38,7 @@ use tokio::time::sleep;
 use tracing::{info, info_span, instrument, Instrument};
 
 pub use api::{ChatGPTClient, ChatGPTError};
+use datalib_sql::sql;
 pub use db::{db_path_for, Conversation, FileRef, LoadedConversation, LoadedRaw, RawDb};
 use export::ExportFiles;
 use fetchers::{Attachments, Conversations};
@@ -185,7 +186,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         "export": opts.export,
     });
     let export = opts.export.as_deref().map(ExportFiles::open).transpose()?;
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let held = db.load_me().await?;
     let client = ChatGPTClient::with_latchkey(opts.latchkey.clone())
         .holding_account(
@@ -211,7 +212,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     summary.new_blobs = ctx.counts.new_blobs.load(Ordering::Relaxed);
     summary.skipped_blobs = ctx.counts.skipped_blobs.load(Ordering::Relaxed);
     summary.blobs_from_export = ctx.counts.blobs_from_export.load(Ordering::Relaxed);
-    run.finish(found.ended_early(), &result, &summary).await;
+    run.summarize(&summary);
     result?;
     Ok(summary)
 }
@@ -642,11 +643,13 @@ async fn upsert_me(ctx: &Ctx<'_>, payload: &Value) -> Result<()> {
         .map(serde_json::to_string)
         .transpose()
         .context("serialize /me's volatile fields")?;
-    sqlx::query(
+    sql!(
+        "chatgpt.upsert_me_volatile_fields",
         "INSERT INTO me_bookkeeping (id, attempt_count, volatile_payload) \
          VALUES (?, 0, jsonb(?)) \
-         ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload",
+         ON CONFLICT(id) DO UPDATE SET volatile_payload = excluded.volatile_payload"
     )
+    .query()
     .bind(id)
     .bind(volatile)
     .execute(&mut *tx)

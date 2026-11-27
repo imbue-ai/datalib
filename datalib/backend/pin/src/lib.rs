@@ -15,6 +15,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{bail, Result};
+use datalib_sql::sql;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 /// The commit a store is read at: a full hash, and nothing else.
@@ -68,12 +69,17 @@ impl Pin {
 pub async fn head(pool: &SqlitePool) -> Result<Option<Pin>> {
     // A table read first: the `dolt_hashof` below reads any error as "no
     // commit", so a file that is not a store would pass for an empty one.
-    let _: i64 = sqlx::query_scalar("SELECT count(*) FROM sqlite_master")
-        .fetch_one(pool)
-        .await?;
+    let _: i64 = sql!(
+        "pin.count_schema_objects",
+        "SELECT count(*) FROM sqlite_master"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await?;
     // `dolt_hashof` resolves the ref; ordering `dolt_log()` by its
     // second-resolution `date` ties on every checkpointing writer.
-    let commit: Option<String> = sqlx::query_scalar("SELECT dolt_hashof('HEAD')")
+    let commit: Option<String> = sql!("pin.resolve_head", "SELECT dolt_hashof('HEAD')")
+        .query_scalar()
         .fetch_optional(pool)
         .await
         .unwrap_or(None);
@@ -97,9 +103,11 @@ pub async fn generation<'c, E>(conn: E) -> Result<Option<String>, sqlx::Error>
 where
     E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
 {
-    match sqlx::query_scalar::<_, String>(
-        "SELECT file_id || '.' || generation FROM store_generation WHERE id = 1",
+    match sql!(
+        "pin.read_store_generation",
+        "SELECT file_id || '.' || generation FROM store_generation WHERE id = 1"
     )
+    .query_scalar::<String>()
     .fetch_optional(conn)
     .await
     {
@@ -206,9 +214,11 @@ pub async fn open_at(db_path: &Path, pin: &Pin) -> Result<SqlitePool, sqlx::Erro
 /// a reader that took it for an empty store would report a source that
 /// lost every row.
 pub async fn holds_a_table(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
-    let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    let n: i64 = sql!(
+        "pin.has_user_table",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await?;
     Ok(n > 0)
@@ -233,6 +243,7 @@ async fn reader_pool(opts: SqliteConnectOptions) -> Result<SqlitePool, sqlx::Err
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     const HASH: &str = "cb290c9a12e6e5c1053568c864ab582adbf42743";
 
     /// `HEAD` resolves when the query runs, so a pin holding it would let
@@ -298,7 +309,8 @@ mod tests {
     }
 
     async fn commit(pool: &SqlitePool) -> Option<String> {
-        match sqlx::query_scalar("SELECT dolt_commit('-Am', 'c')")
+        match test_sql!("SELECT dolt_commit('-Am', 'c')")
+            .query_scalar()
             .fetch_one(pool)
             .await
         {
@@ -309,7 +321,8 @@ mod tests {
     }
 
     async fn insert(pool: &SqlitePool, id: i64) {
-        sqlx::query("INSERT INTO t VALUES (?)")
+        test_sql!("INSERT INTO t VALUES (?)")
+            .query()
             .bind(id)
             .execute(pool)
             .await
@@ -319,10 +332,11 @@ mod tests {
     async fn count_at(pool: &SqlitePool, pin: &Pin) -> Result<i64, sqlx::Error> {
         // Safe: `Pin::table` is a literal name and a hash checked to be
         // 40 hex characters.
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM {}",
-            pin.table("t")
-        )))
+        Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT COUNT(*) FROM {}", pin.table("t")),
+        )
+        .query_scalar()
         .fetch_one(pool)
         .await
     }
@@ -331,7 +345,8 @@ mod tests {
     /// build without the dolt extensions.
     async fn seeded(db: &Path) -> Option<SqlitePool> {
         let w = writer(db).await;
-        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&w)
             .await
             .unwrap();
@@ -351,15 +366,16 @@ mod tests {
         let db = td.path().join("t.doltlite_db");
         let Some(_w) = seeded(&db).await else { return };
         let r = open_reader(&db).await.unwrap();
-        sqlx::query("ATTACH ':memory:' AS probe")
+        test_sql!("ATTACH ':memory:' AS probe")
+            .query()
             .execute(&r)
             .await
             .unwrap();
         let attached = || async {
-            let ask = sqlx::query_scalar::<_, bool>(
-                "SELECT count(*) > 0 FROM pragma_database_list WHERE name = 'probe'",
-            )
-            .fetch_one(&r);
+            let ask =
+                test_sql!("SELECT count(*) > 0 FROM pragma_database_list WHERE name = 'probe'")
+                    .query_scalar::<bool>()
+                    .fetch_one(&r);
             tokio::time::timeout(Duration::from_secs(10), ask)
                 .await
                 .expect("the pool lost its connection and gives out none")
@@ -395,7 +411,8 @@ mod tests {
         assert_eq!(count_at(&r, &first).await.unwrap(), 1);
 
         insert(&w, 2).await;
-        let working: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+        let working: i64 = test_sql!("SELECT COUNT(*) FROM t")
+            .query_scalar()
             .fetch_one(&r)
             .await
             .unwrap();
@@ -430,7 +447,8 @@ mod tests {
         assert!(is_missing_table(&e, "t"), "{e}");
         assert!(!is_missing_table(&e, "u"), "{e}");
 
-        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&w)
             .await
             .unwrap();
@@ -451,14 +469,21 @@ mod tests {
         use sqlx::Row;
         let td = tempfile::tempdir().unwrap();
         let w = writer(&td.path().join("t.doltlite_db")).await;
-        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&w)
             .await
             .unwrap();
         insert(&w, 1).await;
         let err = |sql: &'static str| {
             let w = w.clone();
-            async move { sqlx::query(sql).fetch_all(&w).await.unwrap_err() }
+            async move {
+                Sql::dynamic(test_sql_id!(), sql)
+                    .query()
+                    .fetch_all(&w)
+                    .await
+                    .unwrap_err()
+            }
         };
         assert_eq!(
             missing_schema(&err("SELECT * FROM u").await),
@@ -469,7 +494,11 @@ mod tests {
             Some(Missing::Column("nope".into()))
         );
         assert_eq!(missing_schema(&err("SELEKT 1").await), None);
-        let row = sqlx::query("SELECT * FROM t").fetch_one(&w).await.unwrap();
+        let row = test_sql!("SELECT * FROM t")
+            .query()
+            .fetch_one(&w)
+            .await
+            .unwrap();
         let decoded = row.try_get::<i64, _>("nope").unwrap_err();
         assert_eq!(
             missing_schema(&decoded),

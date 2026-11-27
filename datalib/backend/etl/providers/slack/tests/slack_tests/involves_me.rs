@@ -12,6 +12,7 @@ use datalib_etl_slack_config::InvolvesMe;
 use serde_json::{json, Value};
 
 use crate::support::{channels_with_messages, fetch_into, msg, serve, stored_ts};
+use datalib_sql::test_sql;
 
 /// 2026-10-01 and 2026-10-15T12:00Z: the search reaches from `since` to
 /// half an hour before now, padded two days each way.
@@ -198,7 +199,8 @@ async fn sync(
 async fn history_scopes(out: &Path) -> BTreeSet<String> {
     let reader = datalib_pin::open_reader(&db_path_for(out)).await.unwrap();
     let scopes: Vec<String> =
-        sqlx::query_scalar("SELECT DISTINCT scope FROM coverage WHERE scope LIKE 'history:%'")
+        test_sql!("SELECT DISTINCT scope FROM coverage WHERE scope LIKE 'history:%'")
+            .query_scalar()
             .fetch_all(&reader)
             .await
             .unwrap();

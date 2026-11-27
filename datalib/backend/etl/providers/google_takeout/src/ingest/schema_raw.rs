@@ -2,6 +2,7 @@
 
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
+use datalib_sql::sql;
 use uuid::Uuid;
 
 /// Entity tables. [`full_ddl`] gives each of these, and each of
@@ -58,7 +59,7 @@ pub struct MapsReviewRow {
 
 /// `maps_saved_places` — one row per "saved place" (starred, wantgo,
 /// list entry, etc.). PK recipe:
-/// `uuidv5(NS, "maps_saved:{ftid_or_cid}:{date}")`.
+/// `uuidv5(NS, "maps_saved:{ftid, else cid, else q= query}:{date}")`.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "maps_saved_places")]
 pub struct MapsSavedPlaceRow {
@@ -315,19 +316,21 @@ pub const REREAD_V4: &[&str] = &["google_takeout/google_voice"];
 /// them whole, as if new. Which archive parts were read goes too, or an
 /// export kept zipped would never be unpacked for that read.
 async fn read_again(conn: &mut sqlx::SqliteConnection, scopes: &[&str]) -> anyhow::Result<()> {
-    let has_cursor: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')",
-    )
+    let has_cursor: bool = sql!("google_takeout.rung_read_again.find_ingested_files", "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')").query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if !has_cursor {
         return Ok(());
     }
     for scope in scopes.iter().chain([&super::unpack::SCOPE]) {
-        sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
-            .bind(scope)
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "google_takeout.rung_read_again.delete_ingested_files",
+            "DELETE FROM ingested_files WHERE scope = ?"
+        )
+        .query()
+        .bind(scope)
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -337,6 +340,7 @@ mod tests {
     use super::*;
     use datalib_etl::bulk::BulkUpsertable;
 
+    use datalib_sql::{test_sql_id, Sql};
     #[test]
     fn namespace_is_stable() {
         // Stable bytes-to-bytes: same recipe always hashes to the
@@ -369,7 +373,8 @@ mod tests {
             .await
             .unwrap();
         for sql in full_ddl() {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -382,7 +387,8 @@ mod tests {
             let sql = datalib_etl::prune::scope_ids_sql(table, &[column]);
             // Audited: a table and column of this module's constants.
             let plan: Vec<String> =
-                sqlx::query(sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}")))
+                Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"))
+                    .query()
                     .bind("x")
                     .fetch_all(&pool)
                     .await

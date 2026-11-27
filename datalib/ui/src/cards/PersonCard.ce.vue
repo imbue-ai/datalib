@@ -38,6 +38,7 @@ import {
   unlinkHandle,
   type ContactSummary,
   type NormalizedContact,
+  type WhenHeld,
 } from "./contacts";
 import {
   chipElAt,
@@ -60,6 +61,7 @@ import {
   nameToOffer,
   offerNote,
   offers,
+  othersWith,
   parseSubject,
   personModel,
   sectionLines,
@@ -147,6 +149,7 @@ onMounted(ask);
 watch([written, () => props.seenIn], () => {
   asked.value = false;
   ticks.value = {};
+  heldAs.value = {};
   void ask();
 });
 
@@ -166,9 +169,13 @@ The source of the chip you opened this from comes first.</p>
 <p>When they are not in your contacts, <em>Add to contacts</em> adds them
 with every handle ticked: the one you opened, and every other a source
 says is theirs. Untick what is wrong. One that is on another contact is not
-offered. A number a card writes without its country code is offered as the
-full number with the same digits, where a source knows one. Opening this
-page adds nobody.</p>
+ticked: tick it and say whether <em>both</em> have it, as two people who
+share an address do, or it <em>moves here</em> and comes off the other. A
+number a card writes without its country code is offered as the full
+number with the same digits, where a source knows one. Opening this page
+adds nobody.</p>
+<p>An address several of your contacts share has a page of its own, with
+each of them on it. Their own pages say it is shared.</p>
 <p>Under <em>Your contact</em>, <em>Edit</em> changes its name, note and
 details. What you type is kept as a draft that only you see, even after a
 reload, until <em>Save</em> publishes it or <em>Discard</em> drops it. If
@@ -185,9 +192,10 @@ contact's draft; you pick where sources disagree. A value you use does
 not follow its source afterwards: the card says when the source now says
 something else.</p>
 <p>Every handle is a chip: pale blue when it is on a contact, grey when
-not. Right-click one to add it to your contact, to say it is <em>not
-theirs</em>, or that it no longer works. <em>Not theirs</em> is
-remembered, so no agent suggests it again.</p>
+not. Right-click one to add it to your contact (beside whoever else has
+it, or moved off them), to say it is <em>not theirs</em>, or that it no
+longer works for them. <em>Not theirs</em> is remembered, so no agent
+suggests it again.</p>
 `);
 
 function sourceUri(sourceId: string): string {
@@ -204,8 +212,8 @@ function sourceLabel(sourceId: string): string {
 const everythingQuery = computed(() => {
   const s = subject.value;
   const { mine } = model.value;
-  if (s.kind === "handle") return everythingWith(s.handle, mine);
-  return mine ? everythingWith("", mine) : null;
+  if (s.kind === "handle") return everythingWith(s.handle, people.get(s.handle)?.mine ?? []);
+  return mine ? everythingWith("", [mine]) : null;
 });
 function everything() {
   if (everythingQuery.value) props.ctx.host.openCards(searchSource(everythingQuery.value));
@@ -233,6 +241,12 @@ function drawHeading(el: unknown, _version: number) {
   } else {
     el.replaceChildren();
   }
+}
+
+/// One of the contacts an address is shared by, as their chip.
+function drawContact(el: unknown, c: NormalizedContact, _version: number) {
+  if (!(el instanceof HTMLElement)) return;
+  el.replaceChildren(contactCell(c.key, nameOf(c), c));
 }
 
 /// Draw a handle's chip into its slot, showing the identifier. Called from a
@@ -299,19 +313,24 @@ async function onMenuPick(id: string) {
     switch (id) {
       case "handle-add":
         return linkHandle(handle, mine.key);
+      case "handle-share":
+        return linkHandle(handle, mine.key, "share");
+      case "handle-move":
+        return linkHandle(handle, mine.key, "move");
       case "handle-remove":
-        return unlinkHandle(handle);
+        return unlinkHandle(handle, mine.key);
       case "handle-stopped":
-        return setStoppedWorking(handle, todayPartialDate());
+        return setStoppedWorking(handle, mine.key, todayPartialDate());
       case "handle-works":
-        return setStoppedWorking(handle, null);
+        return setStoppedWorking(handle, mine.key, null);
     }
   });
 }
 
 function stoppedBy(handle: string, ev: Event) {
+  const mine = model.value.mine;
   const by = (ev.target as HTMLInputElement).value.trim();
-  void act(() => setStoppedWorking(handle, by || null));
+  if (mine) void act(() => setStoppedWorking(handle, mine.key, by || null));
 }
 
 const busy = ref(false);
@@ -347,9 +366,9 @@ function stateOf(h: string | null) {
   return h ? linkState(h, model.value.mine, whoOf) : null;
 }
 
-function ownerName(h: string | null): string {
-  const owner = h ? whoOf(h)?.mine : null;
-  return owner ? nameOf(owner) : "";
+/// Who else has a handle, by name: "Robert Picard and Marie Picard".
+function othersNamed(h: string | null): string {
+  return h ? othersWith(h, model.value.mine, whoOf).map(nameOf).join(" and ") : "";
 }
 
 async function addAll(s: PersonSection) {
@@ -375,7 +394,7 @@ function addLabel(s: PersonSection): string {
 
 const canAdd = computed(() => {
   void version.value;
-  if (model.value.mine || !hasContactsApp()) return false;
+  if (model.value.mine || model.value.sharedBy.length || !hasContactsApp()) return false;
   switch (subject.value.kind) {
     case "handle":
       return true;
@@ -392,10 +411,18 @@ const offered = computed(() => {
   void version.value;
   return canAdd.value ? offers(subject.value, model.value, answers) : [];
 });
-const isTicked = (o: Offer) => !o.owner && (ticks.value[o.handle] ?? o.ticked);
-const ticked = computed(() => offered.value.filter(isTicked).map((o) => o.handle));
+const isTicked = (o: Offer) => ticks.value[o.handle] ?? o.ticked;
+const ticked = computed(() => offered.value.filter(isTicked));
 function tick(o: Offer, ev: Event) {
   ticks.value = { ...ticks.value, [o.handle]: (ev.target as HTMLInputElement).checked };
+}
+/// For a ticked handle another contact has: both have it, unless the
+/// person says it moves here.
+const heldAs = ref<Record<string, WhenHeld>>({});
+const whenHeld = (o: Offer): WhenHeld | undefined =>
+  o.owners.length ? (heldAs.value[o.handle] ?? "share") : undefined;
+function holdAs(o: Offer, held: WhenHeld) {
+  heldAs.value = { ...heldAs.value, [o.handle]: held };
 }
 const newName = ref("");
 watch(
@@ -427,14 +454,17 @@ watch([canAdd, newName], findContacts);
 
 const addTo = (c: ContactSummary) =>
   act(async () => {
-    for (const h of ticked.value) await linkHandle(h, c.contact_id);
+    for (const o of ticked.value) await linkHandle(o.handle, c.contact_id, whenHeld(o));
   });
 const add = () =>
   act(async () => {
-    const handles = ticked.value;
-    const id = await createContact(newName.value.trim(), handles);
+    const free = ticked.value.filter((o) => !o.owners.length).map((o) => o.handle);
+    const id = await createContact(newName.value.trim(), free);
+    for (const o of ticked.value) {
+      if (o.owners.length) await linkHandle(o.handle, id, whenHeld(o));
+    }
     // Nothing but the contact names someone added with no handle.
-    if (handles.length === 0) written.value = contactSubject(id);
+    if (ticked.value.length === 0) written.value = contactSubject(id);
   });
 function openContact(c: ContactSummary) {
   props.ctx.host.openCards(personSource(contactSubject(c.contact_id), { seenIn: null }));
@@ -501,8 +531,11 @@ const headPhoto = computed(() => {
       <img v-if="headPhoto" class="person-head-photo" :src="headPhoto" alt="" />
       <div class="person-head-text">
         <h1 class="person-name" :ref="(el) => drawHeading(el, version)"></h1>
-        <p v-if="model.mine || canAdd" class="person-about">
-          <template v-if="model.mine">
+        <p v-if="model.mine || model.sharedBy.length || canAdd" class="person-about">
+          <template v-if="model.sharedBy.length">
+            Shared by {{ model.sharedBy.length }} of your contacts
+          </template>
+          <template v-else-if="model.mine">
             In your contacts · known to {{ model.sections.length }}
             {{ model.sections.length === 1 ? "source" : "sources" }}
           </template>
@@ -518,6 +551,13 @@ const headPhoto = computed(() => {
             Everything with them
           </button>
         </div>
+        <ul v-if="model.sharedBy.length" class="person-shared" aria-label="Who has it">
+          <li
+            v-for="c in model.sharedBy"
+            :key="c.key"
+            :ref="(el) => drawContact(el, c, version)"
+          ></li>
+        </ul>
         <div v-if="canAdd" ref="addForm" class="person-add">
           <ul v-if="offered.length" class="person-offers" aria-label="Handles to add">
             <li v-for="o in offered" :key="o.handle">
@@ -525,7 +565,7 @@ const headPhoto = computed(() => {
                 type="checkbox"
                 :aria-label="o.shown"
                 :checked="isTicked(o)"
-                :disabled="busy || !!o.owner"
+                :disabled="busy"
                 @change="tick(o, $event)"
               />
               <span
@@ -534,6 +574,33 @@ const headPhoto = computed(() => {
               ></span>
               <span v-if="o.label" class="person-muted">{{ o.label }}</span>
               <span class="person-muted">{{ offerNote(o, sourceLabel) }}</span>
+              <span
+                v-if="o.owners.length && isTicked(o)"
+                class="person-held"
+                role="radiogroup"
+                :aria-label="`${o.shown}: ${offerNote(o, sourceLabel)}`"
+              >
+                <label>
+                  <input
+                    type="radio"
+                    :name="`held-${o.handle}`"
+                    :checked="whenHeld(o) === 'share'"
+                    :disabled="busy"
+                    @change="holdAs(o, 'share')"
+                  />
+                  Both
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    :name="`held-${o.handle}`"
+                    :checked="whenHeld(o) === 'move'"
+                    :disabled="busy"
+                    @change="holdAs(o, 'move')"
+                  />
+                  Move it here
+                </label>
+              </span>
             </li>
           </ul>
           <ul v-if="found.length" class="person-found">
@@ -592,6 +659,9 @@ const headPhoto = computed(() => {
             :ref="(el) => drawInto(el, h.handle!, shownValue(h), version)"
           ></span>
           <span v-else>{{ h.value }}</span>
+          <span v-if="othersNamed(h.handle)" class="person-muted">
+            shared with {{ othersNamed(h.handle) }}
+          </span>
           <label v-if="h.handle && h.stopped_working_by" class="person-muted">
             stopped working by
             <input
@@ -657,7 +727,7 @@ const headPhoto = computed(() => {
                 same digits as {{ numbersLike(h.value) }}
               </span>
               <span v-if="stateOf(h.handle) === 'other'" class="person-muted">
-                on {{ ownerName(h.handle) }}
+                on {{ othersNamed(h.handle) }}
               </span>
             </li>
           </ul>
@@ -782,6 +852,23 @@ const headPhoto = computed(() => {
 }
 .person-offers li + li {
   margin-top: 0.15rem;
+}
+.person-held {
+  display: inline-flex;
+  gap: 0.6rem;
+}
+.person-held label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+.person-shared {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
 }
 .person-found {
   display: flex;

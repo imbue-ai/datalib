@@ -17,9 +17,10 @@ use crate::labels::{normalize_label, person_label, plan_agent_label, Held, Label
 use crate::schema::labels::LabelRow;
 use crate::schema::not_linked::NotLinkedRow;
 use crate::{
-    contact_subject, holder, insert_contact, insert_handle, plan_link, DecidedHow, LinkPlan, Maker,
-    Store,
+    contact_subject, holders, insert_contact, insert_handle, plan_link, DecidedHow, LinkPlan,
+    Maker, Store, WhenHeld,
 };
+use datalib_sql::sql;
 
 /// One batch from one agent, sealed as one commit. `run` names the
 /// agent's run, so its proposals can be told from another run's.
@@ -126,10 +127,12 @@ fn repeats_grouping<'g>(
 async fn rejected_groupings(
     conn: &mut sqlx::SqliteConnection,
 ) -> Result<Vec<(String, BTreeSet<String>)>> {
-    let rows: Vec<(String, String, String)> = sqlx::query_as(
+    let rows: Vec<(String, String, String)> = sql!(
+        "contacts_app.review.list_rejected_groupings",
         "SELECT contact_id, contact_name, handle FROM not_linked \
-          WHERE contact_rejected = 1 ORDER BY contact_id, handle",
+          WHERE contact_rejected = 1 ORDER BY contact_id, handle"
     )
+    .query_as()
     .fetch_all(&mut *conn)
     .await
     .context("read the rejected groupings")?;
@@ -154,14 +157,16 @@ enum AgentLink {
     Refused(String),
 }
 
-fn plan_agent_link(holder: Option<&str>, turned_down: bool, target: &str) -> AgentLink {
+/// An agent never shares a handle or moves one: an address on another
+/// contact is the person's to decide about.
+fn plan_agent_link(holders: &[String], turned_down: bool, target: &str) -> AgentLink {
     if turned_down {
         return AgentLink::Refused("a person said it is not this contact".to_string());
     }
-    match plan_link(holder, target) {
+    match plan_link(holders, target, WhenHeld::Refuse) {
         LinkPlan::Insert => AgentLink::Insert,
         LinkPlan::AlreadyLinked => AgentLink::Already,
-        LinkPlan::HeldBy(other) => AgentLink::Refused(format!("already belongs to {other}")),
+        _ => AgentLink::Refused(format!("already belongs to {}", holders.join(" and "))),
     }
 }
 
@@ -179,12 +184,16 @@ async fn person_says(
     let held = labels_of(tx, subject).await?;
     let stored = held.iter().find(|r| r.label == label);
     let Some(applies) = applies else {
-        sqlx::query("DELETE FROM labels WHERE subject = ? AND label = ?")
-            .bind(subject)
-            .bind(label)
-            .execute(&mut **tx)
-            .await
-            .context("forget a label")?;
+        sql!(
+            "contacts_app.review.delete_label",
+            "DELETE FROM labels WHERE subject = ? AND label = ?"
+        )
+        .query()
+        .bind(subject)
+        .bind(label)
+        .execute(&mut **tx)
+        .await
+        .context("forget a label")?;
         return Ok(stored.is_some());
     };
     let settled = stored.is_some_and(|r| r.applies == applies && r.reviewed_at_utc.is_some());
@@ -204,53 +213,61 @@ async fn awaiting_labels(
     conn: &mut sqlx::SqliteConnection,
     subject: &str,
 ) -> Result<Vec<(String, bool)>> {
-    sqlx::query_as(
+    sql!(
+        "contacts_app.review.list_labels_awaiting_review",
         "SELECT label, applies FROM labels \
-          WHERE subject = ? AND decided_how = 'agent' AND reviewed_at_utc IS NULL ORDER BY label",
+          WHERE subject = ? AND decided_how = 'agent' AND reviewed_at_utc IS NULL ORDER BY label"
     )
+    .query_as()
     .bind(subject)
     .fetch_all(&mut *conn)
     .await
     .context("read the labels waiting for review")
 }
 
-/// Unlink `handle` inside `tx` and write down that it is not theirs.
-/// Returns whether it was linked.
+/// Unlink `handle` from `contact_id` inside `tx` and write down that it
+/// is not theirs. Returns whether it was linked to them.
 pub(crate) async fn unlink_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     handle: &str,
+    contact_id: &str,
     now: &str,
     tz: &str,
 ) -> Result<bool> {
-    let Some(r) = sqlx::query(
-        "SELECT h.contact_id, h.agent, h.reason, c.name \
-           FROM handles h LEFT JOIN contacts c USING (contact_id) WHERE h.handle = ?",
+    let Some(r) = sql!(
+        "contacts_app.review.read_link_to_undo",
+        "SELECT h.agent, h.reason, c.name \
+           FROM handles h LEFT JOIN contacts c USING (contact_id) \
+          WHERE h.handle = ? AND h.contact_id = ?"
     )
+    .query()
     .bind(handle)
+    .bind(contact_id)
     .fetch_optional(&mut **tx)
     .await
     .context("read the link to undo")?
     else {
         return Ok(false);
     };
-    let contact_id: String = r.get("contact_id");
     let row = NotLinkedRow {
         handle: handle.to_string(),
         contact_name: r
             .get::<Option<String>, _>("name")
-            .unwrap_or_else(|| contact_id.clone()),
-        contact_id,
+            .unwrap_or_else(|| contact_id.to_string()),
+        contact_id: contact_id.to_string(),
         agent: r.get("agent"),
         reason: r.get("reason"),
         decided_at_utc: now.to_string(),
         tz_offset: tz.to_string(),
         contact_rejected: false,
     };
-    sqlx::query(
+    sql!(
+        "contacts_app.review.upsert_not_linked",
         "INSERT OR REPLACE INTO not_linked (handle, contact_id, contact_name, agent, \
            reason, decided_at_utc, tz_offset, contact_rejected) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
     )
+    .query()
     .bind(&row.handle)
     .bind(&row.contact_id)
     .bind(&row.contact_name)
@@ -262,22 +279,29 @@ pub(crate) async fn unlink_in(
     .execute(&mut **tx)
     .await
     .context("write down a turned-down link")?;
-    sqlx::query("DELETE FROM handles WHERE handle = ?")
-        .bind(handle)
-        .execute(&mut **tx)
-        .await
-        .context("unlink a handle")?;
+    sql!(
+        "contacts_app.review.delete_unlinked_handle",
+        "DELETE FROM handles WHERE handle = ? AND contact_id = ?"
+    )
+    .query()
+    .bind(handle)
+    .bind(contact_id)
+    .execute(&mut **tx)
+    .await
+    .context("unlink a handle")?;
     Ok(true)
 }
 
 /// `labels` has a two-column key, which `PortableTable` derives no
 /// upsert for.
 async fn write_label(conn: &mut sqlx::SqliteConnection, row: &LabelRow) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "contacts_app.review.upsert_label",
         "INSERT OR REPLACE INTO labels (subject, label, applies, decided_how, agent, reason, \
            decided_at_utc, reviewed_at_utc, tz_offset, confidence, run) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
+    .query()
     .bind(&row.subject)
     .bind(&row.label)
     .bind(row.applies)
@@ -295,11 +319,13 @@ async fn write_label(conn: &mut sqlx::SqliteConnection, row: &LabelRow) -> Resul
 }
 
 async fn labels_of(conn: &mut sqlx::SqliteConnection, subject: &str) -> Result<Vec<LabelRow>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "contacts_app.review.list_labels_of_subject",
         "SELECT subject, label, applies, decided_how, agent, reason, decided_at_utc, \
                 reviewed_at_utc, tz_offset, confidence, run FROM labels WHERE subject = ? \
-          ORDER BY label",
+          ORDER BY label"
     )
+    .query()
     .bind(subject)
     .fetch_all(&mut *conn)
     .await
@@ -332,11 +358,13 @@ async fn survivor(
     conn: &mut sqlx::SqliteConnection,
     contact_id: &str,
 ) -> Result<Option<(String, String)>> {
-    let row = sqlx::query(
+    let row = sql!(
+        "contacts_app.review.read_survivor",
         "SELECT c.contact_id, c.name FROM contacts c \
            JOIN contacts asked ON c.contact_id = COALESCE(asked.merged_into, asked.contact_id) \
-          WHERE asked.contact_id = ?",
+          WHERE asked.contact_id = ?"
     )
+    .query()
     .bind(contact_id)
     .fetch_optional(&mut *conn)
     .await
@@ -621,13 +649,13 @@ impl Store {
             };
             let mut plans = Vec::new();
             for h in &handles {
-                let held = holder(&mut tx, h).await?;
+                let held = holders(&mut *tx, h).await?;
                 let plan = match &target {
                     Some(id) => {
                         let refused = turned_down(&mut tx, h.as_str(), id).await?;
-                        plan_agent_link(held.as_deref(), refused, id)
+                        plan_agent_link(&held, refused, id)
                     }
-                    None => plan_agent_link(held.as_deref(), false, ""),
+                    None => plan_agent_link(&held, false, ""),
                 };
                 plans.push((h, plan));
             }
@@ -734,34 +762,42 @@ impl Store {
         let mut done = 0;
         for s in subjects {
             let subject = check_subject(&mut tx, s).await?;
-            let pending: Vec<String> = match subject.strip_prefix("contact:") {
-                Some(id) => sqlx::query_scalar(
-                    "SELECT handle FROM handles \
-                      WHERE contact_id = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL",
+            let pending: Vec<(String, String)> = match subject.strip_prefix("contact:") {
+                Some(id) => sql!(
+                    "contacts_app.review.list_agent_links_of_contact",
+                    "SELECT handle, contact_id FROM handles \
+                      WHERE contact_id = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL"
                 )
+                .query_as()
                 .bind(id),
-                None => sqlx::query_scalar(
-                    "SELECT handle FROM handles \
-                      WHERE handle = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL",
+                None => sql!(
+                    "contacts_app.review.list_agent_link_of_handle",
+                    "SELECT handle, contact_id FROM handles \
+                      WHERE handle = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL"
                 )
+                .query_as()
                 .bind(&subject),
             }
             .fetch_all(&mut *tx)
             .await
             .context("read the links waiting for review")?;
-            for h in &pending {
+            for (h, contact_id) in &pending {
                 if agree {
-                    sqlx::query(
-                        "UPDATE handles SET reviewed_at_utc = ?, tz_offset = ? WHERE handle = ?",
+                    sql!(
+                        "contacts_app.review.mark_link_reviewed",
+                        "UPDATE handles SET reviewed_at_utc = ?, tz_offset = ? \
+                          WHERE handle = ? AND contact_id = ?"
                     )
+                    .query()
                     .bind(&now)
                     .bind(&tz)
                     .bind(h)
+                    .bind(contact_id)
                     .execute(&mut *tx)
                     .await
                     .context("confirm an agent's link")?;
                     done += 1;
-                } else if unlink_in(&mut tx, h, &now, &tz).await? {
+                } else if unlink_in(&mut tx, h, contact_id, &now, &tz).await? {
                     done += 1;
                 }
             }
@@ -772,23 +808,34 @@ impl Store {
                 }
             }
             if let Some(id) = subject.strip_prefix("contact:").filter(|_| !agree) {
-                let emptied: Option<i64> = sqlx::query_scalar(
+                let emptied: Option<i64> = sql!(
+                    "contacts_app.review.is_agent_contact_empty",
                     "SELECT 1 FROM contacts WHERE contact_id = ?1 AND agent IS NOT NULL \
                       AND NOT EXISTS (SELECT 1 FROM handles WHERE contact_id = ?1) \
                       AND NOT EXISTS (SELECT 1 FROM fields WHERE contact_id = ?1) \
-                      AND NOT EXISTS (SELECT 1 FROM contacts WHERE merged_into = ?1)",
+                      AND NOT EXISTS (SELECT 1 FROM contacts WHERE merged_into = ?1)"
                 )
+                .query_scalar()
                 .bind(id)
                 .fetch_optional(&mut *tx)
                 .await
                 .context("read whether an agent's contact is empty")?;
                 if emptied.is_some() {
                     for sql in [
-                        "UPDATE not_linked SET contact_rejected = 1 WHERE contact_id = ?1",
-                        "DELETE FROM labels WHERE subject = 'contact:' || ?1",
-                        "DELETE FROM contacts WHERE contact_id = ?1",
+                        sql!(
+                            "contacts_app.review_with.update_not_linked",
+                            "UPDATE not_linked SET contact_rejected = 1 WHERE contact_id = ?1"
+                        ),
+                        sql!(
+                            "contacts_app.review_with.delete_labels",
+                            "DELETE FROM labels WHERE subject = 'contact:' || ?1"
+                        ),
+                        sql!(
+                            "contacts_app.review_with.delete_contacts",
+                            "DELETE FROM contacts WHERE contact_id = ?1"
+                        ),
                     ] {
-                        sqlx::query(sql)
+                        sql.query()
                             .bind(id)
                             .execute(&mut *tx)
                             .await
@@ -842,10 +889,8 @@ impl Store {
     /// review lists, contacts by name, then handles.
     pub async fn review(&self) -> Result<Vec<ReviewItem>> {
         let mut labels: HashMap<String, Vec<ReviewLabel>> = HashMap::new();
-        for r in sqlx::query(
-            "SELECT subject, label, applies, decided_how, agent, reason, decided_at_utc, \
-                    reviewed_at_utc, tz_offset, confidence, run FROM labels ORDER BY subject, label",
-        )
+        for r in sql!("contacts_app.review.list_all_labels", "SELECT subject, label, applies, decided_how, agent, reason, decided_at_utc, \
+                    reviewed_at_utc, tz_offset, confidence, run FROM labels ORDER BY subject, label").query()
         .fetch_all(&self.pool)
         .await
         .context("read the labels")?
@@ -858,10 +903,8 @@ impl Store {
         }
         let mut links: HashMap<String, Vec<ReviewLink>> = HashMap::new();
         let mut holders: HashMap<String, String> = HashMap::new();
-        for r in sqlx::query(
-            "SELECT handle, contact_id, linked_how, agent, reason, confidence, run, linked_at_utc, \
-                    reviewed_at_utc FROM handles ORDER BY contact_id, handle",
-        )
+        for r in sql!("contacts_app.review.list_all_links", "SELECT handle, contact_id, linked_how, agent, reason, confidence, run, linked_at_utc, \
+                    reviewed_at_utc FROM handles ORDER BY contact_id, handle").query()
         .fetch_all(&self.pool)
         .await
         .context("read the links")?
@@ -881,10 +924,12 @@ impl Store {
                 reviewed_at_utc: r.get("reviewed_at_utc"),
             });
         }
-        let contacts = sqlx::query(
+        let contacts = sql!(
+            "contacts_app.review.list_contacts_with_agent",
             "SELECT contact_id, name, agent FROM contacts WHERE merged_into IS NULL \
-              ORDER BY name COLLATE NOCASE, contact_id",
+              ORDER BY name COLLATE NOCASE, contact_id"
         )
+        .query()
         .fetch_all(&self.pool)
         .await
         .context("read the contacts")?;
@@ -935,10 +980,12 @@ impl Store {
     /// Every link a person turned down, newest first: what an agent
     /// reads before it proposes.
     pub async fn turned_down(&self) -> Result<Vec<TurnedDown>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "contacts_app.review.list_turned_down_links",
             "SELECT handle, contact_id, contact_name, agent, reason, decided_at_utc, \
-                    contact_rejected FROM not_linked ORDER BY decided_at_utc DESC, handle",
+                    contact_rejected FROM not_linked ORDER BY decided_at_utc DESC, handle"
         )
+        .query()
         .fetch_all(&self.pool)
         .await
         .context("read the turned-down links")?;
@@ -962,13 +1009,16 @@ async fn turned_down(
     handle: &str,
     contact_id: &str,
 ) -> Result<bool> {
-    let hit: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM not_linked WHERE handle = ? AND contact_id = ?")
-            .bind(handle)
-            .bind(contact_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .context("read whether a person turned a link down")?;
+    let hit: Option<i64> = sql!(
+        "contacts_app.review.is_link_turned_down",
+        "SELECT 1 FROM not_linked WHERE handle = ? AND contact_id = ?"
+    )
+    .query_scalar()
+    .bind(handle)
+    .bind(contact_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read whether a person turned a link down")?;
     Ok(hit.is_some())
 }
 
@@ -1014,14 +1064,18 @@ mod tests {
 
     #[test]
     fn an_agent_never_takes_a_handle_or_repeats_what_a_person_refused() {
-        assert_eq!(plan_agent_link(None, false, "a"), AgentLink::Insert);
-        assert_eq!(plan_agent_link(Some("a"), false, "a"), AgentLink::Already);
+        let held = |ids: &[&str]| -> Vec<String> { ids.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(plan_agent_link(&[], false, "a"), AgentLink::Insert);
+        assert_eq!(
+            plan_agent_link(&held(&["a"]), false, "a"),
+            AgentLink::Already
+        );
         assert!(matches!(
-            plan_agent_link(Some("b"), false, "a"),
+            plan_agent_link(&held(&["b"]), false, "a"),
             AgentLink::Refused(_)
         ));
         assert!(matches!(
-            plan_agent_link(None, true, "a"),
+            plan_agent_link(&[], true, "a"),
             AgentLink::Refused(_)
         ));
     }
@@ -1308,11 +1362,11 @@ mod tests {
             .unwrap();
         let lore = Handle::parse(&email("lore@enterprise.org")).unwrap();
         store.propose(&lore_to_data(&data, &lore)).await.unwrap();
-        assert!(store.unlink(&lore).await.unwrap());
+        assert!(store.unlink(&lore, &data).await.unwrap());
         assert_eq!(store.turned_down().await.unwrap().len(), 1);
-        store.link(&lore, &data).await.unwrap();
+        store.link(&lore, &data, WhenHeld::Refuse).await.unwrap();
         assert!(store.turned_down().await.unwrap().is_empty());
-        assert!(store.unlink(&lore).await.unwrap());
+        assert!(store.unlink(&lore, &data).await.unwrap());
         let down = store.turned_down().await.unwrap();
         assert_eq!(down.len(), 1, "a person's own link is written down too");
         assert_eq!(down[0].agent, None);

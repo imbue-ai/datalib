@@ -85,16 +85,6 @@ pub async fn run(
     let db_path = datalib_core::layout::grid_index_db(data_root);
     if let Some(parent) = db_path.parent() {
         std::fs::create_dir_all(parent)?;
-        // Tag the whole `unified_grid_and_search_index/` tree, not just this step's own
-        // directory: every index under it is rebuilt from the sidecar
-        // trees, so cache-aware backups (`restic --exclude-caches` etc.)
-        // may skip all of it. Tagging the parent also means the tag is
-        // right before the search step has ever run. Nothing precious lives
-        // here — the app's stores and the loop's record are under `system/`, which is
-        // never tagged.
-        datalib_core::layout::mark_derived_cache(
-            &datalib_core::layout::unified_grid_and_search_index_dir(data_root),
-        );
     }
     let pool = open_index(&db_path).await?;
 
@@ -293,53 +283,6 @@ mod tests {
         assert_eq!(
             holdings_summary(&[h("mail", 12, 0), h("notes", 3, 7)]),
             "15 documents in 2 searched sources; 7 not embedded"
-        );
-    }
-
-    /// The step marks the whole `unified_grid_and_search_index/` tree as derived cache, and
-    /// leaves `system/` alone.
-    #[tokio::test]
-    async fn grid_index_marks_the_index_tree_as_derived_cache() {
-        let td = tempfile::tempdir().unwrap();
-        let data_root = td.path();
-
-        let env = StepEnv {
-            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
-            group: "unified_grid_and_search_index".into(),
-            group_type: None,
-            diff_source_type: None,
-            function: crate::function::Function::UnifiedGridAndSearchIndex,
-            inputs: Vec::new(),
-        };
-        run(
-            data_root,
-            &env,
-            &Params::default(),
-            Some("2026-01-01T00:00:00+00:00"),
-            &Emitter::new("test".into()),
-            &StopFlag::new(),
-        )
-        .await
-        .expect("grid_index over an empty data root should succeed");
-
-        assert!(
-            data_root
-                .join("unified_grid_and_search_index/CACHEDIR.TAG")
-                .is_file(),
-            "unified_grid_and_search_index/ must be tagged, so one tag covers both index trees"
-        );
-        assert!(
-            !data_root
-                .join("unified_grid_and_search_index/unified_grid_and_search_index/CACHEDIR.TAG")
-                .exists(),
-            "the per-index tag was replaced by the one on the parent"
-        );
-        // `system/` is operational history — remote media, the loop's record — and is
-        // not rebuildable from raw, so it must never be swept up by
-        // `--exclude-caches`.
-        assert!(
-            !data_root.join("system/CACHEDIR.TAG").exists(),
-            "system/ must never be tagged as cache"
         );
     }
 }

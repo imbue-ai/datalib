@@ -33,6 +33,7 @@ use datalib_query::table::{Column, SearchTable};
 use datalib_schema::edges::EdgeRow;
 use datalib_schema::grid_rows::GridRowColumn;
 use datalib_schema::problems::{ProblemRow, ProblemRowColumn, ScopeKind};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// SQLite/doltlite-backed implementation of [`IndexRepo`].
 pub struct DoltRepo {
@@ -75,12 +76,15 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
         std::collections::HashMap::with_capacity(uuids.len());
     for chunk in uuids.chunks(LOOKUP_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(",");
-        let sql = format!(
-            "SELECT {} FROM {} WHERE uuid IN ({placeholders})",
-            search_row_select(),
-            at.grid_rows
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.read_rows_by_uuid"),
+            format!(
+                "SELECT {} FROM {} WHERE uuid IN ({placeholders})",
+                search_row_select(),
+                at.grid_rows
+            ),
         );
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut query = sql.query();
         for u in chunk {
             query = query.bind(u);
         }
@@ -111,7 +115,9 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
 
 /// Each record of a person holding one of the handles in the JSON array
 /// `?1`, with what they wrote over every document that carries it.
-pub const PEOPLE_SQL: &str = "\
+pub const PEOPLE_SQL: Sql = sql!(
+    "unified_grid_and_search_index.list_people_by_handles",
+    "\
     WITH seen AS MATERIALIZED ( \
       SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
              SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
@@ -126,12 +132,15 @@ pub const PEOPLE_SQL: &str = "\
       JOIN seen s ON s.record_id = h.record_id \
       JOIN contact_records r ON r.record_id = h.record_id \
      WHERE h.handle IN (SELECT value FROM json_each(?1)) \
-     ORDER BY h.handle, h.record_id";
+     ORDER BY h.handle, h.record_id"
+);
 
 /// Each record writing a number with no country code that ends in one of
 /// the last digits in the JSON array `?1`, as [`PEOPLE_SQL`] reads a
 /// record, its `handle` the number's digits.
-pub const SAME_DIGITS_SQL: &str = "\
+pub const SAME_DIGITS_SQL: Sql = sql!(
+    "unified_grid_and_search_index.list_people_with_same_last_digits",
+    "\
     WITH written AS MATERIALIZED ( \
       SELECT record_id, digits FROM contact_record_numbers \
         INDEXED BY contact_record_numbers_by_last_digits \
@@ -146,26 +155,33 @@ pub const SAME_DIGITS_SQL: &str = "\
       FROM written w \
       JOIN seen s ON s.record_id = w.record_id \
       JOIN contact_records r ON r.record_id = w.record_id \
-     ORDER BY w.digits, w.record_id";
+     ORDER BY w.digits, w.record_id"
+);
 
 /// Every full number a source knows that ends in one of the last digits
 /// in the JSON array `?1`.
-pub const FULL_NUMBERS_SQL: &str = "\
+pub const FULL_NUMBERS_SQL: Sql = sql!(
+    "unified_grid_and_search_index.list_full_numbers_by_last_digits",
+    "\
     SELECT DISTINCT handle FROM contact_record_handles \
       INDEXED BY contact_record_handles_by_last_digits \
      WHERE substr(handle, 1, 4) = 'tel:' \
        AND substr(handle, -7) IN (SELECT value FROM json_each(?1)) \
-     ORDER BY handle";
+     ORDER BY handle"
+);
 
 /// The record of each contact's own page in the JSON array `?1`, by the
 /// page's id.
-pub const CONTACT_PAGES_SQL: &str = "\
+pub const CONTACT_PAGES_SQL: Sql = sql!(
+    "unified_grid_and_search_index.list_people_of_contact_pages",
+    "\
     SELECT g.uuid AS handle, r.contact_json, NULL AS items, NULL AS last_at, 1 AS credit \
       FROM grid_rows g \
       JOIN document_contacts d ON d.markdown_uuid = g.markdown_uuid \
       JOIN contact_records r ON r.record_id = d.record_id \
      WHERE g.uuid IN (SELECT value FROM json_each(?1)) \
-       AND g.uuid = g.markdown_uuid AND g.contact IS NOT NULL";
+       AND g.uuid = g.markdown_uuid AND g.contact IS NOT NULL"
+);
 
 #[derive(sqlx::FromRow)]
 struct PersonRecord {
@@ -202,8 +218,8 @@ async fn add_subject_people<'r>(
     let docs: Vec<&String> = by_doc.keys().collect();
     let wanted = serde_json::to_string(&docs)
         .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
-    let found: Vec<(String, String, Option<String>, Option<i64>)> = match sqlx::query_as(
-        // A document's own row has the document's uuid; its supplied
+    let found: Vec<(String, String, Option<String>, Option<i64>)> = match sql!(
+        "unified_grid_and_search_index.list_subject_people", // A document's own row has the document's uuid; its supplied
         // terms are `[kind, value]` pairs.
         "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), MAX(d.seen_items) \
            FROM grid_rows g, json_each(g.supplied_terms) t \
@@ -213,8 +229,9 @@ async fn add_subject_people<'r>(
            LEFT JOIN contact_records r ON r.record_id = d.record_id \
           WHERE g.uuid IN (SELECT value FROM json_each(?2)) \
             AND json_extract(t.value, '$[0]') = ?1 \
-          GROUP BY g.uuid, person",
+          GROUP BY g.uuid, person"
     )
+    .query_as()
     .bind(datalib_schema::search_terms::SearchTermKind::Subject.as_str())
     .bind(wanted)
     .fetch_all(&mut *at.tx)
@@ -264,13 +281,15 @@ async fn add_contact_handles<'r>(
     let docs: Vec<&String> = contacts.keys().collect();
     let wanted = serde_json::to_string(&docs)
         .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
-    let read: Vec<(String, String, Option<String>)> = match sqlx::query_as(
+    let read: Vec<(String, String, Option<String>)> = match sql!(
+        "unified_grid_and_search_index.list_contact_kinds_and_handles",
         "SELECT d.markdown_uuid, r.contact_json ->> '$.kind', h.handle FROM document_contacts d \
            JOIN contact_records r ON r.record_id = d.record_id \
            LEFT JOIN contact_record_handles h ON h.record_id = d.record_id \
           WHERE d.markdown_uuid IN (SELECT value FROM json_each(?)) \
-          ORDER BY d.markdown_uuid, h.handle",
+          ORDER BY d.markdown_uuid, h.handle"
     )
+    .query_as()
     .bind(wanted)
     .fetch_all(&mut *at.tx)
     .await
@@ -479,7 +498,11 @@ impl DoltRepo {
         // Audited: as `search` — a literal table name, literal columns, a
         // literal index name and `build_where`'s static column names;
         // every value is bound.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut query = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_rows_matching"),
+            sql,
+        )
+        .query();
         for p in &params {
             query = query.bind(p);
         }
@@ -514,25 +537,35 @@ impl DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(None);
         };
-        let ddl = datalib_schema::problems::DDL[0].1.replacen(
-            "CREATE TABLE IF NOT EXISTS problems",
-            "CREATE TEMP TABLE IF NOT EXISTS step_problems",
-            1,
+        let ddl = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.create_temp_problems"),
+            datalib_schema::problems::DDL[0].1.replacen(
+                "CREATE TABLE IF NOT EXISTS problems",
+                "CREATE TEMP TABLE IF NOT EXISTS step_problems",
+                1,
+            ),
         );
         // Audited: the problems table's own DDL, its name swapped for a
         // literal; nothing from data.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        ddl.query()
             .execute(&mut *at.tx)
             .await
             .map_err(|e| internal("make this read's problems table", e))?;
-        sqlx::query("DELETE FROM temp.step_problems")
-            .execute(&mut *at.tx)
-            .await
-            .map_err(|e| internal("empty this read's problems table", e))?;
-        let insert = datalib_table::insert_sql::<ProblemRow>().replacen(
-            "INSERT INTO problems ",
-            "INSERT INTO temp.step_problems ",
-            1,
+        sql!(
+            "unified_grid_and_search_index.clear_temp_problems",
+            "DELETE FROM temp.step_problems"
+        )
+        .query()
+        .execute(&mut *at.tx)
+        .await
+        .map_err(|e| internal("empty this read's problems table", e))?;
+        let insert = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.insert_temp_problem"),
+            datalib_table::insert_sql::<ProblemRow>().replacen(
+                "INSERT INTO problems ",
+                "INSERT INTO temp.step_problems ",
+                1,
+            ),
         );
         let steps = datalib_step_problems::of_steps(&self.root).await;
         datalib_step_problems::say_unread(&steps);
@@ -540,13 +573,10 @@ impl DoltRepo {
             for row in &step.rows {
                 // Audited: `insert` is built from `ProblemRow`'s associated
                 // consts, never from row data; every value is bound.
-                datalib_table::BulkUpsertable::bind_into(
-                    row,
-                    sqlx::query(sqlx::AssertSqlSafe(insert.clone())),
-                )
-                .execute(&mut *at.tx)
-                .await
-                .map_err(|e| internal("gather a step's problems", e))?;
+                datalib_table::BulkUpsertable::bind_into(row, insert.query())
+                    .execute(&mut *at.tx)
+                    .await
+                    .map_err(|e| internal("gather a step's problems", e))?;
             }
         }
         at.problems = "temp.step_problems";
@@ -675,13 +705,14 @@ impl At {
     /// The records `sql` reads for the strings in `of`.
     async fn person_records(
         &mut self,
-        sql: &'static str,
+        sql: Sql,
         of: &[String],
     ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
         if of.is_empty() {
             return Ok(Vec::new());
         }
-        let rows: Vec<PersonRecord> = sqlx::query_as(sql)
+        let rows: Vec<PersonRecord> = sql
+            .query_as()
             .bind(json_array(of)?)
             .fetch_all(&mut *self.tx)
             .await
@@ -713,7 +744,8 @@ impl At {
         if last_digits.is_empty() {
             return Ok(Vec::new());
         }
-        let handles: Vec<String> = sqlx::query_scalar(FULL_NUMBERS_SQL)
+        let handles: Vec<String> = FULL_NUMBERS_SQL
+            .query_scalar()
             .bind(json_array(last_digits)?)
             .fetch_all(&mut *self.tx)
             .await
@@ -732,7 +764,8 @@ impl At {
         }
         let mut read = std::collections::HashMap::new();
         for node in nodes {
-            let facts: Result<(bool, bool, bool), _> = sqlx::query_as(crate::at_node::FACTS_SQL)
+            let facts: Result<(bool, bool, bool), _> = crate::at_node::FACTS_SQL
+                .query_as()
                 .bind(&node)
                 .fetch_one(&mut *self.tx)
                 .await;
@@ -767,7 +800,11 @@ impl At {
         let (sql, params) = ordered_sql_where(table, where_params, sort);
         // Audited: the table name is a literal on `At`, every column name
         // a column enum's `as_str`, and every value bound.
-        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        let mut query = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_sorted_keys"),
+            sql,
+        )
+        .query_scalar::<String>();
         for p in &params {
             query = query.bind(p);
         }
@@ -786,9 +823,12 @@ impl At {
         params: &[String],
         by: &[C],
     ) -> Result<(Vec<GroupKey>, bool), RepoError> {
-        let sql = group_sql(table, where_sql, by);
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_group_keys"),
+            group_sql(table, where_sql, by),
+        );
         // Audited: as `ordered_keys`.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut query = sql.query();
         for p in params {
             query = query.bind(p);
         }
@@ -821,9 +861,12 @@ impl At {
         column: C,
         typed: &str,
     ) -> Result<Vec<(String, u64)>, RepoError> {
-        let sql = values_sql(table, where_sql, column);
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.count_column_values"),
+            values_sql(table, where_sql, column),
+        );
         // Audited: as `ordered_keys`; the column is a `&'static str`.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut query = sql.query();
         for p in params {
             query = query.bind(p);
         }
@@ -899,14 +942,18 @@ impl At {
         }
         let wanted = serde_json::to_string(documents)
             .map_err(|e| RepoError::Internal(format!("encode documents: {e}")))?;
-        let sql = format!(
-            "SELECT markdown_uuid, title FROM {} \
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.read_document_titles"),
+            format!(
+                "SELECT markdown_uuid, title FROM {} \
              WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
                AND title IS NOT NULL AND title != ''",
-            self.markdowns
+                self.markdowns
+            ),
         );
         // Audited: the table name is a literal; the uuids are one bound array.
-        match sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+        match sql
+            .query_as::<(String, String)>()
             .bind(wanted)
             .fetch_all(&mut *self.tx)
             .await
@@ -925,14 +972,17 @@ impl At {
         let mut out = std::collections::HashMap::with_capacity(uuids.len());
         for chunk in uuids.chunks(LOOKUP_CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(",");
-            let sql = format!(
-                "SELECT uuid, markdown_uuid FROM {} \
+            let sql = Sql::dynamic(
+                sql_id!("unified_grid_and_search_index.find_documents_of_rows"),
+                format!(
+                    "SELECT uuid, markdown_uuid FROM {} \
                  WHERE uuid IN ({placeholders}) AND markdown_uuid IS NOT NULL",
-                self.grid_rows
+                    self.grid_rows
+                ),
             );
             // Audited: the table name is a literal; a placeholder run
             // sized from the chunk, every uuid bound.
-            let mut query = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
+            let mut query = sql.query_as::<(String, String)>();
             for u in chunk {
                 query = query.bind(u);
             }
@@ -952,14 +1002,17 @@ impl At {
         params: &[String],
         limit: usize,
     ) -> Result<Vec<ProblemRow>, RepoError> {
-        let sql = format!(
-            "SELECT * FROM {}{where_sql} ORDER BY changed_at_utc DESC, problem_uuid LIMIT ?",
-            self.problems
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_problems_newest"),
+            format!(
+                "SELECT * FROM {}{where_sql} ORDER BY changed_at_utc DESC, problem_uuid LIMIT ?",
+                self.problems
+            ),
         );
         // Audited: the table name is a literal; `where_sql` splices only
         // column names from a column enum's `as_str`, or literals, and
         // binds every value.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut query = sql.query();
         for p in params {
             query = query.bind(p.clone());
         }
@@ -992,14 +1045,17 @@ impl IndexRepo for DoltRepo {
         };
         // Audited: `level_sql` is built from literals alone; every value
         // is bound.
-        let read: Result<Vec<Place>, _> =
-            sqlx::query_as(sqlx::AssertSqlSafe(places::level_sql(parent)))
-                .bind(parent.bound())
-                .bind(&after.sort_key)
-                .bind(&after.uuid)
-                .bind((limit + 1) as i64)
-                .fetch_all(&mut *at.tx)
-                .await;
+        let read: Result<Vec<Place>, _> = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_places_under"),
+            places::level_sql(parent),
+        )
+        .query_as()
+        .bind(parent.bound())
+        .bind(&after.sort_key)
+        .bind(&after.uuid)
+        .bind((limit + 1) as i64)
+        .fetch_all(&mut *at.tx)
+        .await;
         match read {
             Ok(read) => Ok(places::page(read, limit, at.commit)),
             Err(e) => Err(RepoError::Internal(format!(
@@ -1012,7 +1068,8 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        match sqlx::query_scalar(places::SOURCES_WITH_PLACES_SQL)
+        match places::SOURCES_WITH_PLACES_SQL
+            .query_scalar()
             .fetch_all(&mut *at.tx)
             .await
         {
@@ -1028,11 +1085,11 @@ impl IndexRepo for DoltRepo {
             return Ok(Vec::new());
         };
         // Audited: `grid_rows` is a literal table name.
-        let query = format!("SELECT DISTINCT source_id FROM {}", at.grid_rows);
-        match sqlx::query_scalar(sqlx::AssertSqlSafe(query))
-            .fetch_all(&mut *at.tx)
-            .await
-        {
+        let query = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_source_ids"),
+            format!("SELECT DISTINCT source_id FROM {}", at.grid_rows),
+        );
+        match query.query_scalar().fetch_all(&mut *at.tx).await {
             Ok(sources) => Ok(sources),
             Err(e) => Err(RepoError::Internal(e.to_string())),
         }
@@ -1075,12 +1132,15 @@ impl IndexRepo for DoltRepo {
         params.push(utc.to_string());
         // Audited: the table name is a literal on `At`, every column name
         // a column enum's `as_str`, and every value bound.
-        let sql = format!(
-            "SELECT count(*) FROM {}{where_sql}{joiner} {} > ?",
-            at.grid_rows,
-            column.as_str()
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.count_rows_after"),
+            format!(
+                "SELECT count(*) FROM {}{where_sql}{joiner} {} > ?",
+                at.grid_rows,
+                column.as_str()
+            ),
         );
-        let mut query = sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql));
+        let mut query = sql.query_scalar::<i64>();
         for p in &params {
             query = query.bind(p);
         }
@@ -1110,15 +1170,18 @@ impl IndexRepo for DoltRepo {
         } else {
             " AND"
         };
-        let sql = format!(
-            "SELECT uuid FROM {}{where_sql}{joiner} uuid IN (SELECT value FROM json_each(?)){}",
-            at.grid_rows,
-            order
-                .as_deref()
-                .map(|o| format!(" ORDER BY {o}"))
-                .unwrap_or_default()
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.filter_uuids"),
+            format!(
+                "SELECT uuid FROM {}{where_sql}{joiner} uuid IN (SELECT value FROM json_each(?)){}",
+                at.grid_rows,
+                order
+                    .as_deref()
+                    .map(|o| format!(" ORDER BY {o}"))
+                    .unwrap_or_default()
+            ),
         );
-        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql));
+        let mut query = sql.query_scalar::<String>();
         for p in params.iter().chain([&wanted]) {
             query = query.bind(p);
         }
@@ -1211,10 +1274,13 @@ impl IndexRepo for DoltRepo {
         let q = at.read_at(q).await?;
         let (where_sql, params) = where_within(&q, &[]);
         let (held, needle) = vals_holding("v.val_id", typed);
-        let sql = term_values_sql(at.grid_rows, &where_sql, kinds, &held, by_name);
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.count_term_values"),
+            term_values_sql(at.grid_rows, &where_sql, kinds, &held, by_name),
+        );
         // Audited: the kinds are the enum's codes, the table names are
         // `&'static str`, and every value is bound.
-        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(needle);
+        let mut query = sql.query().bind(needle);
         if by_name {
             query = query.bind(like_pattern(typed));
         }
@@ -1264,17 +1330,21 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(None);
         };
-        let sql = format!(
-            "SELECT source_id, conversation_name, account, project, channel, \
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.read_chat_meta"),
+            format!(
+                "SELECT source_id, conversation_name, account, project, channel, \
                     created_at, source_label, source_url, image \
              FROM {} \
              WHERE markdown_uuid = ? \
              ORDER BY CASE WHEN kind IN ('Chat','Slack Thread') THEN 0 ELSE 1 END \
              LIMIT 1",
-            at.grid_rows
+                at.grid_rows
+            ),
         );
         // Audited: `at.grid_rows` is a literal; the uuid is bound.
-        let row = match sqlx::query(sqlx::AssertSqlSafe(sql))
+        let row = match sql
+            .query()
             .bind(markdown_uuid)
             .fetch_optional(&mut *at.tx)
             .await
@@ -1373,19 +1443,18 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let sql = format!(
-            "SELECT markdown_uuid, title, kind, provider, created_at \
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_recent_documents"),
+            format!(
+                "SELECT markdown_uuid, title, kind, provider, created_at \
              FROM {} \
              ORDER BY created_at IS NULL, created_at DESC \
              LIMIT ?",
-            at.markdowns
+                at.markdowns
+            ),
         );
         // Audited: `at.markdowns` is a literal; the limit is bound.
-        let rows = match sqlx::query(sqlx::AssertSqlSafe(sql))
-            .bind(limit as i64)
-            .fetch_all(&mut *at.tx)
-            .await
-        {
+        let rows = match sql.query().bind(limit as i64).fetch_all(&mut *at.tx).await {
             Ok(rows) => rows,
             Err(e) => return Err(RepoError::Internal(e.to_string())),
         };
@@ -1406,13 +1475,17 @@ impl IndexRepo for DoltRepo {
             return Ok(Vec::new());
         };
         // Audited: `at.grid_rows` is a literal; no values.
-        let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT markdown_uuid, source_id, conversation_name, provider, source_label, \
+        let rows = match Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_document_rows"),
+            format!(
+                "SELECT markdown_uuid, source_id, conversation_name, provider, source_label, \
                     kind, created_at, account, channel \
                FROM {} \
               WHERE is_document = 1 AND markdown_uuid IS NOT NULL",
-            at.grid_rows
-        )))
+                at.grid_rows
+            ),
+        )
+        .query()
         .fetch_all(&mut *at.tx)
         .await
         {
@@ -1490,10 +1563,14 @@ impl IndexRepo for DoltRepo {
         };
         // Audited: as `matching` — a literal table name and `build_where`'s
         // static column names; every value is bound, the ids last.
-        let mut query = sqlx::query_as::<_, (String,)>(sqlx::AssertSqlSafe(format!(
-            "SELECT DISTINCT markdown_uuid FROM {}{clause}",
-            at.grid_rows
-        )));
+        let mut query = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_kept_documents"),
+            format!(
+                "SELECT DISTINCT markdown_uuid FROM {}{clause}",
+                at.grid_rows
+            ),
+        )
+        .query_as::<(String,)>();
         for p in &params {
             query = query.bind(p);
         }
@@ -1513,14 +1590,18 @@ impl IndexRepo for DoltRepo {
         let wanted = serde_json::to_string(markdown_uuids)
             .map_err(|e| RepoError::Internal(format!("encode document ids: {e}")))?;
         // Audited: `at.grid_rows` is a literal; the ids are bound.
-        let rows = match sqlx::query(sqlx::AssertSqlSafe(format!(
-            // By uuid: an item's is time-prefixed, so a document's
-            // messages come in the order they were said.
-            "SELECT uuid, kind, markdown_uuid, provider, is_document \
+        let rows = match Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_rows_of_documents"),
+            format!(
+                // By uuid: an item's is time-prefixed, so a document's
+                // messages come in the order they were said.
+                "SELECT uuid, kind, markdown_uuid, provider, is_document \
              FROM {} WHERE markdown_uuid IN (SELECT value FROM json_each(?)) \
              ORDER BY uuid",
-            at.grid_rows
-        )))
+                at.grid_rows
+            ),
+        )
+        .query()
         .bind(wanted)
         .fetch_all(&mut *at.tx)
         .await
@@ -1580,18 +1661,22 @@ impl IndexRepo for DoltRepo {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());
         };
-        let sql = format!(
-            "SELECT e.edge_uuid, e.src_markdown_uuid, e.src_anchor_uuid, \
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.list_outgoing_edges"),
+            format!(
+                "SELECT e.edge_uuid, e.src_markdown_uuid, e.src_anchor_uuid, \
                     e.dst_markdown_uuid, e.dst_anchor_uuid, e.label, e.kind, \
                     m.title AS dst_title \
              FROM {} e \
              LEFT JOIN {} m ON m.markdown_uuid = e.dst_markdown_uuid \
              WHERE e.src_markdown_uuid = ? AND e.kind = ?",
-            at.edges, at.markdowns
+                at.edges, at.markdowns
+            ),
         );
         // Audited: `at.edges` and `at.markdowns` are literals; the uuid
         // and the kind are bound. The page draws links; a reply is not one.
-        let rows = match sqlx::query(sqlx::AssertSqlSafe(sql))
+        let rows = match sql
+            .query()
             .bind(markdown_uuid)
             .bind(datalib_schema::edges::EdgeKind::Link.as_i64())
             .fetch_all(&mut *at.tx)
@@ -1638,13 +1723,17 @@ impl IndexRepo for DoltRepo {
         };
         // Audited: `at.markdowns` is a literal table name; the set is one
         // bound JSON array.
-        let sql = format!(
-            "SELECT m.markdown_uuid, m.source_id, c.store_commit FROM {} m \
+        let sql = Sql::dynamic(
+            sql_id!("unified_grid_and_search_index.find_document_stores"),
+            format!(
+                "SELECT m.markdown_uuid, m.source_id, c.store_commit FROM {} m \
              JOIN source_cursors c ON c.source_id = m.source_id \
              WHERE m.markdown_uuid IN (SELECT value FROM json_each(?))",
-            at.markdowns
+                at.markdowns
+            ),
         );
-        let rows: Vec<(String, String, String)> = match sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        let rows: Vec<(String, String, String)> = match sql
+            .query_as()
             .bind(
                 serde_json::to_string(markdown_uuids)
                     .map_err(|e| RepoError::Internal(e.to_string()))?,

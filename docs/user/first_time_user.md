@@ -664,23 +664,12 @@ faster.
     └── frontend/                   # UI components: the applets', and yours in frontend/user/
 ```
 
-> **Backups:** the bulky **derived** trees — each `<group>/render_markdown/`,
-> and `unified_grid_and_search_index/` — are rebuilt from your raw
-> stores by re-running the pipeline, and each carries a `CACHEDIR.TAG`,
-> so cache-aware backup tools skip them automatically:
->
-> ```sh
-> restic backup ~/datalib --exclude-caches        # or: borg create --exclude-caches
-> tar --exclude-caches -czf datalib-backup.tgz ~/datalib
-> ```
->
-> What's left in the backup is what you want to keep: every
-> `<group>/ingest/` store (the captured data), `config.toml`,
-> `datalib_curated/`, and `system/` (scheduler state, remote media you
-> allowed, sync history). One
-> exception: `system/frontend/` carries a `CACHEDIR.TAG` too, so the
-> components you or an agent wrote in `system/frontend/user/` are
-> skipped — back that folder up separately if you have any.
+> **Backups:** quit the app and copy the whole folder, or point a
+> backup tool at it. Each `<group>/render_markdown/` and
+> `unified_grid_and_search_index/` are rebuilt by a sync, so a smaller
+> backup can leave them out, but only together with `system/`, which
+> would otherwise say they are still there.
+> [Backing up a library](backing_up.md) says what to keep and why.
 
 A per-step report prints when the run finishes, and a machine-readable
 `run_summary` event lands on `datalib-pipeline`'s stderr (NDJSON — tee

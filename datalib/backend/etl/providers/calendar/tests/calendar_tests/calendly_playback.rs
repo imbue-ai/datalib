@@ -11,6 +11,7 @@ use datalib_etl_web::http::{HttpResponse, LatchkeySettings};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use datalib_probe::ProbeAsk;
+use datalib_sql::{test_sql, Sql};
 use serde_json::{json, Value};
 
 pub(crate) const USER: &str = "https://api.calendly.com/users/PICARD0000000001";
@@ -112,27 +113,35 @@ pub(crate) async fn run(playback: &Path, store: &Path, window: Option<Window>) -
     summary
 }
 
-async fn strings(store: &Path, sql: &'static str) -> Vec<String> {
+async fn strings(store: &Path, sql: Sql) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let v = sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap();
+    let v = sql.query_scalar().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     v
 }
 
 async fn event_ids(store: &Path) -> Vec<String> {
-    strings(store, "SELECT id FROM calendly_events ORDER BY id").await
+    strings(
+        store,
+        test_sql!("SELECT id FROM calendly_events ORDER BY id"),
+    )
+    .await
 }
 
 async fn invitee_ids(store: &Path) -> Vec<String> {
     strings(
         store,
-        "SELECT id FROM calendly_invitees WHERE payload IS NOT NULL ORDER BY id",
+        test_sql!("SELECT id FROM calendly_invitees WHERE payload IS NOT NULL ORDER BY id"),
     )
     .await
 }
 
 async fn problem_keys(store: &Path) -> Vec<String> {
-    strings(store, "SELECT scope_key FROM problems ORDER BY scope_key").await
+    strings(
+        store,
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key"),
+    )
+    .await
 }
 
 fn key(uuid: &str) -> String {
@@ -310,8 +319,8 @@ async fn lists_meetings_reads_their_invitees_and_drops_what_is_gone() {
     assert_eq!(invitee_ids(&store).await, all);
     let counsel: Vec<String> = strings(
         &store,
-        "SELECT json_extract(value, '$.name') FROM calendly_invitees, \
-         json_each(json_extract(payload, '$.invitees')) WHERE calendly_invitees.id LIKE '%EVCOUNSEL%'",
+        test_sql!("SELECT json_extract(value, '$.name') FROM calendly_invitees, \
+         json_each(json_extract(payload, '$.invitees')) WHERE calendly_invitees.id LIKE '%EVCOUNSEL%'"),
     )
     .await;
     assert_eq!(counsel, vec!["Reginald Barclay", "Deanna Troi"]);
@@ -337,7 +346,7 @@ async fn lists_meetings_reads_their_invitees_and_drops_what_is_gone() {
     assert_eq!(invitee_ids(&store).await, now);
     let sidecars = strings(
         &store,
-        "SELECT id FROM calendly_invitees_bookkeeping ORDER BY id",
+        test_sql!("SELECT id FROM calendly_invitees_bookkeeping ORDER BY id"),
     )
     .await;
     assert_eq!(sidecars, now, "the gone meeting's sidecar went with it");
@@ -489,7 +498,7 @@ async fn a_listing_it_cannot_fully_read_drops_nothing() {
         assert_eq!(event_ids(&store).await, both);
         assert_eq!(problem_keys(&store).await, vec!["listing:meetings"]);
         assert_eq!(
-            strings(&store, "SELECT severity FROM problems").await,
+            strings(&store, test_sql!("SELECT severity FROM problems")).await,
             ["error"]
         );
     }

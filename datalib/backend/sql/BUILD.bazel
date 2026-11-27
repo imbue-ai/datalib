@@ -1,0 +1,26 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# `Sql`, `sql!` and `sql_id!`: every statement Datalib runs, named where it
+# is written. Its one dependency is sqlx, since everything that runs a
+# statement links it.
+rust_library(
+    name = "datalib_sql",
+    srcs = [
+        "src/lib.rs",
+        "src/tag.rs",
+        "src/values.rs",
+    ],
+    crate_name = "datalib_sql",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "@datalib_crates//:sqlx",
+    ],
+)
+
+rust_test(
+    name = "sql_unittests",
+    size = "small",
+    crate = ":datalib_sql",
+    edition = "2021",
+)

@@ -17,6 +17,7 @@ rust_library(
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",

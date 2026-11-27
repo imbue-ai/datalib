@@ -12,6 +12,7 @@ use sqlx::SqliteConnection;
 use super::messenger::ThreadFile;
 use super::schema_raw::{MediaBlobRow, MESSENGER_MESSAGES_TABLE, MESSENGER_THREADS_TABLE};
 use super::{collect_uris, upsert_rows, Record};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// A build before the Messenger tables gave every conversation a table
 /// of its own, named for its path (`…_messages_inbox_worf_123_message`),
@@ -21,9 +22,11 @@ use super::{collect_uris, upsert_rows, Record};
 /// the old table goes, with the chunk files recorded for it.
 pub async fn messenger_tables(conn: &mut SqliteConnection) -> Result<()> {
     'tables: for table in old_conversation_tables(conn).await? {
-        let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT id, json(payload) FROM {table}"
-        )))
+        let rows: Vec<(String, String)> = Sql::dynamic(
+            sql_id!("facebook.migrate.read_messenger_table_rows"),
+            format!("SELECT id, json(payload) FROM {table}"),
+        )
+        .query_as()
         .fetch_all(&mut *conn)
         .await
         .with_context(|| format!("read {table}"))?;
@@ -65,15 +68,23 @@ pub async fn messenger_tables(conn: &mut SqliteConnection) -> Result<()> {
             move_edges(conn, old_id, new_rows).await?;
         }
 
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {table}")))
-            .execute(&mut *conn)
-            .await
-            .with_context(|| format!("drop {table}"))?;
+        Sql::dynamic(
+            sql_id!("facebook.migrate.drop_messenger_table"),
+            format!("DROP TABLE {table}"),
+        )
+        .query()
+        .execute(&mut *conn)
+        .await
+        .with_context(|| format!("drop {table}"))?;
         if table_exists(conn, "ingested_files").await? {
-            sqlx::query("DELETE FROM ingested_files WHERE scope = ?")
-                .bind(format!("facebook/{table}"))
-                .execute(&mut *conn)
-                .await?;
+            sql!(
+                "facebook.migrate.delete_messenger_ingested_files",
+                "DELETE FROM ingested_files WHERE scope = ?"
+            )
+            .query()
+            .bind(format!("facebook/{table}"))
+            .execute(&mut *conn)
+            .await?;
         }
     }
     Ok(())
@@ -83,10 +94,13 @@ pub async fn messenger_tables(conn: &mut SqliteConnection) -> Result<()> {
 /// path under `messages/` ending in `message_<n>.json`, with its chunk
 /// index dropped.
 async fn old_conversation_tables(conn: &mut SqliteConnection) -> Result<Vec<String>> {
-    let names: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-            .fetch_all(&mut *conn)
-            .await?;
+    let names: Vec<String> = sql!(
+        "facebook.migrate.list_table_names",
+        "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
+    )
+    .query_scalar()
+    .fetch_all(&mut *conn)
+    .await?;
     Ok(names
         .into_iter()
         .filter(|n| {
@@ -97,11 +111,14 @@ async fn old_conversation_tables(conn: &mut SqliteConnection) -> Result<Vec<Stri
 }
 
 async fn table_exists(conn: &mut SqliteConnection, table: &str) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(table)
-            .fetch_one(&mut *conn)
-            .await?;
+    let n: i64 = sql!(
+        "facebook.migrate.table_exists",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+    )
+    .query_scalar()
+    .bind(table)
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(n > 0)
 }
 
@@ -119,11 +136,14 @@ async fn move_edges(
         return Ok(());
     }
     let has_sidecar = table_exists(conn, &sidecar).await?;
-    let edges: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT id, uri, blake3 FROM media_blobs WHERE owner_id = ?")
-            .bind(old_owner)
-            .fetch_all(&mut *conn)
-            .await?;
+    let edges: Vec<(String, String, Option<String>)> = sql!(
+        "facebook.migrate.list_media_edges_of_owner",
+        "SELECT id, uri, blake3 FROM media_blobs WHERE owner_id = ?"
+    )
+    .query_as()
+    .bind(old_owner)
+    .fetch_all(&mut *conn)
+    .await?;
     for (old_edge, uri, blake3) in edges {
         for Record {
             id: new_owner,
@@ -137,10 +157,12 @@ async fn move_edges(
                 continue;
             }
             let new_edge = MediaBlobRow::pk_recipe(new_owner, &uri);
-            sqlx::query(
+            sql!(
+                "facebook.migrate.upsert_moved_media_edge",
                 "INSERT INTO media_blobs (id, owner_id, uri, blake3) VALUES (?, ?, ?, ?) \
-                 ON CONFLICT(id) DO UPDATE SET blake3 = excluded.blake3",
+                 ON CONFLICT(id) DO UPDATE SET blake3 = excluded.blake3"
             )
+            .query()
             .bind(&new_edge)
             .bind(new_owner)
             .bind(&uri)
@@ -150,27 +172,37 @@ async fn move_edges(
             if has_sidecar {
                 // Audited: `sidecar` is the edge table's constant name
                 // plus `_bookkeeping`.
-                sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "INSERT OR REPLACE INTO {sidecar} \
+                Sql::dynamic(
+                    sql_id!("facebook.migrate.copy_media_edge_bookkeeping"),
+                    format!(
+                        "INSERT OR REPLACE INTO {sidecar} \
                      (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, \
                       volatile_payload, tz_offset, held_version) \
                      SELECT ?, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, \
                       volatile_payload, tz_offset, held_version FROM {sidecar} WHERE id = ?"
-                )))
+                    ),
+                )
+                .query()
                 .bind(&new_edge)
                 .bind(&old_edge)
                 .execute(&mut *conn)
                 .await?;
             }
         }
-        sqlx::query("DELETE FROM media_blobs WHERE id = ?")
-            .bind(&old_edge)
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "facebook.migrate.delete_old_media_edge",
+            "DELETE FROM media_blobs WHERE id = ?"
+        )
+        .query()
+        .bind(&old_edge)
+        .execute(&mut *conn)
+        .await?;
         if has_sidecar {
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {sidecar} WHERE id = ?"
-            )))
+            Sql::dynamic(
+                sql_id!("facebook.migrate.delete_old_media_edge_bookkeeping"),
+                format!("DELETE FROM {sidecar} WHERE id = ?"),
+            )
+            .query()
             .bind(&old_edge)
             .execute(&mut *conn)
             .await?;

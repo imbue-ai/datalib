@@ -38,14 +38,14 @@ pub mod contacts {
 pub mod handles {
     use super::*;
 
-    /// A link: a handle belongs to one contact for all time, and an
-    /// address two people share belongs to a group contact. A link an
-    /// agent made names the agent and its reason, and waits for a person
-    /// until `reviewed_at_utc` says one confirmed it.
+    /// A link: a handle is a contact's, and an address two people share
+    /// is linked to each of them, one row each. A link an agent made
+    /// names the agent and its reason, and waits for a person until
+    /// `reviewed_at_utc` says one confirmed it.
     #[derive(Debug, Clone, PortableTable)]
     #[portable_table(
         table = "handles",
-        primary_key = "handle",
+        primary_key = "handle, contact_id",
         index = "handles_by_contact:contact_id"
     )]
     pub struct HandleRow {

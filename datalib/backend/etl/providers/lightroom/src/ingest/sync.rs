@@ -21,6 +21,7 @@ use datalib_etl_sqlite_mirror::{MirrorOptions, MirrorStats};
 
 use super::backups::{self, Backup, Held, Plan, LEDGER, LEDGER_DDL};
 use super::unpack::{self, is_catalog, is_zip};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// What one run reads. At least one of the two is set.
 pub struct Inputs<'a> {
@@ -103,7 +104,8 @@ async fn mirror_inputs(
     label: &str,
     found: &RunProblems,
 ) -> Result<SyncRun> {
-    sqlx::query(LEDGER_DDL)
+    Sql::ddl(sql_id!("lightroom.create_snapshots_ledger"), LEDGER_DDL)
+        .query()
         .execute(pool)
         .await
         .context("create the snapshots ledger")?;
@@ -295,8 +297,12 @@ async fn mirror_backup(
 
 /// What is uncommitted, table by table.
 async fn working_set(pool: &SqlitePool) -> Result<Vec<(String, String)>> {
-    sqlx::query_as("SELECT table_name, status FROM dolt_status ORDER BY table_name")
-        .fetch_all(pool)
-        .await
-        .context("read dolt_status")
+    sql!(
+        "lightroom.list_dolt_status",
+        "SELECT table_name, status FROM dolt_status ORDER BY table_name"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("read dolt_status")
 }

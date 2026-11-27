@@ -11,6 +11,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use datalib_photo_schema::{Exposure, MediaKind, NormalizedPhoto, Original, Pictures, Place};
+use datalib_sql::test_sql;
 
 const SECRET: &str = "a-test-secret";
 /// The Golden Gate photo's file, and the render `previews.db` names
@@ -78,7 +79,8 @@ async fn index(root: &Path, photos: &[NormalizedPhoto]) {
         .await
         .unwrap();
     for (i, p) in photos.iter().enumerate() {
-        sqlx::query("INSERT INTO source_photos VALUES (?, ?, ?, ?)")
+        test_sql!("INSERT INTO source_photos VALUES (?, ?, ?, ?)")
+            .query()
             .bind(&p.uuid)
             .bind(&p.uuid)
             .bind(&p.source_id)
@@ -86,11 +88,12 @@ async fn index(root: &Path, photos: &[NormalizedPhoto]) {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO grid_rows (uuid, provider, kind, source_label, conversation_uuid, \
      sort_key, entire_chat, preview, content_hash, is_document, touched_at_utc) \
-     VALUES (?1, 'lightroom', 'Photo', 'Lightroom', ?1, ?1, '', '', '', 0, ?2)",
+     VALUES (?1, 'lightroom', 'Photo', 'Lightroom', ?1, ?1, '', '', '', 0, ?2)"
         )
+        .query()
         .bind(&p.uuid)
         .bind(format!("2007-01-0{}T00:00:00+00:00", i + 1))
         .execute(&pool)

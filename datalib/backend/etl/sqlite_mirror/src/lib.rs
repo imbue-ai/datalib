@@ -1,7 +1,7 @@
 //! `datalib_etl_sqlite_mirror` — the SQLite→doltlite mirror engine
 //! behind every source whose data is a SQLite file the application
 //! keeps for itself (`lightroom`, `apple_photos`, `apple_messages`,
-//! `whatsapp`). Drops and
+//! `beeper`, `whatsapp`). Drops and
 //! refills every table each run and lets doltlite's content-addressed
 //! storage turn that into an incremental, versioned backup; a source that
 //! evicts is upserted instead, keeping what it let go
@@ -9,8 +9,8 @@
 //! refused before anything is dropped (`NothingToMirror`), and so is one
 //! with a table named like one the store keeps (`TableCollides`). A provider
 //! crate adds the path to the file and its defaults; `whatsapp` also
-//! decrypts first and keeps a media registry beside the mirror
-//! (`MirrorOptions::sidecar_tables`).
+//! decrypts first, and `whatsapp` and `beeper` keep a media registry
+//! beside the mirror (`MirrorOptions::sidecar_tables`).
 
 pub mod ingest;
 pub mod mirror;

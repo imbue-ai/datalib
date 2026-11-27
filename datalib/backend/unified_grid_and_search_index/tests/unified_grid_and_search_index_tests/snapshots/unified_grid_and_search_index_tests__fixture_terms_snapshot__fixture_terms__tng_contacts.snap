@@ -25,6 +25,12 @@ expression: source.render()
   about: email:jlpicard@enterprise.starfleet
   about: email:picard@enterprise.starfleet
   about: tel:+12025550101
+00000000-0000-81ee-8094-7b4bb677da36  Contact
+  title: Marie Picard
+  name: Engineering
+  about: Marie Picard
+  about: email:marie@labarre.earth
+  about: email:vineyard@labarre.earth
 00000000-0000-829a-bb9d-4c1b203d3251  Contact group
   title: Senior Staff
   name: Bridge
@@ -48,6 +54,12 @@ expression: source.render()
   about: email:riker@enterprise.starfleet
   about: email:will.riker@alaska.earth
   about: email:wriker@enterprise.starfleet
+00000000-0000-8c26-8d0c-160812e0272d  Contact
+  title: Robert Picard
+  name: Engineering
+  about: Robert Picard
+  about: email:vineyard@labarre.earth
+  about: tel:+33380550101
 00000000-0000-8c51-a4b4-dde335468f6c  Contact
   title: Hugh
   name: Borg

@@ -10,6 +10,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_file_inventory::ingest::{self, FetchOptions, RawDb};
 use datalib_etl_files::fingerprint_cache::{EntryKind, FingerprintCache};
 use datalib_etl_files::fswalk::StampKind;
+use datalib_sql::test_sql;
 use sqlx::Row;
 use tempfile::TempDir;
 
@@ -38,7 +39,8 @@ fn hex(bytes: Vec<u8>) -> String {
 /// Both tables, `dirs` first, each in id order.
 async fn dump_entries(db: &RawDb) -> String {
     let mut out = String::new();
-    let dirs = sqlx::query("SELECT id, size, entries, blake3, identity_uuid FROM dirs ORDER BY id")
+    let dirs = test_sql!("SELECT id, size, entries, blake3, identity_uuid FROM dirs ORDER BY id")
+        .query()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -52,7 +54,8 @@ async fn dump_entries(db: &RawDb) -> String {
             "dir     id={id:24} size={size:5} entries={entries:3} blake3={blake3} uuid={identity_uuid:?}\n"
         ));
     }
-    let files = sqlx::query("SELECT id, kind, size, blake3, symlink_target FROM files ORDER BY id")
+    let files = test_sql!("SELECT id, kind, size, blake3, symlink_target FROM files ORDER BY id")
+        .query()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -126,7 +129,8 @@ fn fetch_opts(db: &RawDb, root: &Path, cache: FingerprintCache) -> FetchOptions 
 }
 
 async fn dir_identity_uuid(db: &RawDb, id: &str) -> Option<String> {
-    let row = sqlx::query("SELECT identity_uuid FROM dirs WHERE id = ?")
+    let row = test_sql!("SELECT identity_uuid FROM dirs WHERE id = ?")
+        .query()
         .bind(id)
         .fetch_one(db.pool())
         .await
@@ -346,7 +350,8 @@ async fn the_cache_is_keyed_absolutely_even_for_a_relative_root() {
         ingest::fetch(opts).await.unwrap();
     }
 
-    let rows: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+    let rows: Vec<String> = test_sql!("SELECT abs_path FROM fingerprints")
+        .query_scalar()
         .fetch_all(cache.pool())
         .await
         .unwrap();
@@ -409,7 +414,8 @@ async fn a_symlinked_root_shares_the_cache_with_its_real_path() {
     );
     assert_eq!(via_real.files_reused, 1);
 
-    let keys: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+    let keys: Vec<String> = test_sql!("SELECT abs_path FROM fingerprints")
+        .query_scalar()
         .fetch_all(cache.pool())
         .await
         .unwrap();
@@ -455,7 +461,8 @@ async fn deleted_paths_leave_the_cache_but_filtered_ones_stay() {
         .await
         .unwrap();
 
-    let keys: Vec<String> = sqlx::query_scalar("SELECT abs_path FROM fingerprints")
+    let keys: Vec<String> = test_sql!("SELECT abs_path FROM fingerprints")
+        .query_scalar()
         .fetch_all(cache.pool())
         .await
         .unwrap();
