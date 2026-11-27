@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use datalib_columns::{Chip, ChipKind};
 use datalib_problem_mutes::{Counted, Counter, Tally};
-use datalib_problems::{CountedBy, Severity, METRIC};
+use datalib_problems::{severity_in_metric_labels, CountedBy, Severity, METRIC};
 use datalib_runs::MetricRow;
 
 /// What one step last reported of itself, from the run store.
@@ -53,7 +53,7 @@ pub fn counts_by_step(
         entry.failed_processes_run_id = m.run_id.clone();
     }
     for m in problems.iter().filter(|m| m.name == METRIC) {
-        let Some(severity) = Severity::from_metric_labels(&m.labels) else {
+        let Some(severity) = severity_in_metric_labels(&m.labels) else {
             continue;
         };
         let entry = out.entry(m.step.clone()).or_default();

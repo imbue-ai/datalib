@@ -76,7 +76,7 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
 
 /// A sync of `groups`' downloads, opened before the server is up.
 async fn sync_before_boot(root: &Path, groups: &[&str]) {
-    let supervisor_store = datalib_dag::supervisor::store::Store::open(root)
+    let supervisor_store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
     let roots: Vec<String> = groups.iter().map(|g| format!("{g}/ingest")).collect();
@@ -289,7 +289,7 @@ async fn the_prepare_run_lists_every_step_it_will_prepare_from_the_start() {
 /// loop served no request at all until then.
 #[tokio::test]
 async fn a_sync_waits_only_for_the_steps_the_pass_has_not_reached() {
-    use datalib_dag::supervisor::tick::WaitKind;
+    use datalib_supervisor_store::state::WaitKind;
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -309,7 +309,7 @@ async fn a_sync_waits_only_for_the_steps_the_pass_has_not_reached() {
     let rows = get(&state, "/api/manage/rows").await;
     assert_eq!(rows["sync_paused"], serde_json::Value::Null, "{rows}");
 
-    let supervisor_store = datalib_dag::supervisor::store::Store::open(&root)
+    let supervisor_store = datalib_supervisor_store::store::Store::open(&root)
         .await
         .unwrap();
     let id = supervisor_store

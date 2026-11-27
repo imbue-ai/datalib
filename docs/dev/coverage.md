@@ -45,7 +45,7 @@ helpers, so all of them are listed:
 T="//datalib/backend/dag:dag_unittests //datalib/backend/dag:supervisor_harness_test"
 tools/run_coverage.sh $T -- $T \
   //datalib/backend/dag:puppet \
-  //datalib/backend/dag:supervisor_store_worker
+  //datalib/backend/supervisor_store:supervisor_store_worker
 ```
 
 The report is first-party only. `--instrumentation_filter` cannot make

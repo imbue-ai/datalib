@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::run_state::RunState;
 use crate::step::{FailureKind, StepId, StepSpec};
+use datalib_supervisor_store::run_state::RunState;
 
 /// One event on the stream. `step` tags every event so a single
 /// multiplexed stream (the orchestrator's view) stays attributable.
@@ -166,6 +166,61 @@ pub enum Event {
     RunSummary {
         steps: Vec<StepSummary>,
     },
+}
+
+impl Event {
+    /// The event a step's stdout line reported, filed under `step`, the
+    /// step's real id: the `step` the line named is not read.
+    pub fn from_step(step: &str, event: datalib_step_protocol::Event) -> Event {
+        use datalib_step_protocol::Event as Wire;
+        let step = step.to_string();
+        match event {
+            Wire::Metric {
+                name,
+                labels,
+                value,
+            } => Event::Metric {
+                step,
+                name,
+                labels,
+                value,
+            },
+            Wire::ProgressLength { total } => Event::ProgressLength { step, total },
+            Wire::ProgressInc { delta } => Event::ProgressInc { step, delta },
+            Wire::ProgressMessage { msg } => Event::ProgressMessage { step, msg },
+            Wire::Log {
+                level,
+                msg,
+                ts,
+                target,
+                thread,
+                fields,
+            } => Event::Log {
+                step,
+                level,
+                msg,
+                ts,
+                stream: None,
+                target,
+                thread,
+                fields,
+            },
+            Wire::Hint { msg } => Event::Hint { step, msg },
+            Wire::Checkpoint { version, rows } => Event::Checkpoint {
+                step,
+                version,
+                rows,
+            },
+            Wire::Capabilities {
+                streams_output,
+                version,
+            } => Event::Capabilities {
+                step,
+                streams_output,
+                version,
+            },
+        }
+    }
 }
 
 /// Per-step entry in [`Event::RunPlan`].

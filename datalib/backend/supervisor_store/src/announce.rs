@@ -23,7 +23,7 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::Interest;
 use tokio::time::Instant;
 
-use super::store::Store;
+use crate::store::Store;
 
 /// How long a listener hears nothing before it looks at the store itself.
 pub const BACKSTOP: Duration = Duration::from_secs(30);

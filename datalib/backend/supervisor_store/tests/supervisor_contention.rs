@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-use datalib_dag::supervisor::announce::{Listener, UNANNOUNCED};
-use datalib_dag::supervisor::store::Store;
 use datalib_sql::test_sql;
+use datalib_supervisor_store::announce::{Listener, UNANNOUNCED};
+use datalib_supervisor_store::store::Store;
 
 const N: usize = 150;
 

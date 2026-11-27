@@ -3,7 +3,7 @@
 //! These values travel on four surfaces — `Event::StepFinish.status`,
 //! `Event::RunSummary`'s per-step `status`, `run_steps.state` and
 //! `steps.last_status` in `system/supervisor.sqlite`
-//! (`supervisor/record.rs`), and the HTTP API's
+//! (`record.rs`), and the HTTP API's
 //! `current_state` — and every producer and consumer has to agree on
 //! the spelling. Naming them once is what keeps those copies from
 //! drifting apart.

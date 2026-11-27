@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use datalib_dag::events::Event;
 use datalib_etl::progress::Progress;
 use datalib_etl_render::diff::{diff_document, Counts};
 use datalib_etl_render::grid_index::RenderedMarkdown;
@@ -176,10 +175,7 @@ pub async fn run(
             // The cap is advice as much as an error: say what to do
             // where a person reads the run, like an auth failure does.
             if let Some(cap) = too_large(&e) {
-                emitter.event(&Event::Hint {
-                    step: String::new(), // re-tagged by the runner
-                    msg: cap.to_string(),
-                });
+                emitter.hint(cap.to_string());
             }
             return Err(e);
         }

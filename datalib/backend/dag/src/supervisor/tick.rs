@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use strum::{EnumString, IntoStaticStr, VariantArray};
+use datalib_supervisor_store::state::{StateKind, WaitKind};
 
 use super::locks::Hold;
 
@@ -142,14 +142,7 @@ pub struct Start {
     pub consumed: Consumed,
 }
 
-/// `StateKind` is the word `system/supervisor.sqlite` stores for a state
-/// (`steps.state`), without what it waits on or is blocked by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumDiscriminants)]
-#[strum_discriminants(
-    name(StateKind),
-    derive(EnumString, IntoStaticStr, VariantArray),
-    strum(serialize_all = "snake_case")
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepState {
     /// No open request wants it, and it is up to date.
     Idle,
@@ -167,14 +160,18 @@ pub enum StepState {
     Waiting(Wait),
 }
 
-impl StateKind {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
+impl From<StepState> for StateKind {
+    fn from(state: StepState) -> Self {
+        match state {
+            StepState::Idle => StateKind::Idle,
+            StepState::Stale => StateKind::Stale,
+            StepState::Fresh => StateKind::Fresh,
+            StepState::Running => StateKind::Running,
+            StepState::Off => StateKind::Off,
+            StepState::Failed => StateKind::Failed,
+            StepState::Blocked(_) => StateKind::Blocked,
+            StepState::Waiting(_) => StateKind::Waiting,
+        }
     }
 }
 
@@ -191,40 +188,6 @@ pub enum Wait {
     DiskSpace,
     /// The prepare pass has not yet reached it, or a step it reads.
     Prepare,
-}
-
-/// What a `waiting` step waits for, as `system/supervisor.sqlite` stores
-/// it (`steps.waiting_for`) beside the sentence that names the step or
-/// lock.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr, VariantArray)]
-#[strum(serialize_all = "snake_case")]
-pub enum WaitKind {
-    /// A step it reads: running, about to run, or itself waiting on a
-    /// producer that is.
-    Upstream,
-    /// A step that reads what it writes, unpinned, is running.
-    Reader,
-    Lock,
-    /// The data root's disk is under the config's `[disk_space]` floor.
-    DiskSpace,
-    /// A request names it, and the config the loop runs does not have it
-    /// yet: the loop starts using the new one when the sync in progress
-    /// ends.
-    Config,
-    /// The prepare pass at the loop's start has not yet reached it, or a
-    /// step it reads.
-    Prepare,
-}
-
-impl WaitKind {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
 }
 
 impl From<Wait> for WaitKind {

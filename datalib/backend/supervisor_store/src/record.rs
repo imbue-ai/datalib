@@ -10,14 +10,14 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use sqlx::Row;
 
-use super::store::Store;
-use super::tick::{StateKind, WaitKind};
-use crate::step::{FailureKind, StepId};
+use crate::state::{StateKind, WaitKind};
+use crate::store::Store;
 use datalib_sql::{sql, Sql};
+use datalib_step_protocol::FailureKind;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LoopState {
-    pub steps: BTreeMap<StepId, StepRow>,
+    pub steps: BTreeMap<String, StepRow>,
     /// The run in flight, or the one that finished last.
     pub current_run: Option<CurrentRun>,
 }
@@ -32,7 +32,7 @@ pub struct CurrentRun {
     pub finished_at: Option<String>,
     /// Step id → what it is doing in this run, as `RunState::as_str`. A
     /// step the run has not reached has no entry.
-    pub states: BTreeMap<StepId, String>,
+    pub states: BTreeMap<String, String>,
 }
 
 /// What a step did the last time a run reached it: "what happened, and
@@ -133,7 +133,7 @@ pub fn changes<'a>(prev: &'a LoopState, next: &'a LoopState) -> Vec<Change<'a>> 
 /// What a step read at its last success (`reads`, input path to
 /// version), under which definition, and what happened the last time a
 /// run reached it.
-pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
+pub(crate) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         step TEXT PRIMARY KEY,
         succeeded INTEGER NOT NULL,
         fingerprint TEXT NOT NULL,
@@ -155,7 +155,7 @@ pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         needs_rerun INTEGER NOT NULL DEFAULT 0
     )";
 
-pub(super) const DDL: [&str; 5] = [
+pub(crate) const DDL: [&str; 5] = [
     // One per run of the loop; the newest is the run in flight,
     // or the one that finished last.
     "CREATE TABLE IF NOT EXISTS runs (
@@ -198,16 +198,16 @@ pub(super) const DDL: [&str; 5] = [
 
 /// `invocations` keeps every process the loop ever started; this finds
 /// the few still running without the rest.
-pub(super) const INDEXES: [&str; 1] =
+pub(crate) const INDEXES: [&str; 1] =
     ["CREATE INDEX IF NOT EXISTS invocations_open ON invocations (outcome, started_at_utc, id)"];
 
-pub(super) const CLOSE_ABANDONED_INVOCATIONS: Sql = sql!(
+pub(crate) const CLOSE_ABANDONED_INVOCATIONS: Sql = sql!(
     "dag.supervisor.close_abandoned_invocations",
     "UPDATE invocations INDEXED BY invocations_open \
      SET finished_at_utc = ?, outcome = ?, error = ? WHERE outcome IS NULL"
 );
 
-pub(super) const RUNNING_INVOCATIONS: Sql = sql!(
+pub(crate) const RUNNING_INVOCATIONS: Sql = sql!(
     "dag.supervisor.list_running_invocations",
     "SELECT id, step, run_id, started_at_utc FROM invocations INDEXED BY invocations_open \
      WHERE outcome IS NULL ORDER BY started_at_utc, id"
@@ -602,24 +602,6 @@ impl Store {
             })
             .collect()
     }
-}
-
-/// The loop's tables at `root`, as a test reads them back.
-#[cfg(test)]
-pub(crate) async fn saved_state(root: &std::path::Path) -> LoopState {
-    let store = Store::open(root).await.unwrap();
-    let record = store.load_state().await.unwrap();
-    store.close().await;
-    record
-}
-
-/// Write `next` over the loop's tables at `root`, as a test sets them up.
-#[cfg(test)]
-pub(crate) async fn record(root: &std::path::Path, next: &LoopState) {
-    let store = Store::open(root).await.unwrap();
-    let prev = store.load_state().await.unwrap();
-    store.save_state(&prev, next).await.unwrap();
-    store.close().await;
 }
 
 #[cfg(test)]

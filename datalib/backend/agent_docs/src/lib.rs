@@ -160,6 +160,13 @@ pub const DOCS: &[Doc] = &[
         text: include_str!("../../../../docs/dev/step_protocol.md"),
     },
     Doc {
+        topic: "step-protocol-rust",
+        path: "datalib/backend/step_protocol/README.md",
+        kind: Kind::Guide,
+        about: "writing a step of your own in Rust, with the `datalib_step_protocol` crate",
+        text: include_str!("../../step_protocol/README.md"),
+    },
+    Doc {
         topic: "runner",
         path: "datalib/backend/dag/README.md",
         kind: Kind::Reference,

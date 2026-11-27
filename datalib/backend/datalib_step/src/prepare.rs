@@ -1011,7 +1011,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             crate::hints::classify(&err),
-            datalib_dag::FailureKind::Incompatible,
+            datalib_step_protocol::FailureKind::Incompatible,
             "{err:#}"
         );
         assert_eq!(
@@ -1042,7 +1042,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             crate::hints::classify(&err),
-            datalib_dag::FailureKind::Incompatible
+            datalib_step_protocol::FailureKind::Incompatible
         );
     }
 

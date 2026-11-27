@@ -13,11 +13,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use datalib_dag::config::{ConfigCheck, DagConfig};
-use datalib_dag::supervisor::announce::Listener;
-use datalib_dag::supervisor::pass::PassRow;
-use datalib_dag::supervisor::serve::{self, ServeEvent};
-use datalib_dag::supervisor::store::{JobKind, Store};
+use datalib_dag::supervisor::serve;
 use datalib_dag::supervisor::wipe::tree_group;
+use datalib_supervisor_store::announce::Listener;
+use datalib_supervisor_store::pass::PassRow;
+use datalib_supervisor_store::serve_event::ServeEvent;
+use datalib_supervisor_store::store::{JobKind, Store};
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, OnceCell};
 
@@ -93,7 +94,7 @@ impl SyncControl {
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
             trouble: Arc::new(Mutex::new(None)),
-            started_at_utc: Arc::new(datalib_dag::supervisor::store::now_utc()),
+            started_at_utc: Arc::new(datalib_supervisor_store::store::now_utc()),
             supervisor_store: Arc::new(OnceCell::new()),
             stop: Arc::new(watch::channel(false).0),
             exited: Arc::new(watch::channel(false).0),
@@ -108,7 +109,7 @@ impl SyncControl {
         if self.runs_the_loop.load(Ordering::SeqCst) {
             self.busy.load(Ordering::SeqCst)
         } else {
-            datalib_dag::lock::runner_is_held(&self.root)
+            datalib_supervisor_store::lock::runner_is_held(&self.root)
         }
     }
 
@@ -505,7 +506,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         assert!(!control.running(), "idle root");
-        let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
+        let held = datalib_supervisor_store::lock::acquire_runner(td.path()).expect("claim");
         assert!(control.running(), "a datalib-pipeline holds it");
 
         control.runs_the_loop.store(true, Ordering::SeqCst);
@@ -522,7 +523,9 @@ mod tests {
     #[test]
     fn asking_whether_a_sync_is_running_leaves_no_trace() {
         let td = tempfile::tempdir().unwrap();
-        let lock = td.path().join(datalib_dag::lock::RUNNER_LOCK_REL_PATH);
+        let lock = td
+            .path()
+            .join(datalib_supervisor_store::lock::RUNNER_LOCK_REL_PATH);
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         assert!(!control.running());
         assert!(!lock.exists(), "the probe created {}", lock.display());
@@ -535,7 +538,7 @@ mod tests {
     async fn a_reset_is_queued_for_whichever_process_runs_the_loop() {
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
-        let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
+        let held = datalib_supervisor_store::lock::acquire_runner(td.path()).expect("claim");
         let answer = control
             .wipe_waiting(
                 JobKind::Reset,
@@ -575,8 +578,8 @@ mod tests {
     /// no other client could read it.
     #[tokio::test]
     async fn the_prepare_pass_is_read_from_the_store() {
-        use datalib_dag::supervisor::pass::PassState;
-        use datalib_dag::supervisor::store::JobKind;
+        use datalib_supervisor_store::pass::PassState;
+        use datalib_supervisor_store::store::JobKind;
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
         assert_eq!(control.upgrade().await.unwrap(), Upgrade::default());

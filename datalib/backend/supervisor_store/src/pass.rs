@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-use crate::step::StoreBytes;
+use datalib_step_protocol::StoreBytes;
 
 /// How a job stands with one step.
 #[derive(

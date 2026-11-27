@@ -2,7 +2,7 @@
 // Rust enums named below; a test fails when it drifts. Do not edit. What a
 // word means is on the Rust variant.
 
-/** `RunState in datalib/backend/dag/src/run_state.rs`. */
+/** `RunState in datalib/backend/supervisor_store/src/run_state.rs`. */
 export type DagRunState =
   | "running"
   | "succeeded"
@@ -66,14 +66,14 @@ export type LiveTable =
   | "disk"
   | "curated";
 
-/** `PassState in datalib/backend/dag/src/supervisor/pass.rs`. */
+/** `PassState in datalib/backend/supervisor_store/src/pass.rs`. */
 export type PassState =
   | "waiting"
   | "running"
   | "done"
   | "failed";
 
-/** `JobKind in datalib/backend/dag/src/supervisor/store.rs`. */
+/** `JobKind in datalib/backend/supervisor_store/src/store.rs`. */
 export type JobKind =
   | "reset"
   | "purge"

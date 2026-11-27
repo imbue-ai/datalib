@@ -21,7 +21,7 @@ use axum::{
     Router,
 };
 use datalib_core::repo::DynAppRepo;
-use datalib_dag::supervisor::store::RequestRow;
+use datalib_supervisor_store::store::RequestRow;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -1320,7 +1320,7 @@ fn now_utc() -> String {
         .0
 }
 
-/// A step's last outcome, mirroring `datalib_dag::supervisor::record::LastRun`.
+/// A step's last outcome, mirroring `datalib_supervisor_store::record::LastRun`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagStepRun {
     /// The run it happened in — what to pass to `/api/runs/{run}/log`
@@ -1333,8 +1333,8 @@ pub struct DagStepRun {
     pub error: Option<String>,
 }
 
-impl From<&datalib_dag::supervisor::record::LastRun> for DagStepRun {
-    fn from(r: &datalib_dag::supervisor::record::LastRun) -> Self {
+impl From<&datalib_supervisor_store::record::LastRun> for DagStepRun {
+    fn from(r: &datalib_supervisor_store::record::LastRun) -> Self {
         DagStepRun {
             run_id: r.run_id.clone(),
             started_at: r.started_at.clone(),
@@ -1377,7 +1377,7 @@ pub struct DagSnapshot {
     pub states: std::collections::BTreeMap<String, String>,
     /// step id → its row in the loop's `steps` table: its state now, what
     /// it did the last time a run reached it, when it last succeeded.
-    pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRow>,
+    pub steps: std::collections::BTreeMap<String, datalib_supervisor_store::record::StepRow>,
     /// step id → what it has reported in the run in flight.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
     /// step id → what it last reported of its problems, and the streaming
@@ -1748,7 +1748,9 @@ fn internal(e: anyhow::Error) -> Refusal {
     (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
 }
 
-async fn supervisor_store(s: &AppState) -> Result<&datalib_dag::supervisor::store::Store, Refusal> {
+async fn supervisor_store(
+    s: &AppState,
+) -> Result<&datalib_supervisor_store::store::Store, Refusal> {
     s.sync.supervisor_store().await.map_err(internal)
 }
 
@@ -1786,7 +1788,7 @@ async fn request_open(
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     let open = store.open_requests().await.map_err(internal)?;
     let mut listener =
-        datalib_dag::supervisor::announce::Listener::new(store, "POST /api/requests");
+        datalib_supervisor_store::announce::Listener::new(store, "POST /api/requests");
     let mut answer = Vec::new();
     let mut opened = Vec::new();
     for roots in by_group(&checked.graph, roots) {

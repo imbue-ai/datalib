@@ -58,8 +58,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use datalib_cli_help::Example;
-use datalib_dag::subprocess::{ENV_DATA_ROOT, ENV_NOW, ENV_STEP};
-use datalib_dag::FailureKind;
+use datalib_step_protocol::env::{DATALIB_DAG_DATA_ROOT, DATALIB_DAG_NOW, DATALIB_DAG_STEP};
+use datalib_step_protocol::FailureKind;
 
 use crate::events::Emitter;
 use crate::function::Function;
@@ -644,8 +644,8 @@ async fn main() {
         std::process::exit(topo_sort_config::run_cli(path, *check));
     }
 
-    let step_id = std::env::var(ENV_STEP).unwrap_or_else(|_| "step".to_string());
-    let data_root = std::env::var_os(ENV_DATA_ROOT)
+    let step_id = std::env::var(DATALIB_DAG_STEP).unwrap_or_else(|_| "step".to_string());
+    let data_root = std::env::var_os(DATALIB_DAG_DATA_ROOT)
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .expect("no data root: set DATALIB_DAG_DATA_ROOT or run inside one");
@@ -711,12 +711,14 @@ async fn main() {
     let now = cli
         .now
         .clone()
-        .or_else(|| std::env::var(ENV_NOW).ok())
+        .or_else(|| std::env::var(DATALIB_DAG_NOW).ok())
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
     // Every stamp a step writes is split off this one string, so a
     // shape it cannot split is refused here rather than stored as-is.
     if let Err(e) = datalib_time::validate_iso_offset(&now) {
-        datalib_obs::status_line!("--now / ${ENV_NOW} must be RFC 3339 with an offset: {e}");
+        datalib_obs::status_line!(
+            "--now / ${DATALIB_DAG_NOW} must be RFC 3339 with an offset: {e}"
+        );
         std::process::exit(2);
     }
     let control = datalib_etl::control::DownloadControl {

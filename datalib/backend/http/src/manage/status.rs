@@ -2,13 +2,13 @@
 //! step, read from its row in the loop's `steps` table, while the step is
 //! doing something, and its last outcome while it is at rest. Nothing
 //! here works out what the loop is doing; the loop writes it
-//! (`datalib_dag::supervisor::record`).
+//! (`datalib_supervisor_store::record`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use datalib_dag::supervisor::record::StepRow;
-use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::{Diagnostic, Severity};
+use datalib_supervisor_store::record::StepRow;
+use datalib_supervisor_store::state::StateKind;
 
 /// One row's status, in the shape the Status column draws. The rules
 /// here fill `key`, `label`, `at`, `last_success_at` and `detail`.
@@ -195,7 +195,7 @@ fn finish_detail(status: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_dag::supervisor::record::LastRun;
+    use datalib_supervisor_store::record::LastRun;
 
     const STARTED: &str = "2026-09-01T10:00:01+02:00";
     const ENDED: &str = "2026-09-01T10:00:09+02:00";

@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use datalib_dag::RunState;
 use datalib_sql::{test_sql, test_sql_id, Sql};
 use datalib_store_dump::{cell_value, open_readonly, store_as_jsonl, Keep};
+use datalib_supervisor_store::run_state::RunState;
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
 use walkdir::WalkDir;

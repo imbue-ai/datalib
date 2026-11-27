@@ -19,11 +19,13 @@ rust_library(
         "//datalib/backend/id:datalib_id",
         # `search(...)` on a table emits `impl ::datalib_query::table::SearchTable`.
         "//datalib/backend/query:datalib_query",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         # `PortableTable` emits `impl ::datalib_table::BulkUpsertable`.
         "//datalib/backend/table:datalib_table",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
+        # `PortableTable` reads an enum column's values through `strum::VariantArray`.
         "@datalib_crates//:strum",
         "@datalib_crates//:tracing",
     ],
@@ -34,7 +36,4 @@ rust_test(
     size = "small",
     crate = ":datalib_problems",
     edition = "2021",
-    deps = [
-        "@datalib_crates//:serde_json",
-    ],
 )

@@ -8,7 +8,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::{self, StoreKind};
 use datalib_etl_time_series::{index, store, Summary};
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_schema::problems::{metric_label, Severity, METRIC};
 use datalib_time_series_schema::TimeSeries;
 
 use crate::events::{Emitter, OutputClaim};
@@ -72,7 +72,7 @@ pub async fn run_render(
     let problems = datalib_etl_time_series::unreadable_problems(&env.group, &unreadable);
     let progress = emitter.progress();
     for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {
-        progress.metric(METRIC, &[severity.metric_label()], n as i64);
+        progress.metric(METRIC, &[metric_label(severity)], n as i64);
     }
     let db = datalib_etl::layout::render_time_series_db(data_root, &env.group);
     let pool = store::open(&db, StoreKind::TimeSeries).await?;

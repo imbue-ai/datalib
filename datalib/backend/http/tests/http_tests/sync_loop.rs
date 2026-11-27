@@ -439,12 +439,12 @@ async fn a_requests_root_reads_done_while_the_index_after_it_runs() {
 /// Waits until the loop's `steps` and `requests` tables satisfy `ready`,
 /// looking again each time a commit is announced, never on a timer.
 async fn when(
-    store: &datalib_dag::supervisor::store::Store,
-    heard: &mut datalib_dag::supervisor::announce::Listener,
+    store: &datalib_supervisor_store::store::Store,
+    heard: &mut datalib_supervisor_store::announce::Listener,
     what: &str,
     ready: impl Fn(
-        &datalib_dag::supervisor::record::LoopState,
-        &[datalib_dag::supervisor::store::RequestRow],
+        &datalib_supervisor_store::record::LoopState,
+        &[datalib_supervisor_store::store::RequestRow],
     ) -> bool,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -460,7 +460,7 @@ async fn when(
     }
 }
 
-fn running(record: &datalib_dag::supervisor::record::LoopState, step: &str) -> bool {
+fn running(record: &datalib_supervisor_store::record::LoopState, step: &str) -> bool {
     record
         .steps
         .get(step)
@@ -478,10 +478,10 @@ async fn a_source_added_on_disk_mid_sync_starts_beside_the_running_one() {
     let root = td.path();
     std::fs::write(root.join("config.toml"), source(root, "a", HELD)).unwrap();
     let state = server(root).await;
-    let store = datalib_dag::supervisor::store::Store::open(root)
+    let store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
-    let mut heard = datalib_dag::supervisor::announce::Listener::new(&store, "test");
+    let mut heard = datalib_supervisor_store::announce::Listener::new(&store, "test");
 
     let a = sync(&state, "a/out").await;
     when(&store, &mut heard, "a to run", |r, _| running(r, "a/out")).await;

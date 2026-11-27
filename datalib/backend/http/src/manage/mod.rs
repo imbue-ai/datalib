@@ -30,11 +30,11 @@ use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
 };
-use datalib_dag::supervisor::record::StepRow;
-use datalib_dag::supervisor::store::RequestRow;
-use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
 use datalib_dag::{Diagnostic, EntryKind, Severity};
+use datalib_supervisor_store::record::StepRow;
+use datalib_supervisor_store::state::StateKind;
+use datalib_supervisor_store::store::RequestRow;
 use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
@@ -1499,7 +1499,7 @@ impl RowCtx<'_> {
                             .states
                             .get(id)
                             .filter(|_| run_under_way)
-                            .and_then(|s| datalib_dag::RunState::parse(s)),
+                            .and_then(|s| datalib_supervisor_store::run_state::RunState::parse(s)),
                     )
                 })
                 .collect::<Vec<_>>(),

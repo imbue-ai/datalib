@@ -17,9 +17,9 @@ use datalib_runs::{
 
 use crate::events::{Event, EventSink, LogLevel};
 use crate::heavy_statements::{is_heavy_statement, HeavyStatements};
-use crate::run_state::RunState;
 use crate::slow_statements::{is_slow_statement, SlowStatements};
 use crate::step::StepId;
+use datalib_supervisor_store::run_state::RunState;
 
 /// What we know about one step right now.
 #[derive(Default, Clone)]

@@ -29,6 +29,7 @@ rust_binary(
         "//datalib/backend/photo_schema:datalib_photo_schema",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/env:datalib_env",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/problem_mutes:datalib_problem_mutes",
         "//datalib/backend/sql:datalib_sql",

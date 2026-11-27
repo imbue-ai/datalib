@@ -17,9 +17,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use sqlx::Row;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-use super::pass::{PassRow, PassState};
-use crate::step::StoreBytes;
+use crate::pass::{PassRow, PassState};
 use datalib_sql::{sql, sql_id, Sql};
+use datalib_step_protocol::StoreBytes;
 
 /// How a store's tables reach this build's shape, after what
 /// `CREATE TABLE IF NOT EXISTS` makes on its own. Every store from before
@@ -40,7 +40,7 @@ const LADDER: &[datalib_store_meta::Migration] = &[
                 .await?;
                 Sql::ddl(
                     sql_id!("dag.supervisor.migrate_v6_create_steps"),
-                    super::record::STEPS,
+                    crate::record::STEPS,
                 )
                 .query()
                 .execute(&mut *conn)
@@ -247,16 +247,6 @@ impl JobKind {
         self.into()
     }
 
-    /// The verb a compaction or a collection runs its steps with to give
-    /// back disk.
-    pub fn shrink(self) -> Option<crate::subprocess::Shrink> {
-        match self {
-            JobKind::Compact => Some(crate::subprocess::Shrink::Compact),
-            JobKind::Collect => Some(crate::subprocess::Shrink::Collect),
-            JobKind::Reset | JobKind::Purge | JobKind::Prepare => None,
-        }
-    }
-
     /// `None` for a spelling this build does not know.
     pub fn parse(s: &str) -> Option<Self> {
         s.parse().ok()
@@ -320,7 +310,7 @@ impl Store {
         let store = Store {
             pool,
             path: path.clone(),
-            listeners: super::announce::listeners_dir(data_root),
+            listeners: crate::announce::listeners_dir(data_root),
             me: format!(
                 "store-{}-{}",
                 std::process::id(),
@@ -330,9 +320,9 @@ impl Store {
         store.run_ladder(&path).await?;
         let ddl = || {
             DDL.into_iter()
-                .chain(super::record::DDL)
+                .chain(crate::record::DDL)
                 .chain(INDEXES)
-                .chain(super::record::INDEXES)
+                .chain(crate::record::INDEXES)
         };
         for stmt in ddl() {
             Sql::dynamic(sql_id!("dag.supervisor.create_schema"), stmt)
@@ -398,11 +388,11 @@ impl Store {
         Ok(())
     }
 
-    pub(super) fn pool(&self) -> &SqlitePool {
+    pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }
 
-    pub(super) fn path(&self) -> &Path {
+    pub(crate) fn path(&self) -> &Path {
         &self.path
     }
 
@@ -410,13 +400,13 @@ impl Store {
         &self.listeners
     }
 
-    pub(super) fn me(&self) -> &str {
+    pub(crate) fn me(&self) -> &str {
         &self.me
     }
 
     /// After every commit this store makes, and never before one.
-    pub(super) fn announce(&self, what: &str) {
-        super::announce::announce(&self.listeners, &self.me, what);
+    pub(crate) fn announce(&self, what: &str) {
+        crate::announce::announce(&self.listeners, &self.me, what);
     }
 
     pub async fn close(self) {
@@ -1154,7 +1144,7 @@ mod tests {
     /// open rows rather than reading the whole table.
     #[tokio::test]
     async fn the_open_rows_are_read_by_an_index_an_old_store_gains() {
-        use crate::supervisor::record::{CLOSE_ABANDONED_INVOCATIONS, RUNNING_INVOCATIONS};
+        use crate::record::{CLOSE_ABANDONED_INVOCATIONS, RUNNING_INVOCATIONS};
         const NAMES: [&str; 3] = ["requests_open", "jobs_open", "invocations_open"];
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();

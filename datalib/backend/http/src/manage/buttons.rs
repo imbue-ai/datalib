@@ -3,9 +3,9 @@
 //! Pure functions over what the row builder already knows.
 
 use datalib_columns::Action;
-use datalib_dag::supervisor::record::LastRun;
-use datalib_dag::supervisor::tick::StateKind;
-use datalib_dag::FailureKind;
+use datalib_step_protocol::FailureKind;
+use datalib_supervisor_store::record::LastRun;
+use datalib_supervisor_store::state::StateKind;
 
 /// What pressing Sync would do (`Ok`, the hover), or why it cannot be
 /// pressed (`Err`, the disabled hover).

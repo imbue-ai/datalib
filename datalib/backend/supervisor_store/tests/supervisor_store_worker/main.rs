@@ -5,9 +5,9 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::supervisor::record::{LoopState, StepRow};
-use datalib_dag::supervisor::store::Store;
 use datalib_sql::sql;
+use datalib_supervisor_store::record::{LoopState, StepRow};
+use datalib_supervisor_store::store::Store;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {

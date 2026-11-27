@@ -11,7 +11,10 @@ get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
 crate of its own is decided, not done) and item 9 (the lint checks are
 in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
 in section 10, steps 1 to 3 are done (#2033, #2034, #2036, #2038,
-#2040); steps 4 to 6 are not.
+#2040); steps 4 to 6 are not. The store the server and the loop talk
+through is its own crate, `datalib_supervisor_store` (item 6); the
+server still links the runner's crate for the rest of what item 6
+lists.
 
 ## The end state
 
@@ -152,6 +155,24 @@ talks to the child only through the request rows and the record in
 request is no longer refused when another process runs the loop. How
 it behaves is in `datalib/backend/dag/README.md` §"Two locks, two
 files".
+
+Since then the store in `system/supervisor.sqlite` (its tables, its
+migration ladder, the request, job, turn-off and record rows and their
+words), the announcements, `ServeEvent` and `runner-lock` are a crate of
+their own, `datalib_supervisor_store` (`datalib/backend/supervisor_store/`),
+which the server and the runner both link. The two programs still share
+one Rust type for the store, so they still ship together. The server
+still links the runner's crate for these, which stay there:
+
+- checking a config as the loop would run it: building the step graph
+  (`Graph`, `config_check`, `serve::load_config`), what a Rerun would
+  start (`round::rerun_offer`) and a step's argv (`step::StepRun`);
+- running each step's `--check` (`check::check_params`);
+- reading an applet's JSON log lines (`subprocess::parse_envelope`) and
+  the variables a probe's params name (`subprocess::env_vars_named_in`);
+- measuring an applet's memory (`memory::TreeMemory`) and the disk's
+  free space (`disk_space`);
+- a step id's group (`supervisor::wipe::tree_group`).
 
 ### 7. Datalib's constants live in the runner's crate (mostly done)
 
@@ -445,6 +466,10 @@ config as it is then. `DATALIB_DAG_NOW` is open question 1.
   itself.
 - The prepare pass is a job that the loop queues each time it starts
   (open question 3).
+- A client links what it says to the loop and nothing of the loop:
+  `datalib_supervisor_store` holds the store, the announcements,
+  `ServeEvent` and `runner-lock`. **(done)** The server still links the
+  runner's crate for the rest, listed under item 6.
 
 #### Streaming without passes
 

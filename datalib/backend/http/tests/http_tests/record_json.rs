@@ -4,9 +4,9 @@
 
 use std::path::Path;
 
-use datalib_dag::supervisor::record::{CurrentRun, LastRun, LoopState, StepRow};
-use datalib_dag::supervisor::tick::StateKind;
-use datalib_dag::FailureKind;
+use datalib_step_protocol::FailureKind;
+use datalib_supervisor_store::record::{CurrentRun, LastRun, LoopState, StepRow};
+use datalib_supervisor_store::state::StateKind;
 use serde_json::Value;
 
 fn text(v: &Value, key: &str) -> Option<String> {
@@ -67,7 +67,7 @@ fn record(v: &Value) -> LoopState {
 /// Write the rows `json` describes into the loop's store at `root`.
 pub async fn write(root: &Path, json: &str) {
     let value: Value = serde_json::from_str(json).unwrap();
-    let store = datalib_dag::supervisor::store::Store::open(root)
+    let store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
     store

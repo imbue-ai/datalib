@@ -26,8 +26,8 @@ const VERSION_RESOLVED: &str = {
 use datalib_dag::cli::{Cli, Verb};
 use datalib_dag::disk_space::human_bytes;
 use datalib_dag::subprocess::Shrink;
-use datalib_dag::supervisor::store::{JobKind, RequestOutcome, Store};
 use datalib_dag::{config, subprocess, NdjsonSink};
+use datalib_supervisor_store::store::{JobKind, RequestOutcome, Store};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -409,7 +409,7 @@ enum Own {
 
 enum Taken {
     /// This process runs the loop.
-    Lock(datalib_dag::lock::RunnerLock),
+    Lock(datalib_supervisor_store::lock::RunnerLock),
     /// Another process ran it, and what this invocation wrote is done.
     Closed,
 }
@@ -420,14 +420,14 @@ enum Taken {
 /// landing, and then nobody is left to serve it but us. Its release is
 /// announced.
 async fn follow_or_lock(data_root: &Path, store: &Store, own: &Own) -> Result<Taken> {
-    let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-pipeline");
+    let mut listener = datalib_supervisor_store::announce::Listener::new(store, "datalib-pipeline");
     let mut announced = false;
     let (what, id) = match own {
         Own::Request(id) => ("request", id),
         Own::Job(id) => ("job", id),
     };
     loop {
-        match datalib_dag::lock::try_acquire_runner(data_root) {
+        match datalib_supervisor_store::lock::try_acquire_runner(data_root) {
             Ok(lock) => return Ok(Taken::Lock(lock)),
             Err(e) if e.is_held() => {
                 if !announced {
@@ -640,7 +640,7 @@ async fn serve(
         let (emit, runs) = (emit.clone(), datalib_runs::runs_path(&data_root));
         datalib_runs::after_every_write(move |store| {
             if store == runs {
-                emit(datalib_dag::supervisor::serve::ServeEvent::RunStoreWritten);
+                emit(datalib_supervisor_store::serve_event::ServeEvent::RunStoreWritten);
             }
         });
     }

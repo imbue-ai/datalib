@@ -9,7 +9,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_render::grid_index::{build_grid_index_for, open_index};
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_schema::problems::{metric_label, Severity, METRIC};
 use serde::Deserialize;
 
 use crate::events::{Emitter, OutputClaim};
@@ -138,7 +138,7 @@ pub async fn run(
     for severity in [Severity::Error, Severity::Warning] {
         progress.metric(
             METRIC,
-            &[severity.metric_label()],
+            &[metric_label(severity)],
             counts.get(&severity).copied().unwrap_or(0),
         );
     }

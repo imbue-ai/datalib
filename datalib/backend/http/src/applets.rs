@@ -114,7 +114,7 @@ fn base_command(
     // Tauri shell reads it as the user's chosen root, so an applet
     // under a Tauri-hosted gateway would see it set by two unrelated
     // mechanisms.
-    cmd.env(datalib_dag::subprocess::ENV_DATA_ROOT, data_root);
+    cmd.env(datalib_step_protocol::env::DATALIB_DAG_DATA_ROOT, data_root);
     cmd.env(ENV_APPLET_ID, &entry.id);
     cmd.env(ENV_APPLET_BASE, format!("/applet/{}/", entry.id));
     cmd.env(ENV_APPLET_SECRET_FILE, secret_file(data_root));
@@ -733,10 +733,10 @@ impl Supervisor {
             Some(params) => {
                 let json = serde_json::to_string(&params)
                     .map_err(|e| format!("applet {:?}: params → JSON: {e}", entry.id))?;
-                cmd.env(datalib_env::DATALIB_DAG_PARAMS, json);
+                cmd.env(datalib_step_protocol::env::DATALIB_DAG_PARAMS, json);
             }
             None => {
-                cmd.env_remove(datalib_env::DATALIB_DAG_PARAMS);
+                cmd.env_remove(datalib_step_protocol::env::DATALIB_DAG_PARAMS);
             }
         }
         // stdin is not an input channel — nothing is ever written to it. It is
@@ -1226,7 +1226,7 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
 /// the runner relays a step's: a tracing-JSON line at its own level, with
 /// the applet's target and fields beside it; anything else at `info`.
 fn relay_applet_line(id: &str, line: &str) {
-    use datalib_dag::events::LogLevel;
+    use app_schema::runs::LogLevel;
     let Some(e) = datalib_dag::subprocess::parse_envelope(line) else {
         tracing::info!(applet = %id, "{line}");
         return;

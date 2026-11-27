@@ -3,17 +3,15 @@
 //! [`tick::tick`], a pure function; the hosts that feed it events and
 //! act on the [`tick::Tick`] it returns live beside it. The rules: `dag/README.md`.
 
-pub mod announce;
 pub mod host;
 pub mod inputs;
 pub mod locks;
 pub mod loop_host;
-pub mod pass;
-pub mod record;
+#[cfg(test)]
+pub(crate) mod recorded;
 pub mod reload;
 pub mod round;
 pub mod serve;
-pub mod store;
 pub mod tick;
 pub mod upgrade;
 pub mod wipe;

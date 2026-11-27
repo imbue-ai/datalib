@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_dag::events::{Event, LogLevel};
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_step_protocol::{Event, LogLevel};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source_type::SourceType;
@@ -29,16 +29,7 @@ pub fn run(
         None => datalib_etl::layout::ingest_root(data_root, name),
     };
     let log = |msg: String| {
-        emitter.event(&Event::Log {
-            step: String::new(), // re-tagged by the runner if any
-            level: LogLevel::Info,
-            msg,
-            ts: None,
-            stream: None,
-            target: None,
-            thread: None,
-            fields: None,
-        });
+        emitter.event(&Event::log(LogLevel::Info, msg));
     };
 
     let synth: Box<dyn Synthesizer> = match SourceType::parse(step_type) {

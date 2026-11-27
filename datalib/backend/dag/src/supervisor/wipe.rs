@@ -5,8 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::Graph;
-use crate::supervisor::record::{LoopState, StepRow};
-use crate::supervisor::store::JobKind;
+use crate::subprocess::Shrink;
+use datalib_supervisor_store::record::{LoopState, StepRow};
+use datalib_supervisor_store::store::JobKind;
 
 /// The steps of `graph` a wipe keeps from running: none of them may run
 /// until it is done. For a reset, its targets; for a purge, every step
@@ -18,7 +19,7 @@ use crate::supervisor::store::JobKind;
 pub fn kept_from_running(graph: &Graph, kind: JobKind, targets: &[String]) -> Vec<usize> {
     match kind {
         JobKind::Compact | JobKind::Collect => {
-            let Some(how) = kind.shrink() else {
+            let Some(how) = Shrink::for_job(kind) else {
                 return Vec::new();
             };
             let to_shrink = compact_targets(graph, targets, how);
@@ -44,7 +45,7 @@ pub fn kept_from_running(graph: &Graph, kind: JobKind, targets: &[String]) -> Ve
 /// Why the wipe cannot be done at all, or `None`. `latest` is the newest
 /// graph the loop has read, whether it runs it yet or not.
 pub fn refusal(latest: &Graph, kind: JobKind, targets: &[String]) -> Option<String> {
-    if targets.is_empty() && kind.shrink().is_none() {
+    if targets.is_empty() && Shrink::for_job(kind).is_none() {
         return Some("nothing to wipe".into());
     }
     match kind {
@@ -52,13 +53,12 @@ pub fn refusal(latest: &Graph, kind: JobKind, targets: &[String]) -> Option<Stri
             targets.iter().find_map(|t| match latest.by_id.get(t) {
                 None => Some(format!("the config has no step {t:?}")),
                 Some(&i)
-                    if !kind
-                        .shrink()
+                    if !Shrink::for_job(kind)
                         .is_some_and(|how| latest.steps[i].takes(how.verb())) =>
                 {
                     Some(format!(
                         "{t:?} does not take {}",
-                        kind.shrink().map_or(String::new(), |s| s.verb().flag())
+                        Shrink::for_job(kind).map_or(String::new(), |s| s.verb().flag())
                     ))
                 }
                 Some(_) => None,

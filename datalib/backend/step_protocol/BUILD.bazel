@@ -1,0 +1,51 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+exports_files(["README.md"])  # compiled into `datalib-step help step-protocol-rust`
+
+# The step's side of the step protocol (docs/dev/step_protocol.md), for a
+# step program in Rust: what the runner hands a step, and every line a
+# step may print. No first-party dependencies, so a step outside Datalib
+# can take it; the runner and `datalib-step` both use it. See README.md.
+rust_library(
+    name = "datalib_step_protocol",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_step_protocol",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        # For `strum::VariantArray` alone, which the table derive reads a
+        # closed set's values through; no derive macros.
+        "@datalib_crates//:strum",
+    ],
+)
+
+rust_test(
+    name = "step_protocol_unittests",
+    size = "small",
+    compile_data = [
+        "README.md",
+        "examples/minimal_step.rs",
+    ],
+    crate = ":datalib_step_protocol",
+    data = ["//docs/dev:step_protocol.md"],
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# The README's step, built so it cannot rot; `dag_tests`'
+# `rust_example_step.rs` runs it under the real runner.
+rust_binary(
+    name = "minimal_step",
+    srcs = ["examples/minimal_step.rs"],
+    edition = "2021",
+    visibility = ["//datalib/backend/dag:__pkg__"],
+    deps = [
+        ":datalib_step_protocol",
+        "@datalib_crates//:serde",
+    ],
+)

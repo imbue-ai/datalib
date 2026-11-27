@@ -15,56 +15,9 @@ use crate::events::StepProgress;
 
 pub type StepId = String;
 
-/// A verb the runner may append to a step's argv, as `--<verb>`, when the
-/// step's program declares it (`docs/dev/step_protocol.md` § Verbs).
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Deserialize,
-    Serialize,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum Verb {
-    /// Empty what the step wrote. A program that does not take it has its
-    /// step's directory deleted by the runner instead.
-    Reset,
-    /// Each time the runner starts: bring what the step wrote to this
-    /// program's shape, or say it cannot.
-    Prepare,
-    /// Give back disk, dropping history nothing reads.
-    Compact,
-    /// Give back disk, keeping every version.
-    Collect,
-    /// Before anything runs: say whether the step would run its params as
-    /// written, and write nothing.
-    Check,
-}
-
-impl Verb {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-
-    /// The argv word the step is sent.
-    pub fn flag(self) -> String {
-        format!("--{}", self.as_str())
-    }
-}
+/// The protocol's own closed sets and the `--collect` answer, which the
+/// runner reads off a step's command line and outcome as they are.
+pub use datalib_step_protocol::{FailureKind, StoreBytes, Verb};
 
 /// A step declaration.
 #[derive(Debug, Clone)]
@@ -503,12 +456,6 @@ pub struct StepOutcome {
     pub exit: Option<Exit>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StoreBytes {
-    pub before: u64,
-    pub after: u64,
-}
-
 /// How a subprocess ended: an exit code when it exited, the signal
 /// when one ended it. What the runner saw in `wait(2)`, kept apart from
 /// the failure's classification so the `invocations` row says both.
@@ -531,61 +478,6 @@ impl From<std::process::ExitStatus> for Exit {
             code: status.code(),
             signal,
         }
-    }
-}
-
-/// Failure classification — the part of a failure the scheduler acts
-/// on. The mapping to a retry policy lives in the scheduler; the step
-/// only says *which kind* this is.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum FailureKind {
-    /// Try again soon (network blips, lock contention).
-    Transient,
-    /// Try again later, with backoff (HTTP 429 and friends).
-    RateLimited,
-    /// Fail fast; a human must fix credentials.
-    Auth,
-    /// Fail fast; the OS refused to let the app read a file the config
-    /// names (macOS privacy), and a human must grant access again.
-    Permission,
-    /// The input/data is bad; retrying won't help. Fails this step
-    /// (poisoning its subtree), not the graph.
-    Data,
-    /// The run was cancelled from outside.
-    Cancelled,
-    /// The step gave up with work still owed: what it got is committed
-    /// and its dependents read it, and the rest waits for the next run.
-    /// Not retried, since the step's own retries are what ran out.
-    Incomplete,
-    /// What it reports from `--prepare`: what it wrote is in a shape this
-    /// program cannot use, a newer build's. The runner turns the step off
-    /// until a later start runs its `--prepare` and it does not refuse.
-    Incompatible,
-}
-
-impl FailureKind {
-    /// The wire spelling a step writes on its `outcome` line, and the
-    /// one `RunSummary` reports.
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<FailureKind> {
-        s.parse().ok()
     }
 }
 
@@ -628,21 +520,3 @@ impl std::fmt::Display for StepError {
 }
 
 impl std::error::Error for StepError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use strum::VariantArray;
-
-    /// A step writes the kind on its outcome line through serde and the
-    /// runner reports it through `as_str`; a new kind spelled two ways
-    /// would read back as unknown.
-    #[test]
-    fn failure_kind_as_str_matches_the_serde_spelling() {
-        for &v in FailureKind::VARIANTS {
-            let serde = serde_json::to_value(v).unwrap();
-            assert_eq!(serde.as_str(), Some(v.as_str()), "{v:?}");
-            assert_eq!(FailureKind::parse(v.as_str()), Some(v));
-        }
-    }
-}

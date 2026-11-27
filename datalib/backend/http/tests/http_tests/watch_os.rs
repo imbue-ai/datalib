@@ -56,9 +56,9 @@ async fn until(rx: &mut broadcast::Receiver<RootFrame>, want: RootEvent) -> Vec<
 /// the loop, through the OS alone.
 #[tokio::test]
 async fn an_external_config_write_reaches_a_subscriber_and_the_loop() {
-    use datalib_dag::supervisor::announce::{Listener, CONFIG_CHANGED};
+    use datalib_supervisor_store::announce::{Listener, CONFIG_CHANGED};
     let td = tempfile::tempdir().unwrap();
-    let store = datalib_dag::supervisor::store::Store::open(td.path())
+    let store = datalib_supervisor_store::store::Store::open(td.path())
         .await
         .unwrap();
     let mut the_loop = Listener::new(&store, "test");

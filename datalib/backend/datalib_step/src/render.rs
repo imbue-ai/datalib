@@ -11,7 +11,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor, RenderUnitEnd};
-use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
+use datalib_schema::problems::{metric_label, ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
 use crate::dispatch::{PlannedSource, Processors};
@@ -136,8 +136,8 @@ pub async fn run(
         .get(&Severity::Warning)
         .copied()
         .unwrap_or(0);
-    progress.metric(METRIC, &[Severity::Error.metric_label()], errors);
-    progress.metric(METRIC, &[Severity::Warning.metric_label()], warnings);
+    progress.metric(METRIC, &[metric_label(Severity::Error)], errors);
+    progress.metric(METRIC, &[metric_label(Severity::Warning)], warnings);
     if errors + warnings > 0 {
         tracing::debug!(
             source = %name,

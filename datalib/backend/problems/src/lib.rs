@@ -13,169 +13,16 @@ use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-macro_rules! closed_vocabulary {
-    ($(#[$meta:meta])* $name:ident { $($(#[$vmeta:meta])* $variant:ident),+ $(,)? }) => {
-        $(#[$meta])*
-        #[derive(
-            Debug,
-            Clone,
-            Copy,
-            PartialEq,
-            Eq,
-            Hash,
-            Serialize,
-            Deserialize,
-            strum::EnumString,
-            strum::IntoStaticStr,
-            strum::VariantArray,
-        )]
-        #[serde(rename_all = "snake_case")]
-        #[strum(serialize_all = "snake_case")]
-        pub enum $name {
-            $($(#[$vmeta])* $variant),+
-        }
+/// The closed sets a problem row is described in. They are the step
+/// protocol's own, since a step's `problem` line spells them too
+/// (`datalib_step_protocol::problems`).
+pub use datalib_step_protocol::problems::{Outcome, Reason, ScopeKind, Severity, Stage};
 
-        impl $name {
-            pub fn as_str(self) -> &'static str {
-                self.into()
-            }
-
-            /// `None` for a spelling this build does not know.
-            pub fn parse(s: &str) -> Option<Self> {
-                s.parse().ok()
-            }
-        }
-    };
-}
-
-closed_vocabulary! {
-    /// How loudly the screen says it. The count on the Manage row is
-    /// errors and warnings; `info` is a grid filter and never a badge.
-    Severity {
-        Error,
-        Warning,
-        Info,
-    }
-}
-
-closed_vocabulary! {
-    /// Which stage noticed the problem. The fix is in a different place
-    /// for each.
-    Stage {
-        /// Fetching the record from upstream.
-        Fetch,
-        /// Deserializing the stored payload.
-        Parse,
-        /// Projecting it to markdown.
-        Render,
-        /// Building the `grid_rows` row.
-        GridRow,
-        /// Reading a source's time series (`render_time_series`).
-        TimeSeries,
-        /// Listing a calendar's occurrences (`render_occurrences`).
-        Occurrences,
-    }
-}
-
-impl Stage {
-    /// The stages a step other than the download and the render records
-    /// in a store of its own, each that step's alone. `unified_grid_and_search_index` copies
-    /// each one's rows apart from the render store's, so neither copy
-    /// erases the other's.
-    pub const OWN_STORE: [Stage; 2] = [Stage::TimeSeries, Stage::Occurrences];
-}
-
-closed_vocabulary! {
-    /// What happened to the record this row is about — data-loss
-    /// semantics, kept apart from [`Severity`], which is presentation.
-    Outcome {
-        /// The record did not reach the index at all.
-        Dropped,
-        /// It did, with at least one field discarded.
-        Nulled,
-        /// It did, intact. A finding worth publishing, claiming nothing
-        /// was lost.
-        Ok,
-    }
-}
-
-closed_vocabulary! {
-    /// Why one field or record is being reported.
-    Reason {
-        /// The stored payload would not deserialize. → drop the record.
-        Undeserializable,
-        /// No usable identity, so nothing could be keyed on. → drop.
-        NoIdentity,
-        /// A field failed its declared coercion. → null that field, keep
-        /// the record.
-        CoercionFailed,
-        /// A value whose type the contract does not cover. → null that
-        /// field; never pass it through untyped.
-        UncoveredType,
-        /// A piece of a document the renderer does not know how to draw.
-        /// → shown in place as the JSON upstream sent, so nothing is
-        /// lost but its look.
-        UnsupportedJson,
-        /// A deliberate lossy rule fired (truncation, chrome-stripping).
-        /// `Problem::rule` names the rule, so these rows can be grouped
-        /// by it.
-        DeliberateLoss,
-        /// The projection itself failed on this record — a converter
-        /// error, a renderer that gave up on the document. → drop it
-        /// this run; a page from an earlier run may still be on disk.
-        RenderFailed,
-        /// The download could not fetch this record. → the record is
-        /// missing, or — when an earlier fetch left a payload — stale.
-        FetchFailed,
-        /// The download stored this attachment's bytes once, but the
-        /// blob store no longer holds them. → it renders without them;
-        /// a reset of the download fetches them again.
-        BlobMissing,
-        /// The download declined to fetch this record, because a limit
-        /// in the config said not to. → a warning: nothing failed, but
-        /// the record is not in the mirror. A provider that retries its
-        /// skips fetches it once the limit allows.
-        OverSizeLimit,
-        /// A configured entry — a label, a channel, a conversation id —
-        /// that upstream does not have. → that entry is not mirrored;
-        /// reported every run until the config is corrected.
-        NotFound,
-        /// A configured entry that exists but this credential cannot
-        /// read. → the same.
-        Forbidden,
-        /// A setting the config gives that the run did not use, because
-        /// another one it gives takes its place (`since` beside
-        /// `conv_uuids`). → nothing is lost, but the config says more
-        /// than the mirror does; reported every run until it is
-        /// corrected.
-        Ignored,
-        /// A render unit a render looked at produced no document, though the
-        /// rows it was last built from are still upstream. → the
-        /// document an earlier run rendered is kept, possibly stale,
-        /// until the render unit renders again.
-        NoDocument,
-        /// A configured entry upstream has sent nothing new for a while:
-        /// a sensor unplugged, out of range or out of battery. → what
-        /// came before is kept; nothing new is arriving.
-        Silent,
-        /// Nothing was lost; this is a finding worth publishing.
-        Noted,
-    }
-}
-
-closed_vocabulary! {
-    /// Which of the two things [`ProblemRow::scope_key`] holds — the
-    /// sweep key's type, and so which `DELETE … WHERE scope_kind = ?`
-    /// clears this row when its owner is reprocessed.
-    ScopeKind {
-        /// `scope_key` is the `markdown_uuid` of the document the record
-        /// belongs to. The usual case, and the link to the document.
-        Markdown,
-        /// `scope_key` is the raw-store entity id, because the failure
-        /// happened before we knew which document the record was for.
-        Entity,
-    }
-}
+/// The stages a step other than the download and the render records in a
+/// store of its own, each that step's alone. `unified_grid_and_search_index`
+/// copies each one's rows apart from the render store's, so neither copy
+/// erases the other's.
+pub const OWN_STORE_STAGES: [Stage; 2] = [Stage::TimeSeries, Stage::Occurrences];
 
 /// The index every per-record lookup (`scope_kind = ? AND scope_key = ?`)
 /// names with `INDEXED BY`. A store creates it as it opens and keeps it
@@ -241,34 +88,21 @@ impl CountedBy {
 pub const METRIC: &str = "problems";
 pub const METRIC_LABEL: &str = "severity";
 
-impl Severity {
-    /// The `severity=<word>` label a [`METRIC`] sample carries.
-    pub fn metric_label(self) -> (&'static str, &'static str) {
-        (METRIC_LABEL, self.as_str())
-    }
+/// The `severity=<word>` label a [`METRIC`] sample carries.
+pub fn metric_label(severity: Severity) -> (&'static str, &'static str) {
+    (METRIC_LABEL, severity.as_str())
+}
 
-    /// The severity a run-store label string names, `severity=error`
-    /// as the store canonicalizes it.
-    pub fn from_metric_labels(labels: &str) -> Option<Severity> {
-        labels
-            .split(',')
-            .find_map(|kv| {
-                kv.strip_prefix(METRIC_LABEL)
-                    .and_then(|v| v.strip_prefix('='))
-            })
-            .and_then(Severity::parse)
-    }
-
-    /// The severity a writer gets when it says nothing more: a record
-    /// that was lost is an error, one that was degraded a warning, one
-    /// that survived intact a finding.
-    pub fn default_for(outcome: Outcome) -> Severity {
-        match outcome {
-            Outcome::Dropped => Severity::Error,
-            Outcome::Nulled => Severity::Warning,
-            Outcome::Ok => Severity::Info,
-        }
-    }
+/// The severity a run-store label string names, `severity=error` as the
+/// store canonicalizes it.
+pub fn severity_in_metric_labels(labels: &str) -> Option<Severity> {
+    labels
+        .split(',')
+        .find_map(|kv| {
+            kv.strip_prefix(METRIC_LABEL)
+                .and_then(|v| v.strip_prefix('='))
+        })
+        .and_then(Severity::parse)
 }
 
 /// The sweep key, typed: what must be reprocessed for this row to be
@@ -639,7 +473,6 @@ impl ProblemRow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strum::VariantArray;
 
     fn missing(sample: &str) -> ProblemRow {
         ProblemRow::new(
@@ -714,37 +547,6 @@ mod tests {
         let got = sample_of(&over);
         assert!(got.ends_with('…'), "{got}");
         assert!(got.len() <= 80 + '…'.len_utf8());
-    }
-
-    /// Every vocabulary is written to SQL through strum's `as_str` and
-    /// to JSON through serde. Two spellings of one value would make a
-    /// sweep miss the rows it is supposed to clear.
-    #[test]
-    fn as_str_matches_the_serde_spelling_and_parses_back() {
-        fn check<T>(variants: &[T])
-        where
-            T: Copy
-                + std::fmt::Debug
-                + PartialEq
-                + Serialize
-                + Into<&'static str>
-                + std::str::FromStr,
-        {
-            for &v in variants {
-                let s: &'static str = v.into();
-                assert_eq!(
-                    serde_json::to_string(&v).unwrap(),
-                    format!("\"{s}\""),
-                    "{v:?}"
-                );
-                assert_eq!(s.parse::<T>().ok(), Some(v), "{v:?}");
-            }
-        }
-        check(Severity::VARIANTS);
-        check(Stage::VARIANTS);
-        check(Outcome::VARIANTS);
-        check(Reason::VARIANTS);
-        check(ScopeKind::VARIANTS);
     }
 
     #[test]
@@ -850,17 +652,17 @@ mod tests {
 
     #[test]
     fn metric_labels_round_trip_through_the_run_stores_spelling() {
-        let (k, v) = Severity::Warning.metric_label();
+        let (k, v) = metric_label(Severity::Warning);
         assert_eq!(
-            Severity::from_metric_labels(&format!("{k}={v}")),
+            severity_in_metric_labels(&format!("{k}={v}")),
             Some(Severity::Warning)
         );
         assert_eq!(
-            Severity::from_metric_labels("table=x,severity=error"),
+            severity_in_metric_labels("table=x,severity=error"),
             Some(Severity::Error)
         );
-        assert_eq!(Severity::from_metric_labels("severity=loud"), None);
-        assert_eq!(Severity::from_metric_labels(""), None);
+        assert_eq!(severity_in_metric_labels("severity=loud"), None);
+        assert_eq!(severity_in_metric_labels(""), None);
     }
 
     #[test]

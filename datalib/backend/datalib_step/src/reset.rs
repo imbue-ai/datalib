@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::reset_store;
 use datalib_etl::raw_layout::entities_db;
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_schema::problems::{metric_label, Severity, METRIC};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;
@@ -57,7 +57,7 @@ async fn report_problems(emitter: &Emitter, store: &Path) -> Result<()> {
     for severity in [Severity::Error, Severity::Warning] {
         progress.metric(
             METRIC,
-            &[severity.metric_label()],
+            &[metric_label(severity)],
             counts.get(&severity).copied().unwrap_or(0),
         );
     }

@@ -14,9 +14,9 @@ use std::fmt::Write as _;
 use axum::extract::State;
 use axum::http::header;
 use axum::response::IntoResponse;
-use datalib_dag::supervisor::record::StepRow;
-use datalib_dag::supervisor::tick::StateKind;
 use datalib_runs::MetricRow;
+use datalib_supervisor_store::record::StepRow;
+use datalib_supervisor_store::state::StateKind;
 use strum::VariantArray;
 
 use crate::usage::OutputStorage;

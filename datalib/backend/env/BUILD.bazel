@@ -18,10 +18,8 @@ rust_test(
     name = "env_unittests",
     size = "small",
     crate = ":datalib_env",
-    data = ["//docs/dev:step_protocol.md"],
     edition = "2021",
     deps = [
-        "@datalib_crates//:runfiles",
         "@datalib_crates//:tempfile",
     ],
 )
