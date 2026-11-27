@@ -168,9 +168,9 @@ pub enum RootEvent {
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
     /// has a new HEAD: the time series, or their points, moved.
     TimeSeriesIndexChanged,
-    /// The launch's prepare pass moved, or so did a compaction or
-    /// collection (freeing disk space): `/api/config`'s `upgrade` or
-    /// `free_space` is new.
+    /// The loop's store moved, which the prepare pass, a compaction or
+    /// collection (freeing disk space) and the steps left to re-run are
+    /// all read from: `/api/config`'s `upgrade` or `free_space` may be new.
     PassChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
@@ -206,11 +206,6 @@ enum Moved {
     /// The loop's store, `system/supervisor.sqlite`: heard by
     /// [`watch_supervisor_store`], not seen by the filesystem.
     Supervisor,
-    /// A row of the `jobs` table (the prepare pass, a reset, a purge, a
-    /// compaction or a collection) opened, closed, or moved on to its next
-    /// step: heard by [`watch_supervisor_store`] in the announcement's
-    /// words.
-    Job,
     RunStore,
     Frontend,
     GridIndex,
@@ -543,8 +538,6 @@ async fn expand(
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
-            }
-            Moved::Job => {
                 out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
@@ -1018,21 +1011,7 @@ async fn watch_supervisor_store(
         if record && moved.send(Moved::Supervisor).is_err() {
             return;
         }
-        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Job).is_err() {
-            return;
-        }
     }
-}
-
-/// Whether an announcement may be a job's: opened, closed, or moved on.
-/// A change the backstop found unannounced may be one too.
-fn is_wipe_line(line: &str) -> bool {
-    use datalib_dag::supervisor::announce::UNANNOUNCED;
-    use datalib_dag::supervisor::store::JOB_MOVED;
-    line == UNANNOUNCED
-        || ["job opened ", "job closed ", JOB_MOVED]
-            .iter()
-            .any(|p| line.starts_with(p))
 }
 
 #[cfg(test)]
@@ -1040,18 +1019,6 @@ mod tests {
     use super::*;
 
     use datalib_sql::{test_sql, test_sql_id, Sql};
-    #[test]
-    fn a_wipes_announcements_are_told_from_the_rest() {
-        assert!(is_wipe_line("job opened 01a1"));
-        assert!(is_wipe_line("job closed 01a1"));
-        assert!(is_wipe_line(&format!(
-            "{} 01a1",
-            datalib_dag::supervisor::store::JOB_MOVED
-        )));
-        assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
-        assert!(!is_wipe_line("request opened 01a1"));
-    }
-
     #[test]
     fn the_config_and_the_supervisor_store_are_told_apart() {
         let root = Path::new("/data");
@@ -1473,6 +1440,28 @@ mod tests {
         if !got.contains(&requests) {
             until(&mut rx, requests).await;
         }
+    }
+
+    /// The toolbar's "to re-run" pill stayed after its step had run
+    /// again: the step's success cleared `needs_rerun` in the record, and
+    /// only a wipe's announcements told the page to read `/api/config`.
+    #[tokio::test]
+    async fn a_re_run_mark_clearing_tells_the_page_to_read_its_pass_again() {
+        let td = tempfile::tempdir().unwrap();
+        let store = datalib_dag::supervisor::store::Store::open(td.path())
+            .await
+            .unwrap();
+        let unmarked = store.load_state().await.unwrap();
+        let mut marked = unmarked.clone();
+        marked
+            .steps
+            .entry("idx/index".into())
+            .or_default()
+            .needs_rerun = true;
+        store.save_state(&unmarked, &marked).await.unwrap();
+        let (mut rx, _feed) = watching(td.path()).await;
+        store.save_state(&marked, &unmarked).await.unwrap();
+        until(&mut rx, RootEvent::PassChanged).await;
     }
 
     /// A data root reached through a symlink still reports.

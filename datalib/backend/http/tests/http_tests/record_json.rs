@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use datalib_dag::supervisor::record::{CurrentRun, LastRun, LoopState, StepRow};
+use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::FailureKind;
 use serde_json::Value;
 
@@ -35,6 +36,14 @@ fn record(v: &Value) -> LoopState {
                     .unwrap_or(false),
                 last_run,
                 last_success_at: text(st, "last_success_at"),
+                state: text(st, "state").as_deref().and_then(StateKind::parse),
+                requests: st
+                    .get("requests")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|r| Some(r.as_str()?.to_string()))
+                    .collect(),
                 ..Default::default()
             };
             (id.clone(), step)
