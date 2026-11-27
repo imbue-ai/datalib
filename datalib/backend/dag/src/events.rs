@@ -20,6 +20,42 @@ pub enum Event {
     RunPlan {
         steps: Vec<PlannedStep>,
     },
+    /// The loop started an invocation of this step: one process, its
+    /// retries included, and what it was started for and with. Comes
+    /// before the invocation's first `StepStart`.
+    InvocationStart {
+        step: StepId,
+        invocation: String,
+        /// The `[[groups]]` entry the step is filed under.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        group: Option<String>,
+        /// The verb appended to its command, for one a job started.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verb: Option<crate::step::Verb>,
+        /// The open requests it serves, or the one job that started it.
+        requests: Vec<String>,
+        /// The `DATALIB_DAG_NOW` it is handed.
+        now: String,
+        fingerprint: String,
+        /// Input path → the version it is started against
+        /// (`DATALIB_READS`).
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        reads: BTreeMap<String, String>,
+    },
+    /// The invocation's process is over, and this is how it ended. A
+    /// streaming step goes on in its next invocation.
+    InvocationEnd {
+        step: StepId,
+        invocation: String,
+        status: RunState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signal: Option<i32>,
+        attempts: u32,
+    },
     /// The scheduler decided to run this step.
     StepStart {
         step: StepId,

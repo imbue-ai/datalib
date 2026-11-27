@@ -1,6 +1,6 @@
 //! The loop's record: what each step last read and published, what
-//! happened the last time a run reached it, the run in flight, and one row
-//! per process the loop started. The loop holds it in memory as a
+//! happened the last time a request reached it, and one row per process
+//! the loop started. The loop holds it in memory as a
 //! [`Record`] and saves what [`changes`] finds into
 //! `system/supervisor.sqlite`. Only the process holding `runner-lock`
 //! writes it; anyone may read it, with any `sqlite3`.
@@ -18,30 +18,21 @@ use datalib_sql::{sql, Sql};
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Record {
     pub steps: BTreeMap<StepId, StepRecord>,
-    /// The run in flight, or the one that finished last.
-    pub current_run: Option<CurrentRun>,
 }
 
-/// One busy period of the loop: the stretch from taking a request on to
-/// having none left.
+/// What a step did the last time a request reached it: "what happened,
+/// and when", beside [`StepRecord`]'s "is it up to date". Its last
+/// invocation, or, when a request found it up to date or blocked and ran
+/// nothing, that outcome over the invocation before.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct CurrentRun {
-    pub run_id: String,
-    pub started_at: String,
-    /// `None` while the run is in flight.
-    pub finished_at: Option<String>,
-    /// Step id → what it is doing in this run, as `RunState::as_str`. A
-    /// step the run has not reached has no entry.
-    pub states: BTreeMap<StepId, String>,
-}
-
-/// What a step did the last time a run reached it: "what happened, and
-/// when", beside [`StepRecord`]'s "is it up to date".
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct LastRun {
-    /// The run this happened in — the key into `system/runs/runs.sqlite`,
-    /// where the step's log lines and metrics for it live.
-    pub run_id: String,
+pub struct LastInvocation {
+    /// The step's last invocation — the key into
+    /// `system/runs/runs.sqlite`, where its log lines and metrics live.
+    /// Empty for a step no invocation of this build has run.
+    pub invocation_id: String,
+    /// The requests (or the job) it served; for an outcome with no
+    /// invocation, the requests that reached the step.
+    pub requests: Vec<String>,
     pub started_at: String,
     /// `None` while it is running.
     pub finished_at: Option<String>,
@@ -74,13 +65,13 @@ pub struct StepRecord {
     /// is in a shape this build cannot reach in place. The tick holds it
     /// due, and the loop runs it after the pass, until it next succeeds.
     pub needs_rerun: bool,
-    /// What happened the last time a run reached it, whatever the
+    /// What happened the last time a request reached it, whatever the
     /// outcome: what "last synced" says.
-    pub last_run: Option<LastRun>,
-    /// When a run last left it current: succeeded, or checked and found
-    /// up to date. Kept here rather than read from the run store, which
-    /// ages runs out, and the source failing longest is the one whose last
-    /// success matters most.
+    pub last_invocation: Option<LastInvocation>,
+    /// When a request last left it current: succeeded, or checked and
+    /// found up to date. Kept here rather than read from the run store,
+    /// which ages invocations out, and the source failing longest is the
+    /// one whose last success matters most.
     pub last_success_at: Option<String>,
     /// What the loop's last tick made of it; `None` for a step no loop
     /// has ticked, or a word this build does not know.
@@ -99,8 +90,6 @@ pub struct StepRecord {
 /// One thing the store must write to hold `next` where it held `prev`.
 #[derive(Debug, PartialEq)]
 pub enum Change<'a> {
-    /// The run, and every step's state in it.
-    Run(&'a CurrentRun),
     Step(&'a str, &'a StepRecord),
     /// A step whose record was dropped, by a reset.
     Forget(&'a str),
@@ -110,11 +99,6 @@ pub enum Change<'a> {
 /// else: the loop saves after every event, and most change one step.
 pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     let mut out = Vec::new();
-    if let Some(run) = next.current_run.as_ref() {
-        if prev.current_run.as_ref() != Some(run) {
-            out.push(Change::Run(run));
-        }
-    }
     for (id, step) in &next.steps {
         if prev.steps.get(id) != Some(step) {
             out.push(Change::Step(id, step));
@@ -130,13 +114,13 @@ pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
 
 /// What a step read at its last success (`reads`, input path to
 /// version), under which definition, and what happened the last time a
-/// run reached it.
+/// request reached it.
 pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         step TEXT PRIMARY KEY,
         succeeded INTEGER NOT NULL,
         fingerprint TEXT NOT NULL,
         reads TEXT NOT NULL,
-        last_run_id TEXT,
+        last_invocation_id TEXT,
         last_started_at_utc TEXT,
         last_finished_at_utc TEXT,
         last_status TEXT,
@@ -150,26 +134,11 @@ pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         waiting_for TEXT,
         turned_off_by TEXT,
         requests TEXT,
-        needs_rerun INTEGER NOT NULL DEFAULT 0
+        needs_rerun INTEGER NOT NULL DEFAULT 0,
+        last_requests TEXT
     )";
 
-pub(super) const DDL: [&str; 5] = [
-    // One per busy period of the loop; the newest is the run in flight,
-    // or the one that finished last.
-    "CREATE TABLE IF NOT EXISTS runs (
-        run_id TEXT PRIMARY KEY,
-        started_at_utc TEXT NOT NULL,
-        finished_at_utc TEXT,
-        tz_offset TEXT
-    )",
-    // What each step is doing in the newest run; a step the run has not
-    // reached has no row.
-    "CREATE TABLE IF NOT EXISTS run_steps (
-        run_id TEXT NOT NULL,
-        step TEXT NOT NULL,
-        state TEXT NOT NULL,
-        PRIMARY KEY (run_id, step)
-    )",
+pub(super) const DDL: [&str; 3] = [
     STEPS,
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
@@ -178,10 +147,10 @@ pub(super) const DDL: [&str; 5] = [
         version TEXT NOT NULL
     )",
     // One per process the loop started. `outcome` is NULL while it runs.
+    // The run store's `invocations` has the same id, and what it did.
     "CREATE TABLE IF NOT EXISTS invocations (
         id TEXT PRIMARY KEY,
         step TEXT NOT NULL,
-        run_id TEXT NOT NULL,
         started_at_utc TEXT NOT NULL,
         finished_at_utc TEXT,
         tz_offset TEXT,
@@ -207,7 +176,7 @@ pub(super) const CLOSE_ABANDONED_INVOCATIONS: Sql = sql!(
 
 pub(super) const RUNNING_INVOCATIONS: Sql = sql!(
     "dag.supervisor.list_running_invocations",
-    "SELECT id, step, run_id, started_at_utc FROM invocations INDEXED BY invocations_open \
+    "SELECT id, step, started_at_utc FROM invocations INDEXED BY invocations_open \
      WHERE outcome IS NULL ORDER BY started_at_utc, id"
 );
 
@@ -216,7 +185,6 @@ pub(super) const RUNNING_INVOCATIONS: Sql = sql!(
 pub struct InvocationRow {
     pub id: String,
     pub step: String,
-    pub run_id: String,
     pub started_at_utc: String,
 }
 
@@ -235,42 +203,6 @@ pub struct InvocationEnd {
 impl Store {
     /// The record as the last save left it.
     pub async fn load_record(&self) -> Result<Record> {
-        let run = sql!(
-            "dag.supervisor.read_latest_run",
-            "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
-             ORDER BY rowid DESC LIMIT 1"
-        )
-        .query()
-        .fetch_optional(self.pool())
-        .await?;
-        let current_run = match run {
-            None => None,
-            Some(r) => {
-                let run_id: String = r.try_get("run_id")?;
-                let offset: Option<String> = r.try_get("tz_offset")?;
-                let joined = |utc: String| datalib_time::join_stamp(&utc, offset.as_deref());
-                let states = sql!(
-                    "dag.supervisor.list_run_step_states",
-                    "SELECT step, state FROM run_steps WHERE run_id = ?"
-                )
-                .query()
-                .bind(&run_id)
-                .fetch_all(self.pool())
-                .await?
-                .iter()
-                .map(|r| Ok((r.try_get("step")?, r.try_get("state")?)))
-                .collect::<Result<BTreeMap<String, String>>>()?;
-                Some(CurrentRun {
-                    run_id,
-                    started_at: joined(r.try_get("started_at_utc")?),
-                    finished_at: r
-                        .try_get::<Option<String>, _>("finished_at_utc")?
-                        .map(joined),
-                    states,
-                })
-            }
-        };
-
         let mut versions: BTreeMap<String, String> = BTreeMap::new();
         for r in sql!(
             "dag.supervisor.list_sink_versions",
@@ -295,10 +227,16 @@ impl Store {
                 Ok(r.try_get::<Option<String>, _>(column)?
                     .map(|utc| datalib_time::join_stamp(&utc, offset.as_deref())))
             };
-            let last_run = match r.try_get::<Option<String>, _>("last_run_id")? {
+            let last_invocation = match r.try_get::<Option<String>, _>("last_invocation_id")? {
                 None => None,
-                Some(run_id) => Some(LastRun {
-                    run_id,
+                Some(invocation_id) => Some(LastInvocation {
+                    invocation_id,
+                    requests: match r.try_get::<Option<String>, _>("last_requests")? {
+                        Some(json) => {
+                            serde_json::from_str(&json).context("a step's last requests")?
+                        }
+                        None => Vec::new(),
+                    },
                     started_at: joined("last_started_at_utc")?.unwrap_or_default(),
                     finished_at: joined("last_finished_at_utc")?,
                     status: r
@@ -322,7 +260,7 @@ impl Store {
                 succeeded: r.try_get::<i64, _>("succeeded")? != 0,
                 fingerprint: r.try_get("fingerprint")?,
                 needs_rerun: r.try_get::<i64, _>("needs_rerun")? != 0,
-                last_run,
+                last_invocation,
                 last_success_at: joined("last_success_at_utc")?,
                 state: r
                     .try_get::<Option<String>, _>("state")?
@@ -341,7 +279,7 @@ impl Store {
             };
             steps.insert(id, state);
         }
-        Ok(Record { steps, current_run })
+        Ok(Record { steps })
     }
 
     /// Write what changed from `prev` to `next`, in one transaction. The
@@ -354,47 +292,10 @@ impl Store {
         let mut tx = self.pool().begin().await?;
         for change in changes {
             match change {
-                Change::Run(run) => {
-                    let started = datalib_time::split_stamp(&run.started_at);
-                    let finished = run
-                        .finished_at
-                        .as_deref()
-                        .map(|f| datalib_time::split_stamp(f).utc);
-                    sql!(
-                        "dag.supervisor.upsert_run",
-                        "INSERT INTO runs (run_id, started_at_utc, finished_at_utc, tz_offset) \
-                         VALUES (?, ?, ?, ?) ON CONFLICT(run_id) DO UPDATE SET \
-                         finished_at_utc = excluded.finished_at_utc"
-                    )
-                    .query()
-                    .bind(&run.run_id)
-                    .bind(&started.utc)
-                    .bind(finished)
-                    .bind(&started.tz_offset)
-                    .execute(&mut *tx)
-                    .await?;
-                    // Only the newest run's states are ever read.
-                    sql!("dag.supervisor.delete_run_steps", "DELETE FROM run_steps")
-                        .query()
-                        .execute(&mut *tx)
-                        .await?;
-                    for (step, state) in &run.states {
-                        sql!(
-                            "dag.supervisor.insert_run_step",
-                            "INSERT INTO run_steps (run_id, step, state) VALUES (?, ?, ?)"
-                        )
-                        .query()
-                        .bind(&run.run_id)
-                        .bind(step)
-                        .bind(state)
-                        .execute(&mut *tx)
-                        .await?;
-                    }
-                }
                 Change::Step(id, st) => {
                     let utc =
                         |s: &Option<String>| s.as_deref().map(|s| datalib_time::split_stamp(s).utc);
-                    let last = st.last_run.as_ref();
+                    let last = st.last_invocation.as_ref();
                     let offset = last
                         .map(|l| datalib_time::split_stamp(&l.started_at).tz_offset)
                         .or_else(|| {
@@ -406,18 +307,18 @@ impl Store {
                     sql!(
                         "dag.supervisor.upsert_step_record",
                         "INSERT OR REPLACE INTO steps (step, succeeded, fingerprint, reads, \
-                         last_run_id, last_started_at_utc, last_finished_at_utc, last_status, \
-                         last_attempts, last_error, last_failure_kind, last_success_at_utc, \
-                         tz_offset, state, state_detail, waiting_for, turned_off_by, requests, \
-                         needs_rerun) \
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                         last_invocation_id, last_started_at_utc, last_finished_at_utc, \
+                         last_status, last_attempts, last_error, last_failure_kind, \
+                         last_success_at_utc, tz_offset, state, state_detail, waiting_for, \
+                         turned_off_by, requests, needs_rerun, last_requests) \
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     )
                     .query()
                     .bind(id)
                     .bind(st.succeeded)
                     .bind(&st.fingerprint)
                     .bind(serde_json::to_string(&st.reads)?)
-                    .bind(last.map(|l| &l.run_id))
+                    .bind(last.map(|l| &l.invocation_id))
                     .bind(last.map(|l| datalib_time::split_stamp(&l.started_at).utc))
                     .bind(last.and_then(|l| utc(&l.finished_at)))
                     .bind(last.map(|l| &l.status))
@@ -436,6 +337,12 @@ impl Store {
                         Some(serde_json::to_string(&st.requests)?)
                     })
                     .bind(st.needs_rerun)
+                    .bind(match last.map(|l| &l.requests) {
+                        Some(requests) if !requests.is_empty() => {
+                            Some(serde_json::to_string(requests)?)
+                        }
+                        _ => None,
+                    })
                     .execute(&mut *tx)
                     .await?;
                     match &st.version {
@@ -497,13 +404,11 @@ impl Store {
         let started = datalib_time::split_stamp(&row.started_at_utc);
         sql!(
             "dag.supervisor.insert_invocation",
-            "INSERT INTO invocations (id, step, run_id, started_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?)"
+            "INSERT INTO invocations (id, step, started_at_utc, tz_offset) VALUES (?, ?, ?, ?)"
         )
         .query()
         .bind(&row.id)
         .bind(&row.step)
-        .bind(&row.run_id)
         .bind(&started.utc)
         .bind(&started.tz_offset)
         .execute(self.pool())
@@ -552,7 +457,7 @@ impl Store {
     pub async fn invocations(&self) -> Result<Vec<(InvocationRow, Option<InvocationEnd>)>> {
         let rows = sql!(
             "dag.supervisor.list_invocations",
-            "SELECT id, step, run_id, started_at_utc, outcome, failure_kind, error, attempts, \
+            "SELECT id, step, started_at_utc, outcome, failure_kind, error, attempts, \
              exit_code, signal FROM invocations ORDER BY rowid"
         )
         .query()
@@ -563,7 +468,6 @@ impl Store {
                 let row = InvocationRow {
                     id: r.try_get("id")?,
                     step: r.try_get("step")?,
-                    run_id: r.try_get("run_id")?,
                     started_at_utc: r.try_get("started_at_utc")?,
                 };
                 let outcome: Option<String> = r.try_get("outcome")?;
@@ -594,7 +498,6 @@ impl Store {
                 Ok(InvocationRow {
                     id: r.try_get("id")?,
                     step: r.try_get("step")?,
-                    run_id: r.try_get("run_id")?,
                     started_at_utc: r.try_get("started_at_utc")?,
                 })
             })
@@ -644,8 +547,9 @@ mod tests {
                     succeeded: true,
                     fingerprint: "fp-1".into(),
                     needs_rerun: true,
-                    last_run: Some(LastRun {
-                        run_id: "run-1".into(),
+                    last_invocation: Some(LastInvocation {
+                        invocation_id: "inv-1".into(),
+                        requests: vec!["req-0".into()],
                         started_at: "2026-08-31T10:00:00+01:00".into(),
                         finished_at: Some("2026-08-31T10:00:09+01:00".into()),
                         status: "failed".into(),
@@ -661,12 +565,6 @@ mod tests {
                     requests: vec!["req-1".into(), "req-2".into()],
                 },
             )]),
-            current_run: Some(CurrentRun {
-                run_id: "run-1".into(),
-                started_at: "2026-08-31T10:00:00+01:00".into(),
-                finished_at: Some("2026-08-31T10:00:10+01:00".into()),
-                states: BTreeMap::from([("slack/raw".into(), "succeeded".into())]),
-            }),
         }
     }
 
@@ -680,22 +578,15 @@ mod tests {
                 ("b/raw".into(), step("fp-b")),
                 ("c/raw".into(), step("fp-c")),
             ]),
-            current_run: Some(CurrentRun {
-                run_id: "r1".into(),
-                ..Default::default()
-            }),
         };
         assert!(changes(&prev, &prev).is_empty());
 
         let mut next = prev.clone();
         next.steps.insert("b/raw".into(), step("fp-b2"));
         next.steps.remove("c/raw");
-        next.current_run.as_mut().unwrap().states =
-            BTreeMap::from([("b/raw".into(), "running".into())]);
         assert_eq!(
             changes(&prev, &next),
             [
-                Change::Run(next.current_run.as_ref().unwrap()),
                 Change::Step("b/raw", &next.steps["b/raw"]),
                 Change::Forget("c/raw"),
             ]
@@ -740,7 +631,6 @@ mod tests {
         let row = InvocationRow {
             id: "i1".into(),
             step: "a/raw".into(),
-            run_id: "r1".into(),
             started_at_utc: "2026-09-24T10:00:00+02:00".into(),
         };
         store.open_invocation(&row).await.unwrap();

@@ -6,10 +6,12 @@ use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
 /// The parts of the store a reader can depend on separately. `log` is
-/// two of them: a run's lines feed the Manage screen's rows (error
-/// counts, how long since a step last spoke), the server's own lines
-/// feed nothing but the log grid. `processes` moves when a process row
-/// appears or ends, and not on a step's progress, which is `step_runs`.
+/// two of them: an invocation's lines feed the Manage screen's rows
+/// (error counts, how long since a step last spoke), the runner's and
+/// the server's own lines feed nothing but the log grid. `processes`
+/// moves when a process row appears or ends, and not on a step's
+/// progress, which is `invocations`. A word an older build wrote here
+/// (`runs`, `step_runs`, `run_log`) is one this build no longer bumps.
 #[derive(
     Debug,
     Clone,
@@ -28,10 +30,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum StorePart {
-    Runs,
-    StepRuns,
+    Invocations,
     Metrics,
-    RunLog,
+    InvocationLog,
     ProcessLog,
     Processes,
 }

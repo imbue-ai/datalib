@@ -19,7 +19,7 @@ use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
 use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::loop_host::{LoopHost, PeriodSink};
+use datalib_dag::supervisor::loop_host::LoopHost;
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
@@ -306,16 +306,22 @@ impl Harness {
         let root = self.root.path().to_path_buf();
         let stop = self.stop.subscribe();
         let store = Store::open(&root).await.unwrap();
+        let record = record.then(|| {
+            Arc::new(
+                datalib_dag::runs_sink::RunStoreSink::start(&root, None, Default::default())
+                    .expect("open the run store"),
+            )
+        });
         let periods = Periods {
             root,
             report: tx.clone(),
-            record: Arc::new(PeriodSink::default()),
-            write_run_store: record,
+            record: record.clone(),
         };
-        let sink: Arc<dyn EventSink> = Arc::new(FanOutSink(vec![
-            Arc::new(ChannelSink(tx)),
-            periods.record.clone(),
-        ]));
+        let sink: Arc<dyn EventSink> = Arc::new(FanOutSink(
+            std::iter::once(Arc::new(ChannelSink(tx)) as Arc<dyn EventSink>)
+                .chain(record.map(|r| r as Arc<dyn EventSink>))
+                .collect(),
+        ));
         self.host = Some(tokio::spawn(async move {
             if let Some((checked, path)) = periods.graph() {
                 let mut runner = Runner::new(&periods.root)
@@ -775,10 +781,8 @@ impl Harness {
 struct Periods {
     root: PathBuf,
     report: mpsc::UnboundedSender<Seen>,
-    /// The open period's run store record, when it writes one.
-    record: Arc<PeriodSink>,
-    /// Whether a busy period writes the run store too.
-    write_run_store: bool,
+    /// The run store's record, when the harness writes one.
+    record: Option<Arc<datalib_dag::runs_sink::RunStoreSink>>,
 }
 
 impl Periods {
@@ -799,24 +803,20 @@ impl Periods {
 }
 
 impl LoopHost for Periods {
-    fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
-        let _ = self.report.send(Seen::Host("busy period".into()));
+    fn step_env(&self) -> Result<BTreeMap<String, String>, String> {
         let (checked, _) = self.graph().ok_or("the config does not load")?;
-        let run_id = datalib_dag::scheduler::new_run_id();
-        let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs();
-        let env = host::step_env(&checked.cfg, None, &[], &now, &run_id).unwrap();
-        if self.write_run_store {
-            let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, start)
-                .expect("open the run store");
-            self.record.point_at(Some(Arc::new(store)));
-        }
-        Ok(env.vars)
+        Ok(host::step_env(&checked.cfg, None, &[]).unwrap().vars)
     }
 
-    /// Dropping the run store's writer flushes and joins: the period is
-    /// over once what it wrote can be read.
-    fn close(&self, _run_id: &str) {
-        drop(self.record.point_at(None));
+    /// The period is over once what it wrote can be read.
+    fn busy(&self, busy: bool) {
+        if busy {
+            let _ = self.report.send(Seen::Host("busy period".into()));
+            return;
+        }
+        if let Some(record) = &self.record {
+            record.flush_blocking();
+        }
         let _ = self.report.send(Seen::Host("busy period over".into()));
     }
 }

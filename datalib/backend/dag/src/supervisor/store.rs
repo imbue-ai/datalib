@@ -31,6 +31,20 @@ const LADDER: &[datalib_store_meta::Migration] = &[
         name: "steps in one shape; launch_passes goes",
         apply: |conn| {
             Box::pin(async move {
+                // A store another process is making at this moment has its
+                // tables in this build's shape before it records a version,
+                // and reads as one from before the ladder.
+                let made_now: i64 = sql!(
+                    "dag.supervisor.migrate_v6_steps_in_this_shape",
+                    "SELECT count(*) FROM pragma_table_info('steps') \
+                     WHERE name = 'last_invocation_id'"
+                )
+                .query_scalar()
+                .fetch_one(&mut *conn)
+                .await?;
+                if made_now > 0 {
+                    return Ok(());
+                }
                 sql!(
                     "dag.supervisor.migrate_v6_rename_old_steps",
                     "ALTER TABLE steps RENAME TO steps_v5"
@@ -40,7 +54,7 @@ const LADDER: &[datalib_store_meta::Migration] = &[
                 .await?;
                 Sql::ddl(
                     sql_id!("dag.supervisor.migrate_v6_create_steps"),
-                    super::record::STEPS,
+                    STEPS_AT_V6,
                 )
                 .query()
                 .execute(&mut *conn)
@@ -86,7 +100,87 @@ const LADDER: &[datalib_store_meta::Migration] = &[
             })
         },
     },
+    datalib_store_meta::Migration {
+        version: 8,
+        name: "invocations replace runs: a step's last outcome names its invocation",
+        apply: |conn| {
+            Box::pin(async move {
+                let has_column = |table: &'static str, column: &'static str| {
+                    sql!(
+                        "dag.supervisor.migrate_v8_has_column",
+                        "SELECT count(*) FROM pragma_table_info(?) WHERE name = ?"
+                    )
+                    .query_scalar::<i64>()
+                    .bind(table)
+                    .bind(column)
+                };
+                // A step's last outcome was filed under a busy period's id,
+                // which names no invocation: it keeps its outcome and times,
+                // and names none until it next runs.
+                if has_column("steps", "last_run_id")
+                    .fetch_one(&mut *conn)
+                    .await?
+                    > 0
+                {
+                    sql!(
+                        "dag.supervisor.migrate_v8_steps_name_invocations",
+                        "ALTER TABLE steps RENAME COLUMN last_run_id TO last_invocation_id; \
+                         UPDATE steps SET last_invocation_id = '' \
+                           WHERE last_invocation_id IS NOT NULL; \
+                         ALTER TABLE steps ADD COLUMN last_requests TEXT"
+                    )
+                    .raw()
+                    .execute(&mut *conn)
+                    .await?;
+                }
+                sql!(
+                    "dag.supervisor.migrate_v8_drop_runs",
+                    "DROP TABLE IF EXISTS runs; DROP TABLE IF EXISTS run_steps"
+                )
+                .raw()
+                .execute(&mut *conn)
+                .await?;
+                if has_column("invocations", "run_id")
+                    .fetch_one(&mut *conn)
+                    .await?
+                    > 0
+                {
+                    sql!(
+                        "dag.supervisor.migrate_v8_invocations_drop_run",
+                        "ALTER TABLE invocations DROP COLUMN run_id"
+                    )
+                    .query()
+                    .execute(&mut *conn)
+                    .await?;
+                }
+                Ok(())
+            })
+        },
+    },
 ];
+
+/// `steps` as rung 6 makes it, the shape rung 8 starts from.
+const STEPS_AT_V6: &str = "CREATE TABLE IF NOT EXISTS steps (
+        step TEXT PRIMARY KEY,
+        succeeded INTEGER NOT NULL,
+        fingerprint TEXT NOT NULL,
+        reads TEXT NOT NULL,
+        last_run_id TEXT,
+        last_started_at_utc TEXT,
+        last_finished_at_utc TEXT,
+        last_status TEXT,
+        last_attempts INTEGER,
+        last_error TEXT,
+        last_failure_kind TEXT,
+        last_success_at_utc TEXT,
+        tz_offset TEXT,
+        state TEXT,
+        state_detail TEXT,
+        waiting_for TEXT,
+        turned_off_by TEXT,
+        requests TEXT,
+        needs_rerun INTEGER NOT NULL DEFAULT 0
+    )";
 
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
@@ -166,14 +260,15 @@ const INDEXES: [&str; 2] = [
 
 const OPEN_REQUESTS: Sql = sql!(
     "dag.supervisor.find_open_requests",
-    "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+    "SELECT id, roots, opened_by, opened_at_utc, tz_offset, stop_requested_by, closed_at_utc, \
+       outcome, failed_step \
      FROM requests INDEXED BY requests_open \
      WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
 );
 
 const OPEN_JOBS: Sql = sql!(
     "dag.supervisor.find_open_jobs",
-    "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+    "SELECT id, kind, targets, opened_by, opened_at_utc, tz_offset, closed_at_utc, error \
      FROM jobs INDEXED BY jobs_open \
      WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
 );
@@ -271,6 +366,11 @@ pub struct JobRow {
     pub kind: Option<JobKind>,
     pub targets: Vec<String>,
     pub opened_by: String,
+    /// When it was opened, with the offset of the clock that opened it:
+    /// the `DATALIB_DAG_NOW` of every invocation it starts.
+    pub opened_at: String,
+    /// `None` while it is open.
+    pub closed_at: Option<String>,
     /// `None` while it is open; then `Some(None)` if it was done, or the
     /// reason it was not.
     pub closed: Option<Option<String>>,
@@ -283,6 +383,12 @@ pub struct RequestRow {
     /// downstream of them.
     pub roots: Vec<String>,
     pub opened_by: String,
+    /// When it was opened, with the offset of the clock that opened it:
+    /// the `DATALIB_DAG_NOW` of an invocation it is the oldest open
+    /// request of.
+    pub opened_at: String,
+    /// `None` while it is open.
+    pub closed_at: Option<String>,
     pub stop_requested_by: Option<String>,
     /// `None` while it is open. An outcome a newer build wrote that this
     /// one cannot name reads as closed all the same.
@@ -434,7 +540,20 @@ impl Store {
     }
 
     pub async fn open_request(&self, roots: &[String], by: &str) -> Result<String> {
-        let id = uuid::Uuid::now_v7().to_string();
+        self.open_request_as(None, roots, by).await
+    }
+
+    /// [`Store::open_request`], under `id` when one is given: for a
+    /// fixture that finds its request's invocations by id.
+    pub async fn open_request_as(
+        &self,
+        id: Option<&str>,
+        roots: &[String],
+        by: &str,
+    ) -> Result<String> {
+        let id = id
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
         let (now, tz_offset) = now_split();
         sql!(
             "dag.supervisor.insert_request",
@@ -529,7 +648,8 @@ impl Store {
     pub async fn recent_requests(&self, limit: u32) -> Result<Vec<RequestRow>> {
         let rows = sql!(
             "dag.supervisor.list_recent_requests",
-            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+            "SELECT id, roots, opened_by, opened_at_utc, tz_offset, stop_requested_by, \
+               closed_at_utc, outcome, failed_step \
              FROM requests ORDER BY closed_at_utc IS NOT NULL, opened_at_utc DESC, id DESC \
              LIMIT ?"
         )
@@ -543,7 +663,8 @@ impl Store {
     pub async fn request(&self, id: &str) -> Result<Option<RequestRow>> {
         let row = sql!(
             "dag.supervisor.read_request",
-            "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
+            "SELECT id, roots, opened_by, opened_at_utc, tz_offset, stop_requested_by, \
+               closed_at_utc, outcome, failed_step \
              FROM requests WHERE id = ?"
         )
         .query()
@@ -708,7 +829,20 @@ impl Store {
     }
 
     pub async fn open_job(&self, kind: JobKind, targets: &[String], by: &str) -> Result<String> {
-        let id = uuid::Uuid::now_v7().to_string();
+        self.open_job_as(None, kind, targets, by).await
+    }
+
+    /// [`Store::open_job`], under `id` when one is given.
+    pub async fn open_job_as(
+        &self,
+        id: Option<&str>,
+        kind: JobKind,
+        targets: &[String],
+        by: &str,
+    ) -> Result<String> {
+        let id = id
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
         let (now, tz_offset) = now_split();
         sql!(
             "dag.supervisor.insert_job",
@@ -755,7 +889,7 @@ impl Store {
     pub async fn jobs(&self) -> Result<Vec<JobRow>> {
         let rows = sql!(
             "dag.supervisor.list_jobs",
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+            "SELECT id, kind, targets, opened_by, opened_at_utc, tz_offset, closed_at_utc, error \
              FROM jobs ORDER BY opened_at_utc, id"
         )
         .query()
@@ -764,10 +898,25 @@ impl Store {
         rows.iter().map(wipe_of).collect()
     }
 
+    /// The newest jobs, open or closed, newest first.
+    pub async fn recent_jobs(&self, limit: u32) -> Result<Vec<JobRow>> {
+        let rows = sql!(
+            "dag.supervisor.list_recent_jobs",
+            "SELECT id, kind, targets, opened_by, opened_at_utc, tz_offset, closed_at_utc, error \
+             FROM jobs ORDER BY opened_at_utc DESC, id DESC LIMIT ?"
+        )
+        .query()
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(wipe_of).collect()
+    }
+
     pub async fn job(&self, id: &str) -> Result<Option<JobRow>> {
         let row = sql!(
             "dag.supervisor.read_job",
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs WHERE id = ?"
+            "SELECT id, kind, targets, opened_by, opened_at_utc, tz_offset, closed_at_utc, error \
+             FROM jobs WHERE id = ?"
         )
         .query()
         .bind(id)
@@ -882,8 +1031,8 @@ impl Store {
         let kinds: Vec<&str> = kinds.iter().map(|k| k.as_str()).collect();
         let row = sql!(
             "dag.supervisor.find_latest_job_since",
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs \
-             WHERE kind IN (SELECT value FROM json_each(?)) AND opened_at_utc >= ? \
+            "SELECT id, kind, targets, opened_by, opened_at_utc, tz_offset, closed_at_utc, error \
+             FROM jobs WHERE kind IN (SELECT value FROM json_each(?)) AND opened_at_utc >= ? \
              ORDER BY opened_at_utc DESC, id DESC LIMIT 1"
         )
         .query()
@@ -910,12 +1059,15 @@ fn wipe_of(r: &sqlx::sqlite::SqliteRow) -> Result<JobRow> {
     let targets: String = r.try_get("targets")?;
     let closed_at: Option<String> = r.try_get("closed_at_utc")?;
     let error: Option<String> = r.try_get("error")?;
+    let (opened_at, closed_at) = stamps_of(r, closed_at)?;
     Ok(JobRow {
         id: r.try_get("id")?,
         kind: JobKind::parse(&kind),
         targets: serde_json::from_str(&targets).context("a wipe's targets")?,
         opened_by: r.try_get("opened_by")?,
-        closed: closed_at.map(|_| error),
+        closed: closed_at.as_ref().map(|_| error),
+        opened_at,
+        closed_at,
     })
 }
 
@@ -923,14 +1075,31 @@ fn request_of(r: &sqlx::sqlite::SqliteRow) -> Result<RequestRow> {
     let roots: String = r.try_get("roots")?;
     let closed_at: Option<String> = r.try_get("closed_at_utc")?;
     let outcome: Option<String> = r.try_get("outcome")?;
+    let (opened_at, closed_at) = stamps_of(r, closed_at)?;
     Ok(RequestRow {
         id: r.try_get("id")?,
         roots: serde_json::from_str(&roots).context("a request's roots")?,
         opened_by: r.try_get("opened_by")?,
         stop_requested_by: r.try_get("stop_requested_by")?,
-        closed: closed_at.map(|_| outcome.as_deref().and_then(RequestOutcome::parse)),
+        closed: closed_at
+            .as_ref()
+            .map(|_| outcome.as_deref().and_then(RequestOutcome::parse)),
+        opened_at,
+        closed_at,
         failed_step: r.try_get("failed_step")?,
     })
+}
+
+/// A row's opening and closing stamps, each with the offset it was opened
+/// in: the store keeps one offset per row.
+fn stamps_of(
+    r: &sqlx::sqlite::SqliteRow,
+    closed_at_utc: Option<String>,
+) -> Result<(String, Option<String>)> {
+    let offset: String = r.try_get("tz_offset")?;
+    let opened: String = r.try_get("opened_at_utc")?;
+    let join = |utc: &str| datalib_time::join_stamp(utc, Some(&offset));
+    Ok((join(&opened), closed_at_utc.as_deref().map(join)))
 }
 
 fn now_split() -> (String, String) {

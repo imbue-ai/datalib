@@ -75,7 +75,7 @@ async fn main() -> Result<()> {
         }
     };
     let check_only = matches!(cli.verb, Verb::Check { .. });
-    let (config_path, sync_only, reset, shrink, by, run, run_id) = match cli.verb {
+    let (config_path, sync_only, reset, shrink, by, run, request_id) = match cli.verb {
         Verb::Serve { root, run } => {
             return serve(
                 &datalib_dag::cli::config_path(&root),
@@ -99,26 +99,34 @@ async fn main() -> Result<()> {
             steps,
             by,
             run,
-            run_id,
-        } => (root, steps, vec![], None, by, run, run_id),
+            request_id,
+        } => (root, steps, vec![], None, by, run, request_id),
         Verb::Reset {
             root,
             steps,
             run,
-            run_id,
-        } => (root, vec![], steps, None, String::new(), run, run_id),
+            request_id,
+        } => (root, vec![], steps, None, String::new(), run, request_id),
         Verb::FreeDiskSpace {
             root,
             drop_old_versions_on_derived_data,
             run,
-            run_id,
+            request_id,
         } => {
             let how = if drop_old_versions_on_derived_data {
                 Shrink::Compact
             } else {
                 Shrink::Collect
             };
-            (root, vec![], vec![], Some(how), String::new(), run, run_id)
+            (
+                root,
+                vec![],
+                vec![],
+                Some(how),
+                String::new(),
+                run,
+                request_id,
+            )
         }
         verb => return run_verb(verb).await,
     };
@@ -280,16 +288,28 @@ async fn main() -> Result<()> {
             Shrink::Compact => JobKind::Compact,
             Shrink::Collect => JobKind::Collect,
         };
-        Own::Job(store.open_job(kind, &[], CLI_OPENER).await?)
+        Own::Job(
+            store
+                .open_job_as(request_id.as_deref(), kind, &[], CLI_OPENER)
+                .await?,
+        )
     } else if !reset.is_empty() {
-        Own::Job(store.open_job(JobKind::Reset, &reset, CLI_OPENER).await?)
+        Own::Job(
+            store
+                .open_job_as(request_id.as_deref(), JobKind::Reset, &reset, CLI_OPENER)
+                .await?,
+        )
     } else {
         let roots: Vec<String> = if sync_only.is_empty() {
             graph.fringe_ids().into_iter().map(str::to_string).collect()
         } else {
             sync_only.clone()
         };
-        Own::Request(store.open_request(&roots, &by).await?)
+        Own::Request(
+            store
+                .open_request_as(request_id.as_deref(), &roots, &by)
+                .await?,
+        )
     };
     {
         // The stop goes through the store, like a stop from anywhere else.
@@ -321,7 +341,6 @@ async fn main() -> Result<()> {
                 now,
                 parallelism: parallelism.map(|n| n.get()),
                 events: Some(Arc::new(NdjsonSink::new(std::io::stderr()))),
-                run_id,
                 config: Some(config_path.clone()),
             };
             let _log = log_to_the_run_store(&data_root, Some(&cfg));
@@ -676,7 +695,6 @@ async fn serve(
         now: run.now,
         parallelism: run.parallelism.map(|n| n.get()),
         events: None,
-        run_id: None,
         config: Some(config_path.to_path_buf()),
     };
     datalib_dag::supervisor::serve::run(&opts, emit, stop_rx).await;
@@ -822,8 +840,8 @@ async fn status_lines(store: &Store, data_root: &Path) -> Result<Vec<String>> {
     let running = store.running_invocations().await?;
     for inv in &running {
         lines.push(format!(
-            "running {}  since {}  in run {}",
-            inv.step, inv.started_at_utc, inv.run_id
+            "running {}  since {}  invocation {}",
+            inv.step, inv.started_at_utc, inv.id
         ));
     }
     // A running step's own queue says what is ahead of it now.
@@ -831,8 +849,8 @@ async fn status_lines(store: &Store, data_root: &Path) -> Result<Vec<String>> {
     for owed in datalib_runs::latest_metric(data_root, datalib_metrics::OWED).await? {
         if owed.value > 0 && at_rest(&owed.step) {
             lines.push(format!(
-                "owed {}  {}  as of run {}",
-                owed.step, owed.value, owed.run_id
+                "owed {}  {}  as of {}",
+                owed.step, owed.value, owed.reported_in
             ));
         }
     }

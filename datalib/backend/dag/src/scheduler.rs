@@ -21,7 +21,39 @@ use crate::step::{
     StopSignal, Verb,
 };
 use crate::subprocess::Shrink;
-use crate::supervisor::record::{LastRun, Record};
+use crate::supervisor::record::{LastInvocation, Record};
+
+/// What the loop starts an invocation for: the open requests it serves,
+/// or the one job, and the `DATALIB_DAG_NOW` that gives it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Serves {
+    pub requests: Vec<String>,
+    pub now: String,
+}
+
+/// The variables one invocation is handed on top of the loop's
+/// environment: its id, under its own name and the name it had before,
+/// and its "now".
+pub(crate) fn invocation_env(
+    base: &BTreeMap<String, String>,
+    invocation: &str,
+    now: &str,
+) -> BTreeMap<String, String> {
+    let mut env = base.clone();
+    env.insert(
+        crate::subprocess::ENV_INVOCATION_ID.into(),
+        invocation.into(),
+    );
+    env.insert(crate::subprocess::ENV_RUN_ID.into(), invocation.into());
+    env.insert(crate::subprocess::ENV_NOW.into(), now.into());
+    env
+}
+
+/// A fresh invocation id. UUID v7, so ids sort in the order the
+/// invocations started while still being unique by construction.
+pub fn new_invocation_id() -> String {
+    uuid::Uuid::now_v7().to_string()
+}
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -68,12 +100,16 @@ pub struct Runner {
     pub lock_slots: BTreeMap<String, usize>,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
-    /// Extra environment applied to every subprocess step — settings
-    /// for the whole busy period like `PATH` (with the binary dir
-    /// prepended) and the pinned `DATALIB_DAG_NOW`. A step's own `env:`
-    /// entries win on key collision. [`Runner::run_forever`] replaces it
-    /// as each period opens.
+    /// Extra environment applied to every subprocess step, such as `PATH`
+    /// with the binary dir prepended; each invocation's own id and "now"
+    /// go on top. A step's own `env:` entries win on key collision.
+    /// [`Runner::run_forever`] builds it again from the host before each
+    /// tick that starts something.
     child_env: std::sync::RwLock<Arc<BTreeMap<String, String>>>,
+    /// Every invocation's `DATALIB_DAG_NOW`, in place of the time its
+    /// request was opened: for fixtures, whose output must not depend on
+    /// the day they were built.
+    pub now: Option<String>,
     /// Flipped to `true` to stop the round: running steps get SIGINT on
     /// their process group and nothing new starts.
     pub stop: Option<tokio::sync::watch::Receiver<bool>>,
@@ -95,6 +131,7 @@ impl Runner {
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
             child_env: Default::default(),
+            now: None,
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
             reload: None,
@@ -120,6 +157,24 @@ impl Runner {
     pub fn child_env(self, env: BTreeMap<String, String>) -> Self {
         self.set_steps_env(Arc::new(env));
         self
+    }
+
+    pub fn pin_now(mut self, now: Option<String>) -> Self {
+        self.now = now;
+        self
+    }
+
+    /// The `DATALIB_DAG_NOW` of an invocation whose oldest request (or
+    /// job) was opened at `opened_at`, to the second as a step reads it;
+    /// the pinned one when there is one.
+    pub(crate) fn now_for(&self, opened_at: Option<&str>) -> String {
+        if let Some(now) = &self.now {
+            return now.clone();
+        }
+        let at = opened_at
+            .and_then(|s| datalib_time::parse_strict(s).ok())
+            .unwrap_or_else(datalib_time::IsoOffsetTimestamp::now_local);
+        at.to_rfc3339_secs()
     }
 
     /// The environment a step started now gets on top of the host's.
@@ -157,7 +212,12 @@ impl Runner {
     /// the verb, else its tree deleted. Its index, and the version its
     /// emptied tree is at. Emptied, not gone: what reads it sees a new
     /// version and runs, which is how the emptiness reaches the grid.
-    pub(crate) async fn reset_one(&self, graph: &Graph, step: &StepId) -> Result<(usize, String)> {
+    pub(crate) async fn reset_one(
+        &self,
+        graph: &Graph,
+        step: &StepId,
+        serves: Serves,
+    ) -> Result<(usize, String)> {
         let &i = graph
             .by_id
             .get(step)
@@ -165,7 +225,7 @@ impl Runner {
         let fingerprint = &graph.fingerprints[i];
         let reported = if graph.steps[i].takes(Verb::Reset) {
             let (_, outcome) = self
-                .invoke_once(graph, step, Verb::Reset)
+                .invoke_once(graph, step, Verb::Reset, serves)
                 .await
                 .map_err(|e| anyhow::anyhow!("reset {step}: {e}"))?;
             reported_version(&graph.steps[i], fingerprint, &outcome.outputs)?
@@ -194,9 +254,10 @@ impl Runner {
         graph: &Graph,
         step: &StepId,
         how: Shrink,
+        serves: Serves,
     ) -> std::result::Result<(Option<String>, Option<crate::step::StoreBytes>), String> {
         let (i, outcome) = self
-            .invoke_once(graph, step, how.verb())
+            .invoke_once(graph, step, how.verb(), serves)
             .await
             .map_err(|e| e.to_string())?;
         let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)
@@ -213,7 +274,11 @@ impl Runner {
         step: &StepId,
         verb: Verb,
     ) -> std::result::Result<std::result::Result<Vec<String>, String>, String> {
-        match self.invoke_once(graph, step, verb).await {
+        let serves = Serves {
+            requests: Vec::new(),
+            now: self.now_for(None),
+        };
+        match self.invoke_once(graph, step, verb, serves).await {
             Ok((_, outcome)) => Ok(Ok(outcome.warnings)),
             Err(InvokeError::NotStarted(why)) => Ok(Err(why)),
             Err(e) => Err(e.to_string()),
@@ -228,27 +293,44 @@ impl Runner {
         graph: &Graph,
         step: &StepId,
         verb: Verb,
+        serves: Serves,
     ) -> std::result::Result<(usize, StepOutcome), InvokeError> {
         let &i = graph
             .by_id
             .get(step)
             .ok_or_else(|| InvokeError::Failed("no such step".to_string()))?;
-        let outcome = self.verb_task(&graph.steps[i], verb).await?;
+        let outcome = self
+            .verb_task(&graph.steps[i], &graph.fingerprints[i], verb, serves)
+            .await?;
         Ok((i, outcome))
     }
 
     /// [`Runner::invoke_once`] of one step, owning what it needs, so the
-    /// loop can run it beside the steps it runs.
+    /// loop can run it beside the steps it runs. An invocation of its own,
+    /// for what `serves` names.
     pub(crate) fn verb_task(
         &self,
         spec: &crate::step::StepSpec,
+        fingerprint: &str,
         verb: Verb,
+        serves: Serves,
     ) -> impl std::future::Future<Output = std::result::Result<StepOutcome, InvokeError>> + Send + 'static
     {
         let spec = spec.clone();
         let data_root = self.data_root.clone();
         let sink = self.sink.clone();
-        let child_env = self.steps_env();
+        let invocation = new_invocation_id();
+        let child_env = invocation_env(&self.steps_env(), &invocation, &serves.now);
+        sink.emit(&Event::InvocationStart {
+            step: spec.id.clone(),
+            invocation: invocation.clone(),
+            group: spec.group.clone(),
+            verb: Some(verb),
+            requests: serves.requests,
+            now: serves.now,
+            fingerprint: fingerprint.to_string(),
+            reads: BTreeMap::new(),
+        });
         async move {
             let StepRun::Subprocess { argv, env, params } = &spec.run else {
                 return Err(InvokeError::Failed("not a subprocess step".to_string()));
@@ -284,13 +366,23 @@ impl Runner {
                 Ok(o) => o.exit,
                 Err(e) => e.exit,
             };
+            let status = if error.is_none() {
+                RunState::Succeeded
+            } else {
+                RunState::Failed
+            };
+            sink.emit(&Event::InvocationEnd {
+                step: spec.id.clone(),
+                invocation,
+                status,
+                error: error.clone(),
+                exit_code: exit.and_then(|x| x.code),
+                signal: exit.and_then(|x| x.signal),
+                attempts: 1,
+            });
             sink.emit(&Event::StepFinish {
                 step: spec.id.clone(),
-                status: if error.is_none() {
-                    RunState::Succeeded
-                } else {
-                    RunState::Failed
-                },
+                status,
                 error: error.clone(),
                 exit_code: exit.and_then(|x| x.code),
                 signal: exit.and_then(|x| x.signal),
@@ -467,6 +559,7 @@ impl Runner {
         error: Option<String>,
         exit: Option<crate::step::Exit>,
         attempts: u32,
+        reached: Option<Vec<String>>,
     ) {
         let id = &graph.steps[i].id;
         self.sink.emit(&Event::StepFinish {
@@ -477,23 +570,19 @@ impl Runner {
             signal: exit.and_then(|e| e.signal),
         });
         let stamp = now_stamp();
-        if let Some(run) = state.current_run.as_mut() {
-            run.states
-                .insert(id.clone(), st.state().as_str().to_string());
-        }
         {
-            let run_id = state
-                .current_run
-                .as_ref()
-                .map(|r| r.run_id.clone())
-                .unwrap_or_default();
             let entry = state.steps.entry(id.clone()).or_default();
-            let last = entry.last_run.get_or_insert_with(|| LastRun {
-                run_id: run_id.clone(),
+            let last = entry.last_invocation.get_or_insert_with(|| LastInvocation {
                 started_at: stamp.clone(),
                 ..Default::default()
             });
-            last.run_id = run_id;
+            // An outcome no invocation of its own came to (found up to
+            // date, or blocked) keeps the last invocation's id, which is
+            // where the step's log is, and names the requests that
+            // reached it.
+            if let Some(reached) = reached {
+                last.requests = reached;
+            }
             last.finished_at = Some(stamp.clone());
             last.status = st.state().as_str().to_string();
             last.attempts = attempts;
@@ -516,20 +605,18 @@ pub(crate) fn now_stamp() -> String {
     datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_micros()
 }
 
-/// Open a step's run record when the scheduler dispatches it, so a
+/// Open a step's record of its invocation as the loop starts it, so a
 /// reader can tell "running" from "not reached yet".
-pub(crate) fn mark_running(state: &mut Record, id: &StepId, stamp: &str) {
-    if let Some(run) = state.current_run.as_mut() {
-        run.states
-            .insert(id.clone(), RunState::Running.as_str().to_string());
-    }
-    let run_id = state
-        .current_run
-        .as_ref()
-        .map(|r| r.run_id.clone())
-        .unwrap_or_default();
-    state.steps.entry(id.clone()).or_default().last_run = Some(LastRun {
-        run_id,
+pub(crate) fn mark_running(
+    state: &mut Record,
+    id: &StepId,
+    stamp: &str,
+    invocation: &str,
+    serves: &Serves,
+) {
+    state.steps.entry(id.clone()).or_default().last_invocation = Some(LastInvocation {
+        invocation_id: invocation.to_string(),
+        requests: serves.requests.clone(),
         started_at: stamp.to_string(),
         finished_at: None,
         status: String::new(),
@@ -753,13 +840,6 @@ impl QueueLedger {
 /// say as none.
 fn rows_of(seals: impl Iterator<Item = Seal>) -> u64 {
     seals.map(|(_, n)| n.unwrap_or(0)).sum()
-}
-
-/// A fresh run id. UUID v7, so ids sort in the order the runs started
-/// while still being unique by construction — two runs pinned to the
-/// same `--now` (the tests do this) get different ids.
-pub fn new_run_id() -> String {
-    uuid::Uuid::now_v7().to_string()
 }
 
 pub(crate) async fn invoke_with_retry(
@@ -2788,50 +2868,65 @@ mod tests {
         );
     }
 
-    /// The run record is the only thing that makes a run visible to
-    /// anyone who did not spawn it — a terminal `datalib-pipeline` and the
-    /// UI's worker write the same file, so the UI can show either. Its
-    /// id is the one the caller chose, so the run store (keyed by the
-    /// same id) and the record describe the same run.
+    /// The record names each step's last invocation by the id the event
+    /// stream (and so the run store) announced it under, so the Manage
+    /// screen's log link finds its lines; and a pinned "now" is the one
+    /// every invocation is handed.
     #[tokio::test]
-    async fn the_run_id_is_the_one_handed_to_the_steps() {
+    async fn the_invocation_the_record_names_is_the_one_the_stream_announced() {
         let fx = Fixture::new();
         let g = fx.graph();
         let pinned = "2026-08-31T12:34:56+02:00";
-        let r = runner(fx.root.path()).child_env(BTreeMap::from([
-            (crate::subprocess::ENV_NOW.to_string(), pinned.to_string()),
-            (
-                crate::subprocess::ENV_RUN_ID.to_string(),
-                "run-abc".to_string(),
-            ),
-        ]));
+        let seen = Arc::new(Recorder::default());
+        let r = runner(fx.root.path())
+            .pin_now(Some(pinned.to_string()))
+            .sink(seen.clone());
         assert!(r.run(&g).await.unwrap().all_ok());
 
+        let started: Vec<(String, String, String)> = seen
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|e| match e {
+                Event::InvocationStart {
+                    step,
+                    invocation,
+                    now,
+                    ..
+                } => Some((step.clone(), invocation.clone(), now.clone())),
+                _ => None,
+            })
+            .collect();
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
-        let run = st.current_run.expect("a run leaves a record");
-        assert_eq!(run.run_id, "run-abc");
-        assert_eq!(run.started_at, pinned);
+        for (step, invocation, now) in &started {
+            assert_eq!(now, pinned, "{step}: a pinned now is every invocation's");
+            let last = st.steps[step].last_invocation.as_ref().unwrap();
+            assert_eq!(&last.invocation_id, invocation, "{step}");
+            assert_eq!(last.requests.len(), 1, "{step}: the one request it served");
+        }
+        assert_eq!(started.len(), g.steps.len());
     }
 
-    /// Without a caller-chosen id the runner mints one, and two runs
-    /// pinned to the same clock still get different ids.
+    /// Two runs pinned to the same clock still give every invocation an
+    /// id of its own.
     #[tokio::test]
-    async fn a_run_without_a_given_id_mints_a_unique_one() {
+    async fn every_invocation_gets_an_id_of_its_own() {
         let fx = Fixture::new();
         let g = fx.graph();
         let mut ids = Vec::new();
-        for _ in 0..2 {
-            let r = runner(fx.root.path()).child_env(BTreeMap::from([(
-                crate::subprocess::ENV_NOW.to_string(),
-                "2026-08-31T12:34:56+02:00".to_string(),
-            )]));
+        for content in ["slack v1", "slack v2"] {
+            *fx.slack_content.lock().unwrap() = content.to_string();
+            let r = runner(fx.root.path()).pin_now(Some("2026-08-31T12:34:56+02:00".to_string()));
             assert!(r.run(&g).await.unwrap().all_ok());
             ids.push(
                 crate::supervisor::record::recorded(fx.root.path())
                     .await
-                    .current_run
+                    .steps["slack/raw"]
+                    .last_invocation
+                    .clone()
                     .unwrap()
-                    .run_id,
+                    .invocation_id,
             );
         }
         assert_ne!(ids[0], ids[1]);
@@ -2846,19 +2941,12 @@ mod tests {
         assert!(r.run(&g).await.unwrap().all_ok());
 
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
-        let run = st.current_run.expect("a run leaves a record");
-        assert!(run.finished_at.is_some(), "a completed run is closed");
         let every: Vec<&str> = g.steps.iter().map(|s| s.id.as_str()).collect();
         for id in &every {
-            assert_eq!(
-                run.states.get(*id).map(String::as_str),
-                Some("succeeded"),
-                "{id} has no state in the run record"
-            );
-        }
-
-        for id in &every {
-            let last = st.steps[*id].last_run.as_ref().expect("{id}: no last_run");
+            let last = st.steps[*id]
+                .last_invocation
+                .as_ref()
+                .expect("{id}: no last_invocation");
             assert_eq!(last.status, "succeeded");
             assert!(last.finished_at.is_some());
             assert!(!last.started_at.is_empty());
@@ -2869,14 +2957,9 @@ mod tests {
         // than leaving last run's answer in place.
         assert!(r.run(&g).await.unwrap().all_ok());
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
-        let run = st.current_run.expect("second run recorded");
-        assert_eq!(
-            run.states["slack/rendered_md"], "skipped_up_to_date",
-            "a skipped step is recorded as skipped, not left as succeeded"
-        );
         assert_eq!(
             st.steps["slack/rendered_md"]
-                .last_run
+                .last_invocation
                 .as_ref()
                 .unwrap()
                 .status,
@@ -2916,11 +2999,10 @@ mod tests {
         let _ = runner(fx.root.path()).run(&g).await.unwrap();
 
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
-        let run = st.current_run.unwrap();
-        assert_eq!(run.states["email/rendered_md"], "failed");
-        assert_eq!(run.states["unified_grid_and_search_index/grid"], "blocked");
-
-        let failed = st.steps["email/rendered_md"].last_run.as_ref().unwrap();
+        let failed = st.steps["email/rendered_md"]
+            .last_invocation
+            .as_ref()
+            .unwrap();
         assert_eq!(failed.status, "failed");
         assert!(failed.error.as_deref().unwrap().contains("bad json"));
         assert_eq!(failed.attempts, 1, "a Data failure is not retried");
@@ -2928,7 +3010,7 @@ mod tests {
         // A step that never ran still gets a record — "blocked, and on
         // what" is the answer the table needs.
         let blocked = st.steps["unified_grid_and_search_index/grid"]
-            .last_run
+            .last_invocation
             .as_ref()
             .unwrap();
         assert_eq!(blocked.status, "blocked");
@@ -2979,10 +3061,10 @@ mod tests {
         assert!(!rep.all_ok(), "a stopped run is not a clean one");
 
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
-        let run = st.current_run.unwrap();
-        assert_eq!(run.states["email/rendered_md"], "stopped");
-        assert_eq!(run.states["unified_grid_and_search_index/grid"], "blocked");
-        let stopped = st.steps["email/rendered_md"].last_run.as_ref().unwrap();
+        let stopped = st.steps["email/rendered_md"]
+            .last_invocation
+            .as_ref()
+            .unwrap();
         assert_eq!(stopped.status, "stopped");
         assert_eq!(stopped.attempts, 1, "a cancel is not retried");
 
@@ -2993,7 +3075,7 @@ mod tests {
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         assert_eq!(
             st.steps["email/rendered_md"]
-                .last_run
+                .last_invocation
                 .as_ref()
                 .unwrap()
                 .status,
@@ -3001,7 +3083,7 @@ mod tests {
         );
     }
 
-    /// A failure moves `last_run` and leaves `last_success_at` where the
+    /// A failure moves `last_invocation` and leaves `last_success_at` where the
     /// last good run put it — the Manage screen's "last success" (#646).
     #[tokio::test]
     async fn a_failure_keeps_the_last_success_it_follows() {
@@ -3038,7 +3120,7 @@ mod tests {
         r.run(&g).await.unwrap();
         let mut st = crate::supervisor::record::recorded(fx.root.path()).await;
         let good = st.steps.get_mut("email/rendered_md").unwrap();
-        let succeeded_at = good.last_run.as_ref().unwrap().finished_at.clone();
+        let succeeded_at = good.last_invocation.as_ref().unwrap().finished_at.clone();
         assert!(succeeded_at.is_some());
         assert_eq!(good.last_success_at, succeeded_at);
         // Both runs finish within the same second, so a stamp the
@@ -3054,7 +3136,7 @@ mod tests {
         r.run(&g).await.unwrap();
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let after = &st.steps["email/rendered_md"];
-        assert_eq!(after.last_run.as_ref().unwrap().status, "failed");
+        assert_eq!(after.last_invocation.as_ref().unwrap().status, "failed");
         assert_eq!(after.last_success_at, succeeded_at);
     }
 
@@ -3175,15 +3257,10 @@ mod tests {
         let seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 let st = crate::supervisor::record::recorded(root.path()).await;
-                if let Some(cur) = st
-                    .current_run
-                    .as_ref()
-                    .and_then(|c| c.states.get("gate/raw"))
-                {
-                    return (
-                        cur.clone(),
-                        st.steps.get("gate/raw").and_then(|s| s.last_run.clone()),
-                    );
+                if let Some(step) = st.steps.get("gate/raw") {
+                    if step.state == Some(crate::supervisor::tick::StateKind::Running) {
+                        return (step.state, step.last_invocation.clone());
+                    }
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
@@ -3191,8 +3268,10 @@ mod tests {
         .await
         .expect("a step in flight must be readable as running from the record");
 
-        assert_eq!(seen.0, "running");
-        let last = seen.1.expect("a dispatched step has an open last_run");
+        assert_eq!(seen.0, Some(crate::supervisor::tick::StateKind::Running));
+        let last = seen
+            .1
+            .expect("a dispatched step has an open last_invocation");
         assert!(
             last.finished_at.is_none(),
             "an in-flight step has no finish time yet: {last:?}"
@@ -3218,7 +3297,7 @@ mod tests {
         let before = crate::supervisor::record::recorded(fx.root.path())
             .await
             .steps["email/raw"]
-            .last_run
+            .last_invocation
             .clone()
             .expect("the first run recorded email/raw");
         assert_eq!(before.status, "succeeded");
@@ -3230,7 +3309,7 @@ mod tests {
 
         let st = crate::supervisor::record::recorded(fx.root.path()).await;
         let after = st.steps["email/raw"]
-            .last_run
+            .last_invocation
             .as_ref()
             .expect("email/raw keeps its record");
         assert_eq!(
@@ -3242,20 +3321,13 @@ mod tests {
             "nor when it did it — this is the timestamp the grid shows as \
              'last synced', and it moved on every unrelated sync"
         );
-
-        // And the run has no state for it: no request reached it.
-        assert!(!st
-            .current_run
-            .expect("a run leaves a record")
-            .states
-            .contains_key("email/raw"));
     }
 
     /// A step no request has ever reached has no history to keep, and
     /// must not acquire a fake one: it stays "never run" rather than
     /// becoming a row stamped with a run that skipped it.
     #[tokio::test]
-    async fn a_never_selected_step_has_no_last_run_at_all() {
+    async fn a_never_selected_step_has_no_last_invocation_at_all() {
         let fx = Fixture::new();
         let g = fx.graph();
         let r = Subset(runner(fx.root.path()), &["slack/raw"]);
@@ -3265,7 +3337,7 @@ mod tests {
         assert!(
             st.steps
                 .get("email/raw")
-                .and_then(|s| s.last_run.as_ref())
+                .and_then(|s| s.last_invocation.as_ref())
                 .is_none(),
             "a step this run never selected has not run, and must not \
              claim to have: {:#?}",

@@ -1,6 +1,6 @@
-// A metric series over time: appended when a value changed, at most
-// every few seconds per series, plus the final value — so a rate is a
-// query. Compacted like `disk_usage`: carry the last value forward.
+// A metric series over time in one run of an older build: appended when a
+// value changed, at most every few seconds per series, plus the final
+// value. This build writes `invocation_metric_samples` instead.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

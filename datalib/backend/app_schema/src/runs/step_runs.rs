@@ -1,4 +1,5 @@
-// One row per step per run: what it is doing, or did.
+// One row per step per run of an older build: what it did. This build
+// writes none; `invocations` is its record of what a step did.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};

@@ -26,13 +26,13 @@ use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::scheduler::{
-    apply_answer, fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp,
-    reported_version, step_summary, InvokeError, PrepareError, QueueLedger, RunReport, Runner,
-    StepReport, StepStatus, REFUSED_PREPARE,
+    apply_answer, fresh_version, invocation_env, invoke_with_retry, mark_running,
+    new_invocation_id, now_stamp, reported_version, step_summary, InvokeError, PrepareError,
+    QueueLedger, RunReport, Runner, Serves, StepReport, StepStatus, REFUSED_PREPARE,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::subprocess::Shrink;
-use crate::supervisor::record::{CurrentRun, Record};
+use crate::supervisor::record::Record;
 use crate::version::UNKNOWN;
 
 /// How often an open round looks at the disk while the config sets a
@@ -220,6 +220,8 @@ struct PreparePass {
     /// Its row in the store's `jobs`, whose `job_steps` say how it stands
     /// with each step, in `order`.
     job: String,
+    /// When the job was opened: its invocations' `DATALIB_DAG_NOW`.
+    opened_at: Option<String>,
     order: Vec<String>,
     /// In graph order.
     not_started: Vec<String>,
@@ -320,11 +322,12 @@ struct Mailbox<'a> {
 }
 
 /// An open request as the loop holds it: its row's id, its roots by id,
-/// and when the loop took it on.
+/// when the loop took it on, and when it was opened.
 struct Open {
     id: String,
     roots: Vec<String>,
     opened: Seq,
+    opened_at: String,
 }
 
 impl Open {
@@ -343,13 +346,10 @@ impl Open {
 }
 
 /// One busy period: from the first request or wipe the loop takes on with
-/// none open, to the moment none is left and nothing runs. Only the run
-/// store's grouping, and what its summary compares against.
+/// none open, to the moment none is left and nothing runs. Recorded
+/// nowhere: only what the end-of-period report compares against.
 struct Period {
-    run_id: String,
-    /// The same clock its steps get in `DATALIB_DAG_NOW`.
-    clock: datalib_time::RunClock,
-    /// Each step's version as the period began: the summary says whether
+    /// Each step's version as the period began: the report says whether
     /// the period as a whole moved a step's output.
     at_start: HashMap<String, Option<String>>,
 }
@@ -579,13 +579,10 @@ impl Runner {
                 }
                 if let Some(host) = host.filter(|_| period.is_none()) {
                     if !open.is_empty() || !wipes.is_empty() || prepare.is_some() {
-                        let start = super::host::period_start(
-                            &store.open_requests().await?,
-                            &store.open_jobs().await?,
-                        );
-                        match host.open(start) {
+                        match host.step_env() {
                             Ok(env) => {
                                 self.set_steps_env(env.into());
+                                host.busy(true);
                                 period =
                                     Some(self.open_period(graph, &mut record, &mut state).await?);
                                 // What it took on was read with no period
@@ -615,6 +612,7 @@ impl Runner {
                         &mut state,
                         &mut wipes,
                         &mut slots,
+                        host,
                     )
                     .await?;
                 if opened {
@@ -636,6 +634,7 @@ impl Runner {
             }
             if period.is_some() {
                 if let Some(pass) = prepare.as_mut() {
+                    self.env_from(host);
                     for task in self.start_what_it_can(graph, store, pass).await? {
                         set.spawn(task);
                     }
@@ -756,7 +755,13 @@ impl Runner {
                     continue;
                 };
                 if s.ended.is_none() && done {
-                    self.settle_row(graph, &mut state, &mut queue, s, i, cancelled);
+                    let reached = open
+                        .iter()
+                        .enumerate()
+                        .filter(|(r, _)| t.scopes[*r][i])
+                        .map(|(_, o)| o.id.clone())
+                        .collect();
+                    self.settle_row(graph, &mut state, &mut queue, s, i, cancelled, reached);
                 }
             }
 
@@ -798,6 +803,9 @@ impl Runner {
             say_wiping(graph, &mut state, &t, &wiping);
             record_deferred(graph, &mut state, &mailbox.deferred);
 
+            if !t.starts.is_empty() {
+                self.env_from(host);
+            }
             for start in t.starts {
                 let i = start.step;
                 seq += 1;
@@ -806,18 +814,42 @@ impl Runner {
                 let (stop, rx) = watch::channel(false);
                 let ctx = self.ctx_for(graph, &facts, &state, i, &start.consumed, &checkpoint, rx);
                 let started_at = now_stamp();
-                mark_running(&mut state, &graph.steps[i].id, &started_at);
-                let invocation = InvocationRow {
-                    id: uuid::Uuid::now_v7().to_string(),
-                    step: graph.steps[i].id.clone(),
-                    run_id: state
-                        .current_run
-                        .as_ref()
-                        .map(|r| r.run_id.clone())
-                        .unwrap_or_default(),
-                    started_at_utc: started_at,
+                // Every open request whose scope wants it; its "now" is the
+                // oldest one's.
+                let served: Vec<&Open> = open
+                    .iter()
+                    .enumerate()
+                    .filter(|(r, _)| t.scopes[*r][i])
+                    .map(|(_, o)| o)
+                    .collect();
+                let serves = Serves {
+                    requests: served.iter().map(|o| o.id.clone()).collect(),
+                    now: self.now_for(served.iter().map(|o| o.opened_at.as_str()).min()),
                 };
+                let invocation = InvocationRow {
+                    id: new_invocation_id(),
+                    step: graph.steps[i].id.clone(),
+                    started_at_utc: started_at.clone(),
+                };
+                mark_running(
+                    &mut state,
+                    &graph.steps[i].id,
+                    &started_at,
+                    &invocation.id,
+                    &serves,
+                );
                 store.open_invocation(&invocation).await?;
+                self.sink.emit(&Event::InvocationStart {
+                    step: graph.steps[i].id.clone(),
+                    invocation: invocation.id.clone(),
+                    group: graph.steps[i].group.clone(),
+                    verb: None,
+                    requests: serves.requests.clone(),
+                    now: serves.now.clone(),
+                    fingerprint: graph.fingerprints[i].clone(),
+                    reads: ctx.reads.clone(),
+                });
+                let child_env = invocation_env(&self.steps_env(), &invocation.id, &serves.now);
                 slot_of(&mut slots, graph, i).live = Some(Live {
                     invocation: invocation.id,
                     consumed: Read::of(graph, &start.consumed),
@@ -826,7 +858,6 @@ impl Runner {
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
-                let child_env = self.steps_env();
                 let id = graph.steps[i].id.clone();
                 set.spawn(async move {
                     let (attempts, res) =
@@ -990,6 +1021,15 @@ impl Runner {
                             && e.status.state() == crate::run_state::RunState::Stopped,
                         read: live.consumed,
                     });
+                    self.sink.emit(&Event::InvocationEnd {
+                        step: id.clone(),
+                        invocation: live.invocation.clone(),
+                        status: e.status.state(),
+                        error: e.error.clone(),
+                        exit_code: e.exit.and_then(|x| x.code),
+                        signal: e.exit.and_then(|x| x.signal),
+                        attempts: e.attempts,
+                    });
                     store.close_invocation(&live.invocation, &e.as_end()).await?;
                     s.attempts = e.attempts;
                     s.error = e.error.clone();
@@ -1024,6 +1064,7 @@ impl Runner {
             store.close_job(&job, None).await?;
             return Ok(None);
         }
+        let opened_at = store.job(&job).await?.map(|j| j.opened_at);
         tracing::info!(
             steps = asked.len(),
             "supervisor: asking each step to prepare"
@@ -1032,6 +1073,7 @@ impl Runner {
         store.begin_job_steps(&job, &ids).await?;
         Ok(Some(PreparePass {
             job,
+            opened_at,
             order: asked.clone(),
             not_started: asked,
             running: BTreeSet::new(),
@@ -1071,7 +1113,17 @@ impl Runner {
             store
                 .set_job_step(&pass.job, pass.ord(&step), PassState::Running, None, None)
                 .await?;
-            let task = self.verb_task(&graph.steps[graph.by_id[&step]], crate::step::Verb::Prepare);
+            let i = graph.by_id[&step];
+            let serves = Serves {
+                requests: vec![pass.job.clone()],
+                now: self.now_for(pass.opened_at.as_deref()),
+            };
+            let task = self.verb_task(
+                &graph.steps[i],
+                &graph.fingerprints[i],
+                crate::step::Verb::Prepare,
+                serves,
+            );
             pass.running.insert(step.clone());
             tasks.push(async move { Done::Prepared(step, task.await) });
         }
@@ -1164,56 +1216,45 @@ impl Runner {
         Ok(true)
     }
 
-    /// The period's record opened: its plan said, its run id and "now"
-    /// recorded as the record's current run. The steps' environment
-    /// carries both.
+    /// A busy period begins: its plan said, and each step's version kept
+    /// for the report at its end.
     async fn open_period(
         &self,
         graph: &Graph,
         record: &mut Recorded<'_>,
         state: &mut Record,
     ) -> Result<Period> {
-        let child_env = self.steps_env();
         let plan: Vec<PlannedStep> = graph
             .topo
             .iter()
             .map(|&i| PlannedStep::of(&graph.steps[i]))
             .collect();
         self.sink.emit(&Event::RunPlan { steps: plan });
-        let started_at = child_env
-            .get(crate::subprocess::ENV_NOW)
-            .cloned()
-            .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-        let clock = datalib_time::RunClock::starting_at(
-            datalib_time::parse_strict(&started_at)
-                .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
-        );
-        let run_id = child_env
-            .get(crate::subprocess::ENV_RUN_ID)
-            .cloned()
-            .unwrap_or_else(new_run_id);
-        state.current_run = Some(CurrentRun {
-            run_id: run_id.clone(),
-            started_at,
-            finished_at: None,
-            states: Default::default(),
-        });
         record.save(state).await?;
         let at_start = state
             .steps
             .iter()
             .map(|(id, s)| (id.clone(), s.version.clone()))
             .collect();
-        Ok(Period {
-            run_id,
-            clock,
-            at_start,
-        })
+        Ok(Period { at_start })
+    }
+
+    /// The environment the host builds from the config as it is now, for
+    /// what starts next; the last one it built while the config cannot be
+    /// read, as the loop keeps its graph then.
+    fn env_from(&self, host: Option<&dyn LoopHost>) {
+        let Some(host) = host else { return };
+        match host.step_env() {
+            Ok(env) => self.set_steps_env(env.into()),
+            Err(why) => {
+                tracing::warn!("supervisor: the steps' environment stays as it was, since {why}")
+            }
+        }
     }
 
     /// Nothing is open and nothing runs: each step the period reached
-    /// finished, the record's run closed, and the summary sent. A step no
-    /// request reached took no part, and has no line.
+    /// finished, and the summary sent. A step no request reached took no
+    /// part, and has no line.
     #[allow(clippy::too_many_arguments)]
     async fn end_period(
         &self,
@@ -1233,10 +1274,7 @@ impl Runner {
             if let Some(e) = s.ended.take() {
                 self.finish_ended(graph, state, s, i, e);
             }
-            self.settle_row(graph, state, queue, s, i, cancelled);
-        }
-        if let Some(run) = state.current_run.as_mut() {
-            run.finished_at = Some(period.clock.now().to_rfc3339_micros());
+            self.settle_row(graph, state, queue, s, i, cancelled, Vec::new());
         }
         record.save(state).await?;
         let facts = facts_of(graph, state, slots);
@@ -1274,7 +1312,7 @@ impl Runner {
             steps: report.steps.iter().map(step_summary).collect(),
         });
         if let Some(host) = host {
-            host.close(&period.run_id);
+            host.busy(false);
         }
         // Nothing runs: what the slots hold of the facts the record does
         // not, a step's last attempt among them, ends with the period.
@@ -1297,23 +1335,25 @@ impl Runner {
         seq: &mut u64,
         slots: &mut Slots,
     ) -> Result<()> {
-        let mut admit = |id: String, roots: Vec<String>, open: &mut Vec<Open>| {
-            let at: Vec<usize> = roots.iter().map(|r| graph.by_id[r]).collect();
-            for (i, _) in graph
-                .downstream_of(&at)
-                .iter()
-                .enumerate()
-                .filter(|(_, &r)| r)
-            {
-                slot_of(slots, graph, i).ever_in_scope = true;
-            }
-            *seq += 1;
-            open.push(Open {
-                id,
-                roots,
-                opened: Seq(*seq),
-            });
-        };
+        let mut admit =
+            |id: String, roots: Vec<String>, opened_at: String, open: &mut Vec<Open>| {
+                let at: Vec<usize> = roots.iter().map(|r| graph.by_id[r]).collect();
+                for (i, _) in graph
+                    .downstream_of(&at)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &r)| r)
+                {
+                    slot_of(slots, graph, i).ever_in_scope = true;
+                }
+                *seq += 1;
+                open.push(Open {
+                    id,
+                    roots,
+                    opened: Seq(*seq),
+                    opened_at,
+                });
+            };
         let on_disk = |roots: &[String]| {
             self.reload
                 .as_ref()
@@ -1412,7 +1452,7 @@ impl Runner {
                         continue;
                     }
                     deferred.remove(&row.id);
-                    admit(row.id, row.roots, open);
+                    admit(row.id, row.roots, row.opened_at, open);
                 }
                 *turned_off = all_turned_off;
                 // The loop's own prepare pass is not a wipe it carries out.
@@ -1440,6 +1480,7 @@ impl Runner {
         state: &mut Record,
         wipes: &mut Vec<JobRow>,
         slots: &mut Slots,
+        host: Option<&dyn LoopHost>,
     ) -> Result<bool> {
         if wipes.is_empty() {
             return Ok(false);
@@ -1482,8 +1523,9 @@ impl Runner {
                     self.finish_ended(graph, state, s, i, e);
                 }
             }
+            self.env_from(host);
             let done = match kind {
-                JobKind::Reset => self.reset_in_loop(graph, &w.targets, state, slots).await,
+                JobKind::Reset => self.reset_in_loop(graph, &w, state, slots).await,
                 JobKind::Purge => delete_trees(&self.data_root, &w.targets)
                     .await
                     .map(|()| wipe::forget_groups(state, &w.targets)),
@@ -1520,17 +1562,25 @@ impl Runner {
         Ok(opened)
     }
 
+    /// The job's own invocations: each its id, and its "now" the job's.
+    fn serves_job(&self, w: &JobRow) -> Serves {
+        Serves {
+            requests: vec![w.id.clone()],
+            now: self.now_for(Some(&w.opened_at)),
+        }
+    }
+
     /// Each target invoked with `--reset store` and recorded emptied, so
     /// what reads it sees a new version.
     async fn reset_in_loop(
         &self,
         graph: &Graph,
-        targets: &[String],
+        w: &JobRow,
         state: &mut Record,
         slots: &mut Slots,
     ) -> Result<()> {
-        for step in targets {
-            let (_, version) = self.reset_one(graph, step).await?;
+        for step in &w.targets {
+            let (_, version) = self.reset_one(graph, step, self.serves_job(w)).await?;
             state.steps.insert(
                 step.clone(),
                 wipe::emptied(state.steps.get(step), version.clone()),
@@ -1562,7 +1612,7 @@ impl Runner {
             store
                 .set_job_step(&w.id, ord, PassState::Running, None, None)
                 .await?;
-            match self.shrink_one(graph, step, how).await {
+            match self.shrink_one(graph, step, how, self.serves_job(w)).await {
                 Ok((version, bytes)) => {
                     if let Some(version) = version {
                         state.steps.entry(step.clone()).or_default().version = Some(version);
@@ -1622,7 +1672,11 @@ impl Runner {
             consumed,
         ));
         let recorded = |p: usize| {
-            let last = state.steps.get(&graph.steps[p].id)?.last_run.as_ref()?;
+            let last = state
+                .steps
+                .get(&graph.steps[p].id)?
+                .last_invocation
+                .as_ref()?;
             RunState::parse(&last.status)
         };
         let failed_inputs = paths(
@@ -1664,11 +1718,14 @@ impl Runner {
             e.error,
             e.exit,
             e.attempts,
+            None,
         );
     }
 
     /// A step a request wanted, with no row of its own yet and nothing
-    /// left to finish, takes the one its last state settles on.
+    /// left to finish, takes the one its last state settles on; `reached`
+    /// are the open requests that wanted it.
+    #[allow(clippy::too_many_arguments)]
     fn settle_row(
         &self,
         graph: &Graph,
@@ -1677,6 +1734,7 @@ impl Runner {
         s: &mut Slot,
         i: usize,
         cancelled: bool,
+        reached: Vec<String>,
     ) {
         if !s.ever_in_scope || s.status.is_some() {
             return;
@@ -1687,7 +1745,17 @@ impl Runner {
         if st == StepStatus::SkippedUpToDate {
             queue.cleared(graph, i, &*self.sink);
         }
-        self.finish(graph, state, &mut s.status, i, st, None, None, 0);
+        self.finish(
+            graph,
+            state,
+            &mut s.status,
+            i,
+            st,
+            None,
+            None,
+            0,
+            Some(reached),
+        );
     }
 
     /// Once per invocation that reported no version: what that costs its
@@ -2312,6 +2380,7 @@ mod tests {
         // which one `Graph::build` picks.
         let mut pass = PreparePass {
             job: "job".into(),
+            opened_at: None,
             order: Vec::new(),
             not_started: ids(&[
                 "b/ingest", "c/ingest", "d/ingest", "e/ingest", "a/ingest", "a/render",
@@ -2527,7 +2596,7 @@ mod tests {
             .clone();
         assert_eq!(a.state, Some(StateKind::Off));
         assert_eq!(a.turned_off_by.as_deref(), Some("claude"));
-        assert_eq!(a.last_run, None, "a step it skipped took no part");
+        assert_eq!(a.last_invocation, None, "a step it skipped took no part");
         assert_eq!(a.last_success_at, None);
     }
 
@@ -3166,7 +3235,7 @@ mod tests {
         running.await.unwrap().unwrap();
         let a = crate::supervisor::record::recorded(root.path()).await.steps["a/raw"].clone();
         assert_ne!(a.state, Some(StateKind::Running));
-        assert_eq!(a.last_run.unwrap().status, "stopped");
+        assert_eq!(a.last_invocation.unwrap().status, "stopped");
     }
 
     /// What a host's loop told its host, in order.
@@ -3174,18 +3243,14 @@ mod tests {
     struct Told(std::sync::Mutex<Vec<String>>);
 
     impl LoopHost for Told {
-        fn open(
-            &self,
-            start: datalib_runs::RunStart,
-        ) -> std::result::Result<BTreeMap<String, String>, String> {
+        fn step_env(&self) -> std::result::Result<BTreeMap<String, String>, String> {
+            Ok(BTreeMap::new())
+        }
+        fn busy(&self, busy: bool) {
             self.0
                 .lock()
                 .unwrap()
-                .push(format!("open: {}", start.reason));
-            Ok(BTreeMap::new())
-        }
-        fn close(&self, _run_id: &str) {
-            self.0.lock().unwrap().push("close".into());
+                .push(if busy { "busy" } else { "idle" }.into());
         }
     }
 
@@ -3269,7 +3334,7 @@ mod tests {
         until("the period to close", || told.said().len() == 2).await;
         assert_eq!(
             told.said(),
-            ["open: a sync asked for by ui: b/raw", "close"],
+            ["busy", "idle"],
             "one period for the one request"
         );
         assert!(!task.is_finished(), "the loop ended with nothing open");
@@ -3313,13 +3378,10 @@ mod tests {
     async fn a_period_that_cannot_open_fails_its_requests() {
         struct Broken;
         impl LoopHost for Broken {
-            fn open(
-                &self,
-                _: datalib_runs::RunStart,
-            ) -> std::result::Result<BTreeMap<String, String>, String> {
+            fn step_env(&self) -> std::result::Result<BTreeMap<String, String>, String> {
                 Err("no config".into())
             }
-            fn close(&self, _: &str) {
+            fn busy(&self, _: bool) {
                 unreachable!("no period opened")
             }
         }
@@ -3427,24 +3489,32 @@ mod tests {
 
         other.request_stop(&a, "ui").await.unwrap();
         let root = f.root.path().to_path_buf();
-        let state_of = |step: &'static str| {
+        let step_of = |step: &'static str| {
             let root = root.clone();
             async move {
                 crate::supervisor::record::recorded(&root)
                     .await
-                    .current_run
-                    .and_then(|r| r.states.get(step).cloned())
+                    .steps
+                    .get(step)
+                    .cloned()
+                    .unwrap_or_default()
             }
         };
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while state_of("a/rendered").await.as_deref() != Some("skipped_up_to_date") {
+        while step_of("a/rendered")
+            .await
+            .last_invocation
+            .map(|l| l.status)
+            .as_deref()
+            != Some("skipped_up_to_date")
+        {
             assert!(
                 std::time::Instant::now() < deadline,
                 "timed out waiting for a's render to settle while b still runs"
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        assert_eq!(state_of("b/raw").await.as_deref(), Some("running"));
+        assert_eq!(step_of("b/raw").await.state, Some(StateKind::Running));
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
@@ -3504,30 +3574,105 @@ mod tests {
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
     }
 
-    /// A round pinned with `--now` ends on that clock. The demo's bake,
-    /// pinned to 2369, recorded its run as ending in the present, three
-    /// centuries before it began.
+    /// What each invocation the loop started was for, and the "now" it
+    /// was handed, by step.
+    #[derive(Default)]
+    struct Started(std::sync::Mutex<Vec<(String, Vec<String>, String)>>);
+
+    impl crate::events::EventSink for Started {
+        fn emit(&self, event: &Event) {
+            if let Event::InvocationStart {
+                step,
+                requests,
+                now,
+                ..
+            } = event
+            {
+                let mut requests = requests.clone();
+                requests.sort();
+                self.0
+                    .lock()
+                    .unwrap()
+                    .push((step.clone(), requests, now.clone()));
+            }
+        }
+    }
+
+    /// A request open beside another is a sync of its own: the steps
+    /// started for it are handed the time it was opened, not the time the
+    /// loop took on its first request, and a step serving two requests
+    /// gets the older one's. Before invocations, every step of a busy
+    /// period got the period's start, so a sync that joined a long one
+    /// stamped its output hours early.
     #[tokio::test]
-    async fn a_pinned_round_ends_after_it_began() {
+    async fn each_invocation_is_handed_the_time_its_oldest_request_was_opened() {
+        let f = fixture();
+        f.go.store(true, Ordering::SeqCst);
+        let store = Store::open(f.root.path()).await.unwrap();
+        let mut ids = Vec::new();
+        for (roots, opened) in [
+            ("a/raw", "2026-01-01T00:00:00+00:00"),
+            ("b/raw", "2026-01-01T01:00:00+00:00"),
+            ("a/raw", "2026-01-01T02:00:00+00:00"),
+        ] {
+            let id = store.open_request(&[roots.into()], "ui").await.unwrap();
+            test_sql!("UPDATE requests SET opened_at_utc = ?, tz_offset = '+00:00' WHERE id = ?")
+                .query()
+                .bind(opened)
+                .bind(&id)
+                .execute(store.pool())
+                .await
+                .unwrap();
+            ids.push(id);
+        }
+        let started = Arc::new(Started::default());
+        Runner::new(f.root.path())
+            .sink(started.clone())
+            .serve(&f.graph, &store)
+            .await
+            .unwrap();
+        store.close().await;
+
+        let mut a = vec![ids[0].clone(), ids[2].clone()];
+        a.sort();
+        let mut seen = started.0.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(
+            seen,
+            [
+                (
+                    "a/raw".to_string(),
+                    a,
+                    "2026-01-01T00:00:00+00:00".to_string()
+                ),
+                (
+                    "b/raw".to_string(),
+                    vec![ids[1].clone()],
+                    "2026-01-01T01:00:00+00:00".to_string()
+                ),
+            ]
+        );
+    }
+
+    /// A round pinned with `--now` hands every invocation that clock,
+    /// whenever its request was opened.
+    #[tokio::test]
+    async fn a_pinned_round_hands_every_invocation_its_pin() {
         let f = fixture();
         f.go.store(true, Ordering::SeqCst);
         let store = Store::open(f.root.path()).await.unwrap();
         store.open_request(&["a/raw".into()], "ui").await.unwrap();
         let pinned = "2369-04-15T00:00:00+00:00";
-        let env = BTreeMap::from([(crate::subprocess::ENV_NOW.to_string(), pinned.to_string())]);
+        let started = Arc::new(Started::default());
         Runner::new(f.root.path())
-            .child_env(env)
+            .pin_now(Some(pinned.into()))
+            .sink(started.clone())
             .serve(&f.graph, &store)
             .await
             .unwrap();
-
-        let run = store.load_record().await.unwrap().current_run.unwrap();
         store.close().await;
-        assert_eq!(run.started_at, pinned);
-        let finished = run.finished_at.expect("the round closed its run");
-        assert!(
-            finished.as_str() >= pinned && finished.starts_with("2369-04-15T00:0"),
-            "began {pinned}, ended {finished}"
-        );
+        let seen = started.0.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].2, pinned);
     }
 }

@@ -1,4 +1,5 @@
-// The current value of every metric series a step reported this run.
+// The value of every metric series a step reported in one run of an
+// older build. This build writes `invocation_metrics` instead.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
