@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_obs::status_line;
-use datalib_runtime::layout::mark_derived_cache;
+use datalib_runtime::layout::mark_cache;
 use datalib_runtime::node_runtime::RuntimeAsset;
 
 const LOCK_FILE: &str = ".lock";
@@ -35,7 +35,7 @@ pub(crate) fn ensure(
     before_fetch: fn() -> Result<()>,
 ) -> Result<PathBuf> {
     fs::create_dir_all(cache_dir).with_context(|| format!("create {}", cache_dir.display()))?;
-    mark_derived_cache(cache_dir);
+    mark_cache(cache_dir);
     let _lock = Lock::take(&cache_dir.join(LOCK_FILE))?;
 
     let root = cache_dir.join(asset.dir_name());

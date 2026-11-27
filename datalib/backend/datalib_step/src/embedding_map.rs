@@ -84,9 +84,6 @@ pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<O
             .collect(),
     };
     let bytes = map_file::write(data_root, &map)?;
-    datalib_core::layout::mark_derived_cache(
-        &datalib_core::layout::unified_grid_and_search_index_dir(data_root),
-    );
 
     // The map as it now stands, then how this pass seeded it: gauges
     // both, and the second three name the pass they describe.

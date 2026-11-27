@@ -385,9 +385,8 @@ mod tests {
         );
     }
 
-    /// What remote media a person let load is not inside the tree the
-    /// pipeline tags as rebuildable cache: nothing regenerates it, and it
-    /// must survive an `--exclude-caches` backup.
+    /// What remote media a person let load is not inside the index tree,
+    /// which a sync rebuilds: nothing regenerates it.
     #[tokio::test]
     async fn build_state_keeps_remote_media_out_of_the_cache() {
         use datalib_core::layout;
