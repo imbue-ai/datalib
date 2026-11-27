@@ -85,12 +85,10 @@ async fn gitlab_synth_playback_extract_roundtrip() {
     assert_eq!(summary.new_mrs, 1);
     assert_eq!(summary.new_discussions, 1);
 
-    // The render side of the seam, and it has to come first: render reads
+    // Render's read of the store, and it has to come first: render reads
     // somebody else's store at a commit, while `block_on_load_all` below
     // opens read-write and commits its schema on the way in — so running
-    // that first would move HEAD and hide a missing seal. gitlab had no
-    // test crossing this seam at all, which is how `gitlab_live` came to
-    // read an unsealed store and assert on zero rows.
+    // that first would move HEAD and hide a missing seal.
     let parsed = parse_api_dir(&out_db, "gitlab", RawRange::cold()).expect("parse_api_dir");
     assert_eq!(
         parsed.change_requests.len(),
