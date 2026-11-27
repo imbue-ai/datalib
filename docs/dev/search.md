@@ -77,9 +77,9 @@ by uuid.
    of the kept documents, down to the cutoff.
 4. **The two are fused** by reciprocal rank (`fuse`), one entry a document,
    and cut at `RANK_DEPTH`.
-5. **A page is landed** (`land`): each document shown opens on one of its
-   rows, the message its hit named where the terms keep it, and is quoted
-   from that row's text.
+5. **Each document shown opens on one of its rows** (`land`): the
+   message its hit named where the terms keep it, and it is quoted from
+   that row's text.
 
 A part that fails costs that part and says so. The list and what the terms
 keep are cached under the query and the index's generation, so the next
@@ -155,8 +155,8 @@ every number wrong by up to 1.5 times, none gave a wrong plan for any of
 309 statements; at 3 times, 4 did.
 
 The order can be wrong for one library, a small source beside a large
-account. Beside a source that costs little, since the key's index holds
-the source. Between two other keys (`account:a kind:k`) no index holds
+account. Beside `source:` a wrong order costs little, since the key's
+index holds the source. Between two other keys (`account:a kind:k`) no index holds
 both, and no figure is right for every value: it reads the rows of one.
 
 Two things statistics cannot say:
@@ -215,8 +215,8 @@ source. The same plain statements, each given up at 30 s:
    test and say why people rarely narrow by it.
 2. Give the index a rank; `every_index_of_the_grids_rows_has_a_rank_and_no_other`
    fails without one.
-3. `every_filter_key_is_served_by_an_index` holds each key to its index,
-   and `beside_a_key_a_source_is_tested_never_walked` holds it beside
+3. `every_filter_key_is_served_by_an_index` checks each key's plan uses
+   its index, and `beside_a_key_a_source_is_tested_never_walked` checks it beside
    `source:`, `is:document`, `after:`, a person and an unindexed key, in
    every statement above but the suggestions, with the indexes made in
    either order.

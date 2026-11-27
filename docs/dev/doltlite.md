@@ -202,11 +202,11 @@ needs, and what it leaves behind:
   bootstrap and cannot read a store. Remove both from the child's
   environment.
 
-`//datalib/backend/doltlite_facts:python_package_test` holds each of
+`//datalib/backend/doltlite_facts:python_package_test` checks each of
 these, with the pinned wheel against a store the pinned CLI wrote. It
 runs under the host's `python3`: CI's Ubuntu one, and on a mac the
 `/usr/bin/python3` that Xcode's command line tools install.
-`python_reader_test` holds the two failures under python-build-standalone.
+`python_reader_test` checks the two failures under python-build-standalone.
 
 ## Recipes
 
@@ -489,7 +489,7 @@ doltlite repo, at the pinned tag.
   anything; `dolt_checkout(x)` persists a working set for the branch it
   leaves and the one it enters**, about 500 bytes a call. `dolt_checkout
   ('-b', x)` is what creates a branch. `reopening_an_untouched_store_does_not_grow_it`
-  holds the first.
+  checks the first.
 - **A missing branch fails loudly**: `branch not found` from
   `dolt_connect_branch`, `no such branch or table: x` from
   `dolt_checkout`. (Doltlite 0.50.3 let a failed checkout through
@@ -536,7 +536,7 @@ doltlite repo, at the pinned tag.
   open, a connection takes the lock again only to catch up with a file
   that has grown since.
   `locks::a_commit_waits_out_a_read_only_open_and_fails_past_its_timeout`
-  holds it, with a reader in a second process frozen mid-open. Doltlite
+  checks it, with a reader in a second process frozen mid-open. Doltlite
   has fixed this upstream (dolthub/doltlite#5257, after 0.51.15): a
   read-only open takes the lock only to note where the log ends, and
   replays without it. When the pin moves past it, this fact changes.
@@ -577,7 +577,7 @@ doltlite repo, at the pinned tag.
   0.50.10 (before that, a read-only `dolt_status` failed the writer's
   commit and lost its rows: dolthub/doltlite#2832, our #400).
   `a_reader_asking_dolt_status_never_makes_the_writers_commit_fail`
-  holds it. The statements a reader here may issue are the allowlist in
+  checks it. The statements a reader here may issue are the allowlist in
   `etl/README.md` § "A reader opens read-only and pinned".
 - **On a branch, a plain `SELECT` reads that branch's working set**:
   committed rows plus anything uncommitted on the branch. Our readers
@@ -613,7 +613,7 @@ doltlite repo, at the pinned tag.
 | indexes | primary-key equality only; no secondary index, no `ORDER BY` | all | all |
 | writes to the file | none | none | none |
 | a table committed later | readable by name | at the next transaction | open the newer commit |
-| what holds it | `datalib_pin` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
+| what checks it | `datalib_pin` tests | `a_held_read_transaction_is_a_snapshot_while_the_writer_seals` | `detached_readers_are_snapshots_while_the_writer_seals` |
 
 A reader in the tree that pins a commit uses the third
 (`doltlite_raw::open_reader`, `datalib_pin::open_at`); `dolt_at_` is for
@@ -789,7 +789,7 @@ is the recipe in code.
   scans the table and sorts what matches** (0.50.13). 0.50.12 walked the
   order's index and tested each row. For the grid's listing, which has
   no `LIMIT`, the new plan is faster: 3–6 ms against 32–35 ms over 74k
-  synthetic rows. `every_filter_key_is_served_by_an_index` holds which
+  synthetic rows. `every_filter_key_is_served_by_an_index` checks which
   keys have an index.
 - **A `VIRTUAL` generated column with an index plans as an ordinary
   index search, not a covering one**; an expression index is covering.
@@ -958,7 +958,7 @@ message. `dolt_hashof_db(<rev>)` answers the tree's hash, and
   read this way, so a fold tags what they are pinned to, or waits.
 - **Doltlite has no verb that drops history**: no `dolt_squash_history`,
   no orphan branch, no shallow history, and `dolt_gc` takes no options.
-  A fold, a tag and gc are the whole kit. Dolt, the separate DoltHub
+  A fold, a tag and gc are the only tools. Dolt, the separate DoltHub
   database whose SQL doltlite follows, added `dolt_squash_history` in
   July 2026; it is our fold as one call. Doltlite has not
   (`there_is_no_verb_that_drops_history`).
@@ -1190,19 +1190,19 @@ the schema commit a moment later; that is why the untracked tables go too.
 The rows it throws away were written after the last seal and never
 committed, so no reader — every reader pins a commit — was ever
 promised them. Keeping them would have meant committing a state the
-writer never vouched for: an entity row whose blobs never arrived, half
+writer never chose to commit: an entity row whose blobs never arrived, half
 a channel. The next run owes them again.
 
 The other thing a dead writer can leave is a `dolt_commit` on its own
 branch that it never published: the kill landed between `commit_run`'s
-two halves. That commit is a seal the run vouched for, so `open`
-publishes it to `main` rather than discarding it.
+two halves. The run made that commit as the first half of a seal, so
+`open` publishes it to `main` rather than discarding it.
 `doltlite_two_process_test` kills a writer at each of the three points
 — inside the transaction, after its SQL commit, after its `dolt_commit`
 — and reads what the next open makes of each.
 
 `commit_run` is tolerant of "nothing to commit, working tree clean": a
-pass that fetched nothing new leaves the working set clean.
+run that fetched nothing new leaves the working set clean.
 
 If the `discard_dirty_working_tree` warning shows up in the run log
 often, something is crashing between seals. Look upstream for the
@@ -1217,7 +1217,7 @@ cause (network timeout, panic, OOM, etc.).
   from Python through `imbue-datalib-reader`
   ([Reading a store from Python](#reading-a-store-from-python)); the
   CLI is for ad-hoc inspection.
-- **To "fix" a wedged DB.** The next writer's `open` discards the
+- **To "fix" a store a writer left half-written.** The next writer's `open` discards the
   uncommitted state itself. Only reach for `dolt_reset` /
   `dolt_checkout` against a copy of the file, never against the live
   one.
