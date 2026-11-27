@@ -294,8 +294,8 @@ fn build_chat(
                 .expect("non-empty thread render unit")
         });
     // `#general` for a channel, `@Jean-Luc Picard` for a DM, and
-    // `#<channel_id>` when the channel row never arrived — the same
-    // fallback this line has always had. See `Channel::display`.
+    // `#<channel_id>` when the channel row never arrived. See
+    // `Channel::display`.
     let cname = match channels.get(&root.channel_id) {
         Some(c) => c.display(labels.users, self_user_id),
         None => format!("#{}", root.channel_id),
@@ -354,8 +354,8 @@ fn build_chat(
         .collect();
     note_what_is_not_shown(&not_shown, &mut items);
 
-    // "#channel: <root snippet>" preserves the old scannable H1; the
-    // bare "#channel" remains the conversation_name (via `display`).
+    // "#channel: <root snippet>" keeps the H1 scannable; the bare
+    // "#channel" is the conversation_name (via `display`).
     // A bot's `text` is only its notification's summary of the blocks
     // the page shows instead.
     let headline = cards::draw(&root.raw_json, labels).headline;

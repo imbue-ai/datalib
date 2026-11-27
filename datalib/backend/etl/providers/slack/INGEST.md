@@ -174,9 +174,10 @@ conversation's newest message.
 
 What a conversation `client.counts` does not name depends on what it is:
 
-- **A channel** is walked as before. Every channel the account is a
-  member of is in the sidebar, so this is a channel mirrored through
-  `all_channels` or `channels` that the account has not joined.
+- **A channel** is walked as if `client.counts` had not been asked.
+  Every channel the account is a member of is in the sidebar, so this
+  is a channel mirrored through `all_channels` or `channels` that the
+  account has not joined.
 - **A DM** is closed in the sidebar. It is walked whole when its check
   is due: on the first run that finds it closed, and then once a day
   (`CLOSED_DM_CHECK_EVERY`), each check recorded as a sweep
@@ -237,9 +238,10 @@ was mentioned or posted, instead of every channel it is in.
    (`ingest/involving.rs`): `mention` is `<@U…>`, `from_me` is
    `from:<@U…>`, and `broadcast` is `@here` and `@channel`. Each query's
    searched time is a `coverage` scope of its own (`involving:<query>`),
-   paged and settled like the reply search, and each page stores the
-   messages it listed in `involving`, a pointer per message (its
-   conversation, `ts` and thread), not a copy.
+   paged like the reply search. Each page stores a `coverage` span for
+   the part of the stretch it read, and the messages it listed in
+   `involving`, a pointer per message (its conversation, `ts` and
+   thread), not a copy.
 2. **Choose.** A channel is walked when a stored hit inside `since` is
    in it, or `client.counts` shows a mention of the account there
    (`mention_count`, or a thread mention in
@@ -349,7 +351,7 @@ short page is not read as the end; the cursor says whether there is
 more. A page is written together, in the run's open transaction ([one
 transaction between two seals](#one-transaction-between-two-seals)): its
 messages, an edge for each file they carry, and a `coverage` span for
-the stretch the page settles, from its
+the part of the stretch the page read, from its
 oldest message up to where the page before left off (the last page
 reaches the bottom of the stretch). A walk cut off after its first page
 has covered the top, and the next run walks what is under it. The spans
@@ -397,10 +399,11 @@ happened for months searches the months, and one cut off part way leaves
 a smaller gap. The searched range stops half an hour short of the run's
 now, because a reply is searchable a little after it is posted.
 `search.messages` returns a page of a stretch newest first, and each
-page settles its stretch the way a history page does. A reply newer
-than its stored root's `latest_reply` sends that root to be read again
+page stores a `coverage` span for the part of the stretch it read, the
+way a history page does. A reply newer than its stored root's
+`latest_reply` sends that root to be read again
 (`conversations.history` at exactly the root's `ts`), in the transaction
-that settles the page, and the thread is then owed like any other.
+that stores the page's span, and the thread is then owed like any other.
 
 - A match carries no `thread_ts`. Its `permalink` does, which is how a
   reply is told from a root.
@@ -410,7 +413,7 @@ that settles the page, and the thread is then owed like any other.
   Slack ORs.
 - A conversation whose history nothing has covered yet is not searched:
   the walk ahead reads every root it has fresh. Its reply time up to now
-  is settled at the start of the run.
+  is stored as covered at the start of the run, with no search.
 - A store from before the search has walked history and searched
   nothing, so its first run searches back to `since`, once.
 - Only a token that may search can call `search.messages`. A browser
@@ -690,7 +693,7 @@ that ends with a message in the store clears it.
 Slack refuses them (`unknown_method`, `not_allowed_token_type`,
 `missing_scope`), or a request latchkey's permissions or its gateway
 do not allow (the gateway's own 403), will be refused the same way
-every sync until someone changes the token. Asking anyway put a
+every sync until someone changes the token. Asking anyway would put a
 warning or an error on the Manage row of every sync, though nothing
 else was missing.
 
@@ -701,14 +704,14 @@ with the run's `now`. While it is younger than `REFUSAL_REMEMBERED_FOR`
 `listing:<method>`, saying when it was refused, when it will be asked
 again, and what goes without it. `info` is not counted on the Manage
 row; the problems grid shows it. Once the marker is a week old the
-next run asks again: an answer forgets the marker and the row goes, a
-refusal stamps it anew. A failure that may pass (an HTTP 5xx, curl
-failing, Slack's `internal_error` or `fatal_error`) is not a refusal.
-The ones the chokepoint retries ([Rate limits and transient
-errors](#rate-limits-and-transient-errors)) are asked again within
-the run first; whatever still fails is the usual error row, and the
+next run asks again: a call that succeeds deletes the marker and the
+row goes, a refusal stamps it anew. A failure that may pass (an HTTP
+5xx, curl failing, Slack's `internal_error` or `fatal_error`) is not a
+refusal. The ones the shared `latchkey_curl` retries ([Rate limits and
+transient errors](#rate-limits-and-transient-errors)) are asked again
+within the run first; whatever still fails is the usual error row, and the
 call is asked again next run. A reset of the
-download forgets the marker along with everything else.
+download deletes the marker along with everything else.
 
 Without `client.counts` a run walks every conversation, as when the
 call fails, and the read marks it carries stay as they were; without
@@ -768,7 +771,7 @@ and is an `info` row instead
   `last_read` goes to `read_marks` (below); **the rest is volatile**:
   the content payload is just `{"id": …}`, and the state lives in the
   `volatile_payload` column of `channel_read_states_bookkeeping`, so a
-  new `latest` alone does not wake the render.
+  new `latest` alone does not make the render step run again.
   `RawDb::load_read_states` lays the three back together. Upserted every
   run; never pruned.
 - **A followed thread's own mark.** `conversations.replies` puts
@@ -787,8 +790,8 @@ and is an `info` row instead
   thread's by its thread key, `{team}#{channel}#{ts}`; the two cannot
   collide, as a thread key has two `#` and a conversation id none
   (`schema_raw::is_thread_mark`). A mark is content: reading a channel
-  moves the store's version and wakes the render, which redraws only
-  the threads the mark crossed. A thread's mark goes with the thread
+  moves the store's version, so the render step runs again and redraws
+  only the threads the mark crossed. A thread's mark goes with the thread
   when history prunes it. A store from before the table has its marks
   moved out of the two sidecars by rung 2 of the raw ladder.
 - **`saved_items`**, from `saved.list`: in progress, completed and
@@ -836,11 +839,12 @@ body. A failure on its side comes the same two ways: a `502` to `504`,
 or a `200` whose `error` is `internal_error` ("likely due to a
 transient issue on our end", which Slack recommends retrying) or
 `service_unavailable`. All of these are retried by the shared
-`latchkey_curl` chokepoint: `api::slack_retryability` reads a `200`
-body's `error` against `TRANSIENT_CODES` so the chokepoint can see
-the `200` forms. It honors `Retry-After`, otherwise backs off, and
-enforces the source's `common.download_params` give-up policy. When it
-gives up, the call surfaces as `SlackError::Permanent`.
+`latchkey_curl`, which every request goes through:
+`api::slack_retryability` reads a `200` body's `error` against
+`TRANSIENT_CODES` so `latchkey_curl` can see the `200` forms. It
+honors `Retry-After`, otherwise backs off, and enforces the source's
+`common.download_params` give-up policy. When it gives up, the call
+surfaces as `SlackError::Permanent`.
 
 Every other `ok:false` answer is handed back on the first try. That
 includes `fatal_error`, which Slack calls catastrophic rather than

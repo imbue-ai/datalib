@@ -77,8 +77,8 @@ async fn search_problems(out: &Path) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_late_reply_to_an_old_thread_is_found_by_search() {
     // The first run walks the channel cold, so every root it has is read
-    // fresh: its reply time is settled without a search, which the tape
-    // could not answer.
+    // fresh: its reply time is stored as covered without a search, which
+    // the tape could not answer.
     let first = Tree::new();
     record_general(&first.api);
     History::cold("C1")

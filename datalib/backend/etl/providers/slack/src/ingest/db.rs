@@ -311,8 +311,8 @@ impl RawDb {
         let mut rows: Vec<ChannelRow> = Vec::with_capacity(payloads.len());
         let mut tape_pairs: Vec<(&str, &Value)> = Vec::with_capacity(payloads.len());
         // Owns the split-out volatile Values so we can lend `&Value` to
-        // the chokepoint below. Only channels that had volatile fields
-        // land here.
+        // `bulk_upsert_with_tape_split` below. Only channels that had
+        // volatile fields land here.
         let mut volatile_store: Vec<(&str, Value)> = Vec::with_capacity(payloads.len());
         for payload in payloads {
             let Some(id) = payload.get("id").and_then(|v| v.as_str()) else {
@@ -481,7 +481,7 @@ impl RawDb {
 
     /// One `search.messages` page, in one transaction: the thread roots
     /// read again because the page found a reply newer than the one they
-    /// listed, and the stretch of reply time the page settled, for each
+    /// listed, and the stretch of reply time the page covered, for each
     /// conversation it searched.
     pub async fn store_reply_search_page(
         &self,
@@ -507,7 +507,7 @@ impl RawDb {
     }
 
     /// One page of an involves-me search, in one transaction: the
-    /// messages it listed and the stretch of time it settled.
+    /// messages it listed and the stretch of time it covered.
     pub async fn store_involving_page(
         &self,
         rows: &[InvolvingRow],
@@ -1369,8 +1369,8 @@ async fn prune_enumerated(
 
 /// Participant ids out of one conversation payload. An `im` names
 /// exactly one counterpart in `user`; an `mpim` lists everyone — the
-/// account included — in `members`. Verified against the live API
-/// 2026-08-31; see [`super::schema_raw::ChannelRow::dm_user_ids`].
+/// account included — in `members`. Verified against the live API; see
+/// [`super::schema_raw::ChannelRow::dm_user_ids`].
 pub fn dm_participants(payload: &Value, is_im: bool) -> Vec<String> {
     if is_im {
         return payload

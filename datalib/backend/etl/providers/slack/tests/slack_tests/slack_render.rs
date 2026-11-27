@@ -86,10 +86,8 @@ fn renders_tng_fixture() {
     expected.sort();
     assert_eq!(not_shown, expected);
 
-    // Emitted-document spot-check. This used to walk the tree counting
-    // `*.grid_rows.json` files; the renderer no longer writes those, so
-    // it checks what it hands to its callback — which is what both the
-    // store and the index consume.
+    // Emitted-document spot-check: what the renderer hands to its
+    // callback, which is what both the store and the index consume.
     assert_eq!(docs.len(), 12, "one document per rendered thread");
     assert!(!docs[0].rows.is_empty(), "and the rows it projected");
 }

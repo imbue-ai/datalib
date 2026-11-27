@@ -293,8 +293,7 @@ pub(crate) fn next_cursor(resp: &Value) -> Option<String> {
 
 /// Filters `saved.list` walks, one listing each. With no `filter` it
 /// answers only what `saved` does; the three together are every item
-/// (checked against the response's own `counts.total_count` on
-/// 2026-09-24).
+/// (checked against the response's own `counts.total_count`).
 const SAVED_FILTERS: &[&str] = &["saved", "completed", "archived"];
 
 fn refused(e: &anyhow::Error) -> bool {
@@ -343,7 +342,7 @@ enum Optional<T> {
 
 /// `ask`, unless `method` was refused within [`REFUSAL_REMEMBERED_FOR`].
 /// A refusal is remembered as a sweep marker (`refused:<method>`); an
-/// answer forgets it; any other failure leaves it as it was, so a
+/// answer deletes the marker; any other failure leaves it as it was, so a
 /// transient one is asked again next run.
 async fn ask_unless_refused<T>(
     db: &RawDb,
@@ -1042,7 +1041,8 @@ fn refresh_sweep_key(channel_id: &str) -> String {
     format!("refresh:{channel_id}")
 }
 
-/// The part of `stretch` one page settles. History is newest first, so
+/// The part of `stretch` one page has read every message of, which the
+/// caller stores as a `coverage` span. History is newest first, so
 /// a page reaches from where the page before left off (`top`; on the
 /// first page of an open-topped stretch, the newest message it holds)
 /// down to its own oldest message, and the last page down to the
@@ -1360,8 +1360,9 @@ impl Mirror<'_> {
         Ok(())
     }
 
-    /// A page `history_params` asked for, stored in `tx` with the stretch
-    /// it settles. `walk` is left where the page after starts.
+    /// A page `history_params` asked for, stored in `tx` with the
+    /// `coverage` span of the part of the stretch it read. `walk` is
+    /// left where the page after starts.
     async fn store_page(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
@@ -1577,7 +1578,7 @@ fn threads_on(rows: &[MessageInput]) -> Vec<Listed> {
 }
 
 /// Queue what storing `rows` left owed: their threads, and with `media`
-/// their files. Each newly owed one is announced on `bar` here, the
+/// their files. Each newly owed one is added to `bar`'s total here, the
 /// first the run knows of it.
 async fn queue_owed(
     db: &RawDb,
@@ -2017,7 +2018,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
                 progress: &setup,
             };
             let mut totals = ReplySearchTotals::default();
-            // A search that fails settles nothing past where it stopped,
+            // A search that fails covers nothing past where it stopped,
             // so what it missed is searched again next run.
             if let Err(e) = search.run(&targets, &since, &top, &mut totals).await {
                 if !interrupted(&e) {
@@ -2161,9 +2162,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         );
 
         // One tick per conversation walked, thread read and file
-        // fetched, each announced as it is queued. A message is not one:
-        // Slack names no count up front, so it would be done the moment
-        // it was known and never be seen waiting.
+        // fetched, each added to the bar's total as it is queued. A
+        // message is not one: Slack names no count up front, so it would
+        // be done the moment it was known and never be seen waiting.
         let bar = RunBar::new(&opts.progress, walking.len() as u64 + owed_before);
         let mirror = Mirror {
             db: &db,
@@ -2510,10 +2511,11 @@ fn parse_iso_or_utc_date(s: &str) -> Result<DateTime<Utc>> {
 /// Why a configured channel name matched nothing, for its `problems` row.
 ///
 /// It says what the reader can act on and nothing that moves on its own: a
-/// workspace-wide count here rewrote the row every time anybody created a
-/// channel, and a problem recorded again unchanged is supposed to keep its
-/// stamps. `include_archived` is forced on whenever `channels` names entries,
-/// so `members_only` is the one setting that can still hide a named channel.
+/// workspace-wide count here would rewrite the row every time anybody
+/// created a channel, and a problem recorded again unchanged is supposed
+/// to keep its stamps. `include_archived` is forced on whenever `channels`
+/// names entries, so `members_only` is the one setting that can still
+/// hide a named channel.
 fn unmatched_channel_detail(members_only: bool) -> String {
     let listing = if members_only {
         "the channels this account is a member of; `members_only = false` lists the \
@@ -2716,7 +2718,7 @@ mod tests {
         assert_eq!(planned(Some("1736000000.000000"), &held).len(), 1);
     }
 
-    /// Three pages of a cold walk: the first settles from its oldest
+    /// Three pages of a cold walk: the first covers from its oldest
     /// message up to its newest, each next one down to its own oldest,
     /// the last down to `since`.
     #[test]
@@ -2744,7 +2746,7 @@ mod tests {
         );
     }
 
-    /// An open-topped walk that found nothing names no message to settle
+    /// An open-topped walk that found nothing names no message to cover
     /// up to; `Mirror::page` covers the point it began at instead.
     #[test]
     fn an_empty_walk_of_the_open_top_settles_nothing() {
@@ -2902,7 +2904,7 @@ mod tests {
     /// #1423: every channel cost a history call each run, so a routine
     /// sync of 126 quiet channels took 80 s. A channel `client.counts`
     /// shows with nothing newer than what is held walks nothing; one it
-    /// does not list is walked as before.
+    /// does not list is still walked.
     #[test]
     fn a_channel_counts_shows_quiet_is_not_walked_and_an_unlisted_one_is() {
         let held = [span(SINCE, "1735689600.000100")];

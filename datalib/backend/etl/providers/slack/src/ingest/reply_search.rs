@@ -28,7 +28,7 @@ use super::{call, history_message_input, ts_key};
 
 /// How far behind the run's now the searched range stops: a reply is
 /// searchable a little after it is posted, and one the index has not
-/// reached yet would otherwise sit inside a span already settled.
+/// reached yet would otherwise sit inside a span already covered.
 pub const SEARCH_LAG: ChronoDuration = ChronoDuration::minutes(30);
 
 /// Conversations named in one query. Slack ORs `in:` filters.
@@ -47,7 +47,8 @@ pub(super) struct Conversation {
 /// What [`plan`] decided.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(super) struct Plan {
-    /// Conversations whose whole reply range is settled without a search.
+    /// Conversations whose whole reply range is stored as covered without
+    /// a search.
     pub seed: Vec<String>,
     /// One stretch of reply time and the conversations missing it,
     /// newest stretch first.
@@ -124,7 +125,7 @@ pub(super) struct ReplySearch<'a> {
 
 impl ReplySearch<'_> {
     /// The plan for `targets`, carried out. The first error ends the
-    /// search; what it settled before then is kept.
+    /// search; the spans it covered before then are kept.
     pub async fn run(
         &self,
         targets: &[(String, String)],
