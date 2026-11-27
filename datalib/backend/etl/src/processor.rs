@@ -11,7 +11,6 @@ use async_trait::async_trait;
 use crate::control::DownloadControl;
 use crate::download_metrics::DownloadMetrics;
 use crate::progress::Progress;
-use datalib_obs::diagnostics::Diagnostics;
 
 /// One config-driven, monitorable unit of work the orchestrator runs.
 /// Single method.
@@ -66,10 +65,9 @@ pub struct RunCtx<'a> {
     pub progress: &'a Progress,
     /// Cross-provider download knobs (the checkpoint cadence, the stop flag).
     pub control: &'a DownloadControl,
-    /// Per-source "what changed" counters + WARN/ERROR buffer — the ambient
-    /// observability the orchestrator installs as scopes.
+    /// Per-source "what changed" counters, which the orchestrator also
+    /// installs as the ambient scope.
     metrics: Arc<DownloadMetrics>,
-    diagnostics: Arc<Diagnostics>,
 }
 
 impl<'a> RunCtx<'a> {
@@ -81,7 +79,6 @@ impl<'a> RunCtx<'a> {
         progress: &'a Progress,
         control: &'a DownloadControl,
         metrics: Arc<DownloadMetrics>,
-        diagnostics: Arc<Diagnostics>,
     ) -> Self {
         Self {
             name,
@@ -90,7 +87,6 @@ impl<'a> RunCtx<'a> {
             progress,
             control,
             metrics,
-            diagnostics,
         }
     }
 
@@ -122,9 +118,5 @@ impl<'a> RunCtx<'a> {
 
     pub fn metrics(&self) -> Arc<DownloadMetrics> {
         self.metrics.clone()
-    }
-
-    pub fn diagnostics(&self) -> Arc<Diagnostics> {
-        self.diagnostics.clone()
     }
 }

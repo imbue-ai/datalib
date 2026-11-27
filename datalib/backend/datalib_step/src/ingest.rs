@@ -40,7 +40,6 @@ pub async fn run(
     );
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
-    let diagnostics = datalib_obs::diagnostics::Diagnostics::new();
     // Every processor of this source's ingest step writes the one raw
     // store, so the step can only claim what all of them can support. `all` on an empty
     // iterator is `true`, which is why the emptiness check above matters.
@@ -59,7 +58,6 @@ pub async fn run(
                 &progress,
                 control,
                 metrics.clone(),
-                diagnostics.clone(),
             );
             let summary = proc
                 .run(&ctx)
@@ -72,12 +70,9 @@ pub async fn run(
         }
         Ok::<_, anyhow::Error>(())
     };
-    let (ran, end) = datalib_etl::run_problems::noting_run_end(datalib_obs::diagnostics::scope(
-        diagnostics.clone(),
-        datalib_etl_web::retry::scope(
-            guard.clone(),
-            datalib_etl::download_metrics::scope(metrics.clone(), body),
-        ),
+    let (ran, end) = datalib_etl::run_problems::noting_run_end(datalib_etl_web::retry::scope(
+        guard.clone(),
+        datalib_etl::download_metrics::scope(metrics.clone(), body),
     ))
     .await;
     // A source that stopped answering ends the run however the processor

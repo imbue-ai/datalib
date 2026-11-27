@@ -740,7 +740,6 @@ mod tests {
             &progress,
             &control,
             crate::download_metrics::DownloadMetrics::new(),
-            datalib_obs::diagnostics::Diagnostics::new(),
         );
         let failed = ctx
             .run_store(entities.clone(), None, |_| async {
