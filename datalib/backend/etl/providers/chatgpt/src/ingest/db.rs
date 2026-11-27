@@ -118,9 +118,9 @@ impl RawDb {
     /// kept and counted. Answers `(deleted, kept)`.
     ///
     /// Only for a caller holding a **complete** listing — see the gate at
-    /// the callsite. That gate is the whole safety story: nothing here
-    /// second-guesses how much it deletes, because the rows stay in
-    /// doltlite history either way.
+    /// the callsite. That check is the only guard: nothing here checks
+    /// how much it deletes, because the rows stay in doltlite history
+    /// either way.
     pub async fn prune_conversations(
         &self,
         keep: &HashSet<String>,
@@ -364,10 +364,9 @@ pub struct LoadedConversation {
     pub fetched_at_utc: Option<String>,
 }
 
-/// Bag returned to the synchronous render / synthesize path.
-/// Attachment bytes are no longer carried alongside — render's
-/// `parse` loads a per-doc [`BlobBundle`] for each conversation,
-/// keeping render fully sync.
+/// The `me` row and every conversation, as [`block_on_load_all`] returns
+/// them. It carries no attachment bytes: render's `parse` loads a per-doc
+/// [`BlobBundle`] for each conversation, keeping render fully sync.
 #[derive(Clone, Default)]
 pub struct LoadedRaw {
     pub me: Option<Value>,

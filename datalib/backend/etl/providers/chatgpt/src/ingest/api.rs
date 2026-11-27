@@ -39,10 +39,10 @@ struct Renewal {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ChatGPTError {
-    /// The shared retry loop respected rate limits / backed off but the
-    /// orchestrator's give-up policy tripped (`reason` says which bound).
-    /// Surfaced distinctly from `Permanent` so the caller can stop fetching
-    /// cleanly and the user resumes later via the incremental-skip path.
+    /// `latchkey_curl` retried a rate limit with backoff and then gave up
+    /// (`HttpError::GaveUp`; `reason` says which bound it hit). Kept apart
+    /// from `Permanent` so the caller stops fetching and the next run
+    /// fetches what this one did not.
     #[error("rate-limited on {path}; gave up retrying: {reason}")]
     RateLimited {
         path: String,
@@ -191,10 +191,10 @@ impl ChatGPTClient {
             .header("Accept", "application/json")
             .latchkey(self.latchkey.clone())
             .timeout(LATCHKEY_TIMEOUT);
-        // 429 retry — `Retry-After`, exponential backoff, and the give-up
-        // bound — is handled centrally in the shared chokepoint. When it
-        // gives up, surface `RateLimited` (not `Permanent`) so the caller
-        // stops cleanly and the user resumes later.
+        // `latchkey_curl` retries a 429 itself — `Retry-After`,
+        // exponential backoff, and the bound it gives up at. When it gives
+        // up, return `RateLimited` (not `Permanent`) so the caller stops
+        // and the next run fetches the rest.
         let resp = latchkey_curl(&req).await.map_err(|e: HttpError| {
             let upstream = e.upstream();
             match e {

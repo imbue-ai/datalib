@@ -161,11 +161,12 @@ fn build_chat(
     // inherits the previous item's time + 1ms so ordering stays stable.
     let mut last_ms = conv.create_time.as_deref().and_then(iso_to_ms);
     for (m, branch) in &path {
-        // Own stamp, else the previous item's + 1ms (§6's sanctioned
-        // inheritance), else nothing: a conversation with no
-        // `create_time` of its own whose messages carry none either
-        // genuinely has no time to report, and `None` says so rather
-        // than filing the whole thread under 1970.
+        // Own stamp, else the previous item's + 1ms (which
+        // `data_architecture_parse_and_render.md` §6 allows), else
+        // nothing: a conversation with no `create_time` of its own whose
+        // messages carry none either genuinely has no time to report,
+        // and `None` says so rather than filing the whole thread under
+        // 1970.
         let mut problems = Vec::new();
         let ms = own_stamp_ms(
             m.create_time.as_deref(),
@@ -277,8 +278,8 @@ fn build_chat(
         author: None,
         account,
         project: None,
-        // ChatGPT's own conversation id — the round-trip route back
-        // to chatgpt.com now that `uuid` is a minted v5.
+        // ChatGPT's own conversation id, the way back to chatgpt.com:
+        // `uuid` is minted here and is not ChatGPT's.
         external_id: Some(conv_id.clone()),
         source_url: Some(format!("https://chatgpt.com/c/{conv_id}")),
         upstream_account: None,

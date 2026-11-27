@@ -1,6 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only config crate for chatgpt_api (Program A goal #1). Bazel-only.
+# The `chatgpt` source's config schema alone, so anything that reads a
+# config can link it without the download. Bazel-only.
 rust_library(
     name = "datalib_etl_chatgpt_config",
     srcs = glob(["src/**/*.rs"]),

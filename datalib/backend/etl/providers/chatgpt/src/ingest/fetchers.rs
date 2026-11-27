@@ -154,7 +154,7 @@ impl Fetcher<Blob> for Attachments<'_> {
 }
 
 impl Attachments<'_> {
-    /// One edge's bytes, by the two-hop dance: the file's metadata through
+    /// One edge's bytes, in two requests: the file's metadata through
     /// the API, then the signed URL it names, which Azure serves to any
     /// client (the chatgpt cookie is refused there). Bytes the CAS already
     /// holds for the file, under any conversation, or the export holds,
