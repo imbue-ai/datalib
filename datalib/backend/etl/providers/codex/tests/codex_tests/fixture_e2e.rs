@@ -180,7 +180,7 @@ async fn the_tng_fixture_ingests_and_renders() {
          the 0.155 thread carries none"
     );
 
-    // A second pass reads nothing.
+    // A second run reads nothing.
     let again = fetch(opts()).await.unwrap();
     assert_eq!((again.files, again.files_read), (4, 0));
 

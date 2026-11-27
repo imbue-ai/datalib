@@ -61,7 +61,7 @@ async fn a_second_scan_of_one_home_moves_no_content_table() {
     std::env::set_var("DATALIB_DAG_NOW", "2364-04-11T10:00:00+00:00");
     let first = scan_and_commit(&raw_path, &cache).await;
 
-    // Forget which files were read, so the second pass opens every one
+    // Delete the file cursor's rows, so the second scan opens every one
     // of them again and rewrites every row from the same bytes.
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
     test_sql!("DELETE FROM ingested_files")
