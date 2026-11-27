@@ -2,13 +2,15 @@
 // sequence it produces.
 //
 //   * **A sync of one source must not touch another's history.** Every
-//     run walks the whole graph to publish output versions, and it used
-//     to write `not_selected` into the steps it walked past — so a
-//     source that succeeded yesterday came back as "not selected",
-//     stamped with the time of a run that never touched it.
-//   * **The row must show the sync happening.** "Running" only reached
-//     the runner's record when a step *finished*, so pressing Sync looked
-//     like nothing had happened until it was over.
+//     run walks the whole graph to publish output versions; writing
+//     `not_selected` into the steps it walks past would show a source
+//     that succeeded yesterday as "not selected", stamped with the time
+//     of a run that never touched it.
+//   * **The row must show the sync happening.** The tick that starts a
+//     step writes `running` into the loop's store (`run_steps` in
+//     `system/supervisor.sqlite`) before the step ends; were it written
+//     only when the step finished, pressing Sync would look like
+//     nothing happened until it was over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why
 // it carries most of this spec: an `ingest -> render_markdown` edge is
@@ -33,9 +35,9 @@ import {
   pipelineRow as row,
   recordStatuses,
   savedConfig,
-  settle,
-  settleRow,
-  settleRunner,
+  untilRowFinishesAndSyncIdle,
+  untilRowFinishesNewRun,
+  untilNoSyncThenReload,
   showColumn,
   shownCards,
   stampOf as lastSyncedOf,
@@ -114,7 +116,7 @@ async function writeConfig(page: Page, text: string) {
   await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // Reload, so the rows this test then watches were painted from the
-  // config *and* the runner's record together.
+  // config *and* the loop's store together.
   //
   // Without this the sequence sampler below recorded
   // `["Queued", "Never run", "Succeeded"]` and failed the monotonicity
@@ -135,7 +137,8 @@ async function writeConfig(page: Page, text: string) {
 
 /// The step rows this file drives live under groups, and a group's
 /// steps have rows only while it is open. Opened once per test; the
-/// grid remembers across the remounts `settle` does.
+/// grid remembers across the remounts `untilRowFinishesAndSyncIdle`
+/// does.
 async function writeConfigAndOpenGroups(page: Page, text: string) {
   await writeConfig(page, text);
   for (const id of ["pdfs", "docs", "unsynced"]) await expandGroup(page, id);
@@ -157,8 +160,8 @@ test.afterEach(async ({ page }) => {
 
 test.describe("a real sync, driven from the grid", () => {
   // Each test writes the config, runs a real `datalib-pipeline`, and waits
-  // for it to settle. Playwright's 30 s default is not enough headroom
-  // for that on a cold action cache.
+  // for the rows it drives to finish. Playwright's 30 s default is not
+  // enough headroom for that on a cold action cache.
   test.setTimeout(120_000);
 
   test.skip(
@@ -237,16 +240,16 @@ ${applets()}`;
     // Give docs a real history to protect.
     const docsWas = await lastSyncedOf(page, "docs/ingest");
     await syncBtn(page, "docs/ingest").click();
-    expect(await settle(page, "docs/ingest", docsWas)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "docs/ingest", docsWas)).toBe("Succeeded");
     const docsStatus = await statusOf(page, "docs/ingest");
     const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
 
-    // Now sync the *other* source. A run that walked docs/raw used to
-    // write "not selected" over its record.
+    // Now sync the *other* source. A run that walks docs/raw must not
+    // write "not selected" over docs' row.
     const pdfsWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
-    expect(await settle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");
 
     expect(
       await statusOf(page, "docs/ingest"),
@@ -273,8 +276,8 @@ ${applets()}`;
     for (const id of [TAPED, "docs"]) await expandGroup(page, id);
 
     // Watch the row the way the grid paints it, from before the click
-    // until it settles. This is the real sequence — the unit suite
-    // replays a synthetic one through the same state machine.
+    // until it shows a terminal status. This is the real sequence — the
+    // unit suite replays a synthetic one through the same state machine.
     await recordStatuses(page, [TAPED_UP, TAPED_DOWN]);
     // Whatever the rows say before the click. The recorder seeds itself
     // with the current value, so this is 1 for a row with a status and
@@ -304,7 +307,7 @@ ${applets()}`;
       })
       .toContain("Running");
 
-    // Syncing a source takes on everything downstream of it, so the
+    // Syncing a source also runs everything downstream of it, so the
     // render is in flight too: Queued behind its download, Running on
     // what the download has published, since the download streams, or
     // Waiting for its next seal.
@@ -330,11 +333,12 @@ ${applets()}`;
     );
 
     release();
-    // `settleRow`, not `settle`: the log lives in the page, and
-    // `settle` remounts, which would throw it away. The before-stamp is
-    // still passed — a terminal status on its own is answerable by the
-    // *previous* run's frame, which is what #237 fixed.
-    await settleRow(page, TAPED_UP, was[TAPED_UP]);
+    // `untilRowFinishesNewRun`, not `untilRowFinishesAndSyncIdle`: the
+    // log lives in the page, and `untilRowFinishesAndSyncIdle` reloads
+    // it, which would throw the log away. The before-stamp is still
+    // passed — a terminal status on its own is matched by the
+    // *previous* run's frame.
+    await untilRowFinishesNewRun(page, TAPED_UP, was[TAPED_UP]);
     const seen = await since(TAPED_UP, beforeUp);
     expect(
       seen.length,
@@ -342,8 +346,8 @@ ${applets()}`;
     ).toBeGreaterThan(0);
 
     // What the sequence must contain: a frame from before the run was
-    // over, which used to be missing entirely — the click produced no
-    // visible change until the whole run was done.
+    // over. Without one, the click shows no visible change until the
+    // whole run is done.
     expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toMatch(
       /^(Queued|Running)$/,
     );
@@ -354,8 +358,8 @@ ${applets()}`;
     // The sequence must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one.
     // Total over the whole vocabulary, on purpose. An unranked status
-    // used to make this crash with "received value must be a number"
-    // and no hint as to which status it choked on — a test that fails
+    // would make this crash with "received value must be a number" and
+    // no hint as to which status it choked on — a test that fails
     // uninformatively about the one thing it exists to describe.
     //
     // "Never run" ranks *below* Queued: it is the absence of history,
@@ -388,7 +392,9 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. The download is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settleRow(page, TAPED_DOWN, was[TAPED_DOWN])).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await untilRowFinishesNewRun(page, TAPED_DOWN, was[TAPED_DOWN])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
     const downstreamFinal = await since(TAPED_DOWN, beforeDown);
     expect(
       statusWord(downstreamFinal[downstreamFinal.length - 1]),
@@ -397,9 +403,10 @@ ${applets()}`;
     expectSanePaints(await paints(), "the Pipeline table, through a sync");
 
     // The run itself has to be over before the next test writes a
-    // config into this root — the half of `settleRows` that `settleRow`
-    // leaves out. Cheap here: every row is already terminal.
-    await settleRunner(page);
+    // config into this root — the wait `untilRowsFinishAndSyncIdle`
+    // does after the rows and `untilRowFinishesNewRun` leaves out.
+    // Cheap here: every row is already terminal.
+    await untilNoSyncThenReload(page);
   });
 
   test("Status's time holds still under a minute, then crosses to 1 minute ago", async ({
@@ -408,11 +415,11 @@ ${applets()}`;
     // What only a browser can answer about this column. The arithmetic
     // — every unit boundary, a stamp in another UTC offset, one in the
     // future — is in src/config/timeFormat.test.ts, because provoking
-    // "6 days ago" from a live backend would mean forging the runner's
-    // state file. What that unit test cannot show is any of the below:
-    // that the column is wired to the relative form at all, that the
-    // absolute stamp survives as the hover, and what the repaint loop
-    // does to a cell nobody has touched.
+    // "6 days ago" from a live backend would mean forging the loop's
+    // store, `system/supervisor.sqlite`. What that unit test cannot show
+    // is any of the below: that the column is wired to the relative form
+    // at all, that the absolute stamp survives as the hover, and what the
+    // repaint loop does to a cell nobody has touched.
     //
     // That loop is `setInterval(tickRelative, 1000)` in TableGrid.ce.vue,
     // and it is driven here by a fake clock rather than by waiting —
@@ -425,7 +432,7 @@ ${applets()}`;
     await writeConfigAndOpenGroups(page, config());
     const countUpWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
-    expect(await settle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
 
     const cell = row(page, "pdfs/ingest").locator(LAST_UPDATE_AT);
     await expect(cell).toHaveText("seconds ago");
@@ -455,16 +462,15 @@ ${applets()}`;
 
     // ...and it stays put. `runFor` fires every timer due in the
     // window, so this is four real turns of the repaint loop with
-    // nothing else happening. Against the per-second countup this
-    // column used to do, they would have read 3, 4, 5 — this is the
-    // assertion that fails if the countup ever comes back.
+    // nothing else happening. A column counting up each second would
+    // read 3, 4, 5 — this is the assertion that fails if it does.
     await page.clock.runFor(4000);
     await expect(cell, "Status ticked while nothing happened").toHaveText("seconds ago");
 
     // The crossing to "1 minute ago" — the only self-repaint this
-    // column does, and the reason the loop exists. It went untested
-    // while this spec waited on the wall clock, because catching it
-    // meant spending a real minute in a suite that runs in about 40s.
+    // column does, and the reason the loop exists. On the wall clock,
+    // catching it would mean spending a real minute in a suite that runs
+    // in about 40s.
     //
     // The stamp is a real instant from the run above, so the delta at
     // this point is 60s, plus the second skipped at the pause, plus
@@ -510,12 +516,20 @@ ${applets()}`;
       "pdfs/render_markdown",
     ]);
     await syncBtn(page, "docs/ingest").click();
-    expect(await settle(page, "docs/ingest", sortWas["docs/ingest"])).toBe("Succeeded");
-    await syncBtn(page, "pdfs/ingest").click();
-    expect(await settle(page, "pdfs/ingest", sortWas["pdfs/ingest"])).toBe("Succeeded");
-    expect(await settle(page, "pdfs/render_markdown", sortWas["pdfs/render_markdown"])).toMatch(
-      /^(Succeeded|Up to date)$/,
+    expect(await untilRowFinishesAndSyncIdle(page, "docs/ingest", sortWas["docs/ingest"])).toBe(
+      "Succeeded",
     );
+    await syncBtn(page, "pdfs/ingest").click();
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", sortWas["pdfs/ingest"])).toBe(
+      "Succeeded",
+    );
+    expect(
+      await untilRowFinishesAndSyncIdle(
+        page,
+        "pdfs/render_markdown",
+        sortWas["pdfs/render_markdown"],
+      ),
+    ).toMatch(/^(Succeeded|Up to date)$/);
 
     /// Rows top to bottom, each with the exact stamp it claims — read
     /// off `title`, so the check is against instants rather than the
@@ -633,7 +647,7 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
 
     const was = await lastSyncedOf(page, "flaky/ingest");
     await syncBtn(page, "flaky/ingest").click();
-    expect(await settle(page, "flaky/ingest", was)).toBe("Failed");
+    expect(await untilRowFinishesAndSyncIdle(page, "flaky/ingest", was)).toBe("Failed");
     await expandGroup(page, "flaky");
 
     const cell = row(page, "flaky/ingest").locator('[col-id="status"] .tg-status');
@@ -780,7 +794,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(await lastSuccessOf(page, "soured/ingest")).toBeNull();
 
     await syncBtn(page, "soured/ingest").click();
-    expect(await settle(page, "soured/ingest", null)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "soured/ingest", null)).toBe("Succeeded");
     await expandGroup(page, "soured");
     const succeeded = await lastSyncedOf(page, "soured/ingest");
     expect(succeeded).not.toBeNull();
@@ -801,10 +815,11 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
-    // Before `settle`, which reloads the page and would ask afresh: this
-    // is the chip drawn before the sync, following it.
+    // Before `untilRowFinishesAndSyncIdle`, which reloads the page and
+    // would ask afresh: this is the chip drawn before the sync,
+    // following it.
     await expect(stepChip).toHaveClass(/entity-failed/, { timeout: 30_000 });
-    expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
+    expect(await untilRowFinishesAndSyncIdle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");
     const failed = await lastSyncedOf(page, "soured/ingest");
     expect(failed).not.toBe(succeeded);
@@ -830,8 +845,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    await settleRow(page, render, was[render]);
+    await untilRowFinishesNewRun(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await untilRowFinishesNewRun(page, render, was[render]);
     await expect.poll(items, { message: "the sync counted no items" }).not.toMatch(/^0?$/);
 
     // The confirm says what a reset does, and the history is why it can
@@ -847,12 +862,14 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     // Nothing more to click: the render catches up on the emptied store
     // by itself and takes its documents out.
-    expect(await settleRow(page, render, rendered[render])).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await untilRowFinishesNewRun(page, render, rendered[render])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
     await expect.poll(items, { message: "the items stayed after a reset" }).toBe("0");
     // The download keeps no history of its own: its next Sync starts from
     // nothing.
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
-    await settleRunner(page);
+    await untilNoSyncThenReload(page);
   });
 
   test("Reset on a render renders its items again at once", async ({ page }) => {
@@ -865,8 +882,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    await settleRow(page, render, was[render]);
+    await untilRowFinishesNewRun(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await untilRowFinishesNewRun(page, render, was[render]);
     await expect.poll(items, { message: "the sync counted no items" }).not.toMatch(/^0?$/);
     const counted = await items();
 
@@ -875,10 +892,10 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await pickRowMenu(page, row(page, render), "Reset…", page.getByText("Reset Render markdown."));
     // Rebuilt from what is downloaded, with nothing more to click; the
     // download itself is untouched.
-    expect(await settleRow(page, render, rendered[render])).toBe("Succeeded");
+    expect(await untilRowFinishesNewRun(page, render, rendered[render])).toBe("Succeeded");
     await expect.poll(items).toBe(counted);
     expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
-    await settleRunner(page);
+    await untilNoSyncThenReload(page);
   });
 
   test("a render whose code_version moved syncs on its own, and not while up to date", async ({
@@ -890,9 +907,9 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    await settleRow(page, render, was[render]);
-    await settleRunner(page);
+    await untilRowFinishesNewRun(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await untilRowFinishesNewRun(page, render, was[render]);
+    await untilNoSyncThenReload(page);
     // Up to date, a Sync of it would do nothing, so it is disabled and
     // says so.
     await expect(btn).toBeDisabled();
@@ -911,8 +928,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     const before = await stampsBefore(page, ["pdfs/ingest", render]);
     expect(before["pdfs/ingest"], "the download ran above").not.toBeNull();
     await btn.click();
-    await settleRow(page, render, before[render]);
-    await settleRunner(page);
+    await untilRowFinishesNewRun(page, render, before[render]);
+    await untilNoSyncThenReload(page);
     expect(await lastSyncedOf(page, "pdfs/ingest"), "the download ran too").toBe(
       before["pdfs/ingest"],
     );

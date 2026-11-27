@@ -13,9 +13,9 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   expect(EMPTY_URL, "playwright.config.ts should have started the empty-root backend").toBeTruthy();
 
   // Precondition: the root really is uninitialized, and the applet the
-  // grid needs really is missing — i.e. this run reproduces the
-  // reported failure rather than testing a root that got initialized
-  // by an earlier run.
+  // grid needs really is missing — i.e. this run reproduces the 502
+  // the test is named for rather than testing a root that got
+  // initialized by an earlier run.
   const before = await request.get(`${EMPTY_URL}/api/config`);
   expect((await before.json()).exists).toBe(false);
   const search = await request.get(
@@ -60,7 +60,7 @@ test("an empty folder gets an explained bootstrap, not a 502", async ({ page, re
   await expect(cardOf(page, "configView(")).toHaveCount(0);
 
   // The file is on disk and valid, and it carries the applet whose
-  // absence was the original error.
+  // absence gave the 502 above.
   const after = await (await request.get(`${EMPTY_URL}/api/config`)).json();
   expect(after.exists).toBe(true);
   expect(after.parsed_ok).toBe(true);

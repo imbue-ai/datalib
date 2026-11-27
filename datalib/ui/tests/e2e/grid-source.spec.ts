@@ -14,7 +14,7 @@ import {
   fillConfigEditor,
   GRID,
   actOnRowByUuid,
-  searchAndSettle,
+  searchAndAwaitResults,
   MANAGE_WITH_CONFIG,
   savedConfig,
   expectSyncEverything,
@@ -65,7 +65,7 @@ test("the Source column shows the configured name, and source: filters by id", a
   request,
 }) => {
   // Two config writes plus five searches, any of which may land after
-  // an applet restart and pay a model load — see `SEARCH_SETTLE`.
+  // an applet restart and pay a model load — see `SEARCH_TIMEOUT`.
   test.setTimeout(210_000);
 
   // --- With no name in the config, the column falls back to the id --
@@ -88,20 +88,20 @@ test("the Source column shows the configured name, and source: filters by id", a
   // --- `source:` narrows to one source --------------------------
   // Every visible cell must read `slack` — the filter is equality on
   // `source_id`, not a substring match on anything.
-  await searchAndSettle(page, "source:slack");
+  await searchAndAwaitResults(page, "source:slack");
   await expect(page.locator(SOURCE_CELLS).first()).toBeVisible();
   await expect.poll(() => distinctSourceCells(page)).toEqual(["slack"]);
 
   // A stanza that exists in the fixture but isn't the one asked for
   // must be excluded, so the filter is provably doing work.
-  await searchAndSettle(page, "source:claude-api");
+  await searchAndAwaitResults(page, "source:claude-api");
   await expect.poll(() => distinctSourceCells(page)).toEqual(["claude-api"]);
 
   // Datalib's own rows — every source's storage report — are filed
   // under `datalib` rather than the source they measure, which is why
   // neither search above turned one up. They have their own bucket,
   // and the column spells it out.
-  await searchAndSettle(page, "source:datalib");
+  await searchAndAwaitResults(page, "source:datalib");
   await expect.poll(() => distinctSourceCells(page)).toEqual(["Datalib"]);
 
   // --- A name in the config changes the column's text --------------
@@ -112,11 +112,11 @@ test("the Source column shows the configured name, and source: filters by id", a
   await writeConfig(page, original.replace(slackGroup, `${slackGroup}name = "Work Slack"\n`));
 
   await openGrid(page);
-  await searchAndSettle(page, "source:slack");
+  await searchAndAwaitResults(page, "source:slack");
   await expect.poll(() => distinctSourceCells(page)).toEqual(["Work Slack"]);
 
   // The filter token still carries the id, not the name: the index has
   // never heard of names, and two sources may share one.
-  await searchAndSettle(page, 'source:"Work Slack"');
+  await searchAndAwaitResults(page, 'source:"Work Slack"');
   await expect(page.locator(SOURCE_CELLS)).toHaveCount(0);
 });

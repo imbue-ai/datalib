@@ -19,7 +19,7 @@ const props = defineProps<{
   /** What the box holds. */
   query: string;
   /** What was last run, whose results the source counts describe. */
-  settled: string;
+  lastRun: string;
   /** Whether Enter changes the search on screen, or opens a new one. */
   onSearchCard: boolean;
   /** How this machine spells the key that always opens a new tab. */
@@ -66,13 +66,13 @@ async function loadSources() {
   }
   const ctrl = (asked = new AbortController());
   try {
-    const r = await fetchGroups<SearchRow>(props.settled, "source_ref", ctrl.signal);
+    const r = await fetchGroups<SearchRow>(props.lastRun, "source_ref", ctrl.signal);
     if (asked === ctrl) sources.value = r.groups;
   } catch {
     /* the chips are a convenience; the search says what went wrong */
   }
 }
-watch([() => props.settled, offersSources], loadSources, { immediate: true });
+watch([() => props.lastRun, offersSources], loadSources, { immediate: true });
 </script>
 
 <template>

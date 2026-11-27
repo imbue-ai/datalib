@@ -269,8 +269,9 @@ export function membershipRank(m: Membership | null | undefined): number {
 }
 
 /// A `membership` cell: one three-position switch, its knob left for
-/// out, centred for not known, right for in; filled when settled, only
-/// outlined where it is an agent's answer no person has reviewed.
+/// out, centred for not known, right for in; filled where a person
+/// decided it, only outlined where it is an agent's answer no person has
+/// reviewed.
 /// Pressing a third of it hands the host that answer: pressing where the
 /// knob already is does nothing, unless the answer is only proposed,
 /// which the press confirms. Kept per row and column across repaints, as

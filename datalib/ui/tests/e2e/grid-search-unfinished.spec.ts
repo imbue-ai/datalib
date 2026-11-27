@@ -1,6 +1,6 @@
 // The grid searches as you type, so it is often handed a filter not yet
-// finished: `is:do` on the way to `is:document`. It used to toast the
-// refusal and empty the grid mid-word. A query the search cannot read
+// finished: `is:do` on the way to `is:document`. A query the search
+// cannot read must not toast the refusal or empty the grid mid-word: it
 // keeps the rows it had, marked as from the previous search, and says
 // why quietly beside the bar.
 import { test, expect } from "@playwright/test";

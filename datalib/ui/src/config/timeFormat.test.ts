@@ -45,7 +45,7 @@ describe("how long ago", () => {
     // The point of the band is that nothing in it changes as you
     // watch, so every one of these has to read identically — a cell
     // that says "2 seconds ago" and then "3 seconds ago" a moment
-    // later is the thing this replaced.
+    // later pulls the eye back to a row with nothing new to say.
     expect(formatRelative(ago(0), NOW)).toBe("seconds ago");
     expect(formatRelative(ago(999), NOW)).toBe("seconds ago");
     expect(formatRelative(ago(1000), NOW)).toBe("seconds ago");
@@ -65,7 +65,7 @@ describe("how long ago", () => {
   });
 
   it("compares instants, not text, across UTC offsets", () => {
-    // The tree stores each stamp with its source's own offset, so two
+    // A source's stamp keeps the source's own offset, so two
     // rows can carry different ones. These three strings are the same
     // instant written three ways; all must render identically.
     const sameInstant = [
@@ -138,9 +138,11 @@ describe("ordering by when, not by how it reads", () => {
 
   it("compares across UTC offsets, where text order is a lie", () => {
     // 04:00-07:00 is 11:00Z — two hours AFTER 09:00Z — but sorts before
-    // it as text on the leading hour digits. This is the case the tree's
-    // "preserve the source's offset" convention makes real, and the one
-    // a lexicographic sort gets backwards.
+    // it as text on the leading hour digits. AGENTS.md §"Timestamp
+    // convention" makes this case real: a stamp that belongs to the
+    // record (`grid_rows.created_at`) stays in the offset its source
+    // wrote, so one column holds several offsets. A lexicographic sort
+    // gets it backwards.
     const nineUtc = "2026-09-01T09:00:00+00:00";
     const elevenUtcWrittenLocal = "2026-09-01T04:00:00-07:00";
     expect(elevenUtcWrittenLocal < nineUtc, "premise: text order disagrees").toBe(true);

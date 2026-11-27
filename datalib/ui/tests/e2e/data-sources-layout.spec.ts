@@ -19,7 +19,8 @@ async function openSources(page: Page) {
 }
 
 /// Run a sync and wait for it to end — without the reload
-/// `settleRunner` does, which would throw away the layout under test.
+/// `untilNoSyncThenReload` does, which would throw away the layout under
+/// test.
 /// Waits on the request itself (the banner goes when it closes, which
 /// can be before anything looks for it) and on the card having read its
 /// rows meanwhile, so the grid really was handed new answers. A sync

@@ -214,7 +214,7 @@
   border-color: var(--datalib-log-error);
 }
 /* A membership switch: the knob left for out, centred for not known,
-   right for in. A settled answer is filled, green in and orange out; an
+   right for in. A person's answer is filled, green in and orange out; an
    agent's answer no person has reviewed is only outlined, in the colour
    it would fill. */
 .tg-member {

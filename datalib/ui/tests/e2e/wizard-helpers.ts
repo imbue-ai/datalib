@@ -5,8 +5,9 @@ import { expect, type Locator, type Page } from "@playwright/test";
 export const wizardOf = (page: Page): Locator => page.getByRole("dialog");
 
 /// The sign-in controls, opened if the account row had folded them
-/// away behind "Connected as …". Waits for the row to settle first:
-/// an account latchkey holds is checked on opening.
+/// away behind "Connected as …". Waits first until the row shows either
+/// the controls or "Use a different account": an account latchkey holds
+/// is checked on opening.
 export async function showSignIn(page: Page) {
   const again = wizardOf(page).getByRole("button", { name: "Use a different account" });
   const controls = wizardOf(page).locator(".wiz-conn-intro");

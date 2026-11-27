@@ -54,7 +54,7 @@ import { photoCardSource } from "./photos";
 import { parsePhoto } from "@/uri";
 import { TOPIC_EDGE_HOVER, type CardCtx, type EdgeHoverPayload } from "./types";
 
-const { allowRemote, checkRemote, fetchChat, fetchChatBody, forgetRemoteAllow } = useApi();
+const { allowRemote, checkRemote, fetchChat, fetchChatBody, deleteRemoteAllow } = useApi();
 
 const props = defineProps<{
   ctx: CardCtx;
@@ -326,8 +326,8 @@ function allow(scope: AllowScope, key: string | null) {
   void remoteWrite(() => allowRemote(scope, named));
 }
 
-function forget(rule: RemoteAllow) {
-  void remoteWrite(() => forgetRemoteAllow(rule.allow_uuid));
+function deleteAllow(rule: RemoteAllow) {
+  void remoteWrite(() => deleteRemoteAllow(rule.allow_uuid));
 }
 
 function openRemoteTable(url: string, title: string) {
@@ -725,7 +725,7 @@ watch(
                 class="remote-rule-forget"
                 :disabled="remoteBusy"
                 :title="`Forget this rule (allowed ${rule.created_at_utc})`"
-                @click="forget(rule)"
+                @click="deleteAllow(rule)"
               >
                 ✕
               </button>

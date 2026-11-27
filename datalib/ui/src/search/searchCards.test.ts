@@ -5,7 +5,7 @@ import { activeOf, draftAfterMove, type CardEntry, type SearchCard } from "./sea
 const card = (id: string): SearchCard => ({
   id,
   query: ref(""),
-  settled: ref(""),
+  lastRun: ref(""),
   run: () => {},
 });
 const entry = (id: string, shown: boolean, usedAt: number): CardEntry => ({

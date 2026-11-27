@@ -184,8 +184,8 @@ and grid in the page shares it:
 - **`ask(keys)`** asks and waits; a document's decorate pass uses it.
 - **`subscribe(listener)`** tells a surface which keys' answers
   changed, so it redraws those chips and nothing else.
-- **`forget(keys)`** drops answers after an edit made in this page, so
-  every surface draws them again. An answer to a question asked before
+- **`dropAnswers(keys)`** drops answers after an edit made in this
+  page, so every surface draws them again. An answer to a question asked before
   the edit is thrown away when it lands.
 - **`revalidate()`** asks again about everything held, keeping each
   old answer drawn until its new one arrives, and tells subscribers
@@ -583,7 +583,7 @@ A new kind — a channel, a document — is these steps, in this order:
    cases, and admit a new scheme in `sanitize.ts`.
 2. **Its resolver.** An endpoint that answers a batch of URIs, absent
    for one that names nothing, and a `Resolver` instance over it. Say
-   what makes its answers go stale: an edit in this page (`forget`),
+   what makes its answers go stale: an edit in this page (`dropAnswers`),
    or something that moves on its own (follow the live connection and
    `revalidate`).
 3. **Its rules.** Its look, tooltip, menu and card source as pure
@@ -603,7 +603,7 @@ A new kind of *handle* is a person and goes through
   `columns_unittests` (groups and steps), `tests/chip_links.test.ts`
   (the TypeScript mirror over the same cases, and the plugin's marking).
 - The resolver: `resolver.test.ts` (one request per pass, kept answers,
-  forget and stale answers, revalidating, failures).
+  `dropAnswers` and stale answers, revalidating, failures).
 - The rules: `contacts.test.ts`, `entities.test.ts`, `documentChip.test.ts`,
   `nodeChip.test.ts`, `dates.test.ts`, and
   `chipActions.test.ts` (one menu order for every kind, and where each

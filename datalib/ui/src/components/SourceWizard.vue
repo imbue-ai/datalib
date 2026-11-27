@@ -16,15 +16,17 @@
 // the `[[groups]]` entry; the steps written under it carry neither.
 
 // A descriptor with a `credentialService` also gets an account row:
-// which latchkey account to use, the "Web login" tab, which runs
-// latchkey's browser login, the "Paste a key" tab, which stores a token
-// or app password with `latchkey auth set`, and "Check connection", which
-// asks the provider's own probe (`datalib-step probe <type>`) which account
-// the credentials reach — a green tick that names the account. Each
-// `probe:` field has a "Load" of its own that fills its checklist from the
-// live account, with progress while it pages. A label picker built from the
-// live account is the difference between a filter that works and a filter
-// that is a spelling test.
+// - which latchkey account to use;
+// - the "Web login" tab, which runs latchkey's browser login;
+// - the "Paste a key" tab, which stores a token or app password with
+//   `latchkey auth set`;
+// - "Check connection", which runs the provider's own probe
+//   (`datalib-step probe <type>`) to learn which account the credentials
+//   reach — a green tick that names the account.
+// Each `probe:` field has a "Load" of its own that fills its checklist
+// from the live account, with progress while it pages. A label picker
+// built from the live account is the difference between a filter that
+// works and a filter that is a spelling test.
 import { computed, nextTick, onUnmounted, ref, watch } from "vue";
 import {
   CATALOG,
@@ -1320,7 +1322,7 @@ function listLoad(noun: ProbeNoun): ListLoad {
   return lists.value[noun] ?? IDLE_LIST;
 }
 
-/// Forget what was checked and loaded: the credentials it was done
+/// Clear what was checked and loaded: the credentials it was done
 /// with have just changed.
 function resetProbes() {
   check.value = { state: "idle", failure: null, report: null };

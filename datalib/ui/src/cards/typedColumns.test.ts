@@ -220,7 +220,8 @@ describe("a date cell", () => {
 });
 
 /// A membership cell is in, not known or out, and a press hands the host
-/// the row, the column and the answer — never what is already settled.
+/// the row, the column and the answer — never the answer it already has,
+/// unless that answer is only proposed: a press on it then confirms it.
 describe("a membership cell", () => {
   const spec: ColumnSpec = {
     field: "label:spam",
@@ -249,13 +250,13 @@ describe("a membership cell", () => {
   });
 
   it("shows a settled answer filled, a proposed one outlined, and hands over a press", () => {
-    const settled = draw("a", { applies: false });
-    expect(settled.dataset.state).toBe("out");
-    expect(settled.getAttribute("aria-checked")).toBe("false");
-    expect(settled.classList.contains("proposed")).toBe(false);
-    press(settled, 0);
+    const decided = draw("a", { applies: false });
+    expect(decided.dataset.state).toBe("out");
+    expect(decided.getAttribute("aria-checked")).toBe("false");
+    expect(decided.classList.contains("proposed")).toBe(false);
+    press(decided, 0);
     expect(pressed).toEqual([]);
-    press(settled, 2);
+    press(decided, 2);
     expect(pressed).toEqual([["a", "label:spam", true]]);
 
     const proposed = draw("b", { applies: true, proposed: true, title: "agent: one-way offers" });

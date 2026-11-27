@@ -497,13 +497,13 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
-// Every edit forgets the handles it touched, and the other handles of a
-// contact it changed, so every document, grid and card showing them draws
-// them again from the next answer.
+// Every edit drops from `people`'s cache the handles it touched, and the
+// other handles of a contact it changed, so every document, grid and card
+// showing them draws them again from the next answer.
 
 export async function createContact(name: string, handles: string[]): Promise<string> {
   const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;
-  people.forget(handles);
+  people.dropAnswers(handles);
   return id;
 }
 
@@ -539,7 +539,7 @@ export async function linkHandle(
 ): Promise<void> {
   const before = holderIds(handle);
   await post("/link", { handle, contact_id: contactId, ...(held ? { held } : {}), ...from });
-  people.forget(withItsContacts(handle, [contactId, ...before]));
+  people.dropAnswers(withItsContacts(handle, [contactId, ...before]));
   contactsById.revalidate();
 }
 
@@ -550,7 +550,7 @@ export async function setHandleLabel(
   label: string | null,
 ): Promise<void> {
   await post("/handle_label", { handle, contact_id: contactId, label: label?.trim() || null });
-  people.forget(withItsContacts(handle, holderIds(handle)));
+  people.dropAnswers(withItsContacts(handle, holderIds(handle)));
   contactsById.revalidate();
 }
 
@@ -604,7 +604,7 @@ export async function notTheirs(contactId: string): Promise<Set<string>> {
 export async function unlinkHandle(handle: string, contactId: string): Promise<void> {
   const before = holderIds(handle);
   await post("/unlink", { handle, contact_id: contactId });
-  people.forget(withItsContacts(handle, before));
+  people.dropAnswers(withItsContacts(handle, before));
   contactsById.revalidate();
 }
 
@@ -615,7 +615,7 @@ export async function setStoppedWorking(
   by: string | null,
 ): Promise<void> {
   await post("/stopped_working", { handle, contact_id: contactId, by });
-  people.forget(withItsContacts(handle, holderIds(handle)));
+  people.dropAnswers(withItsContacts(handle, holderIds(handle)));
   contactsById.revalidate();
 }
 

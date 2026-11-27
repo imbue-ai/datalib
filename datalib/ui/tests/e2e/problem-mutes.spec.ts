@@ -10,7 +10,7 @@ import { test, expect, type APIRequestContext, type Page } from "@playwright/tes
 import {
   actOnRowByUuid,
   cardOf,
-  gridSettled,
+  untilGridLoaded,
   searchMenuItem,
   selectRowByUuid,
   SEARCH_MENU,
@@ -125,7 +125,7 @@ test("muting a source's problems in the grid takes it off Needs you", async ({ p
   await expect(grid).toBeVisible({ timeout: 10_000 });
   await expect(page.getByTestId("grid-search-input")).toHaveAttribute("data-query", query);
   await grid.locator(".grid-box .slick-row").first().waitFor({ timeout: 15_000 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const held = (await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows(),
   )) as Problem[];

@@ -22,7 +22,7 @@
 //      showed stays shown, and a row the index did not touch keeps its
 //      element while new ones arrive.
 //
-// Both are states to wait for, not frames to catch: nothing upstream can
+// All four are states to wait for, not frames to catch: nothing upstream can
 // finish while the hold is in place.
 //
 // The search steps are deliberately not in this config: their sink is an FTS
@@ -42,11 +42,11 @@ import {
   readRow,
   savedConfig,
   SEARCH_ROWS,
-  searchAndSettle,
+  searchAndAwaitResults,
   searchHeader,
   selectRowByUuid,
-  settleRow,
-  settleRunner,
+  untilRowFinishesNewRun,
+  untilNoSyncThenReload,
   shownCards,
   stampsBefore,
   statusOf,
@@ -99,8 +99,8 @@ async function writeConfig(page: Page, text: string) {
   await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
-  // Remount, so the rows are painted from the config and the runner's
-  // record together — see data-sources-sync.spec.ts for the frame this
+  // Remount, so the rows are painted from the config and the loop's
+  // store together — see data-sources-sync.spec.ts for the frame this
   // avoids.
   await openManager(page);
 }
@@ -249,7 +249,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     // is that it updates itself.
     const grid = await context.newPage();
     await grid.goto(GRID);
-    await searchAndSettle(grid, `source:${SOURCES[0]}`);
+    await searchAndAwaitResults(grid, `source:${SOURCES[0]}`);
     await expect(grid.getByText("no matches.")).toBeVisible();
 
     // The pipeline DAG, in a third tab: its nodes are recoloured as the
@@ -344,20 +344,20 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     // ── let every row finish ────────────────────────────────────────
     release();
     for (const id of STEPS) {
-      const st = await settleRow(page, id, was[id], 120_000);
+      const st = await untilRowFinishesNewRun(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await expect(
       dag.locator(".dv-node[data-probe]"),
       "a live frame redrew the DAG's nodes rather than recolouring them",
     ).toHaveCount(STEPS.length);
-    // Before `settleRunner`, which reloads the page.
+    // Before `untilNoSyncThenReload`, which reloads the page.
     expectSanePaints(await pipelinePaints(), "the Pipeline table, through a streaming sync");
 
     // ── and the grid caught up with every pass, not just the first ──
     // Every conversation the tapes hold, once the run is over: the same
     // count the applet gives a fresh request.
-    await settleRunner(page, 120_000);
+    await untilNoSyncThenReload(page, 120_000);
     const search = (await (
       await page.request.get(
         `/applet/unified_grid_and_search_index/search?q=${encodeURIComponent(`source:${SOURCES[0]}`)}&limit=1000`,
@@ -418,7 +418,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     // The download runs to its end, writing lines the whole way, while
     // the menu stays open on the first one.
     release();
-    await settleRow(page, ingest, was[ingest], 120_000);
+    await untilRowFinishesNewRun(page, ingest, was[ingest], 120_000);
     await expect(menu, "a line arriving closed the menu").toBeVisible();
     expectSanePaints(await paints(), "the log of a running step, under an open menu");
 
@@ -431,8 +431,8 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
         message: "the lines held back while the menu was open never arrived",
       })
       .toBeGreaterThan(before);
-    for (const step of steps) await settleRow(page, step, was[step], 120_000);
-    await settleRunner(page, 120_000);
+    for (const step of steps) await untilRowFinishesNewRun(page, step, was[step], 120_000);
+    await untilNoSyncThenReload(page, 120_000);
   });
 
   // The keyboard's place in a grid is a row index inside the grid.
@@ -447,7 +447,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
 
     const grid = await context.newPage();
     await grid.goto(GRID);
-    await searchAndSettle(grid, `source:${id}`);
+    await searchAndAwaitResults(grid, `source:${id}`);
     const activeUuid = () =>
       grid.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.activeUuid());
 
@@ -473,7 +473,7 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
     expect(await activeUuid()).toBe(picked);
 
     release();
-    for (const step of steps) await settleRow(page, step, was[step], 120_000);
+    for (const step of steps) await untilRowFinishesNewRun(page, step, was[step], 120_000);
     await expect
       .poll(() => gridRowCount(grid), { timeout: 30_000, message: "no row landed above" })
       .toBeGreaterThan(first);
@@ -485,6 +485,6 @@ ${sources.map(([id, type]) => source(id, type)).join("")}${applets()}`;
       "the rows that arrived should sort above the picked one",
     ).toBeGreaterThan(0);
     expect(await activeUuid(), "the keyboard was left on another row").toBe(picked);
-    await settleRunner(page, 120_000);
+    await untilNoSyncThenReload(page, 120_000);
   });
 });

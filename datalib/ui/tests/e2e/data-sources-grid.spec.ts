@@ -7,8 +7,8 @@ test("the Pipeline table paints at full height", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
 
-  // Rows are bound. This stayed true throughout the bug, so it is the
-  // precondition — not the check.
+  // Rows are bound. That stays true when the grid collapses to no
+  // height, so it is the precondition — not the check.
   await expect(page.locator(TABLE_ROWS)).not.toHaveCount(0, { timeout: 10_000 });
 
   // The check: the grid occupies real space on screen.

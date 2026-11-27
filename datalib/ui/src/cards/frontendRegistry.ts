@@ -34,7 +34,8 @@ async function refresh(): Promise<void> {
   try {
     view = await fetchFrontend();
   } catch {
-    // Backend blip — keep the last good state and try next tick.
+    // Backend blip — keep the last good state; the next live frame or
+    // resync fetches again.
     return;
   }
   const next = new Map<string, Map<string, Meta>>();

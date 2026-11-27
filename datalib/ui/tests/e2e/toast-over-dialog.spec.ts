@@ -65,7 +65,7 @@ test("an error toast over the wizard does not eat clicks on its buttons", async 
   expect(hit, "the toast body took the pointer").toBe(false);
 
   // Its two buttons are what it does own. Copy stands in for the text
-  // selection the pass-through gives up.
+  // selection a toast the pointer passes through cannot have.
   const readClipboard = await stubClipboard(page);
   await toast.getByRole("button", { name: "Copy" }).click({ timeout: 5_000 });
   await expect.poll(readClipboard).toContain("/api/pipeline/disk");

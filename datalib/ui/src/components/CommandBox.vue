@@ -125,7 +125,7 @@ onBeforeUnmount(() => {
   window.removeEventListener("pointerdown", onPointerDown);
 });
 
-const settled = computed(() => activeSearch.value?.settled.value ?? draft.value);
+const lastRun = computed(() => activeSearch.value?.lastRun.value ?? draft.value);
 const onMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const shortcut = onMac ? "⌘K" : "Ctrl K";
 const newTabKey = onMac ? "⌘Enter" : "Ctrl+Enter";
@@ -184,7 +184,7 @@ const newTabKey = onMac ? "⌘Enter" : "Ctrl+Enter";
     <SearchPanel
       v-if="panelOpen"
       :query="draft"
-      :settled="settled"
+      :last-run="lastRun"
       :on-search-card="activeSearch !== null"
       :new-tab-key="newTabKey"
       @apply="apply"

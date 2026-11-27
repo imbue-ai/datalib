@@ -3,7 +3,13 @@
 // the newest of them, and the rest arrive as it is scrolled.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { EVERY_ROW, gridSettled, SEARCH_ROWS, searchHeader, type GridApi } from "./grid-helpers";
+import {
+  EVERY_ROW,
+  untilGridLoaded,
+  SEARCH_ROWS,
+  searchHeader,
+  type GridApi,
+} from "./grid-helpers";
 
 async function searchUuids(request: APIRequestContext, params: string): Promise<string[]> {
   const r = await request.get(`/applet/unified_grid_and_search_index/search?q=&${params}`);
@@ -71,7 +77,7 @@ test("a header sort orders the whole search", async ({ page, request }) => {
 
   // A date's first click is its newest, the second its oldest.
   await searchHeader(page, "touched_at").click();
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await searchHeader(page, "touched_at").click();
   await expect.poll(async () => (await api(page)).first).toBe(oldest);
   expect((await held(page)).loaded, "a sort loaded every row").toBeLessThan(
@@ -82,7 +88,7 @@ test("a header sort orders the whole search", async ({ page, request }) => {
 /// Whether `uuid`'s row is drawn inside the grid's viewport. Its index
 /// moves as older rows load above it, so it is asked for each time.
 async function inView(page: Page, uuid: string): Promise<boolean> {
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const i = await page.evaluate(
     (u) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rowIndexOf(u),
     uuid,
@@ -123,7 +129,7 @@ test("the Now button returns to now, and only a newest-first date order has one"
   await expect(now).toBeHidden();
   await searchHeader(page, "touched_at").click();
   await expect(now, "Touched, newest first, is by a date").toBeVisible();
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await searchHeader(page, "touched_at").click();
   await expect(now, "Touched, oldest first, has its now at the far end").toBeHidden();
 });

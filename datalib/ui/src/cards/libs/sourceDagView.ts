@@ -227,9 +227,10 @@ export function sourceDagView(): CardRender {
       wrap.appendChild(legend);
     }
 
-    /// Live states come with the graph: the runner's record, which
-    /// `/api/dag` reads. Only for a run in flight — a finished run's
-    /// colours would claim something is happening.
+    /// Live states come with the graph: the loop's store
+    /// (`system/supervisor.sqlite`), which `/api/dag` reads. Only for a
+    /// run in flight — a finished run's colours would claim something is
+    /// happening.
     function applyStates(dag: DagResponse) {
       const next = new Map<string, string>();
       if (dag.run?.live) {
@@ -275,10 +276,9 @@ export function sourceDagView(): CardRender {
     const unsubscribe = subscribeLive(
       {
         // The shape of the graph is the config and the colours are the
-        // runner's record; `GET /api/dag` is both, and the `dag` frame is
-        // sent when either moves — instead of the 15-second poll this
-        // replaces, which every mounted card ran independently and which
-        // made a saved config take up to fifteen seconds to show.
+        // loop's store; `GET /api/dag` is both, and the `dag` frame is
+        // sent when either moves. A poll would cost a request per mounted
+        // card and leave a saved config unshown until its next round.
         root: (e) => {
           if (!disposed && changed(e, "dag")) void load();
         },
