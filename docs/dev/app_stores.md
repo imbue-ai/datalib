@@ -76,7 +76,9 @@
                                                   or a torn file made it start over
 <data_root>/system/supervisor.sqlite              requests (every sync anyone asked for,
                                                   and how it ended), steps turned off and
-                                                  wipes: the tables anyone may write and
+                                                  jobs (a reset, a purge, freeing disk
+                                                  space; the loop's own prepare pass is
+                                                  one too): the tables anyone may write and
                                                   the loop reads; and the loop's own
                                                   tables — each step's state now, its
                                                   last run and last success, each

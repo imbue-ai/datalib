@@ -554,8 +554,7 @@ offset included, so write it in the local offset
 (`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
 runner's lines in the real one — and everything else it carried
 (`filename`, `line_number`, the remaining `fields`) is kept as
-`fields`. Every level is kept, `debug` and `trace` included. The
-Manage screen shows the sentence, not the envelope, and can still sort
+`fields`. The Manage screen shows the sentence, not the envelope, and can still sort
 by thread.
 
 Every level is kept, `debug` and `trace` included: the runner stores a
@@ -601,25 +600,30 @@ it:
 
 `datalib-pipeline reset <data_root> <step-id>…` (or the app's
 Reset, `POST /api/reset`) empties what a step wrote so the next run
-does its work from the start. The runner invokes a step whose program
+does its work from the start. Either one writes a reset row in the
+`jobs` table of `system/supervisor.sqlite`, and the loop carries it
+out: it invokes a step whose program
 takes the verb once with `--reset` appended, and deletes the tree of
 any other; then it replaces the step's row in
 `system/supervisor.sqlite` with one that has never succeeded and
 holds the version the reset reports, or a new one if it reports none,
 so everything reading the tree runs again. Given the verb, empty your
 tree, keep whatever history you keep, commit if you commit, exit 0,
-and do nothing else; no sync follows.
+and do nothing else. The loop then opens a request
+(`wipe::after_reset`): a step that reads an input is run again at
+once, and what reads it follows; a download is not refilled, so only
+the steps that read it run.
 
 `datalib-step` resets `ingest`, `render_markdown` and `embedding_map`
 and refuses the rest. For a download or a render it deletes every row of
 the step's store in one commit and keeps the tables, plus a render
 tree's documents, so the history still has the rows, the run log
 included, and a reader takes the emptiness
-in as ordinary deletions: the app's Reset then syncs what reads the
-step, and its documents leave the grid. A reset also reports the
+in as ordinary deletions: the request the reset opens syncs what reads
+the step, and its documents leave the grid. A reset also reports the
 `problems` (and for a render, `documents`) counts of the emptied store,
-since the Manage row shows a step's newest sample and the reset step
-itself does not run again until the next sync. The app does not wait
+since the Manage row shows a step's newest sample and a reset download
+does not run again until its next sync. The app does not wait
 for a sync to end: the loop stops the step if it runs and resets it
 there and then ([the runner's
 README](../../datalib/backend/dag/README.md#resets-and-purges)).
@@ -753,15 +757,16 @@ answered within two minutes is killed.
 ## Compact and collect
 
 `datalib-pipeline free-disk-space`, or the app's `POST /api/free_disk_space`
-(the status bar's "Free up disk space…"), runs the command of every step
-that takes the verbs once, to give back the disk its store holds: with
+(the status bar's "Free up disk space…"), writes a row in the
+`jobs` table of `system/supervisor.sqlite`, and the loop carries it
+out: it runs the command of every step that takes the verbs once, to
+give back the disk its store holds, with
 `--compact` appended when old versions of derived data are to be
 dropped (`--drop-old-versions-on-derived-data`,
 `"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
-that reads a store may be reading it while it is rewritten: the command line needs the root to
-itself, as `reset` does, and the app's loop stops and does not start
-the steps it runs this way, or any step that reads them, until it is
-done (`dag/README.md`
+that reads a store may be reading it while it is rewritten: the loop
+stops and does not start the steps it runs this way, or any step that
+reads them, until it is done (`dag/README.md`
 §"Resets and purges"). The step decides what the verb means for what it
 wrote, runs nothing else, and reports its version as a run would; the
 runner records it, so a step that kept its content and reports a

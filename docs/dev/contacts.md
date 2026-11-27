@@ -309,8 +309,9 @@ then `kind` (`person` or `group`), `names` (the preferred one first),
 its `Handle` if one could be made, a label, and `stopped_working_by`),
 `photo` (the image in a blob store, or a URL only a fetch could
 follow), `photo_url` (where the app serves it; see below), `org`, `title`, `note`,
-`details`, `groups`, `members`, `source_url`, the record's own stamps,
-and `seen` (how much of a chat the person wrote).
+`details`, `groups`, `members`, `source_url` and the record's own
+stamps. How much the person wrote is not on the record: the grid's rows
+say it (§"How much someone wrote").
 
 Four producers, each needing less of a provider than the one before:
 
@@ -326,29 +327,26 @@ Four producers, each needing less of a provider than the one before:
   numbers and addresses, the avatar the app cached). These are rows, not documents.
 - **chat-common, for free** (`chat-common/src/people.rs`): a baseline
   per handle per document from what the provider showed: each author
-  with the names it wrote under, how many items and the last one's
-  stamp; each recipient and each reactor under the name shown, having
-  written nothing. A provider's own source contact for the same handle
-  replaces the baseline and keeps its count (`document_contacts`).
+  with the names it wrote under, the most used first; each recipient
+  and each reactor under the name shown. A provider's own source
+  contact for the same handle replaces the baseline and keeps every
+  name it saw (`document_contacts`).
 
 Every `RenderedMarkdown` carries its `contacts`. The render store holds
 them in two tables: `source_contacts` (`markdown_uuid`, `contact_key`,
-`source_id`, `name`, `seen_items`, `last_seen_at`, and the whole record
-as `contact_json`) and `source_contact_handles` (`markdown_uuid`,
+`source_id`, `name`, and the whole record as `contact_json`) and `source_contact_handles` (`markdown_uuid`,
 `contact_key`, `handle`).
 
 **The index holds each distinct record once**
 (`etl/render/src/grid_index/contact_records.rs`). A person is in as many
 documents as they wrote or were named in, and their record is the same
-in all of them but for `seen`, how much they wrote in that document. So
-the index keeps the record without `seen` in `contact_records`
+in all of them. So the index keeps the record in `contact_records`
 (`record_id`, `source_id`, `contact_key`, `name`, `contact_json`), its
 handles in `contact_record_handles` (`record_id`, `handle`), its numbers
 with no country code in `contact_record_numbers` (`record_id`,
-`digits`), and a row
-per document in `document_contacts` (`markdown_uuid`, `record_id`,
-`seen_items`, `last_seen_at`; `seen_items` is null where the source
-counts nothing). In a library of 309,481 rows there were 2,081 distinct
+`digits`), and a row per document in `document_contacts`
+(`markdown_uuid`, `record_id`, and `page`: whether the document is a
+contact's own page, such as an address book's card). In a library of 309,481 rows there were 2,081 distinct
 records. A re-render replaces its document's `document_contacts` rows,
 and a record no document carries is deleted once at the end of each
 run of `unified_grid_and_search_index` that committed anything, in a
@@ -369,11 +367,29 @@ own tables empties these with it.
 "same_digits": …, "full_numbers": …}` (the last two are §"A number
 without its country code"). `pages` are contacts' own pages, by id, each
 answered with the contact it is about. `people` is, for
-each handle, every source contact holding it, one per source and key
-(what was written in each document summed), ranked by
-`unified_grid_and_search_index/src/people.rs`: a source about people first, then the
-chat where the person wrote the most. A handle no source mentions is
-absent. This works with no contacts app at all.
+each handle, every source contact holding it, one per source and key,
+each with `seen` (`{items, last_at}`) where its handles wrote anything
+in that source, ranked by
+`unified_grid_and_search_index/src/people.rs`: a source about people (a
+record a contact's own page carries) first, then the one where the
+person wrote the most. A handle no source mentions is absent. This
+works with no contacts app at all.
+
+### How much someone wrote
+
+**One count: the grid's rows a person wrote, which is what `from:`
+finds.** A row's author is its `author_handle`, and
+`grid_rows_by_author` (`author_handle`, `source_id`, `markdown_uuid`,
+`created_at_utc`, `author`) answers how many rows a handle wrote in a
+source or a document, and the newest, from the index alone. Every
+place that says how much someone wrote reads it: a source contact's
+`seen` in `/people` (that source's rows by the record's handles), the
+person page's *Seen* line and a chip's "· 4 items", and the order of a
+conversation's people (their rows in that conversation). A reaction, a
+comment and an edit's version are rows, so they count, as `from:` finds
+them. No source counts on its own: a render once kept its own tally of
+messages per document, which left out reactions and edits and
+disagreed with `from:` for 27 of the 119 records in the TNG fixture.
 
 ### Photos
 
@@ -760,7 +776,7 @@ source's record of a person is one row per document; `/people` merges
 them (`unified_grid_and_search_index/src/people.rs::merge_and_rank`) and puts
 first the name the most was written under: each document's first name
 (its most used, as `chat-common::people::baseline_contacts` orders
-them) is credited with the items the person wrote there, at least one,
+them) is credited with the rows the person wrote there, at least one,
 and a tie goes to the name that sorts first. So one forged message in a
 spam folder cannot rename the sender on the rest of their mail. A name
 that spells out an address, a number, a handle's URI or its stored form

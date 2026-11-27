@@ -45,8 +45,6 @@ pub struct NormalizedContact {
     /// Stamps the record itself carries, as the source wrote them.
     pub created_at: Option<String>,
     pub modified_at: Option<String>,
-    /// How much of this source the person wrote, where it is a chat.
-    pub seen: Option<Seen>,
     /// The person whose account this source is: who signed in, whose
     /// mailbox it is; for the contacts app, a contact marked as them. The search reads each such contact's handles as
     /// `me` (`docs/dev/contacts.md` §"Searching for a person").
@@ -54,10 +52,13 @@ pub struct NormalizedContact {
     pub account: bool,
 }
 
+/// How much of one source a person wrote: that source's rows in the grid
+/// by their handles, which is what `from:` finds there. The grid index
+/// counts it from its rows; no source says it, so no record carries it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Seen {
     pub items: u64,
-    /// The newest item's stamp, as the source wrote it.
+    /// The newest row's stamp, in UTC.
     pub last_at: Option<String>,
 }
 
@@ -80,7 +81,6 @@ impl NormalizedContact {
             source_url: None,
             created_at: None,
             modified_at: None,
-            seen: None,
             account: false,
         }
     }

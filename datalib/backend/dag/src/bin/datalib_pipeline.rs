@@ -25,13 +25,9 @@ const VERSION_RESOLVED: &str = {
 };
 use datalib_dag::cli::{Cli, Verb};
 use datalib_dag::disk_space::human_bytes;
-use datalib_dag::events::FanOutSink;
-use datalib_dag::scheduler::PrepareError;
 use datalib_dag::subprocess::Shrink;
-use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::reload::ConfigFile;
-use datalib_dag::supervisor::store::{RequestOutcome, Store};
-use datalib_dag::{config, subprocess, EventSink, Graph, NdjsonSink, Runner};
+use datalib_dag::supervisor::store::{JobKind, RequestOutcome, Store};
+use datalib_dag::{config, subprocess, NdjsonSink};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -214,28 +210,13 @@ async fn main() -> Result<()> {
         );
     }
 
-    // `reset` empties stores and `free-disk-space` rewrites them, so
-    // each needs the root to itself: refused, not queued, while anyone
-    // runs the loop.
-    let alone = !reset.is_empty() || shrink.is_some();
-    let reset_lock = if alone {
-        Some(acquire_or_explain(
-            &data_root,
-            if shrink.is_some() {
-                "free-disk-space"
-            } else {
-                "reset"
-            },
-        )?)
-    } else {
-        None
-    };
-
     // Cancellation. The first SIGINT/SIGTERM asks for *this* request to
     // stop — the loop may be running other people's too — and the loop
     // interrupts its steps (SIGINT on each process group), which stop at
     // their next consistent point (`step_protocol.md` § Signals). A second
     // signal gives up waiting and exits hard, taking the steps with it.
+    // A reset or a freeing of disk space cannot be asked to stop; the
+    // first signal stops the loop this process runs, if it runs one.
     //
     // SIGHUP is not one of those two. It says the terminal is gone, so
     // there is nobody left to send a second signal and waiting for one
@@ -244,211 +225,124 @@ async fn main() -> Result<()> {
     // process group of its own, so the kernel's SIGHUP to the
     // foreground group no longer reaches it.
     let (ask_tx, ask_rx) = tokio::sync::watch::channel(false);
-    tokio::spawn(async move {
-        use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-        let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
-        let mut interrupts = 0u32;
-        loop {
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {}
-                _ = sigterm.recv() => {}
-                _ = sighup.recv() => {
-                    datalib_parent_watch::report(
-                        "datalib-pipeline: terminal hung up; stopping the round",
-                    );
-                    let _ = stop_tx.send(true);
-                    // Async, so the runtime keeps draining what the
-                    // steps say while they stop.
-                    tokio::time::sleep(PARENT_GONE_GRACE).await;
-                    datalib_parent_watch::report(
-                        "datalib-pipeline: steps still running after the grace, exiting",
-                    );
+    {
+        let stop_tx = stop_tx.clone();
+        tokio::spawn(async move {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+            let mut sighup = signal(SignalKind::hangup()).expect("install SIGHUP handler");
+            let mut interrupts = 0u32;
+            loop {
+                tokio::select! {
+                    _ = tokio::signal::ctrl_c() => {}
+                    _ = sigterm.recv() => {}
+                    _ = sighup.recv() => {
+                        datalib_parent_watch::report(
+                            "datalib-pipeline: terminal hung up; stopping the round",
+                        );
+                        let _ = stop_tx.send(true);
+                        // Async, so the runtime keeps draining what the
+                        // steps say while they stop.
+                        tokio::time::sleep(PARENT_GONE_GRACE).await;
+                        datalib_parent_watch::report(
+                            "datalib-pipeline: steps still running after the grace, exiting",
+                        );
+                        subprocess::kill_children();
+                        std::process::exit(130);
+                    }
+                }
+                interrupts += 1;
+                if interrupts >= 2 {
                     subprocess::kill_children();
                     std::process::exit(130);
                 }
+                let _ = ask_tx.send(true);
             }
-            interrupts += 1;
-            if interrupts >= 2 {
-                subprocess::kill_children();
-                std::process::exit(130);
-            }
-            let _ = ask_tx.send(true);
-        }
-    });
+        });
+    }
 
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
     let store = Store::open(&data_root).await?;
 
-    // The request this invocation stands for; none for a reset or a
-    // compaction alone.
-    let own = if !alone {
+    // What this invocation asks of the loop, written where every client
+    // writes: a request, or a job.
+    let shrinking: Option<HashMap<String, u64>> = shrink.map(|how| {
+        graph
+            .steps
+            .iter()
+            .filter(|spec| spec.takes(how.verb()))
+            .map(|spec| (spec.id.clone(), tree_bytes(&data_root.join(&spec.id))))
+            .collect()
+    });
+    let own = if let Some(how) = shrink {
+        let kind = match how {
+            Shrink::Compact => JobKind::Compact,
+            Shrink::Collect => JobKind::Collect,
+        };
+        Own::Job(store.open_job(kind, &[], CLI_OPENER).await?)
+    } else if !reset.is_empty() {
+        Own::Job(store.open_job(JobKind::Reset, &reset, CLI_OPENER).await?)
+    } else {
         let roots: Vec<String> = if sync_only.is_empty() {
             graph.fringe_ids().into_iter().map(str::to_string).collect()
         } else {
             sync_only.clone()
         };
-        let id = store.open_request(&roots, &by).await?;
+        Own::Request(store.open_request(&roots, &by).await?)
+    };
+    {
         // The stop goes through the store, like a stop from anywhere else.
-        let (root, id2, by2) = (data_root.clone(), id.clone(), by.clone());
+        let (root, own, by, stop) = (data_root.clone(), own.clone(), by.clone(), stop_tx.clone());
         let mut ask = ask_rx;
         tokio::spawn(async move {
             if ask.wait_for(|asked| *asked).await.is_ok() {
-                if let Ok(s) = Store::open(&root).await {
-                    let _ = s.request_stop(&id2, &by2).await;
-                    s.close().await;
+                match own {
+                    Own::Request(id) => {
+                        if let Ok(s) = Store::open(&root).await {
+                            let _ = s.request_stop(&id, &by).await;
+                            s.close().await;
+                        }
+                    }
+                    Own::Job(_) => {
+                        let _ = stop.send(true);
+                    }
                 }
             }
         });
-        Some(id)
-    } else {
-        None
-    };
-
-    let _lock = match reset_lock {
-        Some(lock) => lock,
-        None => {
-            let own = own
-                .as_deref()
-                .expect("a request unless resetting or compacting");
-            match follow_or_lock(&data_root, &store, own).await? {
-                Taken::Lock(lock) => lock,
-                Taken::Closed(outcome) => {
-                    store.close().await;
-                    std::process::exit(exit_code(outcome, dropped_entries));
-                }
-            }
-        }
-    };
-
-    // Whoever held the lock before us may have died holding it.
-    let taken = host::take_over(&store, &data_root).await?;
-    #[allow(clippy::disallowed_macros)]
-    {
-        if let Some(dead) = &taken.closed_run {
-            eprintln!(
-                "datalib-pipeline: closed run {dead} and {} of its steps, which a loop that died \
-                 left open",
-                taken.closed_invocations
-            );
-        }
     }
 
-    let now =
-        now.unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
-    // With the loop serving several requests, a run is the stretch this
-    // process runs it for.
-    let run_id = run_id.unwrap_or_else(datalib_dag::scheduler::new_run_id);
-    let host::StepEnv {
-        vars: child_env,
-        log_filter,
-    } = host::step_env(
-        &cfg,
-        binary_dir.as_deref(),
-        &[data_root.join(datalib_runtime::layout::BIN_DIR_REL)],
-        &now,
-        &run_id,
-    )?;
+    let report = match follow_or_lock(&data_root, &store, &own).await? {
+        Taken::Closed => None,
+        Taken::Lock(_lock) => {
+            let opts = datalib_dag::supervisor::serve::ServeOptions {
+                root: data_root.clone(),
+                binary_dir,
+                now,
+                parallelism: parallelism.map(|n| n.get()),
+                events: Some(Arc::new(NdjsonSink::new(std::io::stderr()))),
+                run_id,
+                config: Some(config_path.clone()),
+            };
+            let _log = log_to_the_run_store(&data_root, Some(&cfg));
+            datalib_dag::supervisor::serve::run_until_idle(&opts, &store, stop_rx)
+                .await
+                .map_err(|why| anyhow::anyhow!("{why}"))?
+        }
+    };
+    say_how_the_prepare_pass_went(&store).await?;
 
-    // stderr stays the stream; the store is the record. Both, not
-    // either: the stream is what a terminal or a tee sees as it happens,
-    // the store is what a second process reads — live, and after the
-    // fact.
-    let code = {
-        let mut sinks: Vec<Arc<dyn EventSink>> = vec![Arc::new(NdjsonSink::new(std::io::stderr()))];
-        let started = datalib_runs::RunStart {
-            kind: if shrink.is_some() {
-                datalib_runs::RunKind::Shrink
-            } else {
-                datalib_runs::RunKind::Sync
-            },
-            reason: "datalib-pipeline, from the command line".to_string(),
-        };
-        match host::start_record(&data_root, &cfg, &run_id, &now, started) {
-            Some(store) => {
-                // The runner's own `tracing` lines go to the store too,
-                // as the run's lines with no step — and only there:
-                // stderr is the NDJSON event stream, which a fmt layer
-                // would interleave prose into.
-                let filter = tracing_subscriber::EnvFilter::new(&log_filter);
-                let _ = tracing_subscriber::registry()
-                    .with(filter)
-                    .with(datalib_runs::StoreLayer::new(store.log_sink()))
-                    .try_init();
-                datalib_runs::log_build_commit(datalib_runs::git_hash_and_origin().as_ref());
-                sinks.push(Arc::new(store));
+    #[allow(clippy::disallowed_macros)]
+    let code = match own {
+        Own::Request(own) => {
+            for s in report.iter().flat_map(|r| &r.steps) {
+                println!("{}", s.line());
             }
-            None => {
-                // No tracing subscriber is installed on this path and
-                // there are no indicatif bars, so the macro's usual
-                // objection does not apply and `tracing::warn!` would go
-                // nowhere at all.
-                #[allow(clippy::disallowed_macros)]
-                {
-                    eprintln!("datalib-pipeline: run store unavailable; nothing recorded this run");
-                }
-            }
-        }
-        let mut runner = Runner::new(&data_root)
-            .sink(Arc::new(FanOutSink(sinks)))
-            .child_env(child_env)
-            .stop_on(stop_rx)
-            .reload_from(Arc::new(ConfigFile::new(&config_path)));
-        if let Some(p) = parallelism {
-            runner = runner.parallelism(p.get());
-        }
-        // Each time the loop starts, every step whose program takes the
-        // verb is asked to prepare before anything else runs
-        // (dag/README.md §"Upgrading a root"); the http server does the
-        // same when it takes the lock.
-        let asked = datalib_dag::supervisor::upgrade::steps_to_ask(&graph);
-        runner.plan(&graph, &asked);
-        #[allow(clippy::disallowed_macros)]
-        for m in runner.prepare(&graph, &asked).await? {
-            match &m.answer {
-                Ok(true) => eprintln!(
-                    "datalib-pipeline: {} needs to run again before it is up to date; sync it",
-                    m.step
-                ),
-                Ok(false) => {}
-                Err(PrepareError::Refused(why)) => eprintln!(
-                    "datalib-pipeline: {} refused to prepare, and is turned off until it no longer \
-                     does: {why}",
-                    m.step
-                ),
-                Err(PrepareError::Failed(error)) => {
-                    eprintln!("datalib-pipeline: could not prepare {}: {error}", m.step)
-                }
-            }
-        }
-        if !reset.is_empty() {
-            runner.reset(&graph, &reset).await?;
-        }
-        let shrink_failed = match shrink {
-            Some(how) => shrink_and_report(&runner, &graph, &data_root, how).await?,
-            None => false,
-        };
-        let Some(own) = own else {
-            store.close().await;
-            if shrink_failed {
-                std::process::exit(2);
-            }
-            return Ok(());
-        };
-        let report = runner.serve(&graph, &store).await?;
-
-        #[allow(clippy::disallowed_macros)]
-        for s in &report.steps {
-            println!("{}", s.line());
-        }
-        // A dropped config entry is reported here as well as before
-        // the run, because the per-step report is the thing a person
-        // actually reads at the end — and an entry that was dropped has
-        // no row in it, so silence would read as "everything ran".
-        if dropped_entries > 0 {
-            #[allow(clippy::disallowed_macros)]
-            {
+            // A dropped config entry is reported here as well as before
+            // the run, because the per-step report is the thing a person
+            // actually reads at the end — and an entry that was dropped
+            // has no row in it, so silence would read as "everything ran".
+            if dropped_entries > 0 {
                 println!(
                     "\n{dropped_entries} config entr{} dropped and did not run; \
                      see the diagnostics above, or run `datalib-pipeline check {}`",
@@ -460,38 +354,74 @@ async fn main() -> Result<()> {
                     config_path.display()
                 );
             }
+            // Still open only when the loop was stopped under it: a
+            // request nobody is waiting on must not be left for the next
+            // loop.
+            let outcome = match store.request(&own).await?.and_then(|r| r.closed) {
+                Some(outcome) => outcome,
+                None => {
+                    store
+                        .close_request(&own, RequestOutcome::Stopped, None)
+                        .await?;
+                    Some(RequestOutcome::Stopped)
+                }
+            };
+            exit_code(outcome, dropped_entries)
         }
-        // Still open only when the host stopped the loop under it: a
-        // request nobody is waiting on must not be left for the next loop.
-        let outcome = match store.request(&own).await?.and_then(|r| r.closed) {
-            Some(outcome) => outcome,
-            None => {
-                store
-                    .close_request(&own, RequestOutcome::Stopped, None)
-                    .await?;
-                Some(RequestOutcome::Stopped)
+        Own::Job(id) => {
+            let error = match store.job(&id).await?.and_then(|j| j.closed) {
+                Some(error) => error,
+                // The loop was stopped before it got to it: the job stays
+                // for the next loop, as one written from anywhere does.
+                None => Some("not done yet: the loop was stopped first".to_string()),
+            };
+            let steps_failed = match shrinking {
+                Some(before) => say_what_was_given_back(&store, &id, &data_root, &before).await?,
+                None => false,
+            };
+            if let Some(why) = &error {
+                println!("{why}");
             }
-        };
-        store.close().await;
-        exit_code(outcome, dropped_entries)
-    }; // every sink drops here, so the store flushes and joins before we exit
+            if error.is_some() || steps_failed {
+                2
+            } else {
+                0
+            }
+        }
+    };
+    store.close().await;
     std::process::exit(code);
+}
+
+/// Who opens the jobs a `datalib-pipeline` verb writes.
+const CLI_OPENER: &str = "datalib-pipeline";
+
+/// What this invocation wrote to the store.
+#[derive(Clone)]
+enum Own {
+    Request(String),
+    Job(String),
 }
 
 enum Taken {
     /// This process runs the loop.
     Lock(datalib_dag::lock::RunnerLock),
-    /// Another process ran it, and the request is over.
-    Closed(Option<RequestOutcome>),
+    /// Another process ran it, and what this invocation wrote is done.
+    Closed,
 }
 
-/// Take the loop, or follow the request while someone else runs it. The
-/// lock is tried again on every announcement, not just once: the loop that
-/// was running may end between our look and our request landing, and then
-/// nobody is left to serve it but us. Its release is announced.
-async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Taken> {
+/// Take the loop, or follow what this invocation wrote while someone else
+/// runs it. The lock is tried again on every announcement, not just once:
+/// the loop that was running may end between our look and our row
+/// landing, and then nobody is left to serve it but us. Its release is
+/// announced.
+async fn follow_or_lock(data_root: &Path, store: &Store, own: &Own) -> Result<Taken> {
     let mut listener = datalib_dag::supervisor::announce::Listener::new(store, "datalib-pipeline");
     let mut announced = false;
+    let (what, id) = match own {
+        Own::Request(id) => ("request", id),
+        Own::Job(id) => ("job", id),
+    };
     loop {
         match datalib_dag::lock::try_acquire_runner(data_root) {
             Ok(lock) => return Ok(Taken::Lock(lock)),
@@ -502,21 +432,30 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
                     {
                         eprintln!(
                             "datalib-pipeline: the loop on {} is already running{}; \
-                             following request {own} there",
+                             following {what} {id} there",
                             data_root.display(),
                             e.holder().map(|h| format!(" ({h})")).unwrap_or_default()
                         );
                     }
                 }
-                if let Some(closed) = store.request(own).await?.and_then(|r| r.closed) {
+                let closed = match own {
+                    Own::Request(id) => store.request(id).await?.and_then(|r| r.closed).map(|o| {
+                        o.map(RequestOutcome::as_str)
+                            .unwrap_or("closed")
+                            .to_string()
+                    }),
+                    Own::Job(id) => store
+                        .job(id)
+                        .await?
+                        .and_then(|j| j.closed)
+                        .map(|e| e.map_or("done".to_string(), |why| format!("not done: {why}"))),
+                };
+                if let Some(said) = closed {
                     #[allow(clippy::disallowed_macros)]
                     {
-                        println!(
-                            "request {own}: {}",
-                            closed.map(RequestOutcome::as_str).unwrap_or("closed")
-                        );
+                        println!("{what} {id}: {said}");
                     }
-                    return Ok(Taken::Closed(closed));
+                    return Ok(Taken::Closed);
                 }
                 listener.next().await;
             }
@@ -525,37 +464,60 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &str) -> Result<Ta
     }
 }
 
-/// `free-disk-space`, and one line per step whose tree it shrank.
-/// The trees are measured from outside, as directories, since the runner
-/// never opens a step's store. `true` when some step could not do it.
-async fn shrink_and_report(
-    runner: &Runner,
-    graph: &Graph,
+/// The steps the last prepare pass could not prepare, and those it found
+/// need to run again, one line each on stderr.
+async fn say_how_the_prepare_pass_went(store: &Store) -> Result<()> {
+    #[allow(clippy::disallowed_macros)]
+    {
+        if let Some(job) = store.latest_prepare_since("").await? {
+            for row in store.job_steps(&job.id).await? {
+                if let Some(error) = &row.error {
+                    eprintln!("datalib-pipeline: could not prepare {}: {error}", row.step);
+                }
+            }
+        }
+        for (step, rec) in store.load_record().await?.steps {
+            if rec.needs_rerun {
+                eprintln!(
+                    "datalib-pipeline: {step} needs to run again before it is up to date; sync it"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `free-disk-space`'s lines: one per step whose tree it shrank, measured
+/// from outside as directories since the runner never opens a step's
+/// store, and one per step that could not. `true` when some step could
+/// not.
+async fn say_what_was_given_back(
+    store: &Store,
+    job: &str,
     data_root: &Path,
-    how: Shrink,
+    before: &HashMap<String, u64>,
 ) -> Result<bool> {
-    let tree = |step: &str| tree_bytes(&data_root.join(step));
-    let before: HashMap<String, u64> = graph
-        .steps
-        .iter()
-        .filter(|spec| spec.takes(how.verb()))
-        .map(|spec| (spec.id.clone(), tree(&spec.id)))
-        .collect();
     let mut failed = false;
     let (mut was, mut is) = (0, 0);
     #[allow(clippy::disallowed_macros)]
-    for c in runner.shrink(graph, how).await? {
-        match c.answer {
-            Ok(()) => {
-                let (from, to) = (before[&c.step], tree(&c.step));
+    for row in store.job_steps(job).await? {
+        match &row.error {
+            None => {
+                let from = before.get(&row.step).copied().unwrap_or(0);
+                let to = tree_bytes(&data_root.join(&row.step));
                 if to < from {
-                    println!("{:<40} {} → {}", c.step, human_bytes(from), human_bytes(to));
+                    println!(
+                        "{:<40} {} → {}",
+                        row.step,
+                        human_bytes(from),
+                        human_bytes(to)
+                    );
                     (was, is) = (was + from, is + to);
                 }
             }
-            Err(error) => {
+            Some(error) => {
                 failed = true;
-                println!("{:<40} could not shrink: {error}", c.step);
+                println!("{:<40} could not shrink: {error}", row.step);
             }
         }
     }
@@ -575,6 +537,41 @@ async fn shrink_and_report(
     Ok(failed)
 }
 
+/// The runner's own `tracing` lines, to the run store as a `dag` process
+/// outside any run. stderr is the event stream, which a fmt layer would
+/// interleave prose into; the lines go to the store alone. The writer it
+/// returns flushes as it is dropped.
+fn log_to_the_run_store(
+    data_root: &Path,
+    cfg: Option<&config::DagConfig>,
+) -> Option<Arc<datalib_runs::ProcessLogWriter>> {
+    let commit = datalib_runs::git_hash_and_origin();
+    let retention = cfg
+        .and_then(|c| c.run_history)
+        .map(|h| h.retention())
+        .unwrap_or_default();
+    let log = datalib_runs::ProcessLogWriter::start(
+        data_root,
+        datalib_runs::Process::Dag,
+        commit.as_ref().map(|(hash, _)| hash.clone()),
+        retention,
+    )
+    .map(Arc::new);
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
+        cfg.map(|c| c.log_filter())
+            .unwrap_or_else(|| datalib_runs::filter_at(datalib_runs::DEFAULT_LEVEL))
+    });
+    let _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::new(&filter))
+        .with(
+            log.as_ref()
+                .map(|w| datalib_runs::StoreLayer::new(Arc::downgrade(w))),
+        )
+        .try_init();
+    datalib_runs::log_build_commit(commit.as_ref());
+    log
+}
+
 /// The bytes of every file under `dir`, links not followed; 0 for one
 /// that is not there.
 fn tree_bytes(dir: &Path) -> u64 {
@@ -589,25 +586,6 @@ fn tree_bytes(dir: &Path) -> u64 {
             _ => 0,
         })
         .sum()
-}
-
-fn acquire_or_explain(data_root: &Path, verb: &str) -> Result<datalib_dag::lock::RunnerLock> {
-    datalib_dag::lock::acquire_runner(data_root).map_err(|e| {
-        if e.is_held() {
-            anyhow::anyhow!(
-                "the loop on {} is running{}, and {verb} needs the root to itself. \
-                 Quit the app, or wait for the sync to finish.\n(lock: {})",
-                data_root.display(),
-                match e.holder() {
-                    Some(h) => format!(" — {h}"),
-                    None => String::new(),
-                },
-                e.path().display()
-            )
-        } else {
-            anyhow::anyhow!("{e}")
-        }
-    })
 }
 
 fn exit_code(outcome: Option<RequestOutcome>, dropped_entries: usize) -> i32 {
@@ -642,35 +620,7 @@ async fn serve(
     std::fs::create_dir_all(&data_root)
         .with_context(|| format!("create data_root {}", data_root.display()))?;
 
-    let commit = datalib_runs::git_hash_and_origin();
-    let retention = checked
-        .as_ref()
-        .and_then(|c| c.cfg.run_history)
-        .map(|h| h.retention())
-        .unwrap_or_default();
-    let log = datalib_runs::ProcessLogWriter::start(
-        &data_root,
-        datalib_runs::Process::Dag,
-        commit.as_ref().map(|(hash, _)| hash.clone()),
-        retention,
-    )
-    .map(Arc::new);
-    // stderr is the event stream, which a fmt layer would interleave
-    // prose into; the lines go to the store alone.
-    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| {
-        checked
-            .as_ref()
-            .map(|c| c.cfg.log_filter())
-            .unwrap_or_else(|| datalib_runs::filter_at(datalib_runs::DEFAULT_LEVEL))
-    });
-    let _ = tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(&filter))
-        .with(
-            log.as_ref()
-                .map(|w| datalib_runs::StoreLayer::new(Arc::downgrade(w))),
-        )
-        .try_init();
-    datalib_runs::log_build_commit(commit.as_ref());
+    let log = log_to_the_run_store(&data_root, checked.as_ref().map(|c| &c.cfg));
 
     let events = Arc::new(std::sync::Mutex::new(std::io::stderr()));
     let emit: datalib_dag::supervisor::serve::Emit = Arc::new(move |event| {
@@ -725,6 +675,9 @@ async fn serve(
         binary_dir: run.binary_dir,
         now: run.now,
         parallelism: run.parallelism.map(|n| n.get()),
+        events: None,
+        run_id: None,
+        config: Some(config_path.to_path_buf()),
     };
     datalib_dag::supervisor::serve::run(&opts, emit, stop_rx).await;
     if let Some(log) = log {
