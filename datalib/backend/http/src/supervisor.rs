@@ -3,7 +3,7 @@
 //! a child for as long as it is up, keeps what the child says on its
 //! stderr that no store holds — the prepare pass, whether a sync is
 //! running — and is how the handlers write the rows anyone may write
-//! in `system/supervisor.sqlite` (`requests`, `turned_off`, `wipes`).
+//! in `system/supervisor.sqlite` (`requests`, `turned_off`, `jobs`).
 
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::pass::PassRow;
 use datalib_dag::supervisor::serve::{self, ServeEvent};
-use datalib_dag::supervisor::store::{Store, WipeKind};
+use datalib_dag::supervisor::store::{JobKind, Store};
 use datalib_dag::supervisor::wipe::tree_group;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, OnceCell};
@@ -54,7 +54,7 @@ pub struct Upgrade {
 pub struct FreeSpace {
     pub id: String,
     /// `collect`, or `compact` when old versions of derived data go.
-    pub kind: WipeKind,
+    pub kind: JobKind,
     /// The loop is still on it.
     pub running: bool,
     /// Why it was not done, once it is over.
@@ -72,13 +72,12 @@ pub struct SyncControl {
     /// This server's runner holds `runner-lock`.
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
-    upgrade: Arc<Mutex<Upgrade>>,
     /// Why nothing can sync from this server: no runner found, or one
     /// that keeps stopping. Every Sync button says it.
     trouble: Arc<Mutex<Option<String>>>,
     /// When this server started, stamped as the loop's store stamps a
-    /// row: a compaction or collection opened before it is not this
-    /// server's to report.
+    /// row: a prepare pass, compaction or collection opened before it is
+    /// not this server's to report.
     started_at_utc: Arc<String>,
     /// The handlers' own connection, beside the loop's.
     supervisor_store: Arc<OnceCell<Store>>,
@@ -93,7 +92,6 @@ impl SyncControl {
             root,
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
-            upgrade: Arc::new(Mutex::new(Upgrade::default())),
             trouble: Arc::new(Mutex::new(None)),
             started_at_utc: Arc::new(datalib_dag::supervisor::store::now_utc()),
             supervisor_store: Arc::new(OnceCell::new()),
@@ -103,9 +101,9 @@ impl SyncControl {
     }
 
     /// Is a sync running on this root? While this server's runner holds
-    /// the lock, whether that runner last reported a run or the prepare
-    /// pass under way; before that, whether anyone holds it — a
-    /// `datalib-pipeline` that was running when the server started.
+    /// the lock, whether that runner last reported a run under way;
+    /// before that, whether anyone holds it — a `datalib-pipeline` that
+    /// was running when the server started.
     pub fn running(&self) -> bool {
         if self.runs_the_loop.load(Ordering::SeqCst) {
             self.busy.load(Ordering::SeqCst)
@@ -114,11 +112,19 @@ impl SyncControl {
         }
     }
 
-    pub fn upgrade(&self) -> Upgrade {
-        self.upgrade
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+    /// The prepare pass of the loop running since this server started,
+    /// as the store holds it: its row in `jobs`, open while it runs, with
+    /// a row in `job_steps` per step it runs `--prepare` for.
+    pub async fn upgrade(&self) -> anyhow::Result<Upgrade> {
+        let store = self.supervisor_store().await?;
+        let Some(job) = store.latest_prepare_since(&self.started_at_utc).await? else {
+            return Ok(Upgrade::default());
+        };
+        Ok(Upgrade {
+            migrating: job.closed.is_none(),
+            settled: job.closed.is_some(),
+            steps: store.job_steps(&job.id).await?,
+        })
     }
 
     /// Why nothing can sync from this server, when nothing can.
@@ -147,7 +153,7 @@ impl SyncControl {
             return Ok(None);
         };
         Ok(Some(FreeSpace {
-            steps: store.wipe_steps(&wipe.id).await?,
+            steps: store.job_steps(&wipe.id).await?,
             id: wipe.id,
             kind,
             running: wipe.closed.is_none(),
@@ -165,25 +171,27 @@ impl SyncControl {
     /// emptiness reaches the grid. The loop does it as soon as the targets
     /// have stopped, whatever else is syncing.
     pub async fn reset(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
-        self.wipe(WipeKind::Reset, targets, by).await
+        self.wipe(JobKind::Reset, targets, by).await
     }
 
     /// Delete the trees of `groups`, which the config no longer names, and
     /// their steps' rows in the loop's `steps` table, so a group re-added
-    /// under the same id starts from nothing. Checked against the config
-    /// at once; done by the loop as soon as the groups' steps have stopped.
+    /// under the same id
+    /// starts from nothing. Checked against the config at once; done by the
+    /// loop as soon as the groups' steps have stopped.
     pub async fn purge(&self, groups: &[String], by: &str) -> Result<WipeAnswer, String> {
         let checked = load_config(&self.root)?;
         if let Some(why) = purge_refusal(&checked.cfg, groups) {
             return Err(why);
         }
-        self.wipe(WipeKind::Purge, groups, by).await
+        self.wipe(JobKind::Purge, groups, by).await
     }
 
     /// Give back the disk no commit reaches in the stores of `targets`, or
     /// of every step that takes the verb when it names none; with
-    /// `drop_old_versions_on_derived_data`, fold each render store's history first. The
-    /// loop starts none of them, nor what reads them, meanwhile.
+    /// `drop_old_versions_on_derived_data`, fold each render store's
+    /// history first. The loop starts none of them, nor what reads them,
+    /// meanwhile.
     pub async fn free_disk_space(
         &self,
         targets: &[String],
@@ -191,19 +199,19 @@ impl SyncControl {
         by: &str,
     ) -> Result<WipeAnswer, String> {
         let kind = if drop_old_versions_on_derived_data {
-            WipeKind::Compact
+            JobKind::Compact
         } else {
-            WipeKind::Collect
+            JobKind::Collect
         };
         self.wipe(kind, targets, by).await
     }
 
-    /// Write a row to the `wipes` table and wait, up to [`WIPE_WAIT`], for
+    /// Write a row to the `jobs` table and wait, up to [`WIPE_WAIT`], for
     /// the loop to close it. Whichever process runs the loop carries it
     /// out.
     async fn wipe(
         &self,
-        kind: WipeKind,
+        kind: JobKind,
         targets: &[String],
         by: &str,
     ) -> Result<WipeAnswer, String> {
@@ -212,7 +220,7 @@ impl SyncControl {
 
     async fn wipe_waiting(
         &self,
-        kind: WipeKind,
+        kind: JobKind,
         targets: &[String],
         by: &str,
         wait: Duration,
@@ -224,12 +232,12 @@ impl SyncControl {
         // Made before the row, so the loop's close is not missed.
         let mut listener = Listener::new(store, "a wipe's answer");
         let id = store
-            .open_wipe(kind, targets, by)
+            .open_job(kind, targets, by)
             .await
             .map_err(|e| format!("{e:#}"))?;
         let answer = async {
             loop {
-                let row = store.wipe(&id).await.map_err(|e| format!("{e:#}"))?;
+                let row = store.job(&id).await.map_err(|e| format!("{e:#}"))?;
                 if let Some(closed) = row.and_then(|r| r.closed) {
                     return closed.map_or(Ok(()), Err);
                 }
@@ -269,9 +277,9 @@ pub struct HostConfig {
     /// `datalib-pipeline --now` is to one run. For fixtures, whose output must
     /// not depend on the day they were built.
     pub now: Option<String>,
-    /// The channel to `/api/sync/stream`, where a move of the prepare
-    /// pass is sent, so the page fetches `/api/config` again.
-    pub announce: Option<crate::watch::RootTx>,
+    /// The channel to `/api/sync/stream`, where a change to the Manage
+    /// rows is sent, so the page fetches them again.
+    pub stream: Option<crate::watch::RootTx>,
     /// Told each time the runner writes to the run store.
     pub nudge: Option<crate::watch::Nudge>,
 }
@@ -332,7 +340,7 @@ pub async fn run(cfg: HostConfig) {
                  The log has each time it stopped."
             )))
         {
-            control.rows_changed(cfg.announce.as_ref());
+            control.rows_changed(cfg.stream.as_ref());
         }
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
@@ -384,7 +392,7 @@ async fn run_child(
         tokio::select! {
             line = lines.next_line() => match line {
                 Ok(Some(line)) => match serde_json::from_str::<ServeEvent>(&line) {
-                    Ok(event) => control.hear(event, cfg.announce.as_ref(), cfg.nudge.as_ref()),
+                    Ok(event) => control.hear(event, cfg.stream.as_ref(), cfg.nudge.as_ref()),
                     Err(_) => {
                         tracing::warn!("datalib-pipeline serve: {line}");
                         said.push_back(line);
@@ -417,8 +425,8 @@ async fn run_child(
 }
 
 impl SyncControl {
-    fn rows_changed(&self, announce: Option<&crate::watch::RootTx>) {
-        if let Some(tx) = announce {
+    fn rows_changed(&self, stream: Option<&crate::watch::RootTx>) {
+        if let Some(tx) = stream {
             let _ = tx.send(
                 crate::watch::RootEvent::TableChanged {
                     table: crate::watch::Table::ManageRows,
@@ -432,48 +440,16 @@ impl SyncControl {
     fn hear(
         &self,
         event: ServeEvent,
-        announce: Option<&crate::watch::RootTx>,
+        stream: Option<&crate::watch::RootTx>,
         nudge: Option<&crate::watch::Nudge>,
     ) {
-        let tell = |event: crate::watch::RootEvent| {
-            if let Some(tx) = announce {
-                let _ = tx.send(event.into());
-            }
-        };
-        let rows_changed = || self.rows_changed(announce);
-        let upgrade = || self.upgrade.lock().unwrap_or_else(|e| e.into_inner());
+        let rows_changed = || self.rows_changed(stream);
         match event {
             ServeEvent::Holding => {
                 self.runs_the_loop.store(true, Ordering::SeqCst);
                 if self.set_trouble(None) {
                     rows_changed();
                 }
-            }
-            ServeEvent::PreparePlan { steps } => {
-                *upgrade() = Upgrade {
-                    migrating: true,
-                    settled: false,
-                    steps: steps.iter().map(|step| PassRow::waiting(step)).collect(),
-                };
-                tell(crate::watch::RootEvent::PassChanged);
-                rows_changed();
-                self.busy.store(true, Ordering::SeqCst);
-            }
-            ServeEvent::PrepareStep { step, state, error } => {
-                if let Some(row) = upgrade().steps.iter_mut().find(|r| r.step == step) {
-                    row.state = state;
-                    row.error = error;
-                }
-                tell(crate::watch::RootEvent::PassChanged);
-            }
-            ServeEvent::PrepareDone => {
-                let was_migrating = std::mem::replace(&mut upgrade().migrating, false);
-                if was_migrating {
-                    self.busy.store(false, Ordering::SeqCst);
-                    rows_changed();
-                }
-                upgrade().settled = true;
-                tell(crate::watch::RootEvent::PassChanged);
             }
             ServeEvent::SyncStarted { .. } => self.busy.store(true, Ordering::SeqCst),
             ServeEvent::SyncOver { .. } => self.busy.store(false, Ordering::SeqCst),
@@ -562,7 +538,7 @@ mod tests {
         let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
         let answer = control
             .wipe_waiting(
-                WipeKind::Reset,
+                JobKind::Reset,
                 &["a/ingest".into()],
                 "ui",
                 Duration::from_millis(200),
@@ -570,7 +546,7 @@ mod tests {
             .await;
         assert_eq!(answer, Ok(WipeAnswer::Queued));
         let store = control.supervisor_store().await.unwrap();
-        let open = store.open_wipes().await.unwrap();
+        let open = store.open_jobs().await.unwrap();
         assert_eq!(open.len(), 1, "{open:?}");
         drop(held);
     }
@@ -593,49 +569,41 @@ mod tests {
         assert_eq!(control.trouble(), None);
     }
 
-    /// The prepare pass reaches `/api/config` as the runner reports it on
-    /// stderr: every step waiting, then each as it runs and ends,
-    /// `running` true until the pass is over, and `settled` only then.
-    #[test]
-    fn the_prepare_pass_is_reported_as_the_loop_says_it() {
+    /// The prepare pass reaches `/api/config` from the store: its row in
+    /// `jobs` and a row per step in `job_steps`, as the loop writes them.
+    /// Before, the server kept it in memory from the loop's stderr, where
+    /// no other client could read it.
+    #[tokio::test]
+    async fn the_prepare_pass_is_read_from_the_store() {
         use datalib_dag::supervisor::pass::PassState;
+        use datalib_dag::supervisor::store::JobKind;
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
-        control.hear(ServeEvent::Holding, None, None);
-        assert!(control.runs_the_loop.load(Ordering::SeqCst));
-        control.hear(
-            ServeEvent::PreparePlan {
-                steps: vec!["a/ingest".into(), "a/render".into()],
-            },
-            None,
-            None,
-        );
-        let u = control.upgrade();
-        assert!(u.migrating && !u.settled && control.running());
-        assert_eq!(u.steps.len(), 2);
-        assert!(u.steps.iter().all(|r| r.state == PassState::Waiting));
-        control.hear(
-            ServeEvent::PrepareStep {
-                step: "a/render".into(),
-                state: PassState::Failed,
-                error: Some("why".into()),
-            },
-            None,
-            None,
-        );
-        let u = control.upgrade();
-        assert_eq!(u.steps[0].state, PassState::Waiting);
-        assert_eq!(u.steps[1].state, PassState::Failed);
-        assert_eq!(u.steps[1].error.as_deref(), Some("why"));
-        control.hear(ServeEvent::PrepareDone, None, None);
-        let u = control.upgrade();
-        assert!(!u.migrating && u.settled && !control.running());
-        assert_eq!(u.steps[1].state, PassState::Failed, "kept for the pill");
+        assert_eq!(control.upgrade().await.unwrap(), Upgrade::default());
 
-        control.hear(ServeEvent::SyncStarted { run_id: "r".into() }, None, None);
-        assert!(control.running());
-        control.hear(ServeEvent::SyncOver { run_id: "r".into() }, None, None);
-        assert!(!control.running());
+        let store = Store::open(td.path()).await.unwrap();
+        let job = store
+            .open_job(JobKind::Prepare, &[], "the loop")
+            .await
+            .unwrap();
+        store
+            .begin_job_steps(&job, &["a/ingest", "a/render"])
+            .await
+            .unwrap();
+        let u = control.upgrade().await.unwrap();
+        assert!(u.migrating && !u.settled);
+        assert!(u.steps.iter().all(|r| r.state == PassState::Waiting));
+        store
+            .set_job_step(&job, 1, PassState::Failed, Some("why"), None)
+            .await
+            .unwrap();
+        store.close_job(&job, None).await.unwrap();
+        let u = control.upgrade().await.unwrap();
+        assert!(!u.migrating && u.settled);
+        assert_eq!(u.steps[0].state, PassState::Waiting);
+        assert_eq!(u.steps[1].state, PassState::Failed, "kept for the pill");
+        assert_eq!(u.steps[1].error.as_deref(), Some("why"));
+        store.close().await;
     }
 
     /// A root whose config has one group, `keep`, with one step.

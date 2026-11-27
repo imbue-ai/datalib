@@ -162,7 +162,7 @@ pub async fn build_state(
         pipeline: crate::binaries::resolve_pipeline_bin(),
         binary_dir: binary_dir.clone(),
         now,
-        announce: Some(root_tx.clone()),
+        stream: Some(root_tx.clone()),
         nudge: Some(nudge.clone()),
     }));
 

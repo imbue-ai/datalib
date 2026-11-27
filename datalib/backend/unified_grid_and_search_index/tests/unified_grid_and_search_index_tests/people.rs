@@ -4,15 +4,16 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_etl_render::grid_index::{apply_one, seal, RenderedMarkdown, WriteLock};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::providers::Provider;
 use datalib_schema::search_terms::{SearchTerm, SearchTermKind};
 use datalib_unified_grid_and_search_index::dolt_repo::{
-    DoltRepo, CONTACT_PAGES_SQL, FULL_NUMBERS_SQL, PEOPLE_SQL, SAME_DIGITS_SQL,
+    DoltRepo, AUTHORED_SQL, CONTACT_PAGES_SQL, FULL_NUMBERS_SQL, PEOPLE_SQL, RECORD_WEIGHTS_SQL,
+    SAME_DIGITS_SQL,
 };
-use datalib_unified_grid_and_search_index::people::People;
+use datalib_unified_grid_and_search_index::people::{Counted, People};
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
 use crate::dolt_backend_integration::{unique_db_path, writer};
@@ -21,15 +22,41 @@ use datalib_sql::{test_sql_id, Sql};
 const RIKER: &str = "email:riker@enterprise.org";
 const TROI: &str = "email:troi@enterprise.org";
 
-fn record(address: &str, names: &[&str], seen: Option<(u64, Option<&str>)>) -> NormalizedContact {
+fn record(address: &str, names: &[&str]) -> NormalizedContact {
     let mut c = NormalizedContact::new("mail", format!("email:{address}"), ContactKind::Person);
     c.names = names.iter().map(|n| n.to_string()).collect();
     c.handles = vec![ContactHandle::email(None, address)];
-    c.seen = seen.map(|(items, at)| Seen {
-        items,
-        last_at: at.map(str::to_string),
-    });
     c
+}
+
+/// `md` with `n` messages `handle` wrote in it, the newest at `at`.
+fn wrote(mut md: RenderedMarkdown, handle: &str, n: usize, at: &str) -> RenderedMarkdown {
+    let document = md.markdown_uuid.clone();
+    for i in 0..n {
+        let uuid = format!("{document}-{handle}-{i}");
+        let row = GridRow::builder()
+            .uuid(uuid.as_str())
+            .provider(Provider::Email)
+            .kind("Email")
+            .source_label("Mail")
+            .created_at(Some(
+                if i + 1 == n {
+                    at
+                } else {
+                    "2300-01-01T00:00:00+00:00"
+                }
+                .to_string(),
+            ))
+            .author_handle(Some(handle.to_string()))
+            .conversation_uuid(document.as_str())
+            .entire_chat(format!("/chat/{document}"))
+            .body("")
+            .markdown_uuid(Some(document.clone()))
+            .build()
+            .expect("a valid row");
+        md.rows.push(row);
+    }
+    md
 }
 
 fn document(uuid: &str, contacts: Vec<NormalizedContact>) -> RenderedMarkdown {
@@ -77,7 +104,7 @@ async fn index_of(documents: &[RenderedMarkdown]) -> (DoltRepo, sqlx::SqlitePool
     (DoltRepo::open(root).await.expect("open the repo"), pool)
 }
 
-async fn people(repo: &DoltRepo, handles: &[&str]) -> BTreeMap<String, Vec<NormalizedContact>> {
+async fn people(repo: &DoltRepo, handles: &[&str]) -> BTreeMap<String, Vec<Counted>> {
     asked(repo, handles, &[]).await.people
 }
 
@@ -87,48 +114,50 @@ async fn asked(repo: &DoltRepo, handles: &[&str], pages: &[&str]) -> People {
     People::of(rows.expect("people"))
 }
 
-/// A person in many documents is one answer, what they wrote in each
-/// added up, whichever of their names each document showed. A document
-/// that only names them credits that name with one and counts no item,
-/// and a source that counts nothing says so rather than zero.
+/// A person in many documents is one answer, whichever of their names each
+/// document showed, and how much they wrote is the grid's rows by their
+/// handle in that source: the one count, which `from:` finds too. A
+/// document they wrote nothing in credits the name it shows with one, and
+/// someone who wrote nothing has no count.
 #[tokio::test]
-async fn a_person_is_summed_over_the_documents_that_carry_them() {
+async fn a_person_is_counted_from_the_rows_they_wrote() {
     let a = "riker@enterprise.org";
     let (repo, _w) = index_of(&[
-        document(
-            "t-1",
-            vec![record(a, &["Will Riker"], Some((2, Some("2369-01-01"))))],
+        wrote(
+            document("t-1", vec![record(a, &["Will Riker"])]),
+            RIKER,
+            2,
+            "2369-01-01T10:00:00+00:00",
         ),
-        document(
-            "t-2",
-            vec![record(a, &["Will Riker"], Some((3, Some("2369-05-01"))))],
+        wrote(
+            document("t-2", vec![record(a, &["Will Riker"])]),
+            RIKER,
+            3,
+            "2369-05-01T10:00:00+00:00",
         ),
-        document(
-            "t-3",
-            vec![record(a, &["Number One"], Some((4, Some("2369-03-01"))))],
+        wrote(
+            document("t-3", vec![record(a, &["Number One"])]),
+            RIKER,
+            4,
+            "2369-03-01T10:00:00+00:00",
         ),
-        document("t-4", vec![record(a, &["Will Riker"], Some((0, None)))]),
-        document(
-            "t-5",
-            vec![record("troi@enterprise.org", &["Deanna Troi"], None)],
-        ),
-        document(
-            "t-6",
-            vec![record("troi@enterprise.org", &["Deanna Troi"], None)],
-        ),
+        document("t-4", vec![record(a, &["Will Riker"])]),
+        document("t-5", vec![record("troi@enterprise.org", &["Deanna Troi"])]),
+        document("t-6", vec![record("troi@enterprise.org", &["Deanna Troi"])]),
     ])
     .await;
     let got = people(&repo, &[RIKER, TROI, "email:nobody@enterprise.org"]).await;
     assert_eq!(got.keys().collect::<Vec<_>>(), [RIKER, TROI]);
     let riker = &got[RIKER];
     assert_eq!(riker.len(), 1, "one per source and key: {riker:?}");
-    assert_eq!(riker[0].names, ["Will Riker", "Number One"]);
-    assert_eq!(
-        riker[0].seen,
-        Some(Seen {
-            items: 9,
-            last_at: Some("2369-05-01".into())
-        })
+    assert_eq!(riker[0].contact.names, ["Will Riker", "Number One"]);
+    let seen = riker[0].seen.as_ref().expect("a count");
+    assert_eq!(seen.items, 9);
+    assert!(
+        seen.last_at
+            .as_deref()
+            .is_some_and(|at| at.starts_with("2369-05-01")),
+        "{seen:?}"
     );
     assert_eq!(got[TROI].len(), 1);
     assert_eq!(got[TROI][0].seen, None);
@@ -140,20 +169,17 @@ async fn a_person_is_summed_over_the_documents_that_carry_them() {
 async fn a_document_that_only_names_a_person_credits_the_name_once() {
     let a = "riker@enterprise.org";
     let mut documents: Vec<RenderedMarkdown> = (0..5)
-        .map(|i| {
-            document(
-                &format!("t-{i}"),
-                vec![record(a, &["Will Riker"], Some((0, None)))],
-            )
-        })
+        .map(|i| document(&format!("t-{i}"), vec![record(a, &["Will Riker"])]))
         .collect();
-    documents.push(document(
-        "t-9",
-        vec![record(a, &["Number One"], Some((4, Some("2369-01-01"))))],
+    documents.push(wrote(
+        document("t-9", vec![record(a, &["Number One"])]),
+        RIKER,
+        4,
+        "2369-01-01T10:00:00+00:00",
     ));
     let (repo, _w) = index_of(&documents).await;
     assert_eq!(
-        people(&repo, &[RIKER]).await[RIKER][0].names,
+        people(&repo, &[RIKER]).await[RIKER][0].contact.names,
         ["Will Riker", "Number One"]
     );
 }
@@ -166,21 +192,21 @@ async fn a_conversation_names_its_people_from_its_own_document() {
     let mut chat = document(
         "t-1",
         vec![
-            record("riker@enterprise.org", &["Will Riker"], Some((2, None))),
-            record("troi@enterprise.org", &["Deanna Troi"], Some((5, None))),
+            record("riker@enterprise.org", &["Will Riker"]),
+            record("troi@enterprise.org", &["Deanna Troi"]),
         ],
     );
     let worf = "email:worf@enterprise.org";
     chat.rows[0].set_supplied_terms(
         [RIKER, TROI, worf].map(|h| SearchTerm::new(SearchTermKind::Subject, h)),
     );
-    let other = document(
-        "t-2",
-        vec![record(
-            "riker@enterprise.org",
-            &["Will Riker"],
-            Some((90, None)),
-        )],
+    let chat = wrote(chat, RIKER, 2, "2369-01-01T10:00:00+00:00");
+    let chat = wrote(chat, TROI, 5, "2369-01-01T10:00:00+00:00");
+    let other = wrote(
+        document("t-2", vec![record("riker@enterprise.org", &["Will Riker"])]),
+        RIKER,
+        9,
+        "2369-01-01T10:00:00+00:00",
     );
     let (repo, _w) = index_of(&[chat, other]).await;
     let rows = repo.rows_by_uuids(&["t-1".into()]).await.expect("rows");
@@ -202,7 +228,7 @@ async fn a_conversation_names_its_people_from_its_own_document() {
 /// A contact's own row gets the handles its document's contact carries.
 #[tokio::test]
 async fn a_contacts_row_gets_its_handles() {
-    let mut card = record("riker@enterprise.org", &["Will Riker"], None);
+    let mut card = record("riker@enterprise.org", &["Will Riker"]);
     card.handles
         .push(ContactHandle::phone(None, "+1 202 555 0101"));
     let mut md = document("card", vec![card]);
@@ -220,11 +246,14 @@ async fn cost_of_a_person_in(n: usize) -> (Vec<(String, u64)>, u64) {
     let pool = writer(&root).await;
     let lock = WriteLock::for_index(pool.clone());
     for i in 0..n {
-        let seen = Some((i as u64, Some("2369-01-01")));
-        let riker = record("riker@enterprise.org", &["Will Riker"], seen);
-        apply_one(&lock, &document(&format!("t-{i}"), vec![riker]))
-            .await
-            .expect("apply a document");
+        let riker = record("riker@enterprise.org", &["Will Riker"]);
+        let md = wrote(
+            document(&format!("t-{i}"), vec![riker]),
+            RIKER,
+            1 + i % 3,
+            "2369-01-01T10:00:00+00:00",
+        );
+        apply_one(&lock, &md).await.expect("apply a document");
     }
     seal(&lock).await.expect("seal");
     let repo = DoltRepo::open(root).await.expect("open the repo");
@@ -246,50 +275,64 @@ async fn cost_of_a_person_in(n: usize) -> (Vec<(String, u64)>, u64) {
 
 /// Guards the read that fetched and parsed a copy of a person's record
 /// for every document that carries it: 31,303 copies of 22 records for
-/// one handle. The documents are only summed, which is a few steps each.
+/// one handle. Each document is only weighed in SQL, its rows counted by
+/// the author index: a few seeks, and no row answered for it.
 #[tokio::test]
 async fn a_person_in_many_documents_is_not_read_once_per_document() {
     let (few, few_steps) = cost_of_a_person_in(10).await;
     let (many, many_steps) = cost_of_a_person_in(500).await;
     assert_eq!(few, many, "rows answered for 10 and 500 documents");
     let each = (many_steps - few_steps) / 490;
-    assert!(each < 30, "{each} steps for each document more");
+    assert!(each < 200, "{each} steps for each document more");
 }
 
-/// Who a handle is reads that handle's records and the index of what was
-/// written under each, and no table whole.
+/// Who a handle is reads that handle's records, the documents that carry
+/// them and what they wrote by the author index, and no table whole.
 #[tokio::test]
 async fn who_a_handle_is_is_read_by_its_handle() {
     let (_repo, w) = index_of(&[]).await;
-    // Audited: a constant statement of ours.
-    let rows: Vec<(i64, i64, i64, String)> =
-        Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {PEOPLE_SQL}"))
-            .query_as()
-            .bind(r#"["email:riker@enterprise.org"]"#)
-            .fetch_all(&w)
-            .await
-            .expect("explain");
-    let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
-    for wanted in [
-        "SEARCH document_contacts USING COVERING INDEX document_contacts_by_record (record_id=?)",
-        "SEARCH contact_record_handles USING COVERING INDEX contact_record_handles_by_handle \
-         (handle=?)",
-        "SEARCH h USING COVERING INDEX contact_record_handles_by_handle (handle=?",
-        "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+    for (sql, bound, wanted) in [
+        (
+            PEOPLE_SQL,
+            vec![r#"["email:riker@enterprise.org"]"#],
+            vec![
+                "SEARCH h USING COVERING INDEX contact_record_handles_by_handle (handle=?",
+                "SEARCH r USING INTEGER PRIMARY KEY (rowid=?)",
+            ],
+        ),
+        (
+            RECORD_WEIGHTS_SQL,
+            vec!["[1]"],
+            vec![
+                "SEARCH d USING COVERING INDEX document_contacts_by_record (record_id=?)",
+                "SEARCH g USING COVERING INDEX grid_rows_by_author \
+                 (author_handle=? AND source_id=? AND markdown_uuid=?)",
+            ],
+        ),
+        (
+            AUTHORED_SQL,
+            vec![r#"["email:riker@enterprise.org"]"#, r#"["mail"]"#],
+            vec!["SEARCH grid_rows USING COVERING INDEX grid_rows_by_author (author_handle=? AND source_id=?)"],
+        ),
     ] {
+        // Audited: a constant statement of ours.
+        let mut q = Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}")).query_as();
+        for b in bound {
+            q = q.bind(b);
+        }
+        let rows: Vec<(i64, i64, i64, String)> = q.fetch_all(&w).await.expect("explain");
+        let plan: Vec<String> = rows.into_iter().map(|r| r.3).collect();
+        for wanted in wanted {
+            assert!(
+                plan.iter().any(|d| d.starts_with(wanted)),
+                "no {wanted:?} in {plan:#?}"
+            );
+        }
         assert!(
-            plan.iter().any(|d| d.starts_with(wanted)),
-            "no {wanted:?} in {plan:#?}"
+            !plan.iter().any(|d| d.starts_with("SCAN ") && !d.contains("json_each")),
+            "{plan:#?}"
         );
     }
-    assert!(
-        !plan.iter().any(
-            |d| ["h", "r", "document_contacts", "contact_record_handles"]
-                .iter()
-                .any(|t| d.starts_with(&format!("SCAN {t}")))
-        ),
-        "{plan:#?}"
-    );
 }
 
 /// Kalita's card writes her number the way it is dialled at home, so it
@@ -309,10 +352,6 @@ async fn a_number_with_no_country_code_is_matched_by_its_digits() {
     let caller = |n: usize, number: &str| {
         let mut c = NormalizedContact::new("calls", number, ContactKind::Person);
         c.handles = vec![ContactHandle::phone(None, number)];
-        c.seen = Some(Seen {
-            items: 1,
-            last_at: None,
-        });
         document(&format!("call-{n}"), vec![c])
     };
     let (repo, _w) = index_of(&[
@@ -332,7 +371,10 @@ async fn a_number_with_no_country_code_is_matched_by_its_digits() {
         got.same_digits.keys().collect::<Vec<_>>(),
         ["tel:+12025550147"]
     );
-    assert_eq!(got.same_digits["tel:+12025550147"][0].names, ["Kalita"]);
+    assert_eq!(
+        got.same_digits["tel:+12025550147"][0].contact.names,
+        ["Kalita"]
+    );
     assert_eq!(got.people["tel:+12025550147"].len(), 1, "not by a guess");
 
     let got = asked(&repo, &[], &["kalita", "ro", "hugh", "call-1", "nobody"]).await;

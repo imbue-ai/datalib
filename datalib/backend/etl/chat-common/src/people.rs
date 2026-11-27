@@ -1,14 +1,14 @@
 //! The people a chat document shows, as chat-common alone can describe
-//! them: each author handle, the names the provider showed it under, and
-//! how much it wrote; whom a message went to and who reacted, having
-//! written nothing. Every chat provider gets this with no code of its
+//! them: each author handle and the names the provider showed it under;
+//! whom a message went to and who reacted. How much each wrote is the
+//! grid's to count, from its rows (docs/dev/contacts.md §"How much
+//! someone wrote"). Every chat provider gets this with no code of its
 //! own; a provider that knows more says so in its own `NormalizedContact`s.
 
 use std::collections::BTreeMap;
 
-use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
+use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
 use datalib_handle::Handle;
-use datalib_time::IsoOffsetTimestamp;
 
 use crate::types::{NormalizedChatItem, OrphanReactions};
 
@@ -19,8 +19,6 @@ pub fn baseline_contacts(
 ) -> Vec<NormalizedContact> {
     struct Tally {
         names: Vec<(String, u64)>,
-        items: u64,
-        last_ms: Option<i64>,
     }
     let mut by_handle: BTreeMap<&str, (&datalib_handle::Handle, Tally)> = BTreeMap::new();
     // Whom an item was addressed to, and who reacted to it or to a
@@ -36,14 +34,9 @@ pub fn baseline_contacts(
         .filter_map(|r| Some((r.reactor_handle.as_ref()?, &r.reactor_display)));
     let named_only = recipients.chain(reactors);
     for (handle, display) in named_only {
-        let (_, tally) = by_handle.entry(handle.as_str()).or_insert((
-            handle,
-            Tally {
-                names: Vec::new(),
-                items: 0,
-                last_ms: None,
-            },
-        ));
+        let (_, tally) = by_handle
+            .entry(handle.as_str())
+            .or_insert((handle, Tally { names: Vec::new() }));
         let name = name_without_handle(display, handle);
         if !name.is_empty() && !name.eq_ignore_ascii_case(handle.value()) {
             match tally.names.iter_mut().find(|(n, _)| n == name) {
@@ -56,16 +49,9 @@ pub fn baseline_contacts(
         let Some(handle) = &item.author_handle else {
             continue;
         };
-        let (_, tally) = by_handle.entry(handle.as_str()).or_insert((
-            handle,
-            Tally {
-                names: Vec::new(),
-                items: 0,
-                last_ms: None,
-            },
-        ));
-        tally.items += 1;
-        tally.last_ms = tally.last_ms.max(item.date_ms);
+        let (_, tally) = by_handle
+            .entry(handle.as_str())
+            .or_insert((handle, Tally { names: Vec::new() }));
         let name = name_without_handle(&item.author_display, handle);
         if !name.is_empty() {
             match tally.names.iter_mut().find(|(n, _)| n == name) {
@@ -84,13 +70,6 @@ pub fn baseline_contacts(
             let mut c = NormalizedContact::new(source_id, handle.as_str(), ContactKind::Person);
             c.names = tally.names.into_iter().map(|(n, _)| n).collect();
             c.handles = vec![ContactHandle::of(handle.clone())];
-            c.seen = Some(Seen {
-                items: tally.items,
-                last_at: tally
-                    .last_ms
-                    .and_then(IsoOffsetTimestamp::from_unix_millis)
-                    .map(|t| t.to_rfc3339_secs()),
-            });
             c
         })
         .collect()
@@ -123,8 +102,7 @@ pub fn stand_in_account(source_id: &str, label: Option<&str>) -> Option<Normaliz
 
 /// The people a document carries: chat-common's baseline for each author
 /// handle, and where the provider gave its own source contact for the person
-/// behind one, that instead — keeping what the baseline counted
-/// and every name it saw. One provider source contact reached through two
+/// behind one, that instead — keeping every name the baseline saw. One provider source contact reached through two
 /// handles is one person.
 pub fn document_contacts(
     source_id: &str,
@@ -133,34 +111,26 @@ pub fn document_contacts(
     provider: &[NormalizedContact],
 ) -> Vec<NormalizedContact> {
     let mut out: BTreeMap<String, NormalizedContact> = BTreeMap::new();
-    for seen in baseline_contacts(source_id, items, orphans) {
+    for baseline in baseline_contacts(source_id, items, orphans) {
         let theirs = provider.iter().find(|p| {
             p.handles
                 .iter()
-                .any(|h| h.handle.as_ref().map(|h| h.as_str()) == Some(seen.key.as_str()))
+                .any(|h| h.handle.as_ref().map(|h| h.as_str()) == Some(baseline.key.as_str()))
         });
         let Some(theirs) = theirs else {
-            out.insert(seen.key.clone(), seen);
+            out.insert(baseline.key.clone(), baseline);
             continue;
         };
         let merged = out.entry(theirs.key.clone()).or_insert_with(|| {
             let mut c = theirs.clone();
             c.source_id = source_id.to_string();
-            c.seen = None;
             c
         });
-        for name in seen.names {
+        for name in baseline.names {
             if !merged.names.contains(&name) {
                 merged.names.push(name);
             }
         }
-        merged.seen = match (merged.seen.take(), seen.seen) {
-            (Some(a), Some(b)) => Some(Seen {
-                items: a.items + b.items,
-                last_at: a.last_at.max(b.last_at),
-            }),
-            (a, b) => a.or(b),
-        };
     }
     out.into_values().collect()
 }
@@ -217,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn one_per_handle_with_its_names_count_and_last_stamp() {
+    fn one_per_handle_with_its_names_most_used_first() {
         let riker = Handle::email("riker@enterprise.org").unwrap();
         let troi = Handle::tel("+15550101010").unwrap();
         let items = vec![
@@ -234,11 +204,6 @@ mod tests {
         assert_eq!(r.source_id, "mail");
         assert_eq!(r.names, ["Number One", "Will Riker"], "most used first");
         assert_eq!(r.handles[0].handle.as_ref(), Some(&riker));
-        assert_eq!(r.seen.as_ref().unwrap().items, 3);
-        assert_eq!(
-            r.seen.as_ref().unwrap().last_at.as_deref(),
-            Some("1970-01-01T00:00:04+00:00")
-        );
         assert_eq!(got[1].names, ["Deanna"]);
     }
 
@@ -255,10 +220,10 @@ mod tests {
     }
 
     /// A Slack user's profile knows their email; the messages only their
-    /// user id. The document carries the profile, counted the way the
-    /// baseline counted, so the email reaches the index too.
+    /// user id. The document carries the profile, with every name the
+    /// baseline saw, so the email reaches the index too.
     #[test]
-    fn a_providers_account_replaces_the_baseline_and_keeps_its_count() {
+    fn a_providers_account_replaces_the_baseline_and_keeps_its_names() {
         let picard = Handle::slack("T1", "U_PICARD").unwrap();
         let riker = Handle::slack("T1", "U_RIKER").unwrap();
         let mut profile =
@@ -281,7 +246,6 @@ mod tests {
         assert_eq!(p.title.as_deref(), Some("Captain"));
         assert_eq!(p.names, ["Jean-Luc Picard", "Picard"]);
         assert_eq!(p.handles.len(), 2, "the email rides along");
-        assert_eq!(p.seen.as_ref().unwrap().items, 2);
         let r = got.iter().find(|c| c.key == "slack:T1/U_RIKER").unwrap();
         assert_eq!(r.names, ["Riker"], "no profile: the baseline as it was");
     }
@@ -318,7 +282,7 @@ mod tests {
     }
 
     /// Someone who only reacted is in the document too, under the name
-    /// the provider showed for them, having written nothing.
+    /// the provider showed for them.
     #[test]
     fn reactors_are_in_the_document_with_nothing_written() {
         use crate::types::NormalizedReaction;
@@ -344,13 +308,6 @@ mod tests {
         assert_eq!(got.len(), 2, "a reaction with no handle names nobody");
         let w = got.iter().find(|c| c.key == worf.as_str()).unwrap();
         assert_eq!(w.names, ["Worf"]);
-        assert_eq!(w.seen.as_ref().unwrap().items, 0);
-        let p = got.iter().find(|c| c.key == picard.as_str()).unwrap();
-        assert_eq!(
-            p.seen.as_ref().unwrap().items,
-            1,
-            "a reaction is not an item written"
-        );
     }
 
     /// A reaction to a message not in the mirror names its reactor too:
@@ -376,11 +333,10 @@ mod tests {
         assert_eq!(got.len(), 1, "{got:?}");
         assert_eq!(got[0].key, worf.as_str());
         assert_eq!(got[0].names, ["Worf"]);
-        assert_eq!(got[0].seen.as_ref().unwrap().items, 0);
     }
 
-    /// Whom a message went to is in the document too, having written
-    /// nothing there: a chip on a To line needs to find them.
+    /// Whom a message went to is in the document too: a chip on a To
+    /// line needs to find them.
     #[test]
     fn recipients_are_in_the_document_with_nothing_written() {
         use crate::types::{Recipient, RecipientRole};
@@ -404,9 +360,7 @@ mod tests {
         let got = baseline_contacts("mail", &[item], &[]);
         let t = got.iter().find(|c| c.key == troi.as_str()).unwrap();
         assert_eq!(t.names, ["Deanna Troi"]);
-        assert_eq!(t.seen.as_ref().unwrap().items, 0);
         let p = got.iter().find(|c| c.key == picard.as_str()).unwrap();
         assert_eq!(p.names, ["Jean-Luc Picard"], "a bare address is no name");
-        assert_eq!(p.seen.as_ref().unwrap().items, 1);
     }
 }

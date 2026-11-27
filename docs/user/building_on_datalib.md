@@ -705,8 +705,8 @@ service stops honouring the download's change token (Gmail's
 `historyId` has aged out, or a JMAP server answers
 `cannotCalculateChanges`), the next run lists the account again by
 itself. To start over on purpose, reset the source's ingest step: the
-app's Reset, `POST /api/reset`, or `datalib-pipeline reset <data_root> <source>/ingest`
-with no app up, then a sync of it. That empties the store and the sync
+app's Reset, `POST /api/reset`, or `datalib-pipeline reset <data_root> <source>/ingest`,
+then a sync of it. That empties the store and the sync
 downloads everything again.
 
 ## Your app's own writes

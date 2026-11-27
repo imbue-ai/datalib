@@ -52,11 +52,11 @@ pub const EXAMPLES: &[Example] = &[
         command: "datalib-pipeline reset ~/datalib slack/ingest",
     },
     Example {
-        what: "free up disk space, losing nothing; quit the app first",
+        what: "free up disk space, losing nothing",
         command: "datalib-pipeline free-disk-space ~/datalib",
     },
     Example {
-        what: "free up more, keeping only the latest version of each source's rendered documents; quit the app first",
+        what: "free up more, keeping only the latest version of each source's rendered documents",
         command: "datalib-pipeline free-disk-space ~/datalib --drop-old-versions-on-derived-data",
     },
     Example {
@@ -158,8 +158,10 @@ pub enum Verb {
     },
     /// Empty what these steps wrote, keeping its doltlite history, so
     /// their next run starts from nothing; an ingest step's attachment
-    /// bytes stay. Runs nothing else: sync the steps afterwards to refill
-    /// them. Refused while anything else runs the loop on the root.
+    /// bytes stay. Then, as the app's Reset does, a step that reads
+    /// something is rebuilt at once, and what reads a download runs; a
+    /// download is not refilled: sync it to download it again. Done by
+    /// whichever loop runs on the root, the app's included.
     Reset {
         /// The data root, or its config.toml.
         root: PathBuf,
@@ -174,7 +176,7 @@ pub enum Verb {
     },
     /// Give back the disk every store holds that no commit reaches. Every
     /// commit stays readable, so nothing is lost and nothing runs again.
-    /// Refused while anything else runs the loop on the root.
+    /// Done by whichever loop runs on the root, the app's included.
     FreeDiskSpace {
         /// The data root, or its config.toml.
         root: PathBuf,
@@ -196,9 +198,8 @@ pub enum Verb {
     /// written to the store, idle or not. SIGINT or SIGTERM stops it: its
     /// steps are interrupted and their requests stay open for the next
     /// loop; a second signal exits at once. stderr is an NDJSON stream of
-    /// what the loop has to say that no store holds (holding, prepare_plan,
-    /// prepare_step, prepare_done, sync_started, sync_over,
-    /// run_store_written); its log lines go to the run store.
+    /// what the loop has to say that no store holds (holding, sync_started,
+    /// sync_over, run_store_written); its log lines go to the run store.
     Serve {
         /// The data root, or its config.toml.
         root: PathBuf,

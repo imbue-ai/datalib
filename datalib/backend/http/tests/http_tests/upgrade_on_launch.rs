@@ -147,14 +147,14 @@ async fn a_launch_prepares_every_step_before_it_or_a_reader_syncs_at_every_start
             .position(|l| l == line)
             .unwrap_or_else(|| panic!("no {line:?} in {lines:?}"))
     };
-    let mut asked: Vec<&str> = lines
+    let mut prepared: Vec<&str> = lines
         .iter()
         .map(String::as_str)
         .filter(|l| l.starts_with("prepare"))
         .collect();
-    asked.sort();
+    prepared.sort();
     assert_eq!(
-        asked,
+        prepared,
         [
             "prepare a/ingest",
             "prepare a/render_markdown",
@@ -170,9 +170,9 @@ async fn a_launch_prepares_every_step_before_it_or_a_reader_syncs_at_every_start
             "a download syncs only once it is asked: {lines:?}"
         );
         let rendered = at(&format!("sync {group}/render_markdown"));
-        for asked in ["ingest", "render_markdown"] {
+        for function in ["ingest", "render_markdown"] {
             assert!(
-                at(&format!("prepare {group}/{asked}")) < rendered,
+                at(&format!("prepare {group}/{function}")) < rendered,
                 "a render syncs only once it and what it reads are asked: {lines:?}"
             );
         }
@@ -202,13 +202,13 @@ async fn a_launch_prepares_every_step_before_it_or_a_reader_syncs_at_every_start
     let state = boot(&root, &bin).await;
     until_invoked(&root, "sync a/render_markdown").await;
     until_invoked(&root, "sync b/render_markdown").await;
-    let mut asked: Vec<String> = invoked(&root)
+    let mut prepared: Vec<String> = invoked(&root)
         .into_iter()
         .filter(|l| l.starts_with("prepare"))
         .collect();
-    asked.sort();
+    prepared.sort();
     assert_eq!(
-        asked,
+        prepared,
         [
             "prepare a/ingest",
             "prepare a/render_markdown",

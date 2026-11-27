@@ -206,9 +206,11 @@ enum Moved {
     /// The loop's store, `system/supervisor.sqlite`: heard by
     /// [`watch_supervisor_store`], not seen by the filesystem.
     Supervisor,
-    /// A wipe opened, closed, or moved on to its next step: heard by
-    /// [`watch_supervisor_store`] in the announcement's words.
-    Wipe,
+    /// A row of the `jobs` table (the prepare pass, a reset, a purge, a
+    /// compaction or a collection) opened, closed, or moved on to its next
+    /// step: heard by [`watch_supervisor_store`] in the announcement's
+    /// words.
+    Job,
     RunStore,
     Frontend,
     GridIndex,
@@ -542,7 +544,7 @@ async fn expand(
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
             }
-            Moved::Wipe => {
+            Moved::Job => {
                 out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
@@ -1016,19 +1018,19 @@ async fn watch_supervisor_store(
         if record && moved.send(Moved::Supervisor).is_err() {
             return;
         }
-        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Wipe).is_err() {
+        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Job).is_err() {
             return;
         }
     }
 }
 
-/// Whether an announcement may be a wipe's: opened, closed, or moved on.
+/// Whether an announcement may be a job's: opened, closed, or moved on.
 /// A change the backstop found unannounced may be one too.
 fn is_wipe_line(line: &str) -> bool {
     use datalib_dag::supervisor::announce::UNANNOUNCED;
-    use datalib_dag::supervisor::store::WIPE_MOVED;
+    use datalib_dag::supervisor::store::JOB_MOVED;
     line == UNANNOUNCED
-        || ["wipe opened ", "wipe closed ", WIPE_MOVED]
+        || ["job opened ", "job closed ", JOB_MOVED]
             .iter()
             .any(|p| line.starts_with(p))
 }
@@ -1040,11 +1042,11 @@ mod tests {
     use datalib_sql::{test_sql, test_sql_id, Sql};
     #[test]
     fn a_wipes_announcements_are_told_from_the_rest() {
-        assert!(is_wipe_line("wipe opened 01a1"));
-        assert!(is_wipe_line("wipe closed 01a1"));
+        assert!(is_wipe_line("job opened 01a1"));
+        assert!(is_wipe_line("job closed 01a1"));
         assert!(is_wipe_line(&format!(
             "{} 01a1",
-            datalib_dag::supervisor::store::WIPE_MOVED
+            datalib_dag::supervisor::store::JOB_MOVED
         )));
         assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
         assert!(!is_wipe_line("request opened 01a1"));

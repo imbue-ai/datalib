@@ -97,7 +97,6 @@ fn serve_runs_one_sync_after_another_until_sigterm() {
         .expect("spawn datalib-pipeline serve");
     let mut events = Events::of(serve.stderr.take().expect("piped stderr"));
     events.wait_for("holding");
-    events.wait_for("prepare_done");
 
     for n in 1..=2 {
         let out = sync(root);

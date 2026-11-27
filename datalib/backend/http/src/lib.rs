@@ -970,7 +970,10 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
         ),
         None => (false, None, 0, Vec::new(), false),
     };
-    let pass = s.sync.upgrade();
+    let pass = s.sync.upgrade().await.unwrap_or_else(|e| {
+        tracing::warn!("config: could not read the prepare pass: {e:#}");
+        Default::default()
+    });
     let free_space = s.sync.free_space().await.unwrap_or_else(|e| {
         tracing::warn!("config: could not read the free-space pass: {e:#}");
         None

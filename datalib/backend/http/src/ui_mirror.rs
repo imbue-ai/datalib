@@ -56,9 +56,9 @@ mod tests {
                 "PassState",
                 "PassState in datalib/backend/dag/src/supervisor/pass.rs",
             ),
-            union::<datalib_dag::supervisor::store::WipeKind>(
-                "WipeKind",
-                "WipeKind in datalib/backend/dag/src/supervisor/store.rs",
+            union::<datalib_dag::supervisor::store::JobKind>(
+                "JobKind",
+                "JobKind in datalib/backend/dag/src/supervisor/store.rs",
             ),
         ] {
             out.push_str(&block);
