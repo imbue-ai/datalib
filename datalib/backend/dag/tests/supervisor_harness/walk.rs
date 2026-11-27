@@ -126,8 +126,8 @@ impl Walk {
                 log.push(format!("sync {roots:?}"));
             }
         }
-        // Nothing says the loop has taken a request on while an older one
-        // for the same steps is open: a step's record names the oldest.
+        // The walk goes on at once, without waiting for the loop to start
+        // serving the request (`Store::taken_on`).
         let id = self.h.sync(roots).await;
         self.open.push(id.clone());
         self.requests.push(id);
@@ -252,8 +252,8 @@ impl Walk {
 
     /// A step names only requests still open, and only while it has work
     /// left in them: running, waiting, or up to date with something above
-    /// it still moving. The requests are read before the record, since
-    /// the loop saves a step's record before it closes a request.
+    /// it still moving. The requests are read before the `Record`, since
+    /// the loop saves a step's row before it closes a request.
     async fn check_served(&mut self) {
         let requests = self.h.state().await.requests;
         let record = self.h.state().await.record;
@@ -428,7 +428,7 @@ fn joined(done: Option<Result<(), tokio::task::JoinError>>) {
 }
 
 /// A thread of its own, so it fires even if the walks have wedged the
-/// runtime. It writes to stderr directly, since libtest holds back what a
+/// runtime. It writes to stderr directly, since libtest captures what a
 /// test prints until the test ends, and a stuck one never does. Dropping
 /// what it returns calls it off.
 fn watchdog(running: Running) -> mpsc::Sender<()> {

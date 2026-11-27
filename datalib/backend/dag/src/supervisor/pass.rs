@@ -1,14 +1,14 @@
-//! A pass: the steps one verb is run for, and how each stands. The
-//! launch's prepare pass and a wipe that frees disk are both one
-//! (`dag/README.md` §"Upgrading a root", §"Resets and purges"), and the
-//! app draws either the same way.
+//! How a job stands with each step it runs one verb for: the rows of
+//! `job_steps`. The prepare pass at the loop's start and a wipe that frees
+//! disk both write them (`dag/README.md` §"Upgrading a root", §"Resets and
+//! purges"), and the app draws either the same way.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 use crate::step::StoreBytes;
 
-/// How a pass stands with one step.
+/// How a job stands with one step.
 #[derive(
     Debug,
     Clone,

@@ -1,6 +1,7 @@
 //! An app that reads only the raw stores waits for its downloads, not for
-//! the index steps after them, by asking the loop's record whether each
-//! download started after its request opened and has finished since
+//! the index steps after them, by reading from `system/supervisor.sqlite`
+//! whether each download started after its request opened and has
+//! finished since
 //! (`docs/user/building_on_datalib.md`, "To wait for the downloads only").
 //! That compares a step's stamps with the request's, so both must keep
 //! the same precision.

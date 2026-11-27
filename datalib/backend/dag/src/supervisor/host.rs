@@ -1,7 +1,7 @@
 //! What a process running the loop builds around it, the same whichever
 //! process that is (`datalib-pipeline`, or the app's server): the steps'
-//! environment and the run store's record of one busy period, and what it
-//! puts right when it takes the lock.
+//! environment and the run store's sink for one run, and what it puts
+//! right when it takes the lock.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,7 +16,7 @@ use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
 use crate::supervisor::store::{JobKind, JobRow, RequestRow, Store};
 use strum::VariantArray;
 
-/// The environment every step of one busy period gets on top of the
+/// The environment every step of one run gets on top of the
 /// host's own, and the log filter it was built with.
 pub struct StepEnv {
     pub vars: BTreeMap<String, String>,
@@ -24,7 +24,7 @@ pub struct StepEnv {
 }
 
 /// `binary_dir` is the host's override of the config's `binary_dir`.
-/// `now` and `run_id` are pinned for the busy period: every stamped
+/// `now` and `run_id` are pinned for the run: every stamped
 /// output agrees on them.
 pub fn step_env(
     cfg: &DagConfig,
@@ -65,9 +65,9 @@ pub fn step_path(cfg: &DagConfig, binary_dir: Option<&Path>, data_root: &Path) -
     Ok(joined.to_string_lossy().into_owned())
 }
 
-/// The run store's record of one busy period. `None` when the store
-/// could not be opened: a sync without a record beats one that refuses
-/// to start over an unwritable status file.
+/// The run store's sink for one run. `None` when the store could not be
+/// opened: a sync the run store does not see beats one that refuses to
+/// start over an unwritable status file.
 pub fn start_record(
     data_root: &Path,
     cfg: &DagConfig,
@@ -83,10 +83,10 @@ pub fn start_record(
 /// How many steps a run's reason names before it only counts the rest.
 const REASON_NAMES: usize = 3;
 
-/// Why a busy period started, from the requests and wipes open as it did.
-/// A period with nothing but compactions and collections to do is a
-/// shrink; any other is a sync.
-pub fn period_start(requests: &[RequestRow], wipes: &[JobRow]) -> RunStart {
+/// Why a run started, from the requests and wipes open as it did. A run
+/// with nothing but compactions and collections to do is a shrink; any
+/// other is a sync.
+pub fn run_start(requests: &[RequestRow], wipes: &[JobRow]) -> RunStart {
     let mut parts = Vec::new();
     if !requests.is_empty() {
         let roots: Vec<&str> = requests
@@ -186,7 +186,7 @@ pub struct TakenOver {
 
 /// For the process that has just taken `runner-lock`, before its first
 /// loop: close what a loop that died holding the lock left open — its
-/// run, in the record and in the run store, so no row reads its steps as
+/// run, in `system/supervisor.sqlite` and in the run store, so no row reads its steps as
 /// live, and its invocations. Holding the lock is what makes anything open
 /// a thing a dead loop left.
 pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
@@ -231,10 +231,10 @@ mod tests {
             closed: None,
             failed_step: None,
         };
-        let one = period_start(&[request("ui", &["gmail/ingest"])], &[]);
+        let one = run_start(&[request("ui", &["gmail/ingest"])], &[]);
         assert_eq!(one.kind, RunKind::Sync);
         assert_eq!(one.reason, "a sync asked for by ui: gmail/ingest");
-        let many = period_start(
+        let many = run_start(
             &[
                 request("ui", &["a/ingest", "b/ingest"]),
                 request("upgrade", &["c/render_markdown", "d/render_markdown"]),
@@ -247,16 +247,16 @@ mod tests {
             "a sync asked for by ui, upgrade: a/ingest, b/ingest, c/render_markdown and 2 more"
         );
         assert_eq!(
-            period_start(&[], &[]).reason,
+            run_start(&[], &[]).reason,
             "the loop found work with no sync request open"
         );
     }
 
     /// Guards the free-disk run that was logged as a sync "with no sync
-    /// request open": a period that only frees disk says so, and is a
+    /// request open": a run that only frees disk says so, and is a
     /// shrink.
     #[test]
-    fn a_period_that_only_frees_disk_is_a_shrink_and_says_who_asked() {
+    fn a_run_that_only_frees_disk_is_a_shrink_and_says_who_asked() {
         let wipe = |kind: JobKind, targets: &[&str]| JobRow {
             id: "w".into(),
             kind: Some(kind),
@@ -264,13 +264,13 @@ mod tests {
             opened_by: "ui".into(),
             closed: None,
         };
-        let collect = period_start(&[], &[wipe(JobKind::Collect, &[])]);
+        let collect = run_start(&[], &[wipe(JobKind::Collect, &[])]);
         assert_eq!(collect.kind, RunKind::Shrink);
         assert_eq!(
             collect.reason,
             "freeing disk space, asked for by ui: every step"
         );
-        let reset = period_start(&[], &[wipe(JobKind::Reset, &["slack/ingest"])]);
+        let reset = run_start(&[], &[wipe(JobKind::Reset, &["slack/ingest"])]);
         assert_eq!(reset.kind, RunKind::Sync);
         assert_eq!(reset.reason, "a reset asked for by ui: slack/ingest");
     }

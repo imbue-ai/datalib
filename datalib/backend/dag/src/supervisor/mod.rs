@@ -1,7 +1,7 @@
 //! The supervisor: one loop that starts a step whenever an open request
-//! wants it, it is stale, and nothing holds it back. The decision is
+//! wants it, it is stale, and nothing keeps it waiting. The decision is
 //! [`tick::tick`], a pure function; the hosts that feed it events and
-//! act on its answer live beside it. The rules: `dag/README.md`.
+//! act on the [`tick::Tick`] it returns live beside it. The rules: `dag/README.md`.
 
 pub mod announce;
 pub mod host;

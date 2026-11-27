@@ -1,6 +1,6 @@
 //! How much room is left on the volume a data root lives on, and whether
-//! the config's `[disk_space]` floor holds the steps back. The loop holds
-//! every step while it does (`supervisor/tick.rs`, `Wait::DiskSpace`); the
+//! the config's `[disk_space]` floor pauses the steps. While it does, the
+//! loop starts no step (`supervisor/tick.rs`, `Wait::DiskSpace`); the
 //! app's server samples the same number for the status bar.
 
 use std::path::Path;
@@ -19,8 +19,9 @@ pub struct Space {
     pub total: u64,
 }
 
-/// The config's `[disk_space]`: under `pause_below` free bytes every step
-/// is held, and once held they stay held until `resume_at`. The gap keeps
+/// The config's `[disk_space]`: under `pause_below` free bytes the loop
+/// starts no step and stops every running one, and once paused the steps
+/// stay paused until `resume_at`. The gap keeps
 /// a disk hovering at the line from stopping and restarting the same
 /// steps over and over.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -76,8 +77,8 @@ impl TryFrom<RawFloor> for DiskFloor {
 }
 
 impl DiskFloor {
-    /// Whether the steps are held after a look that found `available`,
-    /// given whether they were held before it.
+    /// Whether the steps are paused after a look that found `available`,
+    /// given whether they were paused before it.
     pub fn holds(&self, was_held: bool, available: u64) -> bool {
         available
             < if was_held {
@@ -88,7 +89,7 @@ impl DiskFloor {
     }
 }
 
-/// The steps are held for want of space: what the loop logs and a
+/// The steps are paused for want of space: what the loop logs and a
 /// waiting step's row says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LowDisk {
@@ -159,10 +160,10 @@ mod tests {
     use super::*;
 
     /// The gap between the two lines is the whole point: a disk that
-    /// went under the pause and climbed back a little stays held, and a
-    /// disk that never went under is not held anywhere above the pause.
+    /// went under the pause and rose back a little stays paused, and a
+    /// disk that never went under is not paused anywhere above the pause.
     #[test]
-    fn held_steps_wait_for_the_resume_line_and_free_ones_for_the_pause() {
+    fn paused_steps_wait_for_the_resume_line_and_others_for_the_pause() {
         let floor = DiskFloor::default();
         assert!(
             !floor.holds(false, 12 * GB),
