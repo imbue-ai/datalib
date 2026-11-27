@@ -36,7 +36,6 @@ import {
   filterContacts,
   LIST_SORTS,
   mergeInto,
-  rowHandle,
   sortList,
   withCountColumns,
   withCounts,
@@ -158,8 +157,7 @@ async function create() {
 }
 
 function openPerson(row: ContactRow) {
-  const subject = rowHandle(row) ?? contactSubject(row.key);
-  props.ctx.host.openCards(personSource(subject, { seenIn: null }));
+  props.ctx.host.openCards(personSource(contactSubject(row.key), { seenIn: null }));
 }
 
 function everythingWith(row: ContactRow) {
