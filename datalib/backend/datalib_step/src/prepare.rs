@@ -1244,7 +1244,10 @@ mod tests {
              WHERE key IN ('schema_hash', 'schema_hash.keywords')",
         )
         .await;
-        assert!(run_prepare().await, "the step fills the keyword tables again");
+        assert!(
+            run_prepare().await,
+            "the step fills the keyword tables again"
+        );
         let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
         assert_eq!(
             meta.map(|m| m.shape()),

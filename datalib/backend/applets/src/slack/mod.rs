@@ -687,7 +687,11 @@ mod tests {
 
         let resp = channels_response(tmp.path(), "ws");
         assert_eq!(resp.channels.len(), 2);
-        let cat = resp.channels.iter().find(|c| c.name == "#ten-forward").unwrap();
+        let cat = resp
+            .channels
+            .iter()
+            .find(|c| c.name == "#ten-forward")
+            .unwrap();
         assert_eq!(cat.threads, 2);
         assert_eq!(cat.messages, 3);
     }
@@ -785,7 +789,10 @@ mod tests {
     /// delimiter, so the round trip has to survive encoding.
     #[test]
     fn channel_names_survive_the_query_string() {
-        assert_eq!(query_param("name=%23ten-forward", "name").unwrap(), "#ten-forward");
+        assert_eq!(
+            query_param("name=%23ten-forward", "name").unwrap(),
+            "#ten-forward"
+        );
         assert_eq!(query_param("x=1&name=%23a%20b", "name").unwrap(), "#a b");
         assert!(query_param("nope=1", "name").is_none());
     }
