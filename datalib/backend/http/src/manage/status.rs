@@ -139,9 +139,11 @@ pub fn step_status(
     });
     // Fresh is wanted and up to date: done for this sync if a request
     // still open reached it, and otherwise waiting, since what it reads
-    // may still move.
-    let ran_this_run = last
-        .is_some_and(|l| l.finished_at.is_some() && l.requests.iter().any(|r| open.contains(r)));
+    // may still move. With none open, the request that wanted it has just
+    // closed and the loop's next tick has not yet said Idle: it is done.
+    let ran_this_run = last.is_some_and(|l| {
+        l.finished_at.is_some() && (open.is_empty() || l.requests.iter().any(|r| open.contains(r)))
+    });
     // Waiting with an invocation open is a streaming consumer between two
     // of its processes: it has done the work it had and waits for what it
     // reads to move again.
@@ -263,8 +265,14 @@ mod tests {
             "succeeded"
         );
         assert_eq!(
-            step_status(Some(&at(StateKind::Fresh, None)), &none(), None).key,
+            step_status(Some(&at(StateKind::Fresh, None)), &open("r9"), None).key,
             "queued"
+        );
+        // The row read Queued between its request closing and the loop's
+        // next tick, and the sync seemed to go backwards.
+        assert_eq!(
+            step_status(Some(&at(StateKind::Fresh, None)), &none(), None).key,
+            "succeeded"
         );
 
         let turned_off = step_status(
