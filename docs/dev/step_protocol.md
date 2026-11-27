@@ -554,8 +554,9 @@ offset included, so write it in the local offset
 (`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
 runner's lines in the real one — and everything else it carried
 (`filename`, `line_number`, the remaining `fields`) is kept as
-`fields`. The Manage screen shows
-the sentence, not the envelope, and can still sort by thread.
+`fields`. Every level is kept, `debug` and `trace` included. The
+Manage screen shows the sentence, not the envelope, and can still sort
+by thread.
 
 Every level is kept, `debug` and `trace` included: the runner stores a
 `DEBUG` envelope as a `debug` row rather than rounding it up to `info`.
