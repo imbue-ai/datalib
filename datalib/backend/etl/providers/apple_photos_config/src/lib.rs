@@ -1,5 +1,5 @@
 //! Provider-owned config schema for the `apple_photos` source.
-//! Schema-only (serde + anyhow), so the orchestrator can name
+//! Schema-only (serde + anyhow), so `datalib-step` can name
 //! [`ApplePhotosConfig`] without linking the provider.
 
 use std::collections::BTreeMap;
