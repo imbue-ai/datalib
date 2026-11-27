@@ -350,7 +350,7 @@ impl Recorder {
     /// Every total the run reported, in order. A `set_length(None)` is
     /// left out: the runner treats it as "no total" and so publishes no
     /// `queued` for it.
-    pub fn announcements(&self) -> Vec<u64> {
+    pub fn totals(&self) -> Vec<u64> {
         self.lengths
             .lock()
             .unwrap()

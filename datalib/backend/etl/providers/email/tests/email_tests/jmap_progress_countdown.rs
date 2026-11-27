@@ -46,25 +46,25 @@ async fn a_fastmail_enumeration_counts_down_from_its_message_count() {
         "every message should have contributed one `.eml` download: {summary:?}",
     );
 
-    let announced = recorder.announcements();
+    let totals = recorder.totals();
     // What this test exists to catch: the only total ever reported was
     // the phase count.
     assert!(
-        announced.iter().any(|t| *t > PHASES),
+        totals.iter().any(|t| *t > PHASES),
         "the run never announced a total bigger than its {PHASES} phases, \
          so \"N queued\" counts down from four however big the mailbox is \
-         (announced: {announced:?})",
+         (announced: {totals:?})",
     );
     // Messages fetched, plus one `.eml` download each, plus the
     // phases. Exact rather than a lower bound: a total that overshoots
     // leaves the chip stuck above zero when the run ends.
     let expected = PHASES + MESSAGES as u64 * 2;
-    let last = *announced.last().expect("a total was announced");
+    let last = *totals.last().expect("a total was announced");
     assert_eq!(
         last, expected,
         "the last total announced was {last}, not {expected} \
          ({PHASES} phases + {MESSAGES} messages + {MESSAGES} blobs); \
-         the chip would not reach zero (announced: {announced:?})",
+         the chip would not reach zero (announced: {totals:?})",
     );
     assert_eq!(
         recorder.final_done(),

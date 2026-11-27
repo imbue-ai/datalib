@@ -24,7 +24,7 @@ use crate::support::{
 const IDS: [&str; 3] = ["18c9f2a1b2c3d401", "18c9f2a1b2c3d402", "18c9f2a1b2c3d403"];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_gmail_walk_announces_a_total_so_the_chip_can_count_down() {
+async fn a_gmail_walk_reports_a_total_so_the_chip_can_count_down() {
     let m = Mirror::new();
     write_fixtures(&m.playback);
 
@@ -40,13 +40,13 @@ async fn a_gmail_walk_announces_a_total_so_the_chip_can_count_down() {
     let summary = summary.expect("gmail fetch under playback");
     assert_eq!(summary.emails_upserted, IDS.len());
 
-    let announced = recorder.announcements();
-    let last = *announced.last().expect("a total was announced");
+    let totals = recorder.totals();
+    let last = *totals.last().expect("a total was announced");
     assert_eq!(
         last,
         IDS.len() as u64,
         "the last total announced was {last}, not the {} messages the \
-         run owed; the chip would not reach zero (series: {announced:?})",
+         run owed; the chip would not reach zero (series: {totals:?})",
         IDS.len(),
     );
     assert_eq!(
@@ -81,11 +81,11 @@ async fn a_walk_that_fetches_nothing_leaves_nothing_queued() {
     let summary = summary.expect("second gmail fetch under playback");
     assert_eq!(summary.walked, ["*"], "{summary:?}");
     assert_eq!(summary.emails_upserted, 0, "{summary:?}");
-    let announced = recorder.announcements();
+    let totals = recorder.totals();
     assert_eq!(
         recorder.final_done(),
-        announced.last().copied().unwrap_or(0),
-        "the bar stopped short of the total it announced ({announced:?})",
+        totals.last().copied().unwrap_or(0),
+        "the bar stopped short of the total it announced ({totals:?})",
     );
 }
 
