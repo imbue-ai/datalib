@@ -331,7 +331,7 @@ off in the download step's params:
 id = "linkedin/ingest"
 command = "datalib-step run ingest linkedin"
 [steps.params.export]
-path = "/opt/datalib/demo-sources/linkedin"
+path = "/opt/datalib/demo/inputs/linkedin/linkedin_tng"
 [steps.params.common]
 download = false
 ```

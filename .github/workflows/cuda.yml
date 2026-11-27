@@ -143,8 +143,9 @@ jobs:
           gh release download --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release" \
               --pattern datalib-x86_64-unknown-linux-gnu.tar.gz \
               --pattern 'runtime-x86_64-unknown-linux-gnu.tar.gz*'
+          # `-`: no demo, which `--target app` leaves out.
           scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu \
-              "$RUNNER_TEMP/release" "$RUNNER_TEMP/cuda"
+              "$RUNNER_TEMP/release" - "$RUNNER_TEMP/cuda"
 
       - name: Start a registry
         run: |

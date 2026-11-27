@@ -136,6 +136,44 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The image's demo library: the TNG library, which `:ingested_tng`
+  # syncs from the fixtures (tests/fixtures/README.md). Its own job, beside
+  # `build` rather than a step of it, so a fixture that fails costs the
+  # images and nothing else. One leg: the stores are the same bytes on
+  # either architecture. The image jobs copy the archive into their build
+  # context, and the image unpacks it.
+  tng-library:
+    name: tng-library
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # No cache, as in the build job below; see its comment.
+      - uses: bazel-contrib/setup-bazel@f34d6a05eae3c24acab7fa54587492daeaeffdab # 0.19.2
+        with:
+          bazelisk-cache: false
+          disk-cache: false
+          repository-cache: false
+          external-cache: false
+
+      - name: Build the TNG library
+        run: |
+          set -euo pipefail
+          bazel build //tests/fixtures:ingested_tng -c opt --build_metadata=ROLE=CI
+          mkdir -p "${RUNNER_TEMP}/tng-library"
+          cp bazel-bin/tests/fixtures/ingested/library.tar \
+             bazel-bin/tests/fixtures/ingested/config_body.toml "${RUNNER_TEMP}/tng-library/"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: tng-library
+          overwrite: true
+          path: ${{ runner.temp }}/tng-library
+          if-no-files-found: error
+          retention-days: 7
+
   build:
     name: build (${{ matrix.triple }})
     runs-on: ${{ matrix.runs-on }}
@@ -697,7 +735,7 @@ jobs:
   # at this job's download of that leg's artifact, which fails.
   docker-image:
     name: docker-image (${{ matrix.arch }})
-    needs: [runtime, build]
+    needs: [runtime, build, tng-library]
     if: ${{ !cancelled() }}
     runs-on: ${{ matrix.runs-on }}
     permissions:
@@ -727,19 +765,25 @@ jobs:
         with:
           name: runtime-${{ matrix.triple }}
           path: ${{ runner.temp }}/image-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tng-library
+          path: ${{ runner.temp }}/tng-library
 
       # Lay this run's tarball out in the build context as
       # datalib/docker/Dockerfile expects (`dist/<arch>/<tarball>`): the
       # binaries, and the CPU runtime asset with its `.sha256` sidecar,
       # which the Dockerfile checks before unpacking it beside the binaries
       # — an image is a bundle, so it does not fetch at run time. The demo
-      # library's inputs come from the checkout (datalib/docker/stage_demo.sh).
+      # library is the `tng-library` job's (datalib/docker/stage_demo.sh),
+      # copied in as it came and unpacked inside the image build.
       - name: Stage tarballs and the demo into docker build context
         env:
           ARCH: ${{ matrix.arch }}
           ASSETS: ${{ runner.temp }}/image-assets
+          LIBRARY: ${{ runner.temp }}/tng-library
           TRIPLE: ${{ matrix.triple }}
-        run: scripts/release/stage_docker_context.sh ctx "${ARCH}" "${TRIPLE}" "${ASSETS}"
+        run: scripts/release/stage_docker_context.sh ctx "${ARCH}" "${TRIPLE}" "${ASSETS}" "${LIBRARY}"
 
       # Every Docker Hub image this job needs — BuildKit and the
       # Dockerfile's `FROM`s — comes through Google's pull-through mirror
@@ -821,7 +865,7 @@ jobs:
   # plain image neither waits for the `cuda` job nor fails with it.
   docker-image-cuda:
     name: docker-image (amd64-cuda)
-    needs: [runtime, build, cuda]
+    needs: [runtime, build, cuda, tng-library]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-24.04
     permissions:
@@ -850,12 +894,17 @@ jobs:
         with:
           name: cuda-image-x86_64-unknown-linux-gnu
           path: ${{ runner.temp }}/cuda-assets
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: tng-library
+          path: ${{ runner.temp }}/tng-library
 
       - name: Stage tarballs, CUDA and the demo into docker build context
         env:
           ASSETS: ${{ runner.temp }}/image-assets
           CUDA: ${{ runner.temp }}/cuda-assets
-        run: scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu "${ASSETS}" "${CUDA}"
+          LIBRARY: ${{ runner.temp }}/tng-library
+        run: scripts/release/stage_docker_context.sh ctx amd64 x86_64-unknown-linux-gnu "${ASSETS}" "${LIBRARY}" "${CUDA}"
 
       # As in docker-image.
       - name: Set up Docker Buildx

@@ -28,10 +28,11 @@
 # (scripts/release/stage_cuda.sh stages them, and stage_docker_context.sh
 # roots them at /).
 #
-# plus `demo/` (the fixtures + config that datalib/docker/stage_demo.sh
-# copies in). `scripts/build_docker.sh` stages all of it locally; the
-# docker-image job in `release.yml` stages its architecture's assets from
-# that run's artifacts and the demo from the checkout.
+# plus `demo/` (the TNG library's archive, its config and the curated
+# stores, which datalib/docker/stage_demo.sh copies in).
+# `scripts/build_docker.sh` stages all of it locally; the docker-image job
+# in `release.yml` stages its architecture's assets and the library from
+# that run's artifacts.
 #
 # Everything runs as `datalib`, uid and gid 1000, whose home is /root
 # (see the user step below). Bind mounts at runtime (see
@@ -47,8 +48,8 @@
 #                                  local export a file-backed source
 #                                  reads, mounted read-only.
 #
-# Also baked in: a demo data library at /opt/datalib/demo, ingested at
-# build time from the TNG fixtures — see the demo step near the bottom.
+# Also baked in: a demo data library at /opt/datalib/demo, the TNG
+# library, synced at build time — see the demo step near the bottom.
 #
 # The devcontainer (`.devcontainer/Dockerfile`) does NOT build on this
 # image: it is its own `ubuntu:26.04` image with the Bazel toolchain,
@@ -236,28 +237,32 @@ FROM app
 
 # --- The demo data library ------------------------------------------
 #
-# Seven file-backed sources over the Star Trek: TNG fixtures, staged
-# into the build context by datalib/docker/stage_demo.sh, ingested and
-# rendered here so `datalib-http /opt/datalib/demo` has something to
-# show the moment the container starts, with Picard's curated contacts
-# and mutes (tests/fixtures/curated/) laid over it before the sync, as a
-# person's own would be. docs/user/docker.md walks a
+# The TNG library (tests/fixtures/README.md §"Start here"), the one
+# `bazelisk run //datalib:dev_tng` opens: every source's raw stores from
+# the fixture build, the files the file-reading sources read under
+# `inputs/`, and Picard's curated contacts and mutes
+# (tests/fixtures/curated/), staged into the build context by
+# datalib/docker/stage_demo.sh and unpacked here. The sync renders and
+# indexes all of it, so `datalib-http /opt/datalib/demo` has something
+# to show the moment the container starts. docs/user/docker.md walks a
 # first-time user through it, and datalib/docker/doc_test.sh checks
 # that walkthrough against the built image.
 #
 # Every step runs, the search index's keyword index and embeddings
 # included, so search by words and by meaning both work the moment the
-# demo starts and every step on the Manage screen has run.
+# demo starts and every step on the Manage screen has run. The sources
+# that read files read them again; the rest keep what their raw stores
+# hold (`common.download = false`).
 # No `--now`: the run record is stamped at build time, so the
 # Dashboard's "Synced …" reads as a real past time.
 #
 # This layer is also the one smoke test that runs the shipped
 # pipeline end to end: a tarball whose datalib-pipeline or datalib-step
-# cannot ingest the fixtures fails the image build here.
-COPY --chown=datalib:datalib demo/ /opt/datalib/demo-sources/
+# cannot read the fixtures, migrate the stores or render them fails the
+# image build here.
+COPY --chown=datalib:datalib demo/ /opt/datalib/demo/
 RUN set -eux; \
-    mv /opt/datalib/demo-sources/config.toml /opt/datalib/demo/config.toml; \
-    mv /opt/datalib/demo-sources/datalib_curated /opt/datalib/demo/datalib_curated; \
+    sh /opt/datalib/demo/unpack.sh /opt/datalib/demo; \
     datalib-pipeline sync /opt/datalib/demo; \
     datalib-pipeline check /opt/datalib/demo; \
     datalib-doltlite -readonly /opt/datalib/demo/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite \
