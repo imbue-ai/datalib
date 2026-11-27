@@ -19,7 +19,6 @@ use tracing_subscriber::EnvFilter;
 pub use datalib_log_filter::default_filter;
 pub use datalib_status_line::{shared_multi, status_line};
 
-pub mod diagnostics;
 
 /// `--log-format` selector. `Auto` (the default) emits pretty on a TTY,
 /// JSON otherwise — exactly what you'd want from a CLI that doubles as
@@ -133,14 +132,9 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     // Pretty vs JSON differ only in the `.json()` toggle. Each branch
     // builds its own fmt layer because the two builder chains end in
     // different concrete types that can't share a variable.
-    // The diagnostics layer captures every WARN/ERROR event into the
-    // ambient per-source buffer (when one is installed via
-    // `diagnostics::scope`, as the ingest step does). It's a no-op on
-    // tasks without a buffer.
     let registry = tracing_subscriber::registry()
         .with(filter)
-        .with(otel_layer)
-        .with(diagnostics::DiagnosticsLayer);
+        .with(otel_layer);
     if use_json {
         registry
             .with(
