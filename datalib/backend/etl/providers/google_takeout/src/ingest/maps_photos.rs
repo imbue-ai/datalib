@@ -170,7 +170,7 @@ pub async fn ingest(
         0
     };
     let gone = changes.gone();
-    file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+    file_checkpoint::delete_file_stamps(db.pool(), SCOPE, &gone).await?;
     Ok(MapsPhotosSummary {
         rows: row_count,
         blobs: blob_count,

@@ -79,9 +79,9 @@ impl TryFrom<RawFloor> for DiskFloor {
 impl DiskFloor {
     /// Whether the steps are paused after a look that found `available`,
     /// given whether they were paused before it.
-    pub fn holds(&self, was_held: bool, available: u64) -> bool {
+    pub fn pauses(&self, was_paused: bool, available: u64) -> bool {
         available
-            < if was_held {
+            < if was_paused {
                 self.resume_at
             } else {
                 self.pause_below
@@ -166,13 +166,13 @@ mod tests {
     fn paused_steps_wait_for_the_resume_line_and_others_for_the_pause() {
         let floor = DiskFloor::default();
         assert!(
-            !floor.holds(false, 12 * GB),
+            !floor.pauses(false, 12 * GB),
             "between the lines, not held yet"
         );
-        assert!(floor.holds(false, 9 * GB), "under the pause");
-        assert!(floor.holds(true, 12 * GB), "between the lines, still held");
-        assert!(!floor.holds(true, 15 * GB), "at the resume line");
-        assert!(!floor.holds(false, 10 * GB), "at the pause line is enough");
+        assert!(floor.pauses(false, 9 * GB), "under the pause");
+        assert!(floor.pauses(true, 12 * GB), "between the lines, still held");
+        assert!(!floor.pauses(true, 15 * GB), "at the resume line");
+        assert!(!floor.pauses(false, 10 * GB), "at the pause line is enough");
     }
 
     #[test]

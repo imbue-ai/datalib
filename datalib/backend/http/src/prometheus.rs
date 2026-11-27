@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use axum::extract::State;
 use axum::http::header;
 use axum::response::IntoResponse;
-use datalib_dag::supervisor::record::StepRecord;
+use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::tick::StateKind;
 use datalib_runs::MetricValue;
 use strum::VariantArray;
@@ -71,7 +71,7 @@ pub struct Inputs<'a> {
     pub steps: &'a [StepEntry],
     /// The newest value of every series, across runs.
     pub metrics: &'a [MetricValue],
-    pub records: &'a BTreeMap<String, StepRecord>,
+    pub records: &'a BTreeMap<String, StepRow>,
     pub trees: &'a [OutputStorage],
     pub root_bytes: u64,
     pub disk: &'a crate::disk_free::DiskFree,
@@ -372,7 +372,7 @@ pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse,
         .map_err(crate::unread)?;
     let records = match s.sync.supervisor_store().await {
         Ok(store) => store
-            .load_record()
+            .load_state()
             .await
             .map(|r| r.steps)
             .unwrap_or_default(),
@@ -622,7 +622,7 @@ mod tests {
         }];
         let records = BTreeMap::from([(
             "s".to_string(),
-            StepRecord {
+            StepRow {
                 state: Some(StateKind::Running),
                 last_success_at: Some("2026-09-30T10:00:00.000000+00:00".into()),
                 ..Default::default()

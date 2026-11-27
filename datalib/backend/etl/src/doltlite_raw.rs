@@ -1140,13 +1140,13 @@ async fn open_inner(
             .execute(&pool)
             .await
             .context("create _datalib_meta before migrating")?;
-            let climb = datalib_store_meta::ladder::Climb {
+            let range = datalib_store_meta::ladder::MigrationRange {
                 ladder: which,
                 from: stored,
                 top,
                 store_bytes: std::fs::metadata(db_path).ok().map(|m| m.len()),
             };
-            datalib_store_meta::ladder::apply(&pool, rung, &climb).await?;
+            datalib_store_meta::ladder::apply(&pool, rung, &range).await?;
             let label = match which {
                 Ladder::Shared => "migrate shared",
                 Ladder::Own => "migrate",

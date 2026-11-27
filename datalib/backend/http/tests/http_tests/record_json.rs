@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use datalib_dag::supervisor::record::{LastInvocation, Record, StepRecord};
+use datalib_dag::supervisor::record::{LastInvocation, LoopState, StepRow};
 use datalib_dag::supervisor::store::{RequestOutcome, Store};
 use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::FailureKind;
@@ -24,7 +24,7 @@ fn texts(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn record(v: &Value) -> Record {
+fn record(v: &Value) -> LoopState {
     let steps = v
         .get("steps")
         .and_then(Value::as_object)
@@ -41,7 +41,7 @@ fn record(v: &Value) -> Record {
                 error: text(l, "error"),
                 failure: text(l, "failure").as_deref().and_then(FailureKind::parse),
             });
-            let step = StepRecord {
+            let step = StepRow {
                 succeeded: st
                     .get("succeeded")
                     .and_then(Value::as_bool)
@@ -55,7 +55,7 @@ fn record(v: &Value) -> Record {
             (id.clone(), step)
         })
         .collect();
-    Record { steps }
+    LoopState { steps }
 }
 
 /// Write the rows `json` describes into the loop's store at `root`.
@@ -81,7 +81,7 @@ pub async fn write(root: &Path, json: &str) {
         }
     }
     store
-        .save_record(&Default::default(), &record(&value))
+        .save_state(&Default::default(), &record(&value))
         .await
         .unwrap();
     store.close().await;

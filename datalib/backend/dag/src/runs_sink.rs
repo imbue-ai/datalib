@@ -93,7 +93,7 @@ fn owed_at_end(status: RunState, queued: Option<i64>) -> i64 {
     }
 }
 
-/// Record a running total's new value, and say what it was if this is
+/// LoopState a running total's new value, and say what it was if this is
 /// the first time within the attempt it has gone down.
 fn counter_fell(
     counters: &mut HashMap<(String, String), (i64, bool)>,

@@ -390,7 +390,7 @@ impl FingerprintCache {
         Ok(())
     }
 
-    pub async fn forget(&self, abs_paths: &[String]) -> Result<u64> {
+    pub async fn delete_paths(&self, abs_paths: &[String]) -> Result<u64> {
         if abs_paths.is_empty() {
             return Ok(0);
         }
@@ -780,7 +780,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn forget_removes_only_what_it_is_given() {
+    async fn delete_paths_removes_only_what_it_is_given() {
         let tmp = tempfile::tempdir().unwrap();
         let root = Path::new("/r");
         let cache = FingerprintCache::open(&tmp.path().join("c.sqlite"))
@@ -794,15 +794,18 @@ mod tests {
             .await
             .unwrap();
 
-        let removed = cache.forget(&[abs_key(root, "a.bin")]).await.unwrap();
+        let removed = cache.delete_paths(&[abs_key(root, "a.bin")]).await.unwrap();
         assert_eq!(removed, 1);
         let tree = cache.load_under(root).await.unwrap();
         assert!(tree.blake3("a.bin").is_none());
         assert_eq!(tree.blake3("b.bin"), Some([2u8; 32]));
 
-        // `forget` of a key the cache does not hold is not an error.
-        assert_eq!(cache.forget(&[abs_key(root, "never")]).await.unwrap(), 0);
-        assert_eq!(cache.forget(&[]).await.unwrap(), 0);
+        // `delete_paths` of a key the cache does not hold is not an error.
+        assert_eq!(
+            cache.delete_paths(&[abs_key(root, "never")]).await.unwrap(),
+            0
+        );
+        assert_eq!(cache.delete_paths(&[]).await.unwrap(), 0);
     }
 
     /// A path containing GLOB metacharacters is read as written.

@@ -53,7 +53,7 @@ impl ReadStamp {
         let mut tx = pool.begin().await.context("begin read stamp tx")?;
         for rel in held.keys() {
             if !self.rows.iter().any(|f| &f.rel == rel) {
-                file_checkpoint::forget_file(&mut tx, self.scope, rel).await?;
+                file_checkpoint::delete_file_stamp(&mut tx, self.scope, rel).await?;
             }
         }
         for f in &self.rows {

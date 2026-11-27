@@ -117,7 +117,7 @@ pub async fn ingest<T: FromFile>(
                 prune::prune_scope_in_tx(&mut tx, T::TABLE, &[("file", rel)], &HashSet::new())
                     .await?
                     .len();
-            file_checkpoint::forget_file(&mut tx, &scope, rel).await?;
+            file_checkpoint::delete_file_stamp(&mut tx, &scope, rel).await?;
         }
     }
     tx.commit()
