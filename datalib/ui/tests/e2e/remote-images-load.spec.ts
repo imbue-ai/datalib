@@ -125,7 +125,7 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
   await expect(loaded).toHaveCount(2);
   await expect(chips).toHaveCount(0);
 
-  // Forgetting a rule holds its images again.
+  // Deleting a rule holds its images back again.
   await rules.filter({ hasText: "everything on risa.tourism" }).locator("button").click();
   await expect(chips).toHaveCount(1);
   await expect(chips.first().locator(".remote-media-host")).toHaveText("risa.tourism");

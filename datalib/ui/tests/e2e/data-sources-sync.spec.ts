@@ -157,8 +157,8 @@ test.afterEach(async ({ page }) => {
 
 test.describe("a real sync, driven from the grid", () => {
   // Each test writes the config, runs a real `datalib-pipeline`, and waits
-  // for it to settle. Playwright's 30 s default is not enough headroom
-  // for that on a cold action cache.
+  // for the rows it drives to finish. Playwright's 30 s default is not
+  // enough headroom for that on a cold action cache.
   test.setTimeout(120_000);
 
   test.skip(
@@ -273,8 +273,8 @@ ${applets()}`;
     for (const id of [TAPED, "docs"]) await expandGroup(page, id);
 
     // Watch the row the way the grid paints it, from before the click
-    // until it settles. This is the real sequence — the unit suite
-    // replays a synthetic one through the same state machine.
+    // until it shows a terminal status. This is the real sequence — the
+    // unit suite replays a synthetic one through the same state machine.
     await recordStatuses(page, [TAPED_UP, TAPED_DOWN]);
     // Whatever the rows say before the click. The recorder seeds itself
     // with the current value, so this is 1 for a row with a status and
@@ -304,7 +304,7 @@ ${applets()}`;
       })
       .toContain("Running");
 
-    // Syncing a source takes on everything downstream of it, so the
+    // Syncing a source also runs everything downstream of it, so the
     // render is in flight too: Queued behind its download, Running on
     // what the download has published, since the download streams, or
     // Waiting for its next seal.
@@ -332,8 +332,8 @@ ${applets()}`;
     release();
     // `settleRow`, not `settle`: the log lives in the page, and
     // `settle` remounts, which would throw it away. The before-stamp is
-    // still passed — a terminal status on its own is answerable by the
-    // *previous* run's frame, which is what #237 fixed.
+    // still passed — a terminal status on its own is matched by the
+    // *previous* run's frame.
     await settleRow(page, TAPED_UP, was[TAPED_UP]);
     const seen = await since(TAPED_UP, beforeUp);
     expect(

@@ -546,7 +546,7 @@ test.describe("steering one source among several", () => {
     page,
     request,
   }) => {
-    // One loop takes on the second source while it runs the first — not
+    // One loop starts serving the second source while it runs the first — not
     // a second process on the same stores.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
     await start(page, CHATGPT);

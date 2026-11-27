@@ -45,15 +45,15 @@ type Upgrade = {
   steps: { step: string; state: string; error: string | null }[];
 };
 
-/// A backend announces its URL as soon as it has bound a port, which is
+/// A backend prints its URL as soon as it has bound a port, which is
 /// several seconds before it can answer anything — so this is where the
 /// suite waits for the servers `playwright.config.ts` started. It is
 /// what Playwright's `webServer` readiness probe would do, if the
 /// servers could be run under `webServer` at all.
 ///
-/// A pass that settled with a step it could not migrate is an error here,
-/// not a banner: every spec on that root would run under "N sources
-/// could not be updated", and the cause is in the server's log, where no
+/// A prepare pass that ended with a step it could not migrate is an
+/// error here, not a banner: every spec on that root would run under "N
+/// sources could not be updated", and the cause is in the server's log, where no
 /// spec looks.
 async function awaitHealthy(servers: Server[], token: string): Promise<void> {
   const deadline = Date.now() + 60_000;
@@ -61,9 +61,9 @@ async function awaitHealthy(servers: Server[], token: string): Promise<void> {
     const ctx = await request.newContext({ baseURL: server.url });
     try {
       for (;;) {
-        // Listening is not enough: the first boot of a build asks every
-        // step to migrate before it syncs, and a spec that syncs would
-        // find its Sync disabled until then.
+        // Listening is not enough: the first boot of a build runs every
+        // step's command with `--prepare` appended before it syncs, and a
+        // spec that syncs would find its Sync disabled until then.
         const upgrade = await ctx
           .get(`/api/config`, { headers: { authorization: `Bearer ${token}` } })
           .then(async (res) => (res.ok() ? ((await res.json()).upgrade as Upgrade) : undefined))
@@ -118,11 +118,11 @@ async function warmApplets(urls: string[], token: string): Promise<void> {
 
 /// Ask every backend for the Manage table once, and wait for each answer.
 ///
-/// Settled is not ready for the first spec on a root: its first page is
-/// the sources card, which draws from `/api/manage/rows`, and specs give
-/// that card five seconds. On a busy CI runner the first answer after a
-/// launch has taken longer, and the first spec of a sandboxed root failed
-/// on a card still saying "Loading the sources…".
+/// `upgrade.settled` is not ready for the first spec on a root: its first
+/// page is the sources card, which draws from `/api/manage/rows`, and
+/// specs give that card five seconds. On a busy CI runner the first
+/// answer after a launch has taken longer, and the first spec of a
+/// sandboxed root failed on a card still saying "Loading the sources…".
 async function awaitManageRows(servers: Server[], token: string): Promise<void> {
   await Promise.all(
     servers.map(async (server) => {

@@ -1,9 +1,10 @@
 // What a launch on an upgraded root shows (dag/README.md §"Upgrading a root"):
-// the upgrade screen in front of the library while every step is asked to
-// prepare and while the steps it found in another shape re-run, which the
-// server starts by itself; then the library, with the pill for a source the
-// pass could not update. The server's side — which steps are asked, the
-// pass before any sync, the re-runs it opens — is the Rust tests'; here
+// the upgrade screen in front of the library while every step's command
+// runs with `--prepare` appended and while the steps it found in another
+// shape re-run, which the server starts by itself; then the library, with
+// the pill for a source the pass could not update. The server's side —
+// which steps it runs `--prepare` on, the pass before any sync, the
+// re-runs it opens — is the Rust tests'; here
 // `/api/config`'s `upgrade` is set to each state in turn.
 
 import { test, expect, type Page } from "@playwright/test";

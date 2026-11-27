@@ -590,8 +590,9 @@ export async function lastSuccessOf(page: Page, id: string): Promise<string | nu
 /// States a run will not move a step out of.
 export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted|Stopped)$/;
 
-/// How long a row may take to settle: a real `datalib-pipeline` run over the
-/// fixture corpus on a cold action cache.
+/// How long a row may take to show a terminal status with a new stamp: a
+/// real `datalib-pipeline` run over the fixture corpus on a cold action
+/// cache.
 export const ROW_SETTLE = 60_000;
 
 /// Record every status a set of rows *passes through*, from now until
@@ -734,15 +735,15 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
 /// Resolves once the wall clock is in a later second than when it was
 /// called. A stamp is to the second, and the server's loop takes a sync
 /// on the moment it is asked: without this, a run started straight after
-/// another can carry the same stamp, and a settle that waits for the
-/// stamp to move waits for ever. Every stamp read before calling this is
+/// another can carry the same stamp, and `settleRow`, which waits for the
+/// stamp to move, waits for ever. Every stamp read before calling this is
 /// of a run already over, so a run started after it stamps later.
 export async function untilTheSecondTurns() {
   const now = Math.floor(Date.now() / 1000);
   await expect.poll(() => Math.floor(Date.now() / 1000), { intervals: [50] }).toBeGreaterThan(now);
 }
 
-/// Every row's stamp, keyed by id — the reading a settle compares
+/// Every row's stamp, keyed by id — the reading `settleRow` compares
 /// against. Taken for the whole set before the click that starts a run,
 /// which it holds until a run started then would stamp later.
 export async function stampsBefore(
@@ -755,8 +756,10 @@ export async function stampsBefore(
   return out;
 }
 
-/// Settle every row a run was expected to reach, then wait out the run
-/// itself. Returns each row's settled status, keyed by id.
+/// Wait until every row a run was expected to reach shows a terminal
+/// status beside a stamp other than its `before`, then until no sync is
+/// running, and reload the page. Returns each row's terminal status,
+/// keyed by id.
 export async function settleRows(
   page: Page,
   ids: readonly string[],
