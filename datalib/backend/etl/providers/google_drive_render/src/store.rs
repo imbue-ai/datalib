@@ -37,7 +37,8 @@ pub struct Capture {
     pub parts: Vec<(String, String, Option<String>)>,
 }
 
-/// The raw "table" the row about files that are not Docs names.
+/// The table name in the scope of the one problem row about files that
+/// are not Docs (`unrendered_files:all`). No raw table has this name.
 pub const NOT_DOCS: &str = "unrendered_files";
 
 #[derive(Debug, Default)]
@@ -268,7 +269,9 @@ async fn places(db: &RawDb) -> Result<Places> {
 }
 
 /// One capture's native JSON, unpacked, or what keeps it from being
-/// read. The error is the store's; the problem is the record's.
+/// read. The outer error is a failed read of the store; the inner one is
+/// a problem to put on the Doc's document (its blob missing or
+/// unreadable).
 pub async fn native(db: &RawDb, capture: &Capture) -> Result<Result<Value, Problem>> {
     let missing = |why: String| Ok(Err(Problem::field("native", Reason::BlobMissing, &why)));
     let Some((_, _, blake3)) = capture

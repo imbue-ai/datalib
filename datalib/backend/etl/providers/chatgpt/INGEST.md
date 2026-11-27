@@ -68,7 +68,7 @@ identically to itself:
 - The account's `first_name` in `/me` is in `me_bookkeeping`'s
   `volatile_payload` (`ME_VOLATILE_PATHS`): `/me` answers it on some
   calls and null on others for the same account. Every conversation
-  reads the `me` row, so in the payload the flip re-rendered every
+  reads the `me` row, so in the payload the flip would re-render every
   conversation on most syncs. Render never reads it.
 
 A message id is unique within its
@@ -110,7 +110,7 @@ request and requires the store an uninterrupted run leaves.
    a page fails, or — with `since` set — a page ends past the cutoff.
    Then the same walk again with `&is_archived=true`: the plain listing
    leaves an archived conversation out, so without it archiving a chat
-   deleted it from the mirror. (Measured: an archived chat left the
+   would delete it from the mirror. (Measured: an archived chat left the
    plain listing, was the archived listing's one item, and still
    answered its detail; unarchived, it came back.) The two are one
    listing, and it is *complete* only when both walks ran out of pages.
@@ -215,10 +215,10 @@ goes on with what it has:
   an empty array says the listing has ended.
 - **A rate limit** — a `429` is retried with `Retry-After`, or
   exponential backoff when the header is absent, inside the shared
-  `latchkey_curl` chokepoint; when that gives up, the loop it struck
-  ends the run's requests, since every later request would be refused
-  too, and records `phase:conversations` or `phase:attachments`
-  (`listing:conversations` when it struck the listing). The step ends
+  `latchkey_curl`; when that gives up, the loop that hit it ends the
+  run's requests, since every later request would be refused too, and
+  records `phase:conversations` or `phase:attachments`
+  (`listing:conversations` when the listing hit it). The step ends
   `incomplete`, not `succeeded`. What was left is still owed, so the
   next run fetches it, and that run's report clears the row.
   Twenty-five failures in a row end a loop the same way.

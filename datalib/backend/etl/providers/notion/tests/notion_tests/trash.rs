@@ -1,7 +1,7 @@
 //! A page trashed in Notion after it was mirrored says so, and says so
 //! no longer once it is restored: the trash pass, from the tape to the
-//! document. The search by edit time shows none of this, so each of these
-//! read as an ordinary page before the pass was built.
+//! document. The search by edit time shows none of this, so without the
+//! pass each of these reads as an ordinary page.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;

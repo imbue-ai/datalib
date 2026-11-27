@@ -167,9 +167,11 @@ impl Out<'_> {
     }
 }
 
-/// Each document is read together at the top of the source, and every
-/// other row it holds (a device, a day, a listing) sits in it. The
-/// document is the container its own row describes.
+/// Makes the document a container at the top of the source, marked
+/// read together (`docs/dev/grid_rows.md`), and sets the `parent_uuid`
+/// and `read_uuid` of every other row it holds (a device, a day, a
+/// listing) to that container. The container is the one the
+/// document's own row describes.
 fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<DataNodeRow> {
     let Some(doc) = rows.iter().find(|r| r.uuid == m_uuid) else {
         return Vec::new();
@@ -189,8 +191,8 @@ fn place(source_id: &str, m_uuid: &str, rows: &mut [GridRow]) -> Vec<DataNodeRow
     vec![node]
 }
 
-/// Front matter, and the text every document opens with: it drawn and
-/// the title.
+/// Front matter, and the text every document opens with: the front
+/// matter drawn, then the title.
 fn head(m_uuid: &str, source_id: &str, title: &str, created_at: Option<&str>) -> (Front, String) {
     let front = Front::new()
         .plain("markdown_uuid", m_uuid)
@@ -840,8 +842,8 @@ mod tests {
         assert_ne!(document_uuid("1"), device_uuid("1", "1"));
     }
 
-    /// A document is read together and its own row sits at the top; a
-    /// device's row sits inside it.
+    /// A document is a container marked read together at the top of
+    /// the source, and a device's row is a child of it.
     #[test]
     fn a_documents_other_rows_sit_in_it() {
         let row = |uuid: &str, doc: bool| {

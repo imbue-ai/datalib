@@ -415,7 +415,7 @@ impl Ctx<'_> {
         );
         s.listing = items.len();
 
-        // A complete walk of both listings is an authoritative census of
+        // A complete walk of both listings names every conversation of
         // the account, so a conversation we hold that neither named has
         // been deleted on chatgpt.com. An incomplete one says nothing: the pages it never
         // asked for are full of conversations that still exist. With
@@ -509,7 +509,7 @@ impl Ctx<'_> {
 }
 
 /// `/me`, the conversations, then their attachments. A rate limit
-/// anywhere ends the run's requests: the loop it struck leaves a
+/// anywhere ends the run's requests: the loop that hit it leaves a
 /// `phase:` row, and the `config:` rows stand, since not every named
 /// conversation was checked.
 async fn phases(ctx: &Ctx<'_>, s: &mut FetchSummary) -> Result<()> {

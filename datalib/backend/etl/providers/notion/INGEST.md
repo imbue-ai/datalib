@@ -126,8 +126,8 @@ first, and the next run walks down again; the search is not walked in
 its place. The one thing the walk cannot list is a database past
 Notion's cap of 10,000 results on a query: when one reaches it, the run
 says so in a `listing:roots` row and lists the whole workspace through
-the search instead, as an earlier build's first sync did, which covers
-the beginning so the next run does not walk again.
+the search instead, which covers the beginning so the next run does
+not walk again.
 `FetchOptions::full_sync` walks down again; no config key sets it,
 and nothing in the tree sets it to true.
 
@@ -205,8 +205,8 @@ leaves a store a later run finishes.
 each page object roots mode asks for, and each record a loop owes. The
 walk down is not counted, since what it will find is unknown until it
 finds it; it names how many pages it has placed.
-A page the listing stores at a new stamp announces its body, and its
-comment listing, as it is stored, so the queue grows with the search
+A page the listing stores at a new stamp adds its body, and its comment
+listing, to the queue as it is stored, so the queue grows with the search
 walk and the ETA covers the loops ahead. A page of search results is
 not counted, since its size is unknown until it arrives, and neither is
 a page of the trash listing. Attachments, anchors and users join the
@@ -322,7 +322,7 @@ anything: it was not held, so it is owed, and the next run fetches it.
 | more holes than `MAX_HOLE_FOLLOWUPS` | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so it needs fewer |
 | a hole that stays open: a block the API will not show, a link that is not http or https, or a subtree answering 404 (gone, or not visible to this credential) | `page_markdown:<id>`, a warning; the body is stored and held | the page changing so nothing is lost |
 | an attachment's bytes | `notion_attachments:<page>#<slot>` | the bytes landing, or the body no longer linking it |
-| an attachment larger than one plain request takes (1 GiB) | `notion_attachments:<page>#<slot>`, a warning (`over_size_limit`); it stays owed, and curl stops at once when the size is announced | the file shrinking, or the body no longer linking it |
+| an attachment larger than one plain request takes (1 GiB) | `notion_attachments:<page>#<slot>`, a warning (`over_size_limit`); it stays owed, and curl stops at once when the response gives its size | the file shrinking, or the body no longer linking it |
 | a commented block | `comment_anchors:<id>` | the block fetching |
 | a database or block a page sits under | `tree:<id>` | the parent fetching |
 | a user, other than with a 403 or a 404 | `users:<id>` | the user fetching |

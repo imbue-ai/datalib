@@ -2,7 +2,8 @@
 //! walks a Google Takeout export on disk (`~/backups/Takeout/` or
 //! similar, or the folder of `.zip` parts Google sent) and lands the entries we care about — Maps reviews / saved
 //! places / photos, YouTube watch history + subscriptions, Google Chat
-//! DMs + bots + attachments, and Gemini Apps activity — into a
+//! DMs + bots + attachments, Gemini Apps activity, Google Voice, Maps
+//! lists, My Maps maps and Play Books annotations — into a
 //! provider-owned doltlite raw store. Rendering lives in
 //! [`datalib_etl_google_takeout_render`].
 

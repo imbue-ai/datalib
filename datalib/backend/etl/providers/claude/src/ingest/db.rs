@@ -251,7 +251,7 @@ impl RawDb {
 
     /// claude.ai no longer has the conversation: its row and its edges
     /// go. The loop takes the sidecar and the problem rows.
-    pub async fn forget_conversation(
+    pub async fn delete_conversation(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
         uuid: &str,
@@ -579,7 +579,7 @@ impl RawDb {
     }
 
     /// claude.ai no longer has the task: its row and its log go.
-    pub async fn forget_cowork_session(
+    pub async fn delete_cowork_session(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
         id: &str,

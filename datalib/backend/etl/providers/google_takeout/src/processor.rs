@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `google_takeout` source. File-backed:
+//! The `DataProcessor`s for the `google_takeout` source. File-backed:
 //! download walks the Takeout at `export.path`, unpacked or zipped, and lands the
 //! opted-in feeds into a provider-owned doltlite raw store, which
 //! `datalib_etl_google_takeout_render` renders. The source owns its raw

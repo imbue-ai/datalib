@@ -456,11 +456,11 @@ async fn a_listed_conversation_whose_detail_is_missing_keeps_what_is_held() {
 }
 
 /// A stub belongs to whichever org listed it, so an org that refused its
-/// listing holds the stub prune back; and a run every org refuses (a
-/// session expired inside the org cache) fails rather than reading as
-/// "everything deleted".
+/// listing keeps every stub from being pruned; and a run every org
+/// refuses (a session expired inside the org cache) fails rather than
+/// reading as "everything deleted".
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_refused_org_holds_back_the_stub_prune_and_all_refused_fails() {
+async fn a_refused_org_keeps_every_stub_and_all_refused_fails() {
     let acct = Account::new(true);
     acct.holds(
         &[

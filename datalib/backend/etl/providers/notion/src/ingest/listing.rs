@@ -388,7 +388,7 @@ impl Ctx<'_> {
         }
         tx.commit().await?;
         self.wrote(rows.len() as u64).await;
-        self.foresee_pages(rows.len() as u64);
+        self.expect_bodies_and_comments(rows.len() as u64);
         Ok(stored)
     }
 
@@ -802,9 +802,9 @@ mod tests {
         );
     }
 
-    /// A listing is complete only on Notion's own word for it: losing the
-    /// thread must not read as the end, or a flag is asked about for
-    /// nothing.
+    /// A listing is complete only when Notion says `has_more: false`: a
+    /// response with no cursor to follow must not read as the end, or a
+    /// flag is asked about for nothing.
     #[test]
     fn only_has_more_false_ends_a_listing() {
         let next = |v: Value| next_of(&v);

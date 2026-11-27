@@ -132,7 +132,7 @@ pub struct ScanResult {
     /// named. `None` → every room.
     pub render: Option<HashSet<String>>,
     /// Render unit keys the driver found stale whose room row is gone —
-    /// declared with nothing so their documents go.
+    /// declared with no inputs, so their documents are deleted.
     pub gone: Vec<String>,
     /// The commit this parse read. `None` when nothing was committed.
     pub new_head: Option<String>,
@@ -699,9 +699,9 @@ fn bridge_of(account_id: &str) -> &str {
     account_id.split(['.', '_']).next().unwrap_or(account_id)
 }
 
-/// A row per kind of account whose chats no document shows. On Beeper's own
-/// `hungryserv` and in its `$space`s nothing is wrong, so that is on record at
-/// `info`; a bridge this list does not know is a warning.
+/// A `problems` row per kind of account whose chats no document shows. On
+/// Beeper's own `hungryserv` and in its `$space`s nothing is wrong, so that
+/// row is at `info`; a bridge this list does not know is a warning.
 pub fn unlisted_chat_rows(
     unlisted: &BTreeMap<String, usize>,
     source_id: &str,
