@@ -1,7 +1,7 @@
 // "Compare two versions" in the commit-history card: which two commits
 // a comparison is between, and the config text that adds it. A
 // comparison is a diff group over two commits of its source's raw
-// store (docs/dev/plans/completed/diff_renderer.md), so only commits of
+// store (docs/dev/config_model.md), so only commits of
 // that one store can be paired.
 
 import type { HistoryRow } from "./commitHistory";

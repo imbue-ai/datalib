@@ -39,8 +39,10 @@ pub mod handles {
     use super::*;
 
     /// A link: a handle is a contact's, and an address two people share
-    /// is linked to each of them, one row each. A link an agent made
-    /// names the agent and its reason, and waits for a person until
+    /// is linked to each of them, one row each. It is also a line of the
+    /// contact, with the person's label ("work") and the source record it
+    /// was copied from, where it was. A link an agent made names the
+    /// agent and its reason, and waits for a person until
     /// `reviewed_at_utc` says one confirmed it.
     #[derive(Debug, Clone, PortableTable)]
     #[portable_table(
@@ -72,6 +74,12 @@ pub mod handles {
         pub confidence: Option<f64>,
         #[col(sql = "TEXT")]
         pub run: Option<String>,
+        #[col(sql = "TEXT")]
+        pub label: Option<String>,
+        #[col(sql = "TEXT")]
+        pub copied_from_source: Option<String>,
+        #[col(sql = "TEXT")]
+        pub copied_from_key: Option<String>,
     }
 }
 
@@ -148,9 +156,9 @@ pub mod fields {
     use super::*;
 
     /// One line of what a contact says about a person, as vCard has
-    /// them: a number, an address, a title. A field links nothing, even
-    /// an email or a number; `handle` is its value as a handle, where it
-    /// is one, so the card can say how it stands against the links.
+    /// them: a title, a street address, a birthday. An email or a number
+    /// that is a handle is a link instead, from the save on; `handle` is
+    /// a field's value as a handle, where it is one, until that save.
     #[derive(Debug, Clone, PortableTable)]
     #[portable_table(
         table = "fields",

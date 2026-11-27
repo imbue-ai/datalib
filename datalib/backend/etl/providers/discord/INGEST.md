@@ -149,7 +149,9 @@ owed from an earlier run whose link has run out has its message read
 again, with `around`, for a new one: a single message has an endpoint of
 its own, which only a bot may call. A file over
 `common.blob_size_limit_bytes` is a warning on it and is judged against
-the limit again each run.
+the limit again each run. A file whose download breaks five times in a
+row (no answer, or a 5xx) fails alone: a problem on it, owed again next
+run, and the files after it go on.
 
 ## Edits, reactions and deletions
 

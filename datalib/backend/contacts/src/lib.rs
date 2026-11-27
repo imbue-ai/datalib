@@ -317,7 +317,11 @@ async fn rebuild_handles(conn: &mut sqlx::SqliteConnection) -> Result<()> {
 
 /// A link as the store holds it. One the handle rules no longer read is
 /// shown as written, with no handle, rather than left out.
-fn stored_link(stored: &str, stopped_working_by: Option<String>) -> ContactHandle {
+fn stored_link(
+    stored: &str,
+    stopped_working_by: Option<String>,
+    label: Option<String>,
+) -> ContactHandle {
     let mut link = match Handle::parse(stored) {
         Some(h) => ContactHandle::of(h),
         None => {
@@ -338,6 +342,7 @@ fn stored_link(stored: &str, stopped_working_by: Option<String>) -> ContactHandl
         }
     };
     link.stopped_working_by = stopped_working_by;
+    link.label = label;
     link
 }
 
@@ -602,6 +607,26 @@ impl WhenHeld {
     }
 }
 
+/// What was said about a handle as it was added: the person's label for
+/// it ("work"), and the source record it was copied from, where it was.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HandleFrom {
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub copied_from: Option<drafts::CopiedFrom>,
+}
+
+impl HandleFrom {
+    fn label(&self) -> Option<String> {
+        self.label
+            .as_deref()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+    }
+}
+
 /// `2019`, `2019-06` or `2019-06-14`: as precise as the person knows.
 fn is_partial_date(s: &str) -> bool {
     let parts: Vec<&str> = s.split('-').collect();
@@ -709,7 +734,7 @@ impl Store {
         .context("read whether a contact has a photo")?;
         let links = sql!(
             "contacts_app.list_handles_of_contact",
-            "SELECT handle, stopped_working_by FROM handles WHERE contact_id = ? \
+            "SELECT handle, stopped_working_by, label FROM handles WHERE contact_id = ? \
               ORDER BY stopped_working_by IS NOT NULL, handle"
         )
         .query()
@@ -718,7 +743,7 @@ impl Store {
         .await
         .context("read a contact's handles")?
         .iter()
-        .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by")))
+        .map(|h| stored_link(h.get("handle"), h.get("stopped_working_by"), h.get("label")))
         .collect();
         let me: Option<i64> = sql!(
             "contacts_app.is_contact_me",
@@ -753,7 +778,7 @@ impl Store {
         let mut links: HashMap<String, Vec<ContactHandle>> = HashMap::new();
         for h in sql!(
             "contacts_app.list_all_handles",
-            "SELECT contact_id, handle, stopped_working_by FROM handles \
+            "SELECT contact_id, handle, stopped_working_by, label FROM handles \
               ORDER BY contact_id, stopped_working_by IS NOT NULL, handle"
         )
         .query()
@@ -764,7 +789,11 @@ impl Store {
             links
                 .entry(h.get("contact_id"))
                 .or_default()
-                .push(stored_link(h.get("handle"), h.get("stopped_working_by")));
+                .push(stored_link(
+                    h.get("handle"),
+                    h.get("stopped_working_by"),
+                    h.get("label"),
+                ));
         }
         let photo_set_at: HashMap<String, String> = sql!(
             "contacts_app.list_photo_set_at",
@@ -814,7 +843,8 @@ impl Store {
             let held = holders(&mut *tx, h).await?;
             match plan_link(&held, &contact_id, WhenHeld::Refuse) {
                 LinkPlan::Insert => {
-                    insert_handle(&mut tx, h, &contact_id, Maker::Person, &now, &tz).await?
+                    let from = HandleFrom::default();
+                    insert_handle(&mut tx, h, &contact_id, Maker::Person, &from, &now, &tz).await?
                 }
                 LinkPlan::AlreadyLinked => {}
                 _ => bail!("{h} already belongs to {}", names_of(&mut tx, &held).await?),
@@ -830,8 +860,16 @@ impl Store {
     /// does nothing. A handle other contacts have is refused unless `held`
     /// says to share it with them or to move it here, which takes it off
     /// them as not theirs. A person linking a pair they once turned down
-    /// has changed their mind, so the turn-down goes.
-    pub async fn link(&self, handle: &Handle, contact_id: &str, held: WhenHeld) -> Result<()> {
+    /// has changed their mind, so the turn-down goes. `from` is the
+    /// label and the card it came with; a handle linked already keeps
+    /// its own.
+    pub async fn link(
+        &self,
+        handle: &Handle,
+        contact_id: &str,
+        held: WhenHeld,
+        from: &HandleFrom,
+    ) -> Result<()> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
         let name: Option<String> = sql!(
@@ -845,7 +883,8 @@ impl Store {
         let Some(name) = name else {
             bail!("no contact {contact_id}");
         };
-        let Some(what) = link_in(&mut tx, handle, contact_id, &name, held, &now, &tz).await? else {
+        let linked = link_in(&mut tx, handle, contact_id, &name, held, from, &now, &tz).await?;
+        let Some(what) = linked else {
             return Ok(());
         };
         tx.commit().await?;
@@ -934,6 +973,34 @@ impl Store {
         let what = by.map_or("works again".to_string(), |d| {
             format!("stopped working by {d}")
         });
+        self.seal(&format!("contacts: {handle} {what}")).await?;
+        Ok(true)
+    }
+
+    /// Label a handle linked to `contact_id` ("work", "cell"), or clear
+    /// its label with `None`. Returns whether it was linked to them.
+    pub async fn set_handle_label(
+        &self,
+        handle: &Handle,
+        contact_id: &str,
+        label: Option<&str>,
+    ) -> Result<bool> {
+        let label = label.map(str::trim).filter(|l| !l.is_empty());
+        let done = sql!(
+            "contacts_app.label_handle",
+            "UPDATE handles SET label = ? WHERE handle = ? AND contact_id = ?"
+        )
+        .query()
+        .bind(label)
+        .bind(handle.as_str())
+        .bind(contact_id)
+        .execute(&self.pool)
+        .await
+        .context("label a handle")?;
+        if done.rows_affected() == 0 {
+            return Ok(false);
+        }
+        let what = label.map_or("has no label".to_string(), |l| format!("is {l:?}"));
         self.seal(&format!("contacts: {handle} {what}")).await?;
         Ok(true)
     }
@@ -1198,9 +1265,11 @@ impl Store {
         for (sql, what) in [
             (
                 "INSERT OR IGNORE INTO handles (handle, contact_id, linked_how, linked_at_utc, \
-                   tz_offset, stopped_working_by, agent, reason, reviewed_at_utc, confidence, run) \
+                   tz_offset, stopped_working_by, agent, reason, reviewed_at_utc, confidence, run, \
+                   label, copied_from_source, copied_from_key) \
                  SELECT handle, ?2, linked_how, linked_at_utc, tz_offset, stopped_working_by, \
-                   agent, reason, reviewed_at_utc, confidence, run FROM handles WHERE contact_id = ?1",
+                   agent, reason, reviewed_at_utc, confidence, run, label, copied_from_source, \
+                   copied_from_key FROM handles WHERE contact_id = ?1",
                 "move the links, the survivor's own winning",
             ),
             ("DELETE FROM handles WHERE contact_id = ?1", "drop the old links"),
@@ -1421,16 +1490,18 @@ async fn insert_contact(
 
 /// [`Store::link`] inside `tx`, to the contact called `name`: what the
 /// commit should say it did, or `None` when it was linked already.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn link_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut sqlx::SqliteConnection,
     handle: &Handle,
     contact_id: &str,
     name: &str,
     held: WhenHeld,
+    from: &HandleFrom,
     now: &str,
     tz: &str,
 ) -> Result<Option<String>> {
-    let holding = holders(&mut **tx, handle).await?;
+    let holding = holders(&mut *tx, handle).await?;
     let what = match plan_link(&holding, contact_id, held) {
         LinkPlan::AlreadyLinked => return Ok(None),
         LinkPlan::HeldBy(others) => {
@@ -1452,7 +1523,7 @@ pub(crate) async fn link_in(
             format!("move {handle} from {from} to {name:?}")
         }
     };
-    insert_handle(tx, handle, contact_id, Maker::Person, now, tz).await?;
+    insert_handle(tx, handle, contact_id, Maker::Person, from, now, tz).await?;
     sql!(
         "contacts_app.delete_not_linked_on_link",
         "DELETE FROM not_linked WHERE handle = ? AND contact_id = ?"
@@ -1460,17 +1531,18 @@ pub(crate) async fn link_in(
     .query()
     .bind(handle.as_str())
     .bind(contact_id)
-    .execute(&mut **tx)
+    .execute(&mut *tx)
     .await
     .context("forget a turned-down link")?;
     Ok(Some(what))
 }
 
 async fn insert_handle(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut sqlx::SqliteConnection,
     h: &Handle,
     contact_id: &str,
     by: Maker<'_>,
+    from: &HandleFrom,
     now: &str,
     tz: &str,
 ) -> Result<()> {
@@ -1486,14 +1558,18 @@ async fn insert_handle(
         reviewed_at_utc: None,
         confidence: by.confidence(),
         run: by.run(),
+        label: from.label(),
+        copied_from_source: from.copied_from.as_ref().map(|c| c.source_id.clone()),
+        copied_from_key: from.copied_from.as_ref().map(|c| c.key.clone()),
     };
     // `handles` has a two-column key, which `PortableTable` derives no
     // upsert for.
     sql!(
         "contacts_app.insert_handle",
         "INSERT OR REPLACE INTO handles (handle, contact_id, linked_how, linked_at_utc, \
-           tz_offset, stopped_working_by, agent, reason, reviewed_at_utc, confidence, run) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+           tz_offset, stopped_working_by, agent, reason, reviewed_at_utc, confidence, run, \
+           label, copied_from_source, copied_from_key) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     .query()
     .bind(&row.handle)
@@ -1507,7 +1583,10 @@ async fn insert_handle(
     .bind(&row.reviewed_at_utc)
     .bind(row.confidence)
     .bind(&row.run)
-    .execute(&mut **tx)
+    .bind(&row.label)
+    .bind(&row.copied_from_source)
+    .bind(&row.copied_from_key)
+    .execute(&mut *tx)
     .await
     .context("link a handle")?;
     Ok(())
@@ -2027,7 +2106,7 @@ mod tests {
         );
 
         store
-            .link(&vineyard, "marie", WhenHeld::Share)
+            .link(&vineyard, "marie", WhenHeld::Share, &HandleFrom::default())
             .await
             .unwrap();
         let got = store
@@ -2046,7 +2125,10 @@ mod tests {
             .unwrap()
             .unwrap()
             .published_commit;
-        let saved = store.save("marie", &seen).await.unwrap();
+        let saved = store
+            .save("marie", &seen, &Default::default())
+            .await
+            .unwrap();
         assert!(matches!(saved, drafts::Saved::Saved { .. }), "{saved:?}");
         let marie = store.contact("marie").await.unwrap().unwrap();
         assert_eq!(marie.note.as_deref(), Some("runs the vineyard"));
@@ -2073,7 +2155,7 @@ mod tests {
             .await
             .unwrap();
         let err = store
-            .link(&vineyard, &marie, WhenHeld::Refuse)
+            .link(&vineyard, &marie, WhenHeld::Refuse, &HandleFrom::default())
             .await
             .unwrap_err();
         assert!(
@@ -2082,7 +2164,7 @@ mod tests {
             "{err}"
         );
         store
-            .link(&vineyard, &marie, WhenHeld::Share)
+            .link(&vineyard, &marie, WhenHeld::Share, &HandleFrom::default())
             .await
             .unwrap();
         let holders = |got: HashMap<String, Vec<NormalizedContact>>| -> Vec<String> {
@@ -2113,7 +2195,7 @@ mod tests {
             .await
             .unwrap();
         store
-            .link(&vineyard, &beverly, WhenHeld::Move)
+            .link(&vineyard, &beverly, WhenHeld::Move, &HandleFrom::default())
             .await
             .unwrap();
         assert_eq!(
@@ -2133,7 +2215,7 @@ mod tests {
         );
 
         store
-            .link(&vineyard, &marie, WhenHeld::Share)
+            .link(&vineyard, &marie, WhenHeld::Share, &HandleFrom::default())
             .await
             .unwrap();
         store.merge(&marie, &beverly).await.unwrap();
@@ -2175,7 +2257,10 @@ mod tests {
             )
             .await
             .unwrap();
-        store.link(&tel, &will, WhenHeld::Refuse).await.unwrap();
+        store
+            .link(&tel, &will, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
         store
             .set_stopped_working(&riker, &will, Some("2369"))
             .await
@@ -2237,8 +2322,14 @@ mod tests {
             )
             .await
             .unwrap();
-        store.link(&tel, &id, WhenHeld::Refuse).await.unwrap();
-        store.link(&tel, &id, WhenHeld::Refuse).await.unwrap();
+        store
+            .link(&tel, &id, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
+        store
+            .link(&tel, &id, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
 
         let got = store.resolve(&[riker.clone(), tel.clone()]).await.unwrap();
         assert_eq!(got.len(), 2);
@@ -2251,7 +2342,7 @@ mod tests {
             .await
             .unwrap();
         let err = store
-            .link(&tel, &other, WhenHeld::Refuse)
+            .link(&tel, &other, WhenHeld::Refuse, &HandleFrom::default())
             .await
             .unwrap_err();
         assert!(
@@ -2334,7 +2425,10 @@ mod tests {
         let c = store.contact(&id).await.unwrap().unwrap();
         assert_eq!(c.photo_url.as_deref(), Some(first.as_str()));
         let riker = email("riker@enterprise.org");
-        store.link(&riker, &id, WhenHeld::Refuse).await.unwrap();
+        store
+            .link(&riker, &id, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
         let got = store.resolve(std::slice::from_ref(&riker)).await.unwrap();
         assert_eq!(
             got[riker.as_str()][0].photo_url,
@@ -2547,7 +2641,7 @@ mod tests {
         let err = store.delete(&dup).await.unwrap_err().to_string();
         assert!(err.contains("no contact"), "{err}");
         store
-            .link(&tel, &listed[0], WhenHeld::Refuse)
+            .link(&tel, &listed[0], WhenHeld::Refuse, &HandleFrom::default())
             .await
             .unwrap();
         store.close().await;

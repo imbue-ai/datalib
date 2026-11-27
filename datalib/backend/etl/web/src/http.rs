@@ -241,6 +241,13 @@ pub struct HttpRequest {
     /// stored account to run as, but providers pass the struct rather
     /// than the field so a new knob reaches all of them at once.
     pub latchkey: LatchkeySettings,
+    /// How many times this request is sent while it fails by itself (no
+    /// answer, or a 5xx with no `Retry-After`) before it is handed back
+    /// to its caller as that failure. For a request whose failure costs
+    /// one record, such as a file: one link that always breaks would
+    /// otherwise hold the source until its guard gave up on all of it.
+    /// A rate limit is not counted. `None`: tried until the guard gives up.
+    pub attempts: Option<u32>,
 }
 
 impl HttpRequest {
@@ -255,6 +262,7 @@ impl HttpRequest {
             bypass_latchkey: false,
             max_bytes: DEFAULT_MAX_BYTES,
             latchkey: LatchkeySettings::default(),
+            attempts: None,
         }
     }
 
@@ -271,6 +279,7 @@ impl HttpRequest {
             bypass_latchkey: false,
             max_bytes: DEFAULT_MAX_BYTES,
             latchkey: LatchkeySettings::default(),
+            attempts: None,
         }
     }
 
@@ -296,6 +305,11 @@ impl HttpRequest {
 
     pub fn latchkey(mut self, settings: LatchkeySettings) -> Self {
         self.latchkey = settings;
+        self
+    }
+
+    pub fn attempts(mut self, attempts: u32) -> Self {
+        self.attempts = Some(attempts.max(1));
         self
     }
 }
@@ -694,7 +708,8 @@ where
     // throwaway outside any download scope). It owns both the give-up limits
     // and the backoff schedule.
     let guard = crate::retry::current_or_default();
-    let mut backoff = guard.initial_backoff();
+    let mut backoff = guard.backoff_now();
+    let mut failed_alone = 0u32;
     loop {
         // Held for the attempt only, never through a backoff, so a request
         // waiting to retry leaves its slot to one that can go now.
@@ -784,6 +799,23 @@ where
                 reason: format!("{reason}; last attempt: {detail}"),
                 last_status: outcome.as_ref().ok().map(|resp| resp.status),
             });
+        }
+
+        let alone = retry_after.is_none()
+            && match &outcome {
+                Ok(resp) => resp.status >= 500,
+                Err(_) => true,
+            };
+        failed_alone += u32::from(alone);
+        if req.attempts.is_some_and(|n| failed_alone >= n) {
+            tracing::warn!(
+                service = %req.service,
+                url = %ShownUrl::of(req),
+                attempts = failed_alone,
+                "{} failed {failed_alone} times by itself: handing it back to its caller",
+                ShownUrl::of(req),
+            );
+            return outcome;
         }
 
         let wait = match retry_after {
@@ -1836,6 +1868,69 @@ mod tests {
             matches!(second, Err(HttpError::Interrupted { .. })),
             "no request leaves after a give-up; got {second:?}"
         );
+    }
+
+    /// One Discord file whose link broke every time held the whole
+    /// download for the guard's thirty minutes, and then the source gave
+    /// up on every file after it. A request with attempts of its own is
+    /// handed back as its failure once they are used, the source goes on,
+    /// and the failures still count toward the source's streak.
+    #[tokio::test]
+    async fn a_request_that_fails_alone_is_handed_back_after_its_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        ok_fixture(dir.path(), &req);
+        let offline = dir.path().join("offline");
+        std::fs::write(&offline, "").unwrap();
+
+        let stop = datalib_etl::stop::StopFlag::new();
+        let fast = Duration::from_millis(1);
+        let guard =
+            crate::retry::RetryGuard::new(Duration::from_secs(3600), 100, fast, fast, stop.clone());
+        let playback = playback::Playback::at(dir.path()).offline(&offline);
+        let (first, streak, second) = playback::scope(
+            playback,
+            crate::retry::scope(guard.clone(), async {
+                let first = latchkey_curl(&req.clone().attempts(3)).await;
+                let streak = guard.budget().sequential_failures;
+                std::fs::remove_file(&offline).unwrap();
+                (first, streak, latchkey_curl(&req).await)
+            }),
+        )
+        .await;
+        assert!(
+            matches!(first, Err(HttpError::Curl { .. })),
+            "handed back as its own failure, not a give-up; got {first:?}"
+        );
+        assert_eq!(streak, 3, "each attempt counts toward the source's streak");
+        assert_eq!(stop.gave_up(), None, "the source did not give up");
+        assert_eq!(second.unwrap().status, 200, "the next request still goes");
+    }
+
+    /// A rate limit is about the service, not the request: it does not use
+    /// up a request's own attempts, and the guard alone decides.
+    #[tokio::test]
+    async fn a_rate_limit_does_not_use_up_a_requests_attempts() {
+        let dir = tempfile::tempdir().unwrap();
+        let req = HttpRequest::get(HttpService::Slack, "https://slack.com/api/auth.test");
+        always_429(dir.path(), &req);
+        let fast = Duration::from_millis(1);
+        let guard = crate::retry::RetryGuard::new(
+            Duration::from_secs(3600),
+            5,
+            fast,
+            fast,
+            datalib_etl::stop::StopFlag::default(),
+        );
+        let err = playback::scope(
+            dir.path(),
+            crate::retry::scope(guard, async {
+                latchkey_curl(&req.clone().attempts(2)).await
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(err, HttpError::GaveUp { .. }), "got {err:?}");
     }
 
     /// A request that fails for good (here a tape with no answer) is not

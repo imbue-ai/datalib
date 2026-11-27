@@ -71,10 +71,8 @@ async function quietestRendered(request: APIRequestContext): Promise<string> {
   return sources[0][0];
 }
 
-/// Sync the source's render, and the index after it, and wait for the
-/// request to close.
-async function render(request: APIRequestContext, source: string) {
-  const step = `${source}/render_markdown`;
+/// Sync `step` and what reads it, and wait for the request to close.
+async function sync(request: APIRequestContext, step: string) {
   const opened = await request.post("/api/requests", { data: { roots: [step] } });
   expect(opened.ok(), await opened.text()).toBe(true);
   const [mine] = (await opened.json()) as SyncRequest[];
@@ -98,15 +96,21 @@ test.afterEach(async ({ request }) => {
 });
 
 test("muting a source's problems in the grid takes it off Needs you", async ({ page, request }) => {
-  // A render and the index after it run first.
+  // The source's download, its render and the index after it run first.
+  // The library has never run a download, so a sync of the render alone
+  // fails on a download that has never published.
   test.setTimeout(180_000);
   const source = await quietestRendered(request);
-  await render(request, source);
+  await sync(request, `${source}/ingest`);
   const query = await countedQuery(request, source);
   const theirs = await problems(request, query);
-  // Rendered again unchanged, every problem has the id it had: a mute
-  // keyed on the id holds across syncs.
-  await render(request, source);
+  // Rendered again from an emptied render store, every problem has the
+  // id it had: a mute keyed on the id holds across syncs.
+  const reset = await request.post("/api/reset", {
+    data: { targets: [`${source}/render_markdown`] },
+  });
+  expect(reset.ok(), await reset.text()).toBe(true);
+  await sync(request, `${source}/render_markdown`);
   expect(ids(await problems(request, query))).toEqual(ids(theirs));
   expect(theirs.every((p) => p.muted === "no" && p.severity !== "info")).toBe(true);
 

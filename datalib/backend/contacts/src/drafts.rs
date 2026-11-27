@@ -1,8 +1,10 @@
 // Editing a contact at length: what the card edits (`ContactEdit`), its
 // draft on a branch of the store, and the save that publishes it with
-// the draft winning only the cells it changed. The mechanism is
+// the draft winning only the cells it changed, and makes each address or
+// number typed into it one of the contact's handles. The mechanism is
 // `datalib_etl::draft`; why it is shaped this way is
-// docs/dev/plans/contact_editing.md.
+// docs/dev/plans/contact_editing.md and docs/dev/plans/people.md
+// § "Editing a contact".
 
 use std::collections::BTreeMap;
 
@@ -15,11 +17,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqliteConnection};
 
 use crate::schema::fields::FieldRow;
-use crate::{FieldKind, Store};
+use crate::{holders, link_in, name_of, FieldKind, HandleFrom, Store, WhenHeld};
 use datalib_sql::{sql, sql_id, Sql};
 
 /// What a contact says, as its card edits it: everything but its links
-/// and its photo, which change at once rather than through a draft.
+/// and its photo, which change at once rather than through a draft. An
+/// email or a number among the fields is one the save makes a link.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContactEdit {
     pub name: String,
@@ -65,6 +68,41 @@ pub enum Saved {
     Saved { commit: Option<String> },
     /// The contact moved since the card last looked: nothing was saved.
     Stale { view: Box<DraftView> },
+    /// Addresses or numbers in the draft that other contacts have, which
+    /// the person has not said are theirs too or theirs alone: nothing
+    /// was saved.
+    Held { held: Vec<HeldLine> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HeldLine {
+    pub handle: String,
+    /// The names of the contacts that have it.
+    pub by: Vec<String>,
+}
+
+/// A field the save makes a link: an email or a number the handle rules
+/// read, with its label and the card it was copied from.
+struct NewLink {
+    field_id: String,
+    handle: Handle,
+    from: HandleFrom,
+}
+
+fn new_links(edit: &ContactEdit) -> Vec<NewLink> {
+    edit.fields
+        .iter()
+        .filter_map(|f| {
+            Some(NewLink {
+                field_id: f.field_id.clone(),
+                handle: handle_of(f.kind, &f.value)?,
+                from: HandleFrom {
+                    label: f.label.clone(),
+                    copied_from: f.copied_from.clone(),
+                },
+            })
+        })
+        .collect()
 }
 
 /// Which state of the store a read is of.
@@ -97,13 +135,12 @@ fn check(edit: &ContactEdit) -> Result<()> {
 }
 
 /// A field's value as a handle, where its kind is one a handle can be.
-fn handle_of(kind: FieldKind, value: &str) -> Option<String> {
-    let h = match kind {
+fn handle_of(kind: FieldKind, value: &str) -> Option<Handle> {
+    match kind {
         FieldKind::Email => Handle::email(value),
         FieldKind::Phone => Handle::tel(value),
         _ => None,
-    };
-    h.map(|h| h.as_str().to_string())
+    }
 }
 
 async fn read_edit(
@@ -257,7 +294,7 @@ async fn write_edit(
             kind: f.kind,
             label: f.label.clone().filter(|l| !l.trim().is_empty()),
             value: f.value.trim().to_string(),
-            handle: handle_of(f.kind, &f.value),
+            handle: handle_of(f.kind, &f.value).map(|h| h.as_str().to_string()),
             position: i as i64,
             copied_from_source: f.copied_from.as_ref().map(|c| c.source_id.clone()),
             copied_from_key: f.copied_from.as_ref().map(|c| c.key.clone()),
@@ -266,6 +303,60 @@ async fn write_edit(
     bulk_upsert_entity_in_tx(tx, &rows)
         .await
         .context("write a contact's fields")
+}
+
+/// Make each of `links` a link of the contact, on the save's merged
+/// rows, and drop its field. One linked to them already takes the
+/// field's label and card where it has none of its own.
+async fn make_links(
+    conn: &mut SqliteConnection,
+    contact_id: &str,
+    name: &str,
+    links: &[NewLink],
+    held: &BTreeMap<String, WhenHeld>,
+) -> Result<()> {
+    let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    for l in links {
+        let when = held.get(l.handle.as_str()).copied().unwrap_or_default();
+        link_in(conn, &l.handle, contact_id, name, when, &l.from, &now, &tz).await?;
+        sql!(
+            "contacts_app.drafts.label_linked_handle",
+            "UPDATE handles SET label = ? WHERE handle = ? AND contact_id = ? AND label IS NULL"
+        )
+        .query()
+        .bind(l.from.label())
+        .bind(l.handle.as_str())
+        .bind(contact_id)
+        .execute(&mut *conn)
+        .await
+        .context("label a link")?;
+        if let Some(c) = &l.from.copied_from {
+            sql!(
+                "contacts_app.drafts.source_linked_handle",
+                "UPDATE handles SET copied_from_source = ?, copied_from_key = ? \
+                  WHERE handle = ? AND contact_id = ? AND copied_from_source IS NULL"
+            )
+            .query()
+            .bind(&c.source_id)
+            .bind(&c.key)
+            .bind(l.handle.as_str())
+            .bind(contact_id)
+            .execute(&mut *conn)
+            .await
+            .context("say where a link came from")?;
+        }
+        sql!(
+            "contacts_app.drafts.delete_field_made_a_link",
+            "DELETE FROM fields WHERE field_id = ? AND contact_id = ?"
+        )
+        .query()
+        .bind(&l.field_id)
+        .bind(contact_id)
+        .execute(&mut *conn)
+        .await
+        .context("drop a field made a link")?;
+    }
+    Ok(())
 }
 
 impl Store {
@@ -342,7 +433,10 @@ impl Store {
         Ok(edit
             .fields
             .iter()
-            .filter_map(|f| handle_of(f.kind, &f.value).map(|h| (f.field_id.clone(), h)))
+            .filter_map(|f| {
+                let h = handle_of(f.kind, &f.value)?;
+                Some((f.field_id.clone(), h.as_str().to_string()))
+            })
             .collect())
     }
 
@@ -350,8 +444,16 @@ impl Store {
     /// the contact has moved since `seen`, the published commit the card
     /// last showed: then nothing is saved and the card gets the new view.
     /// A save elsewhere in the store does not count; only a change to
-    /// this contact's name, note or fields does.
-    pub async fn save(&self, contact_id: &str, seen: &str) -> Result<Saved> {
+    /// this contact's name, note or fields does. Each email and number
+    /// among the fields becomes a link, keeping its label and card, and
+    /// stops being a field; one other contacts have needs `held` to say
+    /// whether it is theirs too or theirs alone, or nothing is saved.
+    pub async fn save(
+        &self,
+        contact_id: &str,
+        seen: &str,
+        held: &BTreeMap<String, WhenHeld>,
+    ) -> Result<Saved> {
         let _held = self.drafts.lock().await;
         let b = branch(contact_id);
         if !draft::exists(&self.pool, &b).await? {
@@ -377,9 +479,50 @@ impl Store {
         let mut on = OnDraft::enter(&self.pool, &b).await?;
         let mine = read_edit(on.conn(), At::Here, contact_id).await;
         on.leave().await?;
-        let name = mine?.map_or_else(|| contact_id.to_string(), |e| e.name);
-        let commit = draft::save(&self.pool, &b, &format!("contacts: edit {name:?}")).await?;
+        let Some(mine) = mine? else {
+            bail!("no contact {contact_id}");
+        };
+        let links = new_links(&mine);
+        let asked = self.to_ask(contact_id, &links, held).await?;
+        if !asked.is_empty() {
+            return Ok(Saved::Held { held: asked });
+        }
+        let message = format!("contacts: edit {:?}", mine.name);
+        let (contact_id, name, held) = (contact_id.to_string(), mine.name, held.clone());
+        let finish: draft::Finish = Box::new(move |conn| {
+            Box::pin(async move { make_links(conn, &contact_id, &name, &links, &held).await })
+        });
+        let commit = draft::save(&self.pool, &b, &message, finish).await?;
         Ok(Saved::Saved { commit })
+    }
+
+    /// The new links other contacts have, which `held` says nothing of.
+    async fn to_ask(
+        &self,
+        contact_id: &str,
+        links: &[NewLink],
+        held: &BTreeMap<String, WhenHeld>,
+    ) -> Result<Vec<HeldLine>> {
+        let mut conn = self.pool.acquire().await?;
+        let mut asked = Vec::new();
+        for l in links {
+            if held.contains_key(l.handle.as_str()) {
+                continue;
+            }
+            let mut by = Vec::new();
+            for id in holders(&mut *conn, &l.handle).await? {
+                if id != contact_id {
+                    by.push(name_of(&mut conn, &id).await?);
+                }
+            }
+            if !by.is_empty() {
+                asked.push(HeldLine {
+                    handle: l.handle.as_str().to_string(),
+                    by,
+                });
+            }
+        }
+        Ok(asked)
     }
 
     /// Throw the contact's draft away.
@@ -393,7 +536,6 @@ impl Store {
 mod tests {
     use super::*;
     use crate::ContactKind;
-    use crate::WhenHeld;
     use strum::VariantArray;
 
     use datalib_sql::test_sql;
@@ -453,16 +595,28 @@ mod tests {
         }
     }
 
+    /// An autosave is the draft's alone; the save publishes it, and the
+    /// number typed into it becomes his, with its label and its card,
+    /// while one no handle rule reads stays a line of text.
     #[tokio::test]
     async fn an_autosave_is_seen_by_nobody_until_the_save_publishes_it() {
         let f = riker().await;
         let view = f.store.draft(&f.riker).await.unwrap();
+        let card = CopiedFrom {
+            source_id: "contacts".into(),
+            key: "tng-riker".into(),
+        };
         let mine = edit(
             "Will Riker",
             Some("plays trombone"),
             vec![
                 field("f1", FieldKind::Title, "First officer"),
-                field("f2", FieldKind::Phone, "+1 (555) 012-3456"),
+                Field {
+                    label: Some("cell".into()),
+                    copied_from: Some(card.clone()),
+                    ..field("f2", FieldKind::Phone, "+1 (555) 012-3456")
+                },
+                field("f3", FieldKind::Phone, "555 0199"),
             ],
         );
         let handles = f.store.autosave(&f.riker, &mine).await.unwrap();
@@ -480,7 +634,7 @@ mod tests {
 
         let saved = f
             .store
-            .save(&f.riker, &view.published_commit)
+            .save(&f.riker, &view.published_commit, &BTreeMap::new())
             .await
             .unwrap();
         assert!(
@@ -495,19 +649,105 @@ mod tests {
                 .iter()
                 .map(|f| (f.field_id.as_str(), f.value.as_str(), f.handle.as_deref()))
                 .collect::<Vec<_>>(),
-            [
-                ("f1", "First officer", None),
-                ("f2", "+1 (555) 012-3456", Some("tel:+15550123456"))
-            ],
-            "a number field carries its handle, and links nothing"
+            [("f1", "First officer", None), ("f3", "555 0199", None)],
+            "the number is a link now, not a field; the one with no country code stays text"
         );
-        assert!(f
-            .store
-            .resolve(&[Handle::tel("+15550123456").unwrap()])
-            .await
-            .unwrap()
-            .is_empty());
+        let tel = Handle::tel("+15550123456").unwrap();
+        let theirs = f.store.resolve(std::slice::from_ref(&tel)).await.unwrap();
+        let link = &theirs[tel.as_str()][0];
+        assert_eq!(link.names, ["Will Riker"]);
+        assert_eq!(link.handles[0].label.as_deref(), Some("cell"));
+        let source: (Option<String>, Option<String>) = test_sql!(
+            "SELECT copied_from_source, copied_from_key FROM handles WHERE handle = 'tel:+15550123456'"
+        )
+        .query_as()
+        .fetch_one(&f.store.pool)
+        .await
+        .unwrap();
+        assert_eq!(source, (Some(card.source_id), Some(card.key)));
         assert_eq!(log(&f.store, 1).await, ["contacts: edit \"Will Riker\""]);
+    }
+
+    /// A number another contact has is not taken by a save: the save asks,
+    /// saving nothing, and saves once the person says it is both of
+    /// theirs. One already his takes the field's label and stops being a
+    /// field.
+    #[tokio::test]
+    async fn a_save_asks_before_making_a_link_another_contact_has() {
+        let f = riker().await;
+        let tel = Handle::tel("+15550123456").unwrap();
+        let email = Handle::email("riker@enterprise.org").unwrap();
+        f.store
+            .create(
+                "Deanna Troi",
+                ContactKind::Person,
+                std::slice::from_ref(&tel),
+            )
+            .await
+            .unwrap();
+        f.store
+            .link(&email, &f.riker, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
+        let view = f.store.draft(&f.riker).await.unwrap();
+        let mine = edit(
+            "Will Riker",
+            None,
+            vec![
+                field("f1", FieldKind::Phone, "+1 555 012 3456"),
+                Field {
+                    label: Some("work".into()),
+                    ..field("f2", FieldKind::Email, "Riker@Enterprise.org")
+                },
+            ],
+        );
+        f.store.autosave(&f.riker, &mine).await.unwrap();
+
+        let saved = f
+            .store
+            .save(&f.riker, &view.published_commit, &BTreeMap::new())
+            .await
+            .unwrap();
+        assert_eq!(
+            saved,
+            Saved::Held {
+                held: vec![HeldLine {
+                    handle: tel.as_str().into(),
+                    by: vec!["Deanna Troi".into()],
+                }]
+            }
+        );
+        assert_eq!(
+            f.store.edit_of(&f.riker).await.unwrap().unwrap().name,
+            "William Riker",
+            "nothing saved"
+        );
+
+        let share = BTreeMap::from([(tel.as_str().to_string(), WhenHeld::Share)]);
+        let saved = f
+            .store
+            .save(&f.riker, &view.published_commit, &share)
+            .await
+            .unwrap();
+        assert!(matches!(saved, Saved::Saved { .. }), "{saved:?}");
+        let both = f.store.resolve(std::slice::from_ref(&tel)).await.unwrap();
+        let names: Vec<&str> = both[tel.as_str()].iter().filter_map(|c| c.name()).collect();
+        assert_eq!(names, ["Deanna Troi", "Will Riker"]);
+        let will = f.store.contact(&f.riker).await.unwrap().unwrap();
+        let labels: Vec<(Option<&str>, Option<&str>)> = will
+            .handles
+            .iter()
+            .map(|h| (h.handle.as_ref().map(Handle::as_str), h.label.as_deref()))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                (Some(email.as_str()), Some("work")),
+                (Some(tel.as_str()), None)
+            ]
+        );
+        let edit = f.store.edit_of(&f.riker).await.unwrap().unwrap();
+        assert!(edit.fields.is_empty(), "{:?}", edit.fields);
     }
 
     #[tokio::test]
@@ -540,7 +780,7 @@ mod tests {
 
         let Saved::Stale { view: newer } = f
             .store
-            .save(&f.riker, &view.published_commit)
+            .save(&f.riker, &view.published_commit, &BTreeMap::new())
             .await
             .unwrap()
         else {
@@ -554,7 +794,7 @@ mod tests {
         // Saving again, having seen it, the draft wins the name.
         let saved = f
             .store
-            .save(&f.riker, &newer.published_commit)
+            .save(&f.riker, &newer.published_commit, &BTreeMap::new())
             .await
             .unwrap();
         assert!(
@@ -584,7 +824,7 @@ mod tests {
 
         let saved = f
             .store
-            .save(&f.riker, &view.published_commit)
+            .save(&f.riker, &view.published_commit, &BTreeMap::new())
             .await
             .unwrap();
         assert!(
@@ -613,13 +853,13 @@ mod tests {
             .unwrap();
         let email = Handle::email("riker@enterprise.org").unwrap();
         f.store
-            .link(&email, &f.riker, WhenHeld::Refuse)
+            .link(&email, &f.riker, WhenHeld::Refuse, &HandleFrom::default())
             .await
             .unwrap();
 
         let saved = f
             .store
-            .save(&f.riker, &view.published_commit)
+            .save(&f.riker, &view.published_commit, &BTreeMap::new())
             .await
             .unwrap();
         assert!(matches!(saved, Saved::Saved { .. }), "{saved:?}");
@@ -654,7 +894,7 @@ mod tests {
             .await
             .unwrap();
         f.store
-            .save(&f.riker, &view.published_commit)
+            .save(&f.riker, &view.published_commit, &BTreeMap::new())
             .await
             .unwrap();
         let ids: Vec<String> = f

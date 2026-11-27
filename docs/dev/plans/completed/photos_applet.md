@@ -1,8 +1,21 @@
 # Photos: a row per picture, and an applet that shows it
 
-*Proposal (2026-11-02), partly built: §8 says which steps landed and
-where the build departed from the plan. Lightroom Classic first;
-written so Apple Photos can follow through the same shape (§3).*
+*Landed for Lightroom Classic; kept as the record of what was decided
+and what was left open (§9). Proposed 2026-11-02 and not updated since
+the build: the tree departs from it in places. The search terms are
+`keyword:`, `pictured:` (which `with:` reads), `rating:`, `collection:`,
+`caption:` and `label:`, not §3's table; a location is one `h3` column
+(§6); there is one card, not two; qmd and `unified_document_index` are
+gone. What is true now: the catalog and its previews in
+[`lightroom/INGEST.md`](../../../../datalib/backend/etl/providers/lightroom/INGEST.md)
+§"Rendering", the columns and the photo document in
+[`grid_rows.md`](../../grid_rows.md) §"`image`, `latitude`,
+`longitude`", the applet in [`applets.md`](../../applets.md) and its
+routes in [`docs/user/applets.md`](../../../user/applets.md#photos).
+Not built: Apple Photos through the same `NormalizedPhoto`, the time zone
+by position (§5 rule 3; the boundary map's ODbL is not on the allow
+list), a render unit per photo, a RAW original's embedded JPEG, a
+thumbnail copy in the blob store.*
 
 Before this plan, a Lightroom source was a versioned backup of the
 catalog and nothing else: its `render_markdown` step wrote only the
@@ -118,7 +131,7 @@ row per document):
 
 | column | value |
 | --- | --- |
-| `uuid` | `Identity::mint(Lightroom, source_id, None, "image", id_global, None)`. **No stamp**: the stamp has to be the row's `created_at`, and a capture time the person edits would then change the id ([`entity_ids.md`](../entity_ids.md)). |
+| `uuid` | `Identity::mint(Lightroom, source_id, None, "image", id_global, None)`. **No stamp**: the stamp has to be the row's `created_at`, and a capture time the person edits would then change the id ([`entity_ids.md`](../../entity_ids.md)). |
 | `kind`, `source_label` | `Photo` or `Video`; `Lightroom` |
 | `created_at` | the capture time with its offset (§5) |
 | `modified_at` | `touchTime`, the last edit in Lightroom |
@@ -135,7 +148,7 @@ row per document):
 
 `image`, `latitude` and `longitude` are new `GridRow` columns, null on
 every other source. `image` is a name in the
-[Datalib links](datalib_uris.md) sense, not an address: the row says
+[Datalib links](../datalib_uris.md) sense, not an address: the row says
 *what* picture, and which server hands out its bytes is decided when it
 is drawn, so moving the bytes later moves no row. The same column can
 later carry an email's image attachment. Latitude and longitude are
@@ -218,7 +231,7 @@ The applet looks the current one up when asked (§4).
 ## 4. The `photos` applet
 
 `datalib-applet photos`, a subcommand and a module beside `slack` and
-`datalib_contacts` ([`applets.md`](../applets.md)):
+`datalib_contacts` ([`applets.md`](../../applets.md)):
 
 ```toml
 [[applets]]
@@ -283,7 +296,7 @@ The applet writes two components into its namespace:
   capture time, camera and exposure, rating, keywords, people, albums
   and place. Each keyword, person, album and place is a link that opens
   the search on that term (`label:…`, `place:…`). Opening a card never
-  writes ([`cards.md`](../cards.md) §"Card source").
+  writes ([`cards.md`](../../cards.md) §"Card source").
 - **`comp.photos.browse("<source id>")`**: a contact sheet, the search
   grid on `source:<id>` drawn as thumbnails. It is a search card with a
   different look, not a second list endpoint.
@@ -297,9 +310,9 @@ The applet writes two components into its namespace:
   metadata says `{"serves": ["photo"]}`. The UI reads it from
   `/api/frontend` and turns `datalib:photo/<uuid>` into
   `/applet/<that applet's id>/photo/<uuid>/image?…`. This is the first
-  row of the kind registry in [`dispatch_on_kind.md`](dispatch_on_kind.md),
+  row of the kind registry in [`dispatch_on_kind.md`](../dispatch_on_kind.md),
   built for one kind, not another branch in an if-chain. When `/data/`
-  learns to hand a kind to an applet ([`datalib_uris.md`](datalib_uris.md)
+  learns to hand a kind to an applet ([`datalib_uris.md`](../datalib_uris.md)
   §3), the address moves and no row changes.
 - **Opening a photo row** opens `comp.photos.photo(uuid)` instead of the
   document view, by the same lookup.
@@ -320,7 +333,7 @@ clock. The offset comes from, in order:
 
 The wall clock always comes from `captureTime`, since that is what the
 person edits. `created_at` is written with the offset found, as the
-source's own stamp ([AGENTS.md](../../../AGENTS.md) §"Timestamp
+source's own stamp ([AGENTS.md](../../../../AGENTS.md) §"Timestamp
 convention"), and the `photos` row says which rule supplied it. A source
 where rule 4 was used reports one problem row with the count, so "a
 third of your photos' times assume Europe/Berlin" is on the Manage row,
@@ -343,7 +356,7 @@ derived from columns that stay"; the example catalog shows it is not
 *Superseded as built:* a location is not four `Place` terms but one
 resolution-15 cell in `grid_rows.h3`, and `place:<cell>` at any
 resolution is a range of it; `near:<cell>` adds the neighbours.
-[`datalib/backend/h3/README.md`](../../../datalib/backend/h3/README.md)
+[`datalib/backend/h3/README.md`](../../../../datalib/backend/h3/README.md)
 has the rule and the facts. The photo card still names cells at
 resolutions 4, 6, 8 and 10, each the parent of the finest one.
 

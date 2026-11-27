@@ -1129,7 +1129,7 @@ export function buildSource(opts: {
 }
 
 /// The group `type` of a comparison between two commits of a source's
-/// raw store — `docs/dev/plans/completed/diff_renderer.md`. Not a source type
+/// raw store — `docs/dev/config_model.md`. Not a source type
 /// the catalog offers: one is made from a source, by "Compare…".
 export const DIFF_TYPE = "diff";
 

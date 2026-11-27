@@ -34,9 +34,8 @@ security model the walkthrough's bind-mount rules rest on.
   so search by meaning works with nothing fetched. The query-expansion
   and reranker models are pinned too but nothing loads them, so nothing
   fetches or ships them;
-- the demo data library at `/opt/datalib/demo`, ingested and rendered
-  at image build time from the TNG fixtures under
-  `/opt/datalib/demo-sources` (see below);
+- the demo data library at `/opt/datalib/demo`, the TNG library,
+  synced at image build time (see below);
 - `tini` as PID 1 and [`entrypoint.sh`](../../datalib/docker/entrypoint.sh),
   which provisions latchkey's encryption key;
 - a user, `datalib` (uid and gid 1000), that everything runs as
@@ -71,7 +70,7 @@ carries that digest as its `docker-image.digest` asset
 `ghcr.io/imbue-ai/datalib:<version>-cuda` (and `latest-cuda`), for
 `linux/amd64` only, is what a person with an NVIDIA GPU runs, with
 `docker run --gpus all`, and what embedding on Modal runs
-([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). On top of the
+([`embed_on_modal.md`](embed_on_modal.md)). On top of the
 plain image it holds:
 
 - **`/opt/datalib/lib/libggml-cuda.so`**, the release's
@@ -129,15 +128,24 @@ the CUDA build nor fails with it. Each release carries its digest as
 
 ## The demo library
 
-[`datalib/docker/demo/config.toml`](../../datalib/docker/demo/config.toml)
-names seven file-backed sources — Claude export, a Gmail `.mbox`,
-Google Takeout, SMS Backup & Restore, LinkedIn, vCard contacts, PDFs —
-whose inputs are the same TNG fixtures the test suite uses.
-[`stage_demo.sh`](../../datalib/docker/stage_demo.sh) copies them into
-the build context, and a `RUN` step in the Dockerfile ingests, renders
-and grid-indexes them. That run is also the one end-to-end smoke test
-of the shipped pipeline: a tarball whose binaries cannot ingest the
-fixtures fails the image build.
+The demo is the TNG library, the one `bazelisk run //datalib:dev_tng`
+opens ([`tests/fixtures/README.md`](../../tests/fixtures/README.md)
+§"Start here"): every TNG source, eleven of them reading the files
+under `inputs/` and thirteen keeping what their raw stores hold
+(`common.download = false`). `:ingested_tng` builds its archive,
+`library.tar`, and its config; in a release that is the `tng-library`
+job, whose artifact the image jobs take.
+[`stage_demo.sh`](../../datalib/docker/stage_demo.sh) copies the
+archive into the build context, finishes the config with where the
+inputs land and the applets in
+[`demo/applets.toml`](../../datalib/docker/demo/applets.toml), and adds
+Picard's curated stores. It does not unpack the archive: it runs in the
+job that pushes the image, and the archive is another job's artifact
+(`release_steps.md`). A `RUN` step in the Dockerfile unpacks it with
+[`demo/unpack.sh`](../../datalib/docker/demo/unpack.sh) and syncs. That
+run is also the one end-to-end smoke test of the shipped pipeline: a
+tarball whose binaries cannot read the fixtures, bring the stores to
+their shape or render them fails the image build.
 
 The image carries the whole search index: every step in the demo
 config runs at image time, `unified_grid_and_search_index`'s keyword pass and each
@@ -146,8 +154,9 @@ both answer the moment the container starts.
 
 The demo config is in the shape `datalib-http` leaves as written, so a
 container start does not rewrite it and leave a `config.toml.bak`:
-`config_examples_test.rs` in `datalib-step` holds it, and every other
-config the repo ships or documents, to that.
+`//datalib/backend/dag:copy_restore_test` holds the staged config to
+that, as `config_examples_test.rs` in `datalib-step` holds every config
+the repo ships or documents.
 
 ## Checking the walkthrough against an image
 

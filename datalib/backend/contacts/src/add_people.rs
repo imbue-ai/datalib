@@ -2,7 +2,7 @@
 //! selected: one commit, and a person who is here already is not added
 //! again.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use datalib_handle::Handle;
@@ -11,8 +11,8 @@ use serde::Serialize;
 
 use crate::review::Skipped;
 use crate::{
-    holders, insert_contact, insert_handle, link_in, name_of, names_of, ContactKind, Maker, Store,
-    WhenHeld,
+    holders, insert_contact, insert_handle, link_in, name_of, names_of, ContactKind, HandleFrom,
+    Maker, Store, WhenHeld,
 };
 use datalib_sql::sql;
 
@@ -24,6 +24,14 @@ pub struct NewPerson {
     /// too or this one's alone. They never make the person one of those
     /// contacts, as one in `handles` would.
     pub held: Vec<(Handle, WhenHeld)>,
+    /// What the card each handle came from said of it, by handle.
+    pub said: BTreeMap<String, HandleFrom>,
+}
+
+impl NewPerson {
+    fn said_of(&self, h: &Handle) -> HandleFrom {
+        self.said.get(h.as_str()).cloned().unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -140,10 +148,12 @@ impl Store {
                 }
             };
             for h in free {
-                insert_handle(&mut tx, h, &into, Maker::Person, &now, &tz).await?;
+                let from = person.said_of(h);
+                insert_handle(&mut tx, h, &into, Maker::Person, &from, &now, &tz).await?;
             }
             for (h, when) in &person.held {
-                link_in(&mut tx, h, &into, name, *when, &now, &tz).await?;
+                let from = person.said_of(h);
+                link_in(&mut tx, h, &into, name, *when, &from, &now, &tz).await?;
             }
         }
         tx.commit().await?;
@@ -200,6 +210,7 @@ mod tests {
             name: name.into(),
             handles: handles.iter().map(|h| Handle::parse(h).unwrap()).collect(),
             held: Vec::new(),
+            said: BTreeMap::new(),
         }
     }
 
@@ -220,7 +231,10 @@ mod tests {
             .await
             .unwrap();
         let spam = Handle::parse("email:will@risa.test").unwrap();
-        store.link(&spam, &riker, WhenHeld::Refuse).await.unwrap();
+        store
+            .link(&spam, &riker, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
         store.unlink(&spam, &riker).await.unwrap();
 
         let people = [

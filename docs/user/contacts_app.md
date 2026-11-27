@@ -86,17 +86,18 @@ than building them.
 ## 1. See what is known
 
 The grid index holds every handle any source mentioned, and what that
-source called the person. This lists them with the most written first:
+source called the person. This lists them with the most written first,
+counting what `from:` finds:
 
 ```sh
 datalib-doltlite -readonly <data_root>/unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite "
   SELECT h.handle,
          group_concat(DISTINCT r.name) AS names,
          group_concat(DISTINCT r.source_id) AS sources,
-         sum(d.seen_items) AS items
+         (SELECT count(*) FROM grid_rows g INDEXED BY grid_rows_by_author
+           WHERE g.author_handle = h.handle) AS items
     FROM contact_record_handles h
     JOIN contact_records r USING (record_id)
-    JOIN document_contacts d USING (record_id)
    WHERE h.handle NOT LIKE 'me:%' AND h.handle NOT LIKE 'ai_model:%'
    GROUP BY h.handle
    ORDER BY items DESC

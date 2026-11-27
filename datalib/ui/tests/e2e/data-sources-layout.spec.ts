@@ -30,8 +30,9 @@ async function openSources(page: Page) {
 /// One source, opened the way the card's buttons open one. A sync of
 /// every source on this root runs every render, the index and every
 /// embed, which on a busy runner outlasts any wait here. Garmin's render
-/// is over in a second: the materialized root holds no raw store, so it
-/// fails, and its row's status and time change all the same.
+/// is over in a second: its download has never run in this library, so
+/// a sync of the render alone fails at once, and its row's status and
+/// time change all the same.
 async function syncOneStep(page: Page) {
   type Request = { id: string; state: string };
   const requests = async () =>

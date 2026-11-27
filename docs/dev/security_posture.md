@@ -393,7 +393,7 @@ These all put something from a protected library outside its folder:
 An `embed` step whose params set `embed_on_modal_from_n_chunks` sends
 the text of a source's chunks to the person's own [Modal](https://modal.com)
 account to be embedded on rented GPUs
-([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). This is the one
+([`embed_on_modal.md`](embed_on_modal.md)). This is the one
 place Datalib hands a person's content to a service other than the one
 it came from, so it gets its own section.
 

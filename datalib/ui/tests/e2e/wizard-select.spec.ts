@@ -8,6 +8,7 @@ import {
   MANAGE_WITH_CONFIG,
   savedConfig,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 
 const wizard = (page: Page) => page.getByRole("dialog");
@@ -33,7 +34,7 @@ test.afterEach(async ({ page }) => {
   await openManager(page);
   await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 });
 
 test("an enum-backed field is a dropdown of its values", async ({ page }) => {
@@ -64,7 +65,7 @@ test("an enum-backed field is a dropdown of its values", async ({ page }) => {
   const submit = wizard(page).getByRole("button", { name: "Add source" });
   await expect(submit).toBeEnabled();
   await submit.click();
-  await expect(page.getByText("Added Personal Claude.")).toBeVisible();
+  await expect(page.getByText("Added Personal Claude.")).toBeVisible({ timeout: SAVE_ANSWERED });
   await expandGroup(page, "personal-claude");
   await expect(
     page.locator('.tg-grid .slick-row[data-key="personal-claude/ingest"]'),

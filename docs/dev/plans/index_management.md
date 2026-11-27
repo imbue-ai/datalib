@@ -1,6 +1,12 @@
 # Index management: what a library's indices cost, and who pays
 
-*Proposal (2026-11-24); nothing here is built. Every number was
+*Proposal (2026-11-24), checked against the tree on 2026-11-27. Of
+the order of work, only step 4's page rewrite is built: prepare rewrites
+the inference cache in 16 KB pages (#1995). Steps 1, 2, 3 and 5, and
+half-precision vectors on disk, are not. Two fixes the comments below
+record are in, outside that order: `source_id` at the end of six keys'
+indexes, with declared statistics in place of hints (#2005), and the
+removal of `grid_rows_by_parent` (#2007). Every number was
 measured that day on an APFS clone of one real library (1.22M grid
 rows in 21 sources), on a 16 GB laptop, with the `sqlite3` shell
 (SQLite 3.51) against the clone's grid index and inference cache, and
@@ -41,7 +47,8 @@ Everything search reads is in two files under
   on disk, holding 932,351 distinct vectors of 768 dimensions in 32-bit
   floats (2.9 GB of vector bytes) for 1.03M chunks, in 4 KB pages: the
   rewrite to 16 KB pages was put off while the app held it open (#1969)
-  and then removed (#1970), before it had run on this library.
+  and then removed (#1970), before it had run on this library; #1995
+  then made it a step of prepare.
   The search applet holds a vector for every chunk in memory, in half
   precision, about 1.5 GB.
 
@@ -147,8 +154,9 @@ to be decided on numbers.
    index each statement uses. An index no statement uses goes, unless a key a person types
    needs it, in which case the key's statement says so in a test.
 4. **The inference cache shrinks.** Prepare rewrites its pages to 16 KB
-   at the next launch. Whether vectors are kept in half precision on
-   disk too, as they are in memory, is measured against the eval.
+   at the next launch: built (#1995). Whether vectors are kept in half
+   precision on disk too, as they are in memory, is measured against the
+   eval: open.
 5. **The split, decided on numbers.** With 1 to 4 done, measure a
    search scoped to a small source against a search of everything, cold
    and warm, on the largest library to hand. If a scoped search still

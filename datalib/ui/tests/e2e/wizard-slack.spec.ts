@@ -8,6 +8,7 @@ import {
   MANAGE_WITH_CONFIG,
   savedConfig,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
@@ -135,7 +136,7 @@ test.afterEach(async ({ page }) => {
   await openManager(page);
   await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 });
 
 test("choosing channels loads the picker, and ticking rows writes `channels`", async ({ page }) => {
