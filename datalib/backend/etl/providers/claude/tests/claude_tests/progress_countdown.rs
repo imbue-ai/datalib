@@ -2,17 +2,13 @@
 //!
 //! The DAG runner sums a step's progress increments into `done` and
 //! computes the "N queued" the Manage screen shows as `total - done`,
-//! against whichever length the step announced last. This download used
-//! to break that twice over: it gave each org a bar of its own that
-//! announced that org's size, and it ticked *both* that bar and the
-//! outer one for the same conversation. Against two orgs of one chat
+//! against whichever total the step reported last. This guards a
+//! download that broke that twice over: it gave each org a bar of its
+//! own that reported that org's size, and it ticked *both* that bar and
+//! the outer one for the same conversation. Against two orgs of one chat
 //! each, `done` reached 4 for 2 conversations and the count read zero
-//! from the third event onward.
-//!
-//! Pass 1 of the download carries a comment about exactly this hazard —
-//! "a length reset per org makes the bar jump backwards" — which the
-//! per-org bar in Pass 2 then reintroduced. This test is what keeps the
-//! comment honest.
+//! from the third event onward. A total reset per org also makes the bar
+//! jump backwards.
 
 use std::fs;
 use std::sync::{Arc, Mutex};
@@ -55,7 +51,7 @@ impl Recorder {
     /// The `queued` series the runner would have published, mirroring
     /// `RunStoreSink::publish_sugar`: `done` accumulates, `total` is
     /// replaced wholesale, `queued` is their saturating difference, and
-    /// nothing is published until a total has been announced.
+    /// nothing is published until a total has been reported.
     fn queued_series(&self) -> Vec<u64> {
         let mut done: u64 = 0;
         let mut total: Option<u64> = None;

@@ -64,8 +64,8 @@ pub fn thinking_block(
 
 /// A `tool_use` block, keyed on `(message_uuid, tool_use_id)`.
 ///
-/// The message scope is the fix: `tu-{tool_use_id}` was global on an id
-/// Anthropic controls and we merely observe.
+/// Scoped by the message because the `tool_use_id` is Anthropic's, and
+/// nothing promises it is unique across messages.
 pub fn tool_use(
     source_id: &str,
     message_uuid: &str,
@@ -231,8 +231,7 @@ mod tests {
 
     /// The bug `tu-{tool_use_id}` had: no message scope at all, so the
     /// same tool-use id appearing under two messages — a forked or
-    /// regenerated conversation branch, which this renderer emits flat
-    /// because `parent_message_uuid` is unused — collided.
+    /// regenerated conversation branch — collided.
     #[test]
     fn tool_blocks_are_scoped_to_their_message() {
         assert_ne!(

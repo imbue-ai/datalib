@@ -1215,8 +1215,8 @@ impl Ctx<'_> {
         let in_scope = listed.len();
         let owed = owed_missing_first(self.db.pool(), COWORK_SESSIONS, listed).await?;
         s.cowork_skipped = in_scope - owed.len();
-        // Announcing nothing would publish the total again after the
-        // count reached zero.
+        // `expect(0)` would publish the total again after the count
+        // reached zero.
         if !owed.is_empty() {
             self.bar.expect(owed.len() as u64);
         }
@@ -1568,7 +1568,7 @@ pub(crate) fn parse_conversation(
 
 /// An org whose `capabilities` list is there and leaves out `chat` — an
 /// API-console org — answers 403 to every chat and project request. One
-/// with no list, or something other than a list, is walked as before.
+/// with no list, or something other than a list, is walked like any other.
 fn lacks_chat(org: &Value) -> bool {
     org.get("capabilities")
         .and_then(Value::as_array)
@@ -1662,7 +1662,7 @@ mod tests {
 
     use datalib_sql::test_sql;
     /// A 403 from claude.ai reads as "expired key" but is equally the
-    /// signature of a *malformed stored* key — observed 2026-08-31, where
+    /// signature of a *malformed stored* key — seen on a real root, where
     /// `auth set` had been run with `'$(pbpaste)'` in single quotes and
     /// latchkey had been sending those 10 literal characters as the cookie
     /// for hours. The hint has to name that case, because the symptom
@@ -1902,7 +1902,7 @@ mod tests {
     // ── null-vs-absent from the API ──────────────────────────────────
 
     /// The two spellings claude.ai used for the same untouched
-    /// conversation on the 2026-09-18 bake: one replica sent every
+    /// conversation in one sync of a real root: one replica sent every
     /// no-value field of a content block as `null`, the other left it
     /// out. `stop_timestamp: null` is the deliberate kind — an in-flight
     /// message — and reads the same either way.
@@ -1993,7 +1993,7 @@ mod tests {
         );
     }
 
-    /// The bake's symptom, end to end: two fetches of an unchanged
+    /// That sync's symptom, end to end: two fetches of an unchanged
     /// conversation, one spelling each, must leave one row and no
     /// `modified` delta between the commit and the working set.
     #[tokio::test]
