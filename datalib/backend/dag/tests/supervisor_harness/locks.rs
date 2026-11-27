@@ -1,7 +1,7 @@
 //! Locks, end to end: declared in the config, held by puppets, and kept
 //! by the loop. All the parallelism they allow, and no more.
 
-use datalib_dag::supervisor::store::RequestOutcome;
+use datalib_supervisor_store::store::RequestOutcome;
 
 use crate::harness::{reads, source, Clocks, Harness, Seen};
 

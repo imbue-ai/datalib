@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use datalib_dag::lock::FileLock;
+use datalib_flock::FileLock;
 
 /// Why the data root could not be claimed.
 #[derive(Debug)]

@@ -12,8 +12,8 @@ use std::io::Write;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-use datalib_dag::supervisor::store::RequestOutcome;
-use datalib_dag::supervisor::tick::StateKind;
+use datalib_supervisor_store::state::StateKind;
+use datalib_supervisor_store::store::RequestOutcome;
 
 use crate::harness::{reads, source, Clocks, Harness, Progress, Seen};
 

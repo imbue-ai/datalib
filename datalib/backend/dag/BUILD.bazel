@@ -27,19 +27,17 @@ rust_library(
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/cli_help:datalib_cli_help",
-        "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
-        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/step_protocol:datalib_step_protocol",
-        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/supervisor_store:datalib_supervisor_store",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
@@ -50,7 +48,6 @@ rust_library(
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:shlex",
-        "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:sysinfo",
         "@datalib_crates//:tokio",
@@ -99,6 +96,7 @@ rust_binary(
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/sql_work:datalib_sql_work",
+        "//datalib/backend/supervisor_store:datalib_supervisor_store",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:serde_json",
@@ -132,41 +130,6 @@ rust_test(
         "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tempfile",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-
-# One process reading or writing `system/supervisor.sqlite` as one of its
-# real users does; seven of them at once are `supervisor_contention_test`.
-rust_binary(
-    name = "supervisor_store_worker",
-    testonly = True,
-    srcs = ["tests/supervisor_store_worker/main.rs"],
-    edition = "2021",
-    deps = [
-        ":datalib_dag",
-        "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/sql:datalib_sql",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:sqlx",
-        "@datalib_crates//:tokio",
-    ],
-)
-
-rust_test(
-    name = "supervisor_contention_test",
-    srcs = ["tests/supervisor_contention.rs"],
-    crate_root = "tests/supervisor_contention.rs",
-    data = [":supervisor_store_worker"],
-    edition = "2021",
-    env = {"STORE_WORKER": "$(rootpath :supervisor_store_worker)"},
-    deps = [
-        ":datalib_dag",
-        "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -218,7 +181,6 @@ rust_test(
         "no-sandbox",  # latchkey reads keyring + LATCHKEY_CURL from host
     ],
     deps = [
-        ":datalib_dag",
         "//datalib/backend/contacts:datalib_contacts",
         "//datalib/backend/curated_overlay:datalib_curated_overlay",
         "//datalib/backend/etl/render:datalib_etl_render",
@@ -228,6 +190,7 @@ rust_test(
         "//datalib/backend/search_index:datalib_search_index",
         "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_dump:datalib_store_dump",
+        "//datalib/backend/supervisor_store:datalib_supervisor_store",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",
         "@datalib_crates//:runfiles",
@@ -315,6 +278,7 @@ rust_test(
         ":datalib_dag",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/supervisor_store:datalib_supervisor_store",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",

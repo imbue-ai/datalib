@@ -270,6 +270,11 @@ datalib/
                    under its public `datalib-*` name in one directory
                    (`:dist`); build that whenever you need to actually
                    run a pipeline.
+    supervisor_store/ `datalib_supervisor_store`: what the server and the
+                   loop say to each other — `system/supervisor.sqlite`
+                   (requests, jobs, turn-offs, each step's record), the
+                   announcements, `ServeEvent`, `runner-lock`. Nothing of
+                   the loop; the runner and `datalib-http` both link it.
     datalib_step/  `datalib-step`: the step program Datalib ships. A
                    step runs it with `command = "datalib-step run
                    <function> <type>"`, and it reads its params from
@@ -876,22 +881,22 @@ upstream (block types, MIME types), free-form display text
 
 | vocabulary | type | home |
 |---|---|---|
-| what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
+| what a step is doing in a run | `RunState` | `supervisor_store/src/run_state.rs` (`datalib_supervisor_store`) |
 | what a run is for | `RunKind` | `app_schema/src/runs/run.rs` |
 | why a step failed | `FailureKind` | `step_protocol/src/outcome.rs` (`datalib_step_protocol`) |
 | what the runner asks of a step besides a run (`--reset`, …) | `Verb` | `step_protocol/src/invocation.rs` (`datalib_step_protocol`) |
 | what the run store names | `LiveState` | `runs/src/lib.rs` |
 | a log line's severity | `LogLevel` | `step_protocol/src/event.rs` (`datalib_step_protocol`), re-exported by `app_schema` |
 | which pipe a log line came from | `Stream` | `app_schema/src/runs/log.rs` |
-| what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
-| what a waiting step waits for (`steps.waiting_for`) | `WaitKind` | `dag/src/supervisor/tick.rs` |
-| how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
+| what the loop made of a step (`steps.state`) | `StateKind` | `supervisor_store/src/state.rs` (`datalib_supervisor_store`) |
+| what a waiting step waits for (`steps.waiting_for`) | `WaitKind` | `supervisor_store/src/state.rs` (`datalib_supervisor_store`) |
+| how a sync request ended | `RequestOutcome` | `supervisor_store/src/store.rs` (`datalib_supervisor_store`) |
 | where a step stands for one sync request | `RequestStepPhase` | `http/src/request_progress.rs` |
 | a browser-login attempt, and what it is doing | `ConnectState`, `ConnectPhase` | `http/src/connect.rs` |
 | who names a latchkey account a browser login adds | `AccountNaming` | `http/src/connect.rs` |
 | what kind of trouble a sign-in or probe ran into | `IssueKind` | `probe/src/issue.rs` (`datalib_probe`) |
 | a probe the wizard polls | `ProbeState` | `http/src/probe.rs` |
-| how a pass (the prepare pass at a start, a wipe that frees disk) stands with one step | `PassState` | `dag/src/supervisor/pass.rs` |
+| how a pass (the prepare pass at a start, a wipe that frees disk) stands with one step | `PassState` | `supervisor_store/src/pass.rs` (`datalib_supervisor_store`) |
 | the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
 | what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `step_protocol/src/problems.rs` (`datalib_step_protocol`), re-exported by `datalib_problems` |

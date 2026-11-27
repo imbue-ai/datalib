@@ -709,7 +709,7 @@ impl Feed {
 /// announced to the loop, which re-reads its config when told to.
 fn hear(moved: Moved, listeners: &Path, raw_tx: &tokio::sync::mpsc::UnboundedSender<Moved>) {
     if moved == Moved::Config {
-        use datalib_dag::supervisor::announce::{announce, CONFIG_CHANGED, FROM_SERVER};
+        use datalib_supervisor_store::announce::{announce, CONFIG_CHANGED, FROM_SERVER};
         announce(listeners, FROM_SERVER, CONFIG_CHANGED);
     }
     let _ = raw_tx.send(moved);
@@ -774,7 +774,7 @@ fn start(
         raw_tx.clone(),
         listening_tx,
     ));
-    let listeners = datalib_dag::supervisor::announce::listeners_dir(&root);
+    let listeners = datalib_supervisor_store::announce::listeners_dir(&root);
 
     let mut feed = None;
     let mut make_watcher: Option<MakeWatcher> = None;
@@ -998,8 +998,8 @@ async fn watch_supervisor_store(
     moved: tokio::sync::mpsc::UnboundedSender<Moved>,
     listening: tokio::sync::oneshot::Sender<()>,
 ) {
-    use datalib_dag::supervisor::announce::{Listener, CONFIG_CHANGED, RUNNER_LOCK_RELEASED};
-    let store = match datalib_dag::supervisor::store::Store::open(&root).await {
+    use datalib_supervisor_store::announce::{Listener, CONFIG_CHANGED, RUNNER_LOCK_RELEASED};
+    let store = match datalib_supervisor_store::store::Store::open(&root).await {
         Ok(store) => store,
         Err(e) => {
             tracing::warn!(
@@ -1027,8 +1027,8 @@ async fn watch_supervisor_store(
 /// Whether an announcement may be a job's: opened, closed, or moved on.
 /// A change the backstop found unannounced may be one too.
 fn is_wipe_line(line: &str) -> bool {
-    use datalib_dag::supervisor::announce::UNANNOUNCED;
-    use datalib_dag::supervisor::store::JOB_MOVED;
+    use datalib_supervisor_store::announce::UNANNOUNCED;
+    use datalib_supervisor_store::store::JOB_MOVED;
     line == UNANNOUNCED
         || ["job opened ", "job closed ", JOB_MOVED]
             .iter()
@@ -1046,9 +1046,11 @@ mod tests {
         assert!(is_wipe_line("job closed 01a1"));
         assert!(is_wipe_line(&format!(
             "{} 01a1",
-            datalib_dag::supervisor::store::JOB_MOVED
+            datalib_supervisor_store::store::JOB_MOVED
         )));
-        assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
+        assert!(is_wipe_line(
+            datalib_supervisor_store::announce::UNANNOUNCED
+        ));
         assert!(!is_wipe_line("request opened 01a1"));
     }
 
@@ -1436,9 +1438,9 @@ mod tests {
     /// it hears so.
     #[tokio::test]
     async fn an_external_config_write_reaches_a_subscriber_and_the_loop() {
-        use datalib_dag::supervisor::announce::{Listener, CONFIG_CHANGED};
+        use datalib_supervisor_store::announce::{Listener, CONFIG_CHANGED};
         let td = tempfile::tempdir().unwrap();
-        let store = datalib_dag::supervisor::store::Store::open(td.path())
+        let store = datalib_supervisor_store::store::Store::open(td.path())
             .await
             .unwrap();
         let mut the_loop = Listener::new(&store, "test");
@@ -1461,7 +1463,7 @@ mod tests {
     #[tokio::test]
     async fn a_terminal_loops_supervisor_store_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
-        let store = datalib_dag::supervisor::store::Store::open(td.path())
+        let store = datalib_supervisor_store::store::Store::open(td.path())
             .await
             .unwrap();
         let (mut rx, _feed) = watching(td.path()).await;

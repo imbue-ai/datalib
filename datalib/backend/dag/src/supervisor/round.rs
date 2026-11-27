@@ -9,12 +9,8 @@ use anyhow::{Context, Result};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
-use super::announce::{Listener, CONFIG_CHANGED};
 use super::inputs;
 use super::loop_host::LoopHost;
-use super::pass::PassState;
-use super::record::{InvocationEnd, InvocationRow};
-use super::store::{JobKind, JobRow, RequestOutcome, Store};
 use super::tick::{
     tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
     StepFacts, StepShape, StepState as Row, Tick, Wait,
@@ -24,7 +20,6 @@ use crate::artifact::ArtifactPath;
 use crate::disk_space::{self, DiskFloor, LowDisk};
 use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
-use crate::run_state::RunState;
 use crate::scheduler::{
     apply_verb_outcome, fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp,
     reported_version, step_summary, ConsumerQueues, InvokeError, PrepareError, RunReport, Runner,
@@ -32,8 +27,13 @@ use crate::scheduler::{
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::subprocess::Shrink;
-use crate::supervisor::record::{CurrentRun, Record};
 use crate::version::UNKNOWN;
+use datalib_supervisor_store::announce::{Listener, CONFIG_CHANGED};
+use datalib_supervisor_store::pass::PassState;
+use datalib_supervisor_store::record::{CurrentRun, Record};
+use datalib_supervisor_store::record::{InvocationEnd, InvocationRow};
+use datalib_supervisor_store::run_state::RunState;
+use datalib_supervisor_store::store::{JobKind, JobRow, RequestOutcome, Store};
 
 /// How often an open round looks at the disk while the config sets a
 /// floor. Nothing announces a disk filling or being freed.
@@ -988,7 +988,7 @@ impl Runner {
                         // Sent SIGINT, and it stopped: one that says it
                         // failed has failed, whatever it was sent.
                         stopped: live.stop.is_none()
-                            && e.status.state() == crate::run_state::RunState::Stopped,
+                            && e.status.state() == datalib_supervisor_store::run_state::RunState::Stopped,
                         read: live.consumed,
                     });
                     store.close_invocation(&live.invocation, &e.as_end()).await?;
@@ -2077,8 +2077,8 @@ fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String
             .map(|(r, _)| r.clone())
             .collect();
         let waiting = !requests.is_empty();
-        st.state = waiting.then_some(super::tick::StateKind::Waiting);
-        st.waiting_for = waiting.then_some(super::tick::WaitKind::Config);
+        st.state = waiting.then_some(datalib_supervisor_store::state::StateKind::Waiting);
+        st.waiting_for = waiting.then_some(datalib_supervisor_store::state::WaitKind::Config);
         st.state_detail = waiting.then(|| {
             "waiting for the sync in progress to take on a config that has this step".to_string()
         });
@@ -2259,12 +2259,11 @@ mod tests {
 
     use super::*;
     use crate::step::{StepRun, StepSpec};
-    use crate::supervisor::record::StepRecord;
     use crate::supervisor::reload::GraphSource;
-    use crate::supervisor::tick::{StateKind, WaitKind};
     use crate::EventSink;
+    use datalib_supervisor_store::record::StepRecord;
+    use datalib_supervisor_store::state::{StateKind, WaitKind};
 
-    use datalib_sql::test_sql;
     /// A purge's last stop before `remove_dir_all`. A Mac's disk ignores
     /// letter case, so `Gone` there is the folder `gone`; it is never
     /// deleted under a name that is not its own.
@@ -2532,7 +2531,7 @@ mod tests {
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
         assert_eq!(f.runs[1].load(Ordering::SeqCst), 1);
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
-        let a = crate::supervisor::record::recorded(f.root.path())
+        let a = crate::supervisor::recorded::recorded(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
@@ -2577,7 +2576,9 @@ mod tests {
 
     /// What the server does when its watch sees `config.toml` move.
     fn announce_config(root: &std::path::Path) {
-        use crate::supervisor::announce::{announce, listeners_dir, CONFIG_CHANGED, FROM_SERVER};
+        use datalib_supervisor_store::announce::{
+            announce, listeners_dir, CONFIG_CHANGED, FROM_SERVER,
+        };
         announce(&listeners_dir(root), FROM_SERVER, CONFIG_CHANGED);
     }
 
@@ -2801,7 +2802,7 @@ mod tests {
         running.await.unwrap().unwrap();
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
         assert_eq!(t.runs(0), 2, "stopped once, then run to the end");
-        let a = crate::supervisor::record::recorded(t.root.path()).await;
+        let a = crate::supervisor::recorded::recorded(t.root.path()).await;
         assert_eq!(
             a.steps["a/raw"].waiting_for, None,
             "a step no longer waiting says it waits for nothing"
@@ -2907,7 +2908,7 @@ mod tests {
         .await;
         gates[0].store(true, Ordering::SeqCst);
         until("a to run again", || runs.load(Ordering::SeqCst) == 2).await;
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::recorded::recorded(root.path()).await;
         assert_eq!(record.steps["a/raw"].fingerprint, ran_with);
 
         gates[1].store(true, Ordering::SeqCst);
@@ -2916,7 +2917,7 @@ mod tests {
             outcome(&other, &first).await,
             Some(Some(RequestOutcome::Done))
         );
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::recorded::recorded(root.path()).await;
         assert_eq!(record.steps["a/raw"].fingerprint, edited);
     }
 
@@ -2979,7 +2980,7 @@ mod tests {
             1,
             "not pulled into a's sync"
         );
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::recorded::recorded(root.path()).await;
         let offer = rerun_offer(&graph, &record);
         assert_eq!(offer, ["b/render"]);
 
@@ -2990,7 +2991,7 @@ mod tests {
             .unwrap();
         assert_eq!(b_render.load(Ordering::SeqCst), 2);
         assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download did not run");
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::recorded::recorded(root.path()).await;
         assert!(rerun_offer(&graph, &record).is_empty());
         assert_eq!(
             record.steps["index/grid"].reads.get("b/render"),
@@ -3008,7 +3009,7 @@ mod tests {
     ) -> StepRecord {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            let record = crate::supervisor::record::recorded(root).await;
+            let record = crate::supervisor::recorded::recorded(root).await;
             if let Some(st) = record.steps.get(step).filter(|st| ready(st)) {
                 return st.clone();
             }
@@ -3035,7 +3036,7 @@ mod tests {
         })
         .await;
         assert_eq!(a.requests, [id.as_str()]);
-        let b = crate::supervisor::record::recorded(f.root.path())
+        let b = crate::supervisor::recorded::recorded(f.root.path())
             .await
             .steps["b/raw"]
             .clone();
@@ -3044,7 +3045,7 @@ mod tests {
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
-        let a = crate::supervisor::record::recorded(f.root.path())
+        let a = crate::supervisor::recorded::recorded(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
@@ -3092,7 +3093,7 @@ mod tests {
         })
         .await;
         assert!(a.requests.is_empty(), "{:?}", a.requests);
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::recorded::recorded(root.path()).await;
         assert_eq!(record.steps["b/raw"].requests, [rb.as_str()]);
         assert_eq!(
             record.steps["index/all"].requests,
@@ -3175,7 +3176,10 @@ mod tests {
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
-        let a = crate::supervisor::record::recorded(root.path()).await.steps["a/raw"].clone();
+        let a = crate::supervisor::recorded::recorded(root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
         assert_ne!(a.state, Some(StateKind::Running));
         assert_eq!(a.last_run.unwrap().status, "stopped");
     }
@@ -3225,7 +3229,7 @@ mod tests {
     }
 
     async fn state_of(root: &std::path::Path, step: &str) -> StepRecord {
-        let recorded = crate::supervisor::record::recorded(root).await;
+        let recorded = crate::supervisor::recorded::recorded(root).await;
         recorded.steps.get(step).cloned().unwrap_or_default()
     }
 
@@ -3439,7 +3443,7 @@ mod tests {
         let state_of = |step: &'static str| {
             let root = root.clone();
             async move {
-                crate::supervisor::record::recorded(&root)
+                crate::supervisor::recorded::recorded(&root)
                     .await
                     .current_run
                     .and_then(|r| r.states.get(step).cloned())
@@ -3488,13 +3492,12 @@ mod tests {
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
         assert!(other.running_invocations().await.unwrap().is_empty());
-        let outcome: String = test_sql!("SELECT outcome FROM invocations WHERE id = ?")
-            .query_scalar()
-            .bind(&open[0].id)
-            .fetch_one(other.pool())
-            .await
-            .unwrap();
-        assert_eq!(outcome, "succeeded");
+        let invocations = other.invocations().await.unwrap();
+        let (_, end) = invocations
+            .iter()
+            .find(|(row, _)| row.id == open[0].id)
+            .expect("a's invocation");
+        assert_eq!(end.as_ref().unwrap().outcome, "succeeded");
     }
 
     /// With nothing asked of it the loop returns rather than waiting for a

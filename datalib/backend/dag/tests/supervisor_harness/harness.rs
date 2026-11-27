@@ -15,15 +15,15 @@ use std::time::Duration;
 use datalib_dag::config;
 use datalib_dag::events::FanOutSink;
 use datalib_dag::scheduler::RetryPolicy;
-use datalib_dag::supervisor::announce::{
-    announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
-};
 use datalib_dag::supervisor::host;
 use datalib_dag::supervisor::loop_host::{LoopHost, OpenRunSink};
-use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
-use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
 use datalib_dag::{Event, EventSink, Runner};
+use datalib_supervisor_store::announce::{
+    announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
+};
+use datalib_supervisor_store::record::{InvocationEnd, InvocationRow, Record};
+use datalib_supervisor_store::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
 use tokio::sync::{mpsc, watch};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -384,7 +384,7 @@ impl Harness {
     pub fn edit_config(&mut self, steps: &[Step]) {
         self.write_config(steps);
         announce(
-            &datalib_dag::supervisor::announce::listeners_dir(self.root.path()),
+            &datalib_supervisor_store::announce::listeners_dir(self.root.path()),
             FROM_SERVER,
             CONFIG_CHANGED,
         );
@@ -662,7 +662,7 @@ impl Harness {
     /// that is waiting, and a loop that then does it had not heard.
     async fn probe<T>(&mut self, check: &mut impl FnMut(&State) -> Option<T>) -> &'static str {
         announce(
-            &datalib_dag::supervisor::announce::listeners_dir(self.root.path()),
+            &datalib_supervisor_store::announce::listeners_dir(self.root.path()),
             FROM_SERVER,
             "probe",
         );

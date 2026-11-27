@@ -1,0 +1,74 @@
+load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
+
+# What the server and the runner's loop say to each other: the store in
+# `system/supervisor.sqlite`, the announcements, the lines
+# `datalib-pipeline serve` prints, and `runner-lock`. Nothing of the loop
+# itself, so the server links this and not the runner (src/lib.rs).
+rust_library(
+    name = "datalib_supervisor_store",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_supervisor_store",
+    edition = "2021",
+    visibility = ["//visibility:public"],
+    deps = [
+        "//datalib/backend/flock:datalib_flock",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/time:datalib_time",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:uuid",
+    ],
+)
+
+rust_test(
+    name = "supervisor_store_unittests",
+    size = "small",
+    crate = ":datalib_supervisor_store",
+    edition = "2021",
+    deps = [
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# One process reading or writing `system/supervisor.sqlite` as one of its
+# real users does; seven of them at once are `supervisor_contention_test`.
+rust_binary(
+    name = "supervisor_store_worker",
+    testonly = True,
+    srcs = ["tests/supervisor_store_worker/main.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_supervisor_store",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tokio",
+    ],
+)
+
+rust_test(
+    name = "supervisor_contention_test",
+    srcs = ["tests/supervisor_contention.rs"],
+    crate_root = "tests/supervisor_contention.rs",
+    data = [":supervisor_store_worker"],
+    edition = "2021",
+    env = {"STORE_WORKER": "$(rootpath :supervisor_store_worker)"},
+    deps = [
+        ":datalib_supervisor_store",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+    ],
+)

@@ -6,9 +6,9 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use datalib_dag::supervisor::record::{Record, StepRecord};
-use datalib_dag::supervisor::store::RequestRow;
-use datalib_dag::supervisor::tick::{StateKind, WaitKind};
+use datalib_supervisor_store::record::{Record, StepRecord};
+use datalib_supervisor_store::state::{StateKind, WaitKind};
+use datalib_supervisor_store::store::RequestRow;
 use serde::Serialize;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
@@ -150,7 +150,7 @@ pub async fn get(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_dag::supervisor::store::RequestOutcome;
+    use datalib_supervisor_store::store::RequestOutcome;
 
     fn request(closed: Option<Option<RequestOutcome>>) -> RequestRow {
         RequestRow {

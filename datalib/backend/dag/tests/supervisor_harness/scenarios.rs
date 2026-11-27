@@ -2,9 +2,9 @@
 
 use std::time::Duration;
 
-use datalib_dag::supervisor::store::RequestOutcome;
-use datalib_dag::supervisor::tick::{StateKind, WaitKind};
 use datalib_dag::Event;
+use datalib_supervisor_store::state::{StateKind, WaitKind};
+use datalib_supervisor_store::store::RequestOutcome;
 
 use crate::harness::{reads, source, Clocks, Harness, Seen, State, Step};
 

@@ -27,9 +27,9 @@ mod tests {
              // word means is on the Rust variant.\n\n",
         );
         for block in [
-            union::<datalib_dag::RunState>(
+            union::<datalib_supervisor_store::run_state::RunState>(
                 "DagRunState",
-                "RunState in datalib/backend/dag/src/run_state.rs",
+                "RunState in datalib/backend/supervisor_store/src/run_state.rs",
             ),
             union::<datalib_runs::RunKind>(
                 "RunKind",
@@ -52,13 +52,13 @@ mod tests {
                 "ConnectPhase in datalib/backend/http/src/connect.rs",
             ),
             union::<crate::watch::Table>("LiveTable", "Table in datalib/backend/http/src/watch.rs"),
-            union::<datalib_dag::supervisor::pass::PassState>(
+            union::<datalib_supervisor_store::pass::PassState>(
                 "PassState",
-                "PassState in datalib/backend/dag/src/supervisor/pass.rs",
+                "PassState in datalib/backend/supervisor_store/src/pass.rs",
             ),
-            union::<datalib_dag::supervisor::store::JobKind>(
+            union::<datalib_supervisor_store::store::JobKind>(
                 "JobKind",
-                "JobKind in datalib/backend/dag/src/supervisor/store.rs",
+                "JobKind in datalib/backend/supervisor_store/src/store.rs",
             ),
         ] {
             out.push_str(&block);

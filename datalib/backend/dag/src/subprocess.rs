@@ -39,6 +39,17 @@ pub enum Shrink {
 }
 
 impl Shrink {
+    /// The verb a compaction or a collection runs its steps with to give
+    /// back disk.
+    pub fn for_job(kind: datalib_supervisor_store::store::JobKind) -> Option<Shrink> {
+        use datalib_supervisor_store::store::JobKind;
+        match kind {
+            JobKind::Compact => Some(Shrink::Compact),
+            JobKind::Collect => Some(Shrink::Collect),
+            JobKind::Reset | JobKind::Purge | JobKind::Prepare => None,
+        }
+    }
+
     pub fn verb(self) -> crate::step::Verb {
         match self {
             Shrink::Collect => crate::step::Verb::Collect,
@@ -1995,7 +2006,7 @@ mod tests {
     /// open, so a re-run the pass opened has finished too.
     async fn launch_once(root: &std::path::Path, g: &Graph) {
         use crate::supervisor::loop_host::LoopHost;
-        use crate::supervisor::store::Store;
+        use datalib_supervisor_store::store::Store;
 
         struct Quiet;
         impl LoopHost for Quiet {
@@ -2083,7 +2094,7 @@ mod tests {
         ])
         .unwrap();
         assert!(Runner::new(root.path()).run(&g).await.unwrap().all_ok());
-        let before = crate::supervisor::record::recorded(root.path()).await;
+        let before = crate::supervisor::recorded::recorded(root.path()).await;
 
         launch_once(root.path(), &g).await;
         let log = |id: &str| std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap();
@@ -2097,7 +2108,7 @@ mod tests {
             "run\nprepare\nrun\n",
             "re-run after the pass"
         );
-        let after = crate::supervisor::record::recorded(root.path()).await;
+        let after = crate::supervisor::recorded::recorded(root.path()).await;
         let raw = &after.steps["raw/ingest"];
         assert!(
             raw.version.as_deref().is_some_and(|v| v.ends_with(":v2")),
@@ -2140,7 +2151,7 @@ mod tests {
             spec
         };
         let g = Graph::build(vec![refusing("a/out"), refusing("b/out")]).unwrap();
-        let store = crate::supervisor::store::Store::open(root.path())
+        let store = datalib_supervisor_store::store::Store::open(root.path())
             .await
             .unwrap();
         store.turn_off("b/out", "a person").await.unwrap();

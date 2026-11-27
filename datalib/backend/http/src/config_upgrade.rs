@@ -155,7 +155,7 @@ async fn move_one_index_dir(
     if config_uses_old || !datalib_core::layout::supervisor_db(root).exists() {
         return;
     }
-    let renamed = match datalib_dag::supervisor::store::Store::open(root).await {
+    let renamed = match datalib_supervisor_store::store::Store::open(root).await {
         Ok(store) => {
             let moved = store.rename_group_steps(old_id, new_id).await;
             store.close().await;
@@ -211,7 +211,7 @@ pub async fn move_index_step_dir(root: &Path) {
     if config_uses_old || !datalib_core::layout::supervisor_db(root).exists() {
         return;
     }
-    let renamed = match datalib_dag::supervisor::store::Store::open(root).await {
+    let renamed = match datalib_supervisor_store::store::Store::open(root).await {
         Ok(store) => {
             let moved = store.rename_step(&old_id, &new_id).await;
             store.close().await;
@@ -329,7 +329,7 @@ pub async fn move_case_folders(root: &Path) {
     if moved.is_empty() || !datalib_core::layout::supervisor_db(root).exists() {
         return;
     }
-    let store = match datalib_dag::supervisor::store::Store::open(root).await {
+    let store = match datalib_supervisor_store::store::Store::open(root).await {
         Ok(store) => store,
         Err(e) => {
             tracing::error!("supervisor: could not carry the moved steps' switches: {e:#}");
@@ -401,7 +401,7 @@ mod tests {
         std::fs::create_dir_all(root.join("Email/ingest")).unwrap();
         std::fs::write(root.join("Email/ingest/store"), "held").unwrap();
         std::fs::create_dir_all(root.join("g/Raw")).unwrap();
-        let store = datalib_dag::supervisor::store::Store::open(root)
+        let store = datalib_supervisor_store::store::Store::open(root)
             .await
             .unwrap();
         store.turn_off("Email/ingest", "thad").await.unwrap();
@@ -416,7 +416,7 @@ mod tests {
             std::fs::read_to_string(root.join("email/ingest/store")).unwrap(),
             "held"
         );
-        let store = datalib_dag::supervisor::store::Store::open(root)
+        let store = datalib_supervisor_store::store::Store::open(root)
             .await
             .unwrap();
         let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();

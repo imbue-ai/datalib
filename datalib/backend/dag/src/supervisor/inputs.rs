@@ -4,7 +4,7 @@
 //! loop hands over what it knows (`round.rs`, `ctx_for`).
 
 use super::tick::{Consumed, SinkIx, StepFacts};
-use crate::run_state::RunState;
+use datalib_supervisor_store::run_state::RunState;
 
 /// The producers whose version differs from the one the step read at its
 /// last success. Every one of them when there is no success under the

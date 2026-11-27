@@ -1226,7 +1226,7 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
 /// the runner relays a step's: a tracing-JSON line at its own level, with
 /// the applet's target and fields beside it; anything else at `info`.
 fn relay_applet_line(id: &str, line: &str) {
-    use datalib_dag::events::LogLevel;
+    use app_schema::runs::LogLevel;
     let Some(e) = datalib_dag::subprocess::parse_envelope(line) else {
         tracing::info!(applet = %id, "{line}");
         return;

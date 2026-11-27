@@ -134,7 +134,7 @@ impl FileLock {
     /// go a microsecond later, so don't build an invariant on it.
     ///
     /// **A probe that cannot get an answer says "held".** Production asks
-    /// it through `datalib_dag::lock::runner_is_held`, which the app
+    /// it through `datalib_supervisor_store::lock::runner_is_held`, which the app
     /// server reads as whether a sync is running on the root before its
     /// own runner holds the lock. Guessing `false` on an errno we did not
     /// expect would report no sync where one is running; guessing `true`

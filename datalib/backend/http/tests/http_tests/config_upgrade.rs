@@ -110,7 +110,7 @@ async fn boot_brings_an_old_index_root_forward(old: &str) {
     let kept = root.join(format!("{old}/search_index/inference_cache.sqlite"));
     std::fs::create_dir_all(kept.parent().unwrap()).unwrap();
     std::fs::write(&kept, "embeddings").unwrap();
-    let store = datalib_dag::supervisor::store::Store::open(root)
+    let store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
     store
@@ -141,7 +141,7 @@ async fn boot_brings_an_old_index_root_forward(old: &str) {
         "embeddings"
     );
 
-    let store = datalib_dag::supervisor::store::Store::open(root)
+    let store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
     let off = store.turned_off().await.unwrap();
@@ -221,7 +221,7 @@ async fn boot_moves_the_index_steps_tree_to_its_new_name() {
         "unified_grid_and_search_index/grid_index",
         "unified_grid_and_search_index/unified_grid_and_search_index",
     );
-    let store = datalib_dag::supervisor::store::Store::open(root)
+    let store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
     store.turn_off(old_id, "test").await.unwrap();
@@ -245,7 +245,7 @@ async fn boot_moves_the_index_steps_tree_to_its_new_name() {
         std::fs::read_to_string(datalib_core::layout::grid_index_db(root)).unwrap(),
         "the grid index"
     );
-    let store = datalib_dag::supervisor::store::Store::open(root)
+    let store = datalib_supervisor_store::store::Store::open(root)
         .await
         .unwrap();
     let off = store.turned_off().await.unwrap();

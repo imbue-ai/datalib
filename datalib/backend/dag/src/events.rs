@@ -6,8 +6,8 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
-use crate::run_state::RunState;
 use crate::step::{FailureKind, StepId, StepSpec};
+use datalib_supervisor_store::run_state::RunState;
 
 /// One event on the stream. `step` tags every event so a single
 /// multiplexed stream (the orchestrator's view) stays attributable.

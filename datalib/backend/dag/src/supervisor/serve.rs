@@ -9,17 +9,17 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
 use crate::config::ConfigCheck;
-use crate::lock::RunnerLock;
 use crate::scheduler::Runner;
-use crate::supervisor::announce::Listener;
 use crate::supervisor::host;
 use crate::supervisor::loop_host::{LoopHost, OpenRunSink};
 use crate::supervisor::reload::ConfigFile;
-use crate::supervisor::store::{RequestOutcome, Store};
+use datalib_supervisor_store::announce::Listener;
+use datalib_supervisor_store::lock::RunnerLock;
+use datalib_supervisor_store::serve_event::ServeEvent;
+use datalib_supervisor_store::store::{RequestOutcome, Store};
 
 /// What the process running the loop needs beyond the data root.
 #[derive(Clone, Default)]
@@ -49,26 +49,6 @@ impl ServeOptions {
             .clone()
             .unwrap_or_else(|| crate::config::root_config_path(&self.root))
     }
-}
-
-/// One thing the loop says to whoever started it, one NDJSON line each
-/// on `datalib-pipeline serve`'s stderr. Only what no store holds: everything
-/// else a parent reads from `system/supervisor.sqlite` and the run store.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "event", rename_all = "snake_case")]
-pub enum ServeEvent {
-    /// This process holds `runner-lock`: the loop is its from here on.
-    Holding,
-    /// A run began: the loop is busy until [`ServeEvent::SyncOver`].
-    SyncStarted {
-        run_id: String,
-    },
-    SyncOver {
-        run_id: String,
-    },
-    /// This process wrote to the run store, so a reader showing it should
-    /// read it again. A filesystem watch would say so too, but late.
-    RunStoreWritten,
 }
 
 /// Where [`run`] sends what it says.
@@ -197,7 +177,7 @@ async fn hold(
 async fn no_pass(store: &Store) -> anyhow::Result<()> {
     let job = store
         .open_job(
-            crate::supervisor::store::JobKind::Prepare,
+            datalib_supervisor_store::store::JobKind::Prepare,
             &[],
             crate::supervisor::round::LOOP_OPENER,
         )
@@ -276,7 +256,7 @@ async fn take_the_lock(
 ) -> Option<RunnerLock> {
     let mut announced = false;
     loop {
-        match crate::lock::try_acquire_runner(root) {
+        match datalib_supervisor_store::lock::try_acquire_runner(root) {
             Ok(lock) => return Some(lock),
             Err(e) if e.is_held() => {
                 if !announced {
@@ -432,30 +412,5 @@ async fn fail_open_requests(store: &Store, why: &str) {
             None => RequestOutcome::Failed,
         };
         let _ = store.close_request(&request.id, outcome, None).await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A parent reads these off a pipe, so the words are a protocol: each
-    /// line names its event in snake case, and reads back as it was sent.
-    #[test]
-    fn a_serve_event_reads_back_as_it_was_written() {
-        let events = [
-            ServeEvent::Holding,
-            ServeEvent::SyncStarted { run_id: "r".into() },
-            ServeEvent::SyncOver { run_id: "r".into() },
-            ServeEvent::RunStoreWritten,
-        ];
-        for event in events {
-            let line = serde_json::to_string(&event).unwrap();
-            assert_eq!(serde_json::from_str::<ServeEvent>(&line).unwrap(), event);
-        }
-        assert_eq!(
-            serde_json::to_string(&ServeEvent::RunStoreWritten).unwrap(),
-            r#"{"event":"run_store_written"}"#
-        );
     }
 }

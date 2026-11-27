@@ -10,10 +10,10 @@ use anyhow::{Context, Result};
 use datalib_runs::{RunKind, RunStart};
 
 use crate::config::DagConfig;
-use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::supervisor::store::{JobKind, JobRow, RequestRow, Store};
 use datalib_step_protocol::env::{DATALIB_DAG_NOW, DATALIB_DAG_RUN_ID};
+use datalib_supervisor_store::run_state::RunState;
+use datalib_supervisor_store::store::{JobKind, JobRow, RequestRow, Store};
 use strum::VariantArray;
 
 /// The environment every step of one run gets on top of the
@@ -214,8 +214,8 @@ pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::supervisor::record::InvocationRow;
-    use crate::supervisor::record::{CurrentRun, Record};
+    use datalib_supervisor_store::record::InvocationRow;
+    use datalib_supervisor_store::record::{CurrentRun, Record};
 
     /// Guards reading a run's cause off a server log line and the absence
     /// of a request: a sync names who asked and for what.

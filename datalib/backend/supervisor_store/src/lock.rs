@@ -2,15 +2,16 @@
 //! `flock(2)` the kernel releases when the holder dies (`datalib_flock`).
 //!
 //! The runner and the server take separate locks on separate files; the
-//! crate README says why they cannot share one. Letting go of the runner's
+//! runner's README (`dag/README.md` §"Two locks, two files") says why
+//! they cannot share one. Letting go of the runner's
 //! is announced, so a host waiting for it takes it at once.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub use datalib_flock::{FileLock, LockError};
+use datalib_flock::{FileLock, LockError};
 
-use crate::supervisor::announce::{announce, listeners_dir, FROM_LOCK, RUNNER_LOCK_RELEASED};
+use crate::announce::{announce, listeners_dir, FROM_LOCK, RUNNER_LOCK_RELEASED};
 
 /// `runner-lock`, held. Dropping it releases the lock and announces that.
 pub struct RunnerLock {
@@ -126,11 +127,9 @@ mod tests {
     /// timer.
     #[tokio::test]
     async fn letting_go_of_the_lock_is_announced() {
-        use crate::supervisor::announce::Listener;
+        use crate::announce::Listener;
         let tmp = tempfile::tempdir().unwrap();
-        let store = crate::supervisor::store::Store::open(tmp.path())
-            .await
-            .unwrap();
+        let store = crate::store::Store::open(tmp.path()).await.unwrap();
         let mut listener = Listener::new(&store, "test");
         drop(acquire_runner(tmp.path()).unwrap());
         assert_eq!(listener.next().await, [RUNNER_LOCK_RELEASED]);

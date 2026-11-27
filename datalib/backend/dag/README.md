@@ -604,7 +604,8 @@ naming no step) looks exactly like one it did.
 
 ## Two locks, two files
 
-- **One loop per data root** (`system/runner-lock`). The loop is the
+- **One loop per data root** (`system/runner-lock`,
+  `datalib_supervisor_store::lock`). The loop is the
   only writer of the `steps`, `sinks`, `runs`, `run_steps` and
   `invocations` tables in `system/supervisor.sqlite` (§"The record"),
   and the steps it spawns write raw stores
@@ -753,7 +754,8 @@ every commit it makes (`request opened <id>`, `turned off <step>`, `record
 saved`, …), and so do the two writers that are not the store: the
 server, when its watch sees `config.toml` move (`config changed`, which
 is what makes the loop re-read its config), and whoever lets go of
-`runner-lock`. `supervisor/announce.rs` is all of it.
+`runner-lock`. [`announce.rs`](../supervisor_store/src/announce.rs) in
+`datalib_supervisor_store` is all of it.
 
 A listener is a FIFO in `system/supervisor-listeners/`, named
 `<pid>-<n>.fifo`. An announcement is one line, shorter than a pipe
@@ -801,7 +803,7 @@ runs `run_forever` itself. A `datalib-pipeline` sync has no idle side:
 exits.
 
 `datalib-pipeline serve` says on stderr, one NDJSON line each
-(`supervisor::serve::ServeEvent`), what its parent needs and no store
+(`datalib_supervisor_store::serve_event::ServeEvent`), what its parent needs and no store
 holds: that it holds the lock (`holding`), the start and end of each run
 (`sync_started`, `sync_over`), and every write it makes to the run
 store (`run_store_written`), which a filesystem watch would report late.
@@ -886,7 +888,11 @@ back.
 ## The record
 
 The loop keeps what it knows in `system/supervisor.sqlite`, in two
-sets of tables. Anyone may write the first set (`supervisor/store.rs`):
+sets of tables. The store is its own crate, `datalib_supervisor_store`
+(`datalib/backend/supervisor_store/`), with the announcements,
+`ServeEvent` and `runner-lock`: the loop and the server both link it,
+and it holds nothing of the loop. Anyone may write the first set
+([`store.rs`](../supervisor_store/src/store.rs)):
 `requests` (its `roots`, `opened_by`, a
 `stop_requested_by`, and once closed its `outcome` — `done`, `failed`
 or `stopped` — and `failed_step`), `turned_off` (`step`,
@@ -895,8 +901,9 @@ closed the `error` that stopped it, if any) and `job_steps` (a
 compaction's, collection's or prepare pass's steps in order, each
 `state`, `error` and `before_bytes`/`after_bytes`). Only the holder of
 `runner-lock` writes the second set, in the table below
-(`supervisor/record.rs`). The file is plain SQLite in rollback-journal
-mode, so any `sqlite3` reads it. `supervisor_contention_test` runs seven
+([`record.rs`](../supervisor_store/src/record.rs)). The file is plain SQLite in rollback-journal
+mode, so any `sqlite3` reads it. `supervisor_contention_test`
+(`//datalib/backend/supervisor_store`) runs seven
 processes on one store (people opening requests, the loop saving, the
 server reading) and checks that every write lands and that the file's
 header says rollback-journal:
@@ -910,7 +917,7 @@ header says rollback-journal:
 | `invocations` | process the loop started | when, in which run, and how it ended (`outcome` is NULL while it runs) |
 
 The store's shape moves by the rungs of
-`supervisor/store.rs`'s `LADDER`: an open runs the rungs from the
+`store.rs`'s `LADDER`: an open runs the rungs from the
 version the store records to this build's before it runs the DDL, and a
 store a newer build migrated further is refused, so two builds sharing a
 root run the newer one.
