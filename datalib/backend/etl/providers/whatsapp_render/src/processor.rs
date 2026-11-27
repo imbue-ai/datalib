@@ -1,4 +1,4 @@
-//! The render wave for the whatsapp source: its planner and the
+//! The render step for the whatsapp source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -11,7 +11,7 @@ use datalib_etl_whatsapp_config::WhatsappRenderConfig;
 use datalib_schema::problems::{Outcome, ProblemRow, Scope, Stage};
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// One render processor, always: it renders whatever is in the raw store.
 pub fn plan_render(
     ctx: PlanContext,
     config: WhatsappRenderConfig,
