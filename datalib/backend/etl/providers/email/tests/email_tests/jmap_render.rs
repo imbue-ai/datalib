@@ -218,7 +218,7 @@ fn render_smoke_produces_one_page_and_its_rows() {
 
     // The thread (chat) row and the root email row both carry the outlink.
     // Asserted on the emitted document rather than a `*.grid_rows.json`
-    // file: the renderer no longer writes one.
+    // file: the renderer writes no such file.
     let doc = &completed[0];
     let rows = &doc.rows;
     assert_eq!(

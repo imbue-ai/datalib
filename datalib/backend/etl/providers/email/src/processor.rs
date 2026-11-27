@@ -1,4 +1,5 @@
-//! Program A `DataProcessor`s for the email source.
+//! The `DataProcessor` for the email source's download: it runs the
+//! download mode the config names.
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -117,10 +118,10 @@ impl DataProcessor for EmailIngest {
     }
 
     /// JMAP (Fastmail) and the Gmail API seal after each batch of
-    /// fetched messages and each batch of `.eml` bodies. mbox does not —
-    /// no seam is wired — so it commits once at the end, which costs
-    /// latency and never correctness: a consumer that gets no checkpoints
-    /// simply does one pass when the download finishes.
+    /// fetched messages and each batch of `.eml` bodies. mbox and Apple
+    /// Mail are handed no `Sealer`, so they commit once at the end, which
+    /// costs latency and never correctness: a consumer that gets no
+    /// checkpoints runs once, when the download finishes.
     fn streams_output(&self) -> bool {
         true
     }

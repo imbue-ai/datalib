@@ -806,12 +806,12 @@ impl EmailListing<'_> {
     }
 
     /// Enumerate, with `Email/query`, the admitted mailboxes (or the
-    /// account) no enumeration has listed whole: a first run, a start
-    /// over, a mailbox the label filter newly admits. Each page lists its
-    /// ids; an email already listed is left as it is. The walk starts
-    /// again every run until one reaches its end, and only that one
-    /// records its scopes as listed whole and, when it covered the whole
-    /// account, deletes what it did not name.
+    /// account) no enumeration has listed whole: a first run, a run after
+    /// `listed::start_over`, a mailbox the label filter newly admits.
+    /// Each page lists its ids; an email already listed is left as it is.
+    /// The walk starts again every run until one reaches its end, and only
+    /// that one records its scopes as listed whole and, when it covered
+    /// the whole account, deletes what it did not name.
     async fn enumerate_unlisted_scopes(
         &self,
         mailbox_filter: Option<&BTreeSet<String>>,

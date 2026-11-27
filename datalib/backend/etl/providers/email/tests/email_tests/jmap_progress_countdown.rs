@@ -1,12 +1,11 @@
 //! The Fastmail (JMAP) half of what `progress_countdown` asserts for
-//! Gmail: the download announces a total big enough to count down from,
+//! Gmail: the download reports a total big enough to count down from,
 //! and every phase's ticks add up to it.
 //!
-//! This path used to announce `5` — its phase count — so a mailbox of
-//! forty thousand messages counted down from four. `Email/query` is
-//! already sent `calculateTotal: true` and its `total` was read only to
-//! decide when to stop paginating. The total announced now is exact: the
-//! emails the store owes, then the `.eml`s it lacks.
+//! It guards against reporting the phase count, `5`, as the total, which
+//! made a mailbox of forty thousand messages count down from four. The
+//! total reported is exact: the emails the store owes, then the `.eml`s
+//! it lacks.
 
 use std::sync::Arc;
 
@@ -48,8 +47,8 @@ async fn a_fastmail_enumeration_counts_down_from_its_message_count() {
     );
 
     let announced = recorder.announcements();
-    // The old behaviour, and the thing this test exists to catch: the
-    // only total ever announced was the phase count.
+    // What this test exists to catch: the only total ever reported was
+    // the phase count.
     assert!(
         announced.iter().any(|t| *t > PHASES),
         "the run never announced a total bigger than its {PHASES} phases, \

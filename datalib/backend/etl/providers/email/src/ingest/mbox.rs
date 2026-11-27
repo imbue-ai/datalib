@@ -2411,8 +2411,8 @@ mod tests {
         assert_eq!(stored(&db_path).await.0.len(), 2);
     }
 
-    /// A read error can repeat on every read; the stream used to retry it
-    /// forever, and the run with it.
+    /// A read error can repeat on every read; a stream that retried it
+    /// would retry forever, and the run with it.
     #[cfg(unix)]
     #[test]
     fn a_read_error_ends_the_stream() {
@@ -2670,7 +2670,7 @@ mod tests {
             }
         };
         under("enterprise").await;
-        // A file holding nothing holds the prune, and the retirement with it.
+        // A file holding nothing stops the prune, and the retirement with it.
         std::fs::write(dir.path().join("c.mbox"), "").unwrap();
         under("defiant").await;
         std::fs::remove_file(dir.path().join("c.mbox")).unwrap();

@@ -1,4 +1,4 @@
-//! The render wave for the email source: its planner and the
+//! The render step for the email source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use crate::render::render::{unmatched_label_rows, OutlinkFormat};
@@ -242,8 +242,9 @@ mod tests {
         };
         let out = tempfile::tempdir().unwrap();
         let progress = Progress::noop();
-        // The names are settled as the store takes the document, so the
-        // test reads back what the store holds.
+        // The store drops a contact's name that is someone else's handle
+        // as it writes the document, so the test reads back what the
+        // store holds.
         let store = IndexedMarkdownStore::open(out.path()).unwrap();
         let mut on_doc = |md: RenderedMarkdown| store.put_document(&md);
         let mut on_declare = |_: &str, _: RenderUnitEnd<'_>| Ok(());

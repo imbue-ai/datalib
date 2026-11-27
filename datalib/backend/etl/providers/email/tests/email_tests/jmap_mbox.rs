@@ -168,7 +168,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
         .find(|e| e.message_id.as_deref() == Some("briefing-003@enterprise.starfleet"))
         .expect("geordi present");
     assert!(geordi.has_attachment);
-    // Attachment payloads now live inside the `.eml` itself (see
+    // Attachment payloads live inside the `.eml` itself (see
     // `extract_attachments_from_emls` at parse time) — not in a
     // dedicated email_attachments row. We only assert the
     // `has_attachment` flag here; the rendered-blobs test exercises

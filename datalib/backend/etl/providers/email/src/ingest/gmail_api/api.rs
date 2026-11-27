@@ -64,7 +64,7 @@ fn bucket_capacity(units_per_minute: u32) -> f64 {
 /// Client-side quota throttle: a leaky bucket over Gmail's per-user
 /// "quota units per minute" limit. Google's own answer is the authority:
 /// a request it rate-limits lowers the ceiling for the rest of the run,
-/// so a long backfill settles under the real limit instead of bumping
+/// so a long backfill runs below the real limit instead of bumping
 /// into it once a minute.
 #[derive(Debug)]
 pub struct QuotaThrottle {
@@ -135,7 +135,7 @@ impl QuotaThrottle {
     }
 
     /// One cut per rate-limited *request*, however many attempts it took,
-    /// and an empty bucket: the request the chokepoint just retried went
+    /// and an empty bucket: the request the HTTP layer just retried went
     /// out at the old rate, and the next one must not be another burst.
     fn absorb_rate_limits(&mut self) {
         let seen = self.rate_limited.load(Ordering::Relaxed);
@@ -1051,7 +1051,7 @@ mod tests {
         );
 
         // One cut per rate-limited request, however many attempts the
-        // chokepoint made, and never below the floor.
+        // HTTP layer made, and never below the floor.
         client.rate_limited.fetch_add(5, Ordering::Relaxed);
         t.acquire(0).await;
         assert_eq!(t.units_per_minute(), 3_840);

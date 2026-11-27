@@ -902,8 +902,8 @@ pub async fn migrate_held_into_the_sidecar(conn: &mut SqliteConnection) -> Resul
 /// Builds before this rung compared `only_extract_labels` written as
 /// Gmail's ids (`INBOX`) with the labels' names (`Inbox`), so a walk
 /// listed a label's mail and the fetch then dropped every message, its
-/// listing with it, while the label stayed listed whole. Forgetting
-/// which labels were listed whole has the next run walk them again,
+/// listing with it, while the label stayed listed whole. Deleting the
+/// `listed_whole` rows of a Gmail store has the next run walk them again,
 /// which lists what was dropped; what is held stays held. A JMAP store
 /// is left alone.
 pub async fn migrate_relist_gmail_scopes(conn: &mut SqliteConnection) -> Result<()> {
@@ -985,10 +985,10 @@ pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection)
 
 /// Builds before this rung stored a Gmail thread id in decimal, the way a
 /// Takeout's `X-GM-THRID` spells it, and so kept the API's spelling of
-/// the message and thread ids in columns of their own. Now a thread id is
-/// keyed as a message id is (`envelope::GmailId::key`), and those columns
-/// say nothing `id` and `thread_id` do not. A JMAP store's thread ids are
-/// its server's, and stay. So does a thread id an mbox minted from the
+/// the message and thread ids in columns of their own. This build keys a
+/// thread id as it keys a message id (`envelope::GmailId::key`), and
+/// those columns say nothing `id` and `thread_id` do not. A JMAP store's
+/// thread ids are its server's, and stay. So does a thread id an mbox minted from the
 /// email's own id, which is the email's id and so not a Gmail thread's.
 pub async fn migrate_gmail_thread_ids_to_hex(conn: &mut SqliteConnection) -> Result<()> {
     for column in ["gmail_message_id", "gmail_thread_id"] {
@@ -1130,8 +1130,8 @@ mod tests {
         db.close().await;
     }
 
-    /// A store an older build wrote climbs the whole ladder with its
-    /// tokens intact and nothing to fetch again: what `gmail_messages`
+    /// A store an older build wrote, migrated through every rung, keeps its
+    /// tokens and has nothing to fetch again: what `gmail_messages`
     /// mapped and what a JMAP account's state covered are listed and
     /// held, a Gmail message recorded as unfetched is owed, an mbox
     /// import's email is left alone, and the state the old cursors kept

@@ -15,7 +15,7 @@ pub mod parse;
 #[allow(clippy::module_inception)]
 pub mod render;
 
-/// The render version stamped onto each doc's `markdowns` row — now owned by the
-/// renderer (which drives chat-common). Re-exported for callers that
-/// referenced `render::RENDER_VERSION`.
+/// The render version stamped onto each doc's `markdowns` row, defined by the
+/// renderer (which drives chat-common) and re-exported here as
+/// `render::RENDER_VERSION`.
 pub use render::RENDER_VERSION;

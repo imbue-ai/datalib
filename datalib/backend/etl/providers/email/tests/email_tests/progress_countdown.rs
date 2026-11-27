@@ -1,13 +1,12 @@
 //! The Manage screen's "N queued" chip is the DAG runner subtracting a
-//! step's increments from the last total that step announced. A download
-//! that never announces one gets a bare count instead — no remaining, no
-//! countdown — which is what Gmail and Fastmail showed while Slack, which
-//! does announce one, counted down.
+//! step's increments from the last total that step reported with
+//! `set_length`. A download that never reports one gets a bare count
+//! instead — no remaining, no countdown.
 //!
-//! So the assertion that matters is not "a total was announced" but
-//! "the last total announced equals what the run counted" — a bar that
-//! announces a stale or partial total reads as stuck just as badly as
-//! one that announces none. The total is the number of messages the
+//! So the assertion that matters is not "a total was reported" but
+//! "the last total reported equals what the run counted" — a bar that
+//! reports a stale or partial total reads as stuck just as badly as
+//! one that reports none. The total is the number of messages the
 //! store owes when the fetch starts.
 
 use std::path::Path;
@@ -58,7 +57,7 @@ async fn a_gmail_walk_announces_a_total_so_the_chip_can_count_down() {
 }
 
 /// A re-walk of a mailbox already mirrored fetches nothing, and
-/// announces nothing to fetch: the total is what the store owes, so the
+/// reports nothing to fetch: the total is what the store owes, so the
 /// chip does not sit at a number that never counts down.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_walk_that_fetches_nothing_leaves_nothing_queued() {

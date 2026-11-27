@@ -94,9 +94,9 @@ A run does three things with emails, in this order:
    token (`jmap:<account_id>:state:Email` in `sync_scope_state`)
    advances. The token never waits on a fetch. With no token to replay
    from — a first run, or `cannotCalculateChanges` —
-   the run asks for the account's state now, saves it, forgets which
-   scopes were listed whole, and lists every email again so that all of
-   them are owed. No other error does this: an `Email/changes` that
+   the run asks for the account's state now, saves it, deletes every
+   `listed_whole` row, and lists every email again so that all of them
+   are owed. No other error does this: an `Email/changes` that
    fails is a `problems` row, and the run goes on with what is stored.
    Listing again costs an `Email/get` of every email's envelope, but no
    `.eml` the store already holds is downloaded again.
@@ -160,9 +160,10 @@ The two API modes share one mechanism (`listed.rs`):
   `history.list` keeps it current, naming each message with its
   thread. JMAP walks `Email/query` and asks `Email/get` for each page's
   `threadId`s, and every later `Email/get` says the thread of what it
-  fetched; `Email/changes` takes destroyed emails out. A start over
-  walks it again. Gmail's `threads.get` is never asked: it costs 40
-  units a thread.
+  fetched; `Email/changes` takes destroyed emails out. Listing every
+  email again (step 1 of §"Incrementality") deletes the `#threads` row
+  with the others, so the walk runs again. Gmail's `threads.get` is
+  never asked: it costs 40 units a thread.
 - **The rest of a kept thread is listed**, at the current token: every
   member of a thread holding an email the filter keeps (Gmail: by
   `emails.label_ids`; JMAP: by its mailboxes) that is not listed
@@ -205,8 +206,8 @@ A store written before these tables existed is carried over by two
 rungs of the migration ladder (`listed::migrate_from_cursors`, then
 `listed::migrate_held_into_the_sidecar`): what it holds is listed and
 held under no stamp, so its tokens stay good and nothing is fetched
-again. A store from the days of a `fetched_messages` table climbs the
-second rung alone, which moves the stamp each email was fetched for
+again. A store from the days of a `fetched_messages` table runs only
+the second rung, which moves the stamp each email was fetched for
 into the sidecar.
 
 ## When part of a sync fails
@@ -240,7 +241,7 @@ with nothing listed to go on with.
 - Some download failures stop the `.eml` phase early: a refused
   credential (401/403), a retry loop that gave up, or twenty failures in
   a row. Any of these would fail every remaining `.eml` the same way.
-  The run stops asking, records one `phase:eml_download` row that says
+  The run stops downloading, records one `phase:eml_download` row that says
   why, how many it downloaded and how many are left, and commits
   everything it downloaded. The step then ends `incomplete` rather than
   `succeeded`, and render reads what was committed. The next run
@@ -386,12 +387,12 @@ are identical downstream.
 ### The `.eml` is the canonical body
 
 The RFC 5322 `.eml` is the **complete backup** of a message: body, headers and
-every MIME part, attachments included. It rides in the shared per-source CAS
-keyed by `blob_id`, and everything else is metadata around it.
+every MIME part, attachments included. It is stored in the shared per-source
+CAS keyed by `blob_id`, and everything else is metadata around it.
 
 Concretely, there is no `email_attachments` table. The parts inside an `.eml`
 are reachable by mail-parsing the bytes at render time, so we don't download
-them into separate CAS entries during ingest. Both mbox and JMAP land *only
+them into separate CAS entries during ingest. Both mbox and JMAP store *only
 the `.eml`*.
 
 ### `emails` carries the envelope as `payload`
@@ -425,14 +426,14 @@ reason. JMAP's is the keyword `$muted`, and an mbox's a `Muted` entry in
 conversation, but no account we have tried held one, so that it answers with
 `$muted` is what the draft standard says rather than what we have seen.
 Gmail's API has no such label: it is absent from `labels.list`, and
-`labelIds=MUTED` is refused. So each Gmail run asks one search (`is:muted`,
-5 quota units a page), hands the answer to what it fetches, and at the end
-writes the marks that differ. A search that fails is a
+`labelIds=MUTED` is refused. So each Gmail run walks one search (`is:muted`,
+5 quota units a page), sets `muted` from its result on each message it
+fetches, and at the end writes the marks that differ. A search that fails is a
 `listing:messages.list muted` row and moves no mark, since a list that
 stopped short would read as messages being unmuted; a message fetched in
-that run has `muted` NULL until the next answer. A mute moves the store's
-version but is not a moved mark (`read_marks::moved`), since no document
-shows it. Rung 9 adds the column, moves a `$muted` the store already holds,
+that run has `muted` NULL until a later run's search succeeds. A mute
+moves the store's version but is not a moved mark (`read_marks::moved`),
+since no document shows it. Rung 9 adds the column, moves a `$muted` the store already holds,
 and clears the mbox's read stamp so its labels are read again.
 
 ### `emails.preview` is a line of the body
@@ -505,8 +506,8 @@ matters because only a mailbox's counts are kept out of `payload`
 server returns is stored as it came. Fastmail adds keys of its own to a
 mailbox (`autoLearn`, `hidden`, `splits`, `purgeOlderThanDays` and
 others), and it has been seen to drop them from one mailbox between two
-syncs; fanning out on that would re-render every thread the filter
-keeps for a change no document shows.
+syncs; re-rendering on such a change would re-render every thread the
+filter keeps for a change no document shows.
 
 ### Tables
 

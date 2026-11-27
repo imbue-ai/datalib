@@ -302,7 +302,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
-    // Stamp a `sync_runs` row for this pass, the same as every other
+    // Stamp a `sync_runs` row for this run, the same as every other
     // live source. It is what the DAG-level run-2 incrementality golden
     // reads: a source with no row there is reported as file-backed, so
     // skipping this would make a Gmail incrementality regression
@@ -682,13 +682,14 @@ impl Run<'_> {
     }
 
     /// Walk `messages.list` over every configured label (or the account)
-    /// no walk has listed whole: a first run, a start over, a label the
-    /// filter newly admits, a scope an earlier `since` now reaches back
-    /// past. With `since`, a walk lists only mail after it. Each page
-    /// lists its ids; a message already listed is left as it is. A walk
-    /// starts again every run until it reaches its end, and only then is
-    /// its scope recorded as listed whole and, when it covered the whole
-    /// account with no window, what it did not name deleted.
+    /// no walk has listed whole: a first run, a run after
+    /// `listed::start_over`, a label the filter newly admits, a scope an
+    /// earlier `since` now reaches back past. With `since`, a walk lists
+    /// only mail after it. Each page lists its ids; a message already
+    /// listed is left as it is. A walk starts again every run until it
+    /// reaches its end, and only then is its scope recorded as listed
+    /// whole and, when it covered the whole account with no window, what
+    /// it did not name deleted.
     async fn walk_unlisted_scopes(
         &mut self,
         throttle: &mut QuotaThrottle,

@@ -328,7 +328,7 @@ fn base64url(bytes: &[u8]) -> String {
 
 // ── progress ────────────────────────────────────────────────────────
 
-/// Records what a download announced and what it counted, the way the
+/// Records the totals a download reported and what it counted, the way the
 /// runner's `RunStoreSink` does. Children share one recorder because the
 /// runner relabels every child event back to the step that emitted it.
 #[derive(Default, Clone)]
@@ -347,7 +347,7 @@ impl ProgressSink for Recorder {
 }
 
 impl Recorder {
-    /// Every total the run announced, in order. A `set_length(None)` is
+    /// Every total the run reported, in order. A `set_length(None)` is
     /// left out: the runner treats it as "no total" and so publishes no
     /// `queued` for it.
     pub fn announcements(&self) -> Vec<u64> {

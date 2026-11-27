@@ -1,6 +1,6 @@
-//! Raw-store schema for the email provider. One schema for both download
-//! modes — mbox synthesizes a JMAP-shaped envelope so the two are identical
-//! from here on.
+//! Raw-store schema for the email provider. One schema for every download
+//! mode — the mbox, Gmail API and Apple Mail modes synthesize a JMAP-shaped
+//! envelope, so all four are identical from here on.
 //!
 //! The `.eml` in the CAS is the canonical body; everything here is metadata
 //! around it, and there is deliberately no `email_attachments` table. What
@@ -598,9 +598,9 @@ pub const LADDER: &[Migration] = &[
 ];
 
 /// The column is made here because a mark is written from `$muted` below,
-/// before an open adds what the DDL declares. A store that climbed rung 8
-/// in this same open has it already. An mbox is read again for its `Muted`
-/// labels, which no row kept; the Gmail API's are asked for every run, and
+/// before an open adds what the DDL declares. A store that rung 8
+/// migrated in this same open has it already. An mbox is read again for
+/// its `Muted` labels, which no row kept; the Gmail API's are asked for every run, and
 /// a JMAP server's were the keyword moved here.
 async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
     let has_column: bool = sql!(
