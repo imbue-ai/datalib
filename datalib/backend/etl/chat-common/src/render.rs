@@ -29,7 +29,39 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// It also covers what `render_markdown` writes beside the markdown,
 /// the `source_contacts` rows and the search terms among them: a change
 /// only there still needs every document rendered again for an
-/// existing root to hold it.
+/// existing root to hold it. v10 was such a change: it moved only the
+/// `source_contacts` rows (`people.rs` counts reactors).
+/// v12: the people baseline counts a reactor to a message not in
+/// the mirror, which moves only the `source_contacts` rows.
+/// v13: an attachment's size comes from its bytes when the provider
+/// gave none, lost bytes are a `blob_missing` problem, and the versions
+/// a conversation left fold in as `<details class="branch">`.
+/// v14: an email's Bcc shows on its recipients line, and it and each
+/// message's mentions are `supplied_search_terms` rows.
+/// v15: a document's own row names everyone who took part in it
+/// (`participant` terms), so `is:document with:…` finds conversations.
+/// v16: a chat's conversation name is its subject alone; `channel` is
+/// left to sources that file a row somewhere else.
+/// v17: a chat named by its people names them on its document's own row
+/// (`subject` terms), so the Subject cell draws them as chips.
+/// v18: participants are who wrote a message, never a tool call or a
+/// stand-in label ("Me", "Unknown"; `AuthorKind`).
+/// v19: an item with attachments draws its labels too.
+/// v20: an attachment its source's blob store holds is linked at its
+/// `/data/…` address rather than copied beside the page.
+/// v21: so is a person's photo.
+/// v22: the account's own messages are "Me", a chip of the `me:self`
+/// handle, whatever stand-in the source used ("User", "Human").
+/// v23: a message's time is on the clock its source wrote it on, and a
+/// time whose source names no clock says so (`Z`), in the header
+/// and in the row's `created_at`.
+/// v24: a `Markdown` body that leaves a fence or an HTML block open is
+/// closed at its end, so the messages after it are not swallowed.
+/// v25: titles, names, filenames and labels lose their bidi controls.
+/// v26: a chat is one document; the front matter has no `period`, and
+/// no title says which months it holds.
+/// v27: a chat is drawn in the chat layout: no box per message, one
+/// header over a run of one person's messages, reactions as pills.
 pub const LAYOUT_VERSION: u32 = 27;
 
 /// What every chat-common provider declares through
