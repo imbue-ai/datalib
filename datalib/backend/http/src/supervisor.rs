@@ -34,7 +34,8 @@ const WIPE_WAIT: Duration = Duration::from_secs(10);
 /// The prepare pass at this server's start, as `/api/config` reports it.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
 pub struct Upgrade {
-    /// The pass is running: nothing syncs until it is done.
+    /// The pass is running: a step it has not reached, and what reads
+    /// one, waits for it.
     pub migrating: bool,
     /// This server's runner has run its pass, or found it had none to
     /// run. False until the runner holds the runner lock, which another

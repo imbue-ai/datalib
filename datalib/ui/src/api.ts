@@ -939,7 +939,8 @@ export type PassRow = {
 };
 
 export type Upgrade = {
-  // The migrate pass is running: nothing syncs until it is done.
+  // The prepare pass is running: a step it has not reached, and what
+  // reads one, waits for it.
   migrating: boolean;
   // The server has run its pass, or found it had none to run.
   settled: boolean;

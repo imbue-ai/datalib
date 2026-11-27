@@ -19,7 +19,7 @@ use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
 use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::period::{PeriodSink, RunPeriods};
+use datalib_dag::supervisor::loop_host::{LoopHost, PeriodSink};
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
@@ -798,7 +798,7 @@ impl Periods {
     }
 }
 
-impl RunPeriods for Periods {
+impl LoopHost for Periods {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let _ = self.report.send(Seen::Host("busy period".into()));
         let (checked, _) = self.graph().ok_or("the config does not load")?;

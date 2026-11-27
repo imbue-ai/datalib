@@ -1,6 +1,7 @@
-//! Every launch on a root: the server asks every step whose program takes
-//! the verb to `--prepare` before its loop takes any request, and runs the
-//! ones that answer `needs_rerun` (`dag/README.md` §"Upgrading a root").
+//! Every launch on a root: the server's loop asks every step whose program
+//! takes the verb to `--prepare`, holding back only what it has not asked
+//! and what reads that, and runs the ones that answer `needs_rerun`
+//! (`dag/README.md` §"Upgrading a root").
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -115,14 +116,14 @@ async fn get(state: &AppState, uri: &str) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// Every step is asked, producers first, before the sync opened at boot
-/// runs, and the next launch asks every step again, since the runner
-/// cannot tell whether a program changed in between. `b`'s render, which
-/// says it needs to run again, is run on that launch without anyone
-/// asking — only `a` is synced — and leaves the list of what is behind
-/// once it has.
+/// Every step is asked, producers first, and none syncs before it and
+/// every step it reads have been asked; the next launch asks every step
+/// again, since the runner cannot tell whether a program changed in
+/// between. `b`'s render, which says it needs to run again, is run on that
+/// launch without anyone asking — only `a` is synced — and leaves the list
+/// of what is behind once it has.
 #[tokio::test]
-async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
+async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -144,8 +145,11 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
             .position(|l| l == line)
             .unwrap_or_else(|| panic!("no {line:?} in {lines:?}"))
     };
-    let (asked, _ran) = lines.split_at(4);
-    let mut asked = asked.to_vec();
+    let mut asked: Vec<&str> = lines
+        .iter()
+        .map(String::as_str)
+        .filter(|l| l.starts_with("prepare"))
+        .collect();
     asked.sort();
     assert_eq!(
         asked,
@@ -155,8 +159,22 @@ async fn a_launch_asks_every_step_before_any_sync_at_every_start() {
             "prepare b/ingest",
             "prepare b/render_markdown",
         ],
-        "every step is asked before anything syncs: {lines:?}"
+        "every step is asked once: {lines:?}"
     );
+    for group in ["a", "b"] {
+        let synced = at(&format!("sync {group}/ingest"));
+        assert!(
+            at(&format!("prepare {group}/ingest")) < synced,
+            "a download syncs only once it is asked: {lines:?}"
+        );
+        let rendered = at(&format!("sync {group}/render_markdown"));
+        for asked in ["ingest", "render_markdown"] {
+            assert!(
+                at(&format!("prepare {group}/{asked}")) < rendered,
+                "a render syncs only once it and what it reads are asked: {lines:?}"
+            );
+        }
+    }
     for group in ["a", "b"] {
         assert!(
             at(&format!("prepare {group}/ingest"))
@@ -214,9 +232,10 @@ async fn until_caught_up(state: &AppState) -> serde_json::Value {
     }
 }
 
-/// While the first step is still preparing, the run's record already lists
-/// every step the pass will ask, the rest as pending, so a person can see
-/// how many are left (#1678: the pass's run listed only the steps reached).
+/// While the downloads' `--prepare`s are still running, the run's record
+/// already lists every step the pass will run `--prepare` for, the rest as
+/// pending, so a person can see how many are left (#1678: the pass's run
+/// listed only the steps reached).
 #[tokio::test]
 async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     let td = tempfile::tempdir().unwrap();
@@ -231,27 +250,13 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     std::fs::write(root.join("hold"), "").unwrap();
 
     let state = boot(&root, &bin).await;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let first = loop {
-        if let Some(line) = invoked(&root).first() {
-            break line.trim_start_matches("prepare ").to_string();
-        }
-        assert!(Instant::now() < deadline, "no step was asked to prepare");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    let steps = [
-        "a/ingest",
-        "a/render_markdown",
-        "b/ingest",
-        "b/render_markdown",
+    let want: Vec<(String, &str)> = vec![
+        ("a/ingest".into(), "running"),
+        ("a/render_markdown".into(), "pending"),
+        ("b/ingest".into(), "running"),
+        ("b/render_markdown".into(), "pending"),
     ];
-    let want: Vec<(String, &str)> = steps
-        .iter()
-        .map(|s| {
-            let state = if *s == first { "running" } else { "pending" };
-            (s.to_string(), state)
-        })
-        .collect();
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let snap = datalib_runs::snapshot(&root).await.unwrap();
         let mut got: Vec<(String, &str)> = snap
@@ -265,7 +270,7 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
         }
         assert!(
             Instant::now() < deadline,
-            "while {first} prepares, the run's rows never read {want:?}: {:?} {got:?}",
+            "while the downloads prepare, the run's rows never read {want:?}: {:?} {got:?}",
             snap.kind
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -275,18 +280,23 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// While the pass runs the app stays open, so every Sync on the Sources
-/// card must say it is paused rather than queue a sync that cannot
-/// start; once the pass is over they are offered again.
+/// While the pass runs, Sync stays offered. A sync of a source the pass
+/// has not reached waits for it, its step reading as waiting on the
+/// upgrade, and a step the pass does not hold runs at once. Before, every
+/// Sync was disabled until the whole pass was over, and the loop took no
+/// request at all until then.
 #[tokio::test]
-async fn every_sync_is_paused_while_the_pass_runs_and_offered_after() {
+async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
+    use datalib_dag::supervisor::tick::WaitKind;
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
     let bin = bin_dir_with_fake_step(td.path());
+    let custom = "[[groups]]\nid = \"c\"\n\n[[steps]]\nid = \"c/out\"\n\
+                  command = \"sh -c 'mkdir -p c/out && echo x > c/out/f'\"\n\n";
     std::fs::write(
         root.join("config.toml"),
-        PROGRAMS.to_string() + &source("a"),
+        PROGRAMS.to_string() + &source("a") + custom,
     )
     .unwrap();
     std::fs::write(root.join("hold"), "").unwrap();
@@ -295,43 +305,97 @@ async fn every_sync_is_paused_while_the_pass_runs_and_offered_after() {
     until_invoked(&root, "prepare a/ingest").await;
     assert_eq!(config(&state).await["upgrade"]["migrating"], true);
     let rows = get(&state, "/api/manage/rows").await;
-    let paused = rows["sync_paused"]
-        .as_str()
-        .expect("paused while migrating");
-    let syncs: Vec<&serde_json::Value> = rows["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|r| r["id"].as_str().is_some_and(|id| id.starts_with('a')))
-        .flat_map(|r| r["actions"].as_array().unwrap())
-        .filter(|a| a["id"] == "sync")
-        .collect();
-    assert!(!syncs.is_empty(), "{rows}");
-    for sync in &syncs {
-        assert_eq!(sync["enabled"], false, "{sync}");
-        assert_eq!(sync["disabled_reason"], paused, "{sync}");
-    }
+    assert_eq!(rows["sync_paused"], serde_json::Value::Null, "{rows}");
 
-    std::fs::remove_file(root.join("hold")).unwrap();
+    let mailbox = datalib_dag::supervisor::store::Store::open(&root)
+        .await
+        .unwrap();
+    let id = mailbox
+        .open_request(&["a/ingest".into(), "c/out".into()], "ui")
+        .await
+        .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
-    while config(&state).await["upgrade"]["migrating"] != false {
-        assert!(Instant::now() < deadline, "the pass never ended");
+    while !root.join("c/out/f").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the step the pass does not hold never ran"
+        );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let rows = get(&state, "/api/manage/rows").await;
-    assert_eq!(rows["sync_paused"], serde_json::Value::Null, "{rows}");
-    let group = rows["rows"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["id"] == "a")
-        .unwrap();
-    let sync = group["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["id"] == "sync")
-        .unwrap();
-    assert_eq!(sync["enabled"], true, "{sync}");
+    while mailbox.load_record().await.unwrap().steps["a/ingest"].waiting_for
+        != Some(WaitKind::Prepare)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "a/ingest never read as waiting on the upgrade"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        !invoked(&root).iter().any(|l| l == "sync a/ingest"),
+        "{:?}",
+        invoked(&root)
+    );
+    assert_eq!(mailbox.request(&id).await.unwrap().unwrap().closed, None);
+
+    std::fs::remove_file(root.join("hold")).unwrap();
+    until_invoked(&root, "sync a/ingest").await;
+    mailbox.close().await;
+    state.sync.shutdown(Duration::from_secs(10)).await;
+}
+
+/// Two sources have no path between them, so their `--prepare`s run at
+/// the same time: with every `--prepare` held, both downloads' have
+/// started, and neither render's has. The pass once ran one at a time, so
+/// `b`'s waited for `a`'s and everything downstream of it.
+#[tokio::test]
+async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = bin_dir_with_fake_step(td.path());
+    std::fs::write(
+        root.join("config.toml"),
+        PROGRAMS.to_string() + &source("a") + &source("b"),
+    )
+    .unwrap();
+    std::fs::write(root.join("hold"), "").unwrap();
+    let state = boot(&root, &bin).await;
+    until_invoked(&root, "prepare a/ingest").await;
+    until_invoked(&root, "prepare b/ingest").await;
+    let started = invoked(&root);
+    for render in ["prepare a/render_markdown", "prepare b/render_markdown"] {
+        assert!(
+            !started.iter().any(|l| l == render),
+            "a render's --prepare started before its download's exited: {started:?}"
+        );
+    }
+    std::fs::remove_file(root.join("hold")).unwrap();
+    until_invoked(&root, "prepare a/render_markdown").await;
+    until_invoked(&root, "prepare b/render_markdown").await;
+    state.sync.shutdown(Duration::from_secs(10)).await;
+}
+
+/// A root with no config yet has no step to ask, so its pass is over at
+/// once. The first-run screen waits for `settled`; when the pass moved
+/// into the loop, a loop that could not start for want of a config never
+/// said it, and the screen waited for good.
+#[tokio::test]
+async fn a_root_with_no_config_settles_its_pass_at_once() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = bin_dir_with_fake_step(td.path());
+    let state = boot(&root, &bin).await;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while config(&state).await["upgrade"]["settled"] != true {
+        assert!(
+            Instant::now() < deadline,
+            "the pass never settled: {}",
+            config(&state).await["upgrade"]
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(config(&state).await["upgrade"]["migrating"], false);
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
