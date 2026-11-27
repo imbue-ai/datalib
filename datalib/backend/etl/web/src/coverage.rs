@@ -181,7 +181,7 @@ pub async fn cover(tx: &mut Transaction<'_, Sqlite>, scope: &str, span: Span) ->
 }
 
 /// Delete every span of `scope`: a channel that is gone, a source reset.
-pub async fn forget(tx: &mut Transaction<'_, Sqlite>, scope: &str) -> Result<()> {
+pub async fn delete_spans(tx: &mut Transaction<'_, Sqlite>, scope: &str) -> Result<()> {
     sql!(
         "etl.web.coverage.delete_spans_of_scope",
         "DELETE FROM coverage WHERE scope = ?"
@@ -301,7 +301,7 @@ mod tests {
         );
 
         let mut tx = pool.begin().await.unwrap();
-        forget(&mut tx, "history:ten_forward").await.unwrap();
+        delete_spans(&mut tx, "history:ten_forward").await.unwrap();
         tx.commit().await.unwrap();
         assert!(held(&pool, "history:ten_forward").await.unwrap().is_empty());
         pool.close().await;
