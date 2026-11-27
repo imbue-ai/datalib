@@ -1241,9 +1241,10 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
 /// Download the `.eml` of every email that has no stored bytes:
 /// `owed::drain` over the edges, `blob_download_concurrency` at once,
 /// each body into the CAS as it lands and its edge row written a flush
-/// at a time. The email rows are already stored, so a download the
-/// phase could not do leaves something to keep, and the next run
-/// downloads whatever still has no bytes.
+/// at a time. The email rows are already stored, so when the loop gives
+/// up it records a `phase:eml_download` row rather than failing the run:
+/// what the run stored is still written, and the next run downloads
+/// whatever still has no bytes.
 async fn sync_blobs(
     db: &RawDb,
     session: &Session,

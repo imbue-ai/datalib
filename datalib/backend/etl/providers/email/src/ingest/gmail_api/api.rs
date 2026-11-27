@@ -389,8 +389,9 @@ fn messages_list_url(
     label_id: Option<&str>,
     after: Option<i64>,
 ) -> String {
-    // A `since` before 1970 is negative seconds, which Slack answered with
-    // nothing (#1048). No mail is older than the epoch.
+    // A `since` before 1970 would be negative seconds, which Gmail's
+    // `after:` is not known to accept (Slack's API answered them with
+    // nothing, #1048). No mail is older than the epoch, so 0 loses none.
     let q = after.map(|secs| format!("after:{}", secs.max(0)));
     search_url(user_id, page_token, page_size, label_id, q.as_deref())
 }

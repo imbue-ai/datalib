@@ -110,7 +110,8 @@ fn system_entry(label: &str) -> Option<(&'static str, LabelKind)> {
 /// The spelling to store for `label`, whatever spelling it arrived in.
 ///
 /// User labels pass through untouched — their name *is* the user's, and
-/// all three modes report it identically (`Work/Projects`).
+/// every spelling a label arrives in (a Takeout mbox's, the Gmail API's,
+/// the backslashed one) writes it identically (`Work/Projects`).
 pub fn canonical_name(label: &str) -> String {
     match system_entry(label) {
         Some((canonical, _)) => canonical.to_string(),

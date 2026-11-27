@@ -174,7 +174,8 @@ conversation's newest message.
 
 What a conversation `client.counts` does not name depends on what it is:
 
-- **A channel** is walked as if `client.counts` had not been asked.
+- **A channel** is walked the way every conversation is when
+  `client.counts` fails (`Newest::Unknown`).
   Every channel the account is a member of is in the sidebar, so this
   is a channel mirrored through `all_channels` or `channels` that the
   account has not joined.
@@ -709,9 +710,10 @@ row goes, a refusal stamps it anew. A failure that may pass (an HTTP
 5xx, curl failing, Slack's `internal_error` or `fatal_error`) is not a
 refusal. The ones the shared `latchkey_curl` retries ([Rate limits and
 transient errors](#rate-limits-and-transient-errors)) are asked again
-within the run first; whatever still fails is the usual error row, and the
-call is asked again next run. A reset of the
-download deletes the marker along with everything else.
+within the run first; whatever still fails is the usual error row, and
+the call is asked again next run. A reset of the download (`--reset`)
+deletes every row of the store, the marker's `sync_scope_state` row
+included.
 
 Without `client.counts` a run walks every conversation, as when the
 call fails, and the read marks it carries stay as they were; without

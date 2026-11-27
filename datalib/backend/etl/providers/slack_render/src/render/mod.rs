@@ -303,9 +303,9 @@ mod channel_display_tests {
         }
     }
 
-    /// A channel renders as `#name`, or its id when it has no name: the
-    /// DM path must leave channels alone, which keeps the render goldens
-    /// byte-stable.
+    /// A channel renders as `#name`, or `#` and its id when it has no
+    /// name: the DM path must leave channels alone, which keeps the
+    /// render goldens byte-stable.
     #[test]
     fn a_channel_is_hash_name() {
         let inputs = Inputs::default();
