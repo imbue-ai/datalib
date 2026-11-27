@@ -1303,7 +1303,7 @@ impl RowCtx<'_> {
 
         let activity = match status.key.as_str() {
             "running" => queue::Activity::Running,
-            "waiting" => queue::Activity::BetweenPasses,
+            "waiting" => queue::Activity::CaughtUp,
             _ => queue::Activity::Idle,
         };
         let cells = match e {

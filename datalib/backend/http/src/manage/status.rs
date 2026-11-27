@@ -144,10 +144,10 @@ pub fn step_status(
     // Waiting with an invocation open is a streaming consumer between two
     // of its processes: it has done the work it had and waits for what it
     // reads to move again.
-    let between_passes = last.is_some_and(|l| l.finished_at.is_none());
+    let invocation_open = last.is_some_and(|l| l.finished_at.is_none());
     let now = match step.and_then(|s| s.state) {
         Some(StateKind::Running) => view("running", last.map(|l| l.started_at.clone()), detail),
-        Some(StateKind::Waiting) if between_passes => view("waiting", ended, detail),
+        Some(StateKind::Waiting) if invocation_open => view("waiting", ended, detail),
         Some(StateKind::Waiting) => view("queued", ended, detail),
         Some(StateKind::Fresh) if !ran_this_run => view(
             "queued",
@@ -270,7 +270,7 @@ mod tests {
     /// next one with its invocation still open. It reads Waiting, not
     /// Running (no process is working) and not Queued (it has started).
     #[test]
-    fn a_step_between_passes_reads_waiting() {
+    fn a_caught_up_consumer_with_its_invocation_open_reads_waiting() {
         let mut rec = at(StateKind::Waiting, Some("waiting for a/ingest"));
         let last = rec.last_run.as_mut().unwrap();
         last.started_at = STARTED.into();

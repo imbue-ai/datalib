@@ -205,7 +205,7 @@ pub enum Activity {
     Running,
     /// Read every seal so far, with no process: its queue is how far
     /// behind its producer it is, and there is no pace to estimate from.
-    BetweenPasses,
+    CaughtUp,
     /// Not started, or finished.
     Idle,
 }
@@ -704,10 +704,10 @@ mod tests {
     /// and its ETA never reads stalled, however long the producer takes
     /// to seal again.
     #[test]
-    fn a_step_between_passes_shows_its_empty_queue_and_no_estimate() {
+    fn a_caught_up_step_shows_its_empty_queue_and_no_estimate() {
         let caught_up = step_cells(
             Some(&progress(&[("queued{from=a}", 0)], None)),
-            Activity::BetweenPasses,
+            Activity::CaughtUp,
         );
         assert_eq!(caught_up.queue.value, Some(0));
         assert_eq!(caught_up.eta, blank("seconds"));
@@ -723,7 +723,7 @@ mod tests {
                 .as_deref(),
             Some(STALLED)
         );
-        let c = step_cells(Some(&quiet), Activity::BetweenPasses);
+        let c = step_cells(Some(&quiet), Activity::CaughtUp);
         assert_eq!((c.queue.value, c.eta), (Some(3), blank("seconds")));
     }
 
@@ -765,7 +765,7 @@ mod tests {
             .as_deref()
             .unwrap()
             .contains("before run r7 ended"));
-        for activity in [Activity::Running, Activity::BetweenPasses] {
+        for activity in [Activity::Running, Activity::CaughtUp] {
             assert_eq!(owed_cell(Some(&owed(412)), activity), blank("count"));
         }
         assert_eq!(owed_cell(Some(&owed(0)), Activity::Idle), blank("count"));
