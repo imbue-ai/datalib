@@ -2,12 +2,12 @@
 //! step, read from its row in the loop's `steps` table, while the step is
 //! doing something, and its last outcome while it is at rest. Nothing
 //! here works out what the loop is doing; the loop writes it
-//! (`datalib_dag::supervisor::record`).
+//! (`datalib_supervisor_store::record`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use datalib_dag::{Diagnostic, Severity};
-use datalib_supervisor_store::record::StepRecord;
+use datalib_supervisor_store::record::StepRow;
 use datalib_supervisor_store::state::StateKind;
 
 /// One row's status, in the shape the Status column draws. The rules
@@ -118,7 +118,7 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
 /// reading "Up to date" from last week, for an entry no longer in the
 /// graph, is what #209 was about. `run` is the id of the run in flight.
 pub fn step_status(
-    step: Option<&StepRecord>,
+    step: Option<&StepRow>,
     run: Option<&str>,
     dropped: Option<&Diagnostic>,
 ) -> StatusView {
@@ -201,8 +201,8 @@ mod tests {
     const ENDED: &str = "2026-09-01T10:00:09+02:00";
     const YESTERDAY: &str = "2026-08-31T09:00:00+02:00";
 
-    fn succeeded_yesterday() -> StepRecord {
-        StepRecord {
+    fn succeeded_yesterday() -> StepRow {
+        StepRow {
             last_run: Some(LastRun {
                 run_id: "r0".into(),
                 started_at: YESTERDAY.into(),
@@ -217,8 +217,8 @@ mod tests {
         }
     }
 
-    fn at(state: StateKind, detail: Option<&str>) -> StepRecord {
-        StepRecord {
+    fn at(state: StateKind, detail: Option<&str>) -> StepRow {
+        StepRow {
             state: Some(state),
             state_detail: detail.map(str::to_string),
             ..succeeded_yesterday()

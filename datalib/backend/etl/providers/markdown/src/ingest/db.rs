@@ -79,8 +79,8 @@ impl RawDb {
                 .await
                 .context("delete a note")?;
         }
-        datalib_etl::prune::forget_record_problems_in_tx(&mut tx, MARKDOWN_FILES, rel).await?;
-        file_checkpoint::forget_file(&mut tx, scope, rel).await?;
+        datalib_etl::prune::delete_record_problems_in_tx(&mut tx, MARKDOWN_FILES, rel).await?;
+        file_checkpoint::delete_file_stamp(&mut tx, scope, rel).await?;
         tx.commit().await.context("commit delete tx")?;
         Ok(())
     }

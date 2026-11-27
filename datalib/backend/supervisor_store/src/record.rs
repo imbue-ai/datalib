@@ -1,7 +1,7 @@
 //! The tables of `system/supervisor.sqlite` only the loop writes: what
 //! each step last read and published, what happened the last time a run
 //! reached it, the run in flight, and one row per process the loop
-//! started. The loop keeps a copy in memory as a [`Record`] and saves what
+//! started. The loop keeps a copy in memory as a [`LoopState`] and saves what
 //! [`changes`] finds into the file. Only the process holding `runner-lock`
 //! writes them; anyone may read them, with any `sqlite3`.
 
@@ -16,8 +16,8 @@ use datalib_sql::{sql, Sql};
 use datalib_step_protocol::FailureKind;
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Record {
-    pub steps: BTreeMap<String, StepRecord>,
+pub struct LoopState {
+    pub steps: BTreeMap<String, StepRow>,
     /// The run in flight, or the one that finished last.
     pub current_run: Option<CurrentRun>,
 }
@@ -36,7 +36,7 @@ pub struct CurrentRun {
 }
 
 /// What a step did the last time a run reached it: "what happened, and
-/// when", beside [`StepRecord`]'s "is it up to date".
+/// when", beside [`StepRow`]'s "is it up to date".
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LastRun {
     /// The run this happened in — the key into `system/runs/runs.sqlite`,
@@ -55,7 +55,7 @@ pub struct LastRun {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct StepRecord {
+pub struct StepRow {
     /// Each input's path → the version this step read at its last
     /// success. A failure never updates it, so the step stays out of date
     /// until it succeeds.
@@ -102,15 +102,15 @@ pub struct StepRecord {
 pub enum Change<'a> {
     /// The run, and every step's state in it.
     Run(&'a CurrentRun),
-    Step(&'a str, &'a StepRecord),
+    Step(&'a str, &'a StepRow),
     /// A step whose entry was removed, by a purge: its `steps` and
     /// `sinks` rows are deleted.
     Remove(&'a str),
 }
 
-/// What changed between two [`Record`]s, so a save writes that and nothing
+/// What changed between two [`LoopState`]s, so a save writes that and nothing
 /// else: the loop saves after every event, and most change one step.
-pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
+pub fn changes<'a>(prev: &'a LoopState, next: &'a LoopState) -> Vec<Change<'a>> {
     let mut out = Vec::new();
     if let Some(run) = next.current_run.as_ref() {
         if prev.current_run.as_ref() != Some(run) {
@@ -236,7 +236,7 @@ pub struct InvocationEnd {
 
 impl Store {
     /// The loop's tables as the last save left them.
-    pub async fn load_record(&self) -> Result<Record> {
+    pub async fn load_state(&self) -> Result<LoopState> {
         let run = sql!(
             "dag.supervisor.read_latest_run",
             "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
@@ -318,7 +318,7 @@ impl Store {
                         .and_then(FailureKind::parse),
                 }),
             };
-            let state = StepRecord {
+            let state = StepRow {
                 reads: serde_json::from_str(&reads).context("a step's reads")?,
                 version: versions.remove(&id),
                 succeeded: r.try_get::<i64, _>("succeeded")? != 0,
@@ -343,12 +343,12 @@ impl Store {
             };
             steps.insert(id, state);
         }
-        Ok(Record { steps, current_run })
+        Ok(LoopState { steps, current_run })
     }
 
     /// Write what changed from `prev` to `next`, in one transaction. The
     /// loop's to call, and only the loop's.
-    pub async fn save_record(&self, prev: &Record, next: &Record) -> Result<()> {
+    pub async fn save_state(&self, prev: &LoopState, next: &LoopState) -> Result<()> {
         let changes = changes(prev, next);
         if changes.is_empty() {
             return Ok(());
@@ -487,7 +487,7 @@ impl Store {
 
     /// Whether a loop has started serving the request: some step's
     /// `requests` column names it, or it has already closed.
-    pub async fn taken_on(&self, request: &str) -> Result<bool> {
+    pub async fn serving_started(&self, request: &str) -> Result<bool> {
         Ok(sql!("dag.supervisor.is_request_taken_on", "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
              OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)").query_scalar()
         .bind(request)
@@ -609,8 +609,8 @@ mod tests {
     use super::*;
 
     use datalib_sql::test_sql;
-    fn step(fingerprint: &str) -> StepRecord {
-        StepRecord {
+    fn step(fingerprint: &str) -> StepRow {
+        StepRow {
             succeeded: true,
             fingerprint: fingerprint.into(),
             version: Some("v1".into()),
@@ -618,11 +618,11 @@ mod tests {
         }
     }
 
-    fn stepped() -> Record {
-        Record {
+    fn stepped() -> LoopState {
+        LoopState {
             steps: BTreeMap::from([(
                 "slack/raw".into(),
-                StepRecord {
+                StepRow {
                     reads: BTreeMap::from([("x/raw".into(), "v0".into())]),
                     version: Some("abc".into()),
                     succeeded: true,
@@ -658,7 +658,7 @@ mod tests {
     /// each time would write every step on every tick.
     #[test]
     fn a_save_writes_what_changed_and_nothing_else() {
-        let prev = Record {
+        let prev = LoopState {
             steps: BTreeMap::from([
                 ("a/raw".into(), step("fp-a")),
                 ("b/raw".into(), step("fp-b")),
@@ -693,8 +693,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();
-        store.save_record(&Record::default(), &st).await.unwrap();
-        assert_eq!(store.load_record().await.unwrap(), st);
+        store.save_state(&LoopState::default(), &st).await.unwrap();
+        assert_eq!(store.load_state().await.unwrap(), st);
     }
 
     /// A purge removes a step: its `steps` row and its tree's `sinks` row
@@ -705,11 +705,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();
-        store.save_record(&Record::default(), &st).await.unwrap();
+        store.save_state(&LoopState::default(), &st).await.unwrap();
         let mut reset = st.clone();
         reset.steps.remove("slack/raw");
-        store.save_record(&st, &reset).await.unwrap();
-        assert!(store.load_record().await.unwrap().steps.is_empty());
+        store.save_state(&st, &reset).await.unwrap();
+        assert!(store.load_state().await.unwrap().steps.is_empty());
         let sinks: i64 = test_sql!("SELECT COUNT(*) FROM sinks")
             .query_scalar()
             .fetch_one(store.pool())

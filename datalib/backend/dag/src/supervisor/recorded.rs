@@ -3,20 +3,20 @@
 
 use std::path::Path;
 
-use datalib_supervisor_store::record::Record;
+use datalib_supervisor_store::record::LoopState;
 use datalib_supervisor_store::store::Store;
 
-pub(crate) async fn recorded(root: &Path) -> Record {
+pub(crate) async fn saved_state(root: &Path) -> LoopState {
     let store = Store::open(root).await.unwrap();
-    let record = store.load_record().await.unwrap();
+    let record = store.load_state().await.unwrap();
     store.close().await;
     record
 }
 
 /// Write `next` over the loop's tables at `root`.
-pub(crate) async fn record(root: &Path, next: &Record) {
+pub(crate) async fn record(root: &Path, next: &LoopState) {
     let store = Store::open(root).await.unwrap();
-    let prev = store.load_record().await.unwrap();
-    store.save_record(&prev, next).await.unwrap();
+    let prev = store.load_state().await.unwrap();
+    store.save_state(&prev, next).await.unwrap();
     store.close().await;
 }

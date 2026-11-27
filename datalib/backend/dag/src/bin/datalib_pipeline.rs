@@ -285,7 +285,11 @@ async fn main() -> Result<()> {
         Own::Job(store.open_job(JobKind::Reset, &reset, CLI_OPENER).await?)
     } else {
         let roots: Vec<String> = if sync_only.is_empty() {
-            graph.fringe_ids().into_iter().map(str::to_string).collect()
+            graph
+                .ids_without_inputs()
+                .into_iter()
+                .map(str::to_string)
+                .collect()
         } else {
             sync_only.clone()
         };
@@ -476,7 +480,7 @@ async fn say_how_the_prepare_pass_went(store: &Store) -> Result<()> {
                 }
             }
         }
-        for (step, rec) in store.load_record().await?.steps {
+        for (step, rec) in store.load_state().await?.steps {
             if rec.needs_rerun {
                 eprintln!(
                     "datalib-pipeline: {step} needs to run again before it is up to date; sync it"

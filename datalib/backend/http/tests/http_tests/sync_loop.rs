@@ -443,13 +443,13 @@ async fn when(
     heard: &mut datalib_supervisor_store::announce::Listener,
     what: &str,
     ready: impl Fn(
-        &datalib_supervisor_store::record::Record,
+        &datalib_supervisor_store::record::LoopState,
         &[datalib_supervisor_store::store::RequestRow],
     ) -> bool,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        let record = store.load_record().await.unwrap();
+        let record = store.load_state().await.unwrap();
         let requests = store.recent_requests(100).await.unwrap();
         if ready(&record, &requests) {
             return;
@@ -460,7 +460,7 @@ async fn when(
     }
 }
 
-fn running(record: &datalib_supervisor_store::record::Record, step: &str) -> bool {
+fn running(record: &datalib_supervisor_store::record::LoopState, step: &str) -> bool {
     record
         .steps
         .get(step)

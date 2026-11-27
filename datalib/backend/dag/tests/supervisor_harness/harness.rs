@@ -22,7 +22,7 @@ use datalib_dag::{Event, EventSink, Runner};
 use datalib_supervisor_store::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
-use datalib_supervisor_store::record::{InvocationEnd, InvocationRow, Record};
+use datalib_supervisor_store::record::{InvocationEnd, InvocationRow, LoopState};
 use datalib_supervisor_store::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
 use tokio::sync::{mpsc, watch};
 
@@ -119,9 +119,9 @@ pub enum Seen {
     Broke(String),
 }
 
-/// What the store says now: the `Record`, every invocation, and requests.
+/// What the store says now: the `LoopState`, every invocation, and requests.
 pub struct State {
-    pub record: Record,
+    pub record: LoopState,
     pub invocations: Vec<(InvocationRow, Option<InvocationEnd>)>,
     pub requests: Vec<RequestRow>,
     pub wipes: Vec<JobRow>,
@@ -627,7 +627,7 @@ impl Harness {
 
     pub async fn state(&self) -> State {
         State {
-            record: self.person.load_record().await.unwrap(),
+            record: self.person.load_state().await.unwrap(),
             invocations: self.person.invocations().await.unwrap(),
             requests: self.person.recent_requests(1000).await.unwrap(),
             wipes: self.person.jobs().await.unwrap(),
@@ -692,8 +692,8 @@ impl Harness {
     pub async fn sync_all(&mut self) -> String {
         let path = config::root_config_path(self.root.path());
         let (checked, _) = config::load_graded(&path).unwrap();
-        let fringe = checked.graph.fringe_ids();
-        self.sync(&fringe).await
+        let roots = checked.graph.ids_without_inputs();
+        self.sync(&roots).await
     }
 
     pub async fn stop(&mut self, request: &str) {

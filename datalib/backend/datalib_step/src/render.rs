@@ -14,7 +14,7 @@ use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor
 use datalib_schema::problems::{metric_label, ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
-use crate::dispatch::{PlannedSource, Wave};
+use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
 use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore, WHOLE_TABLE};
@@ -44,7 +44,7 @@ pub async fn run(
         raw_path,
         ..
     } = planned;
-    let Wave::Render(processors) = processors else {
+    let Processors::Render(processors) = processors else {
         anyhow::bail!("the render driver was handed source {name:?}'s ingest wave");
     };
     let progress = emitter.progress();

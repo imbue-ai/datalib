@@ -5,14 +5,14 @@
 use std::path::Path;
 
 use datalib_step_protocol::FailureKind;
-use datalib_supervisor_store::record::{CurrentRun, LastRun, Record, StepRecord};
+use datalib_supervisor_store::record::{CurrentRun, LastRun, LoopState, StepRow};
 use serde_json::Value;
 
 fn text(v: &Value, key: &str) -> Option<String> {
     v.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
-fn record(v: &Value) -> Record {
+fn record(v: &Value) -> LoopState {
     let steps = v
         .get("steps")
         .and_then(Value::as_object)
@@ -28,7 +28,7 @@ fn record(v: &Value) -> Record {
                 error: text(l, "error"),
                 failure: text(l, "failure").as_deref().and_then(FailureKind::parse),
             });
-            let step = StepRecord {
+            let step = StepRow {
                 succeeded: st
                     .get("succeeded")
                     .and_then(Value::as_bool)
@@ -52,7 +52,7 @@ fn record(v: &Value) -> Record {
             .filter_map(|(id, st)| Some((id.clone(), st.as_str()?.to_string())))
             .collect(),
     });
-    Record { steps, current_run }
+    LoopState { steps, current_run }
 }
 
 /// Write the rows `json` describes into the loop's store at `root`.
@@ -62,7 +62,7 @@ pub async fn write(root: &Path, json: &str) {
         .await
         .unwrap();
     store
-        .save_record(&Default::default(), &record(&value))
+        .save_state(&Default::default(), &record(&value))
         .await
         .unwrap();
     store.close().await;

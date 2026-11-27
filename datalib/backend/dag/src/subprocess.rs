@@ -2094,7 +2094,7 @@ mod tests {
         ])
         .unwrap();
         assert!(Runner::new(root.path()).run(&g).await.unwrap().all_ok());
-        let before = crate::supervisor::recorded::recorded(root.path()).await;
+        let before = crate::supervisor::recorded::saved_state(root.path()).await;
 
         launch_once(root.path(), &g).await;
         let log = |id: &str| std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap();
@@ -2108,7 +2108,7 @@ mod tests {
             "run\nprepare\nrun\n",
             "re-run after the pass"
         );
-        let after = crate::supervisor::recorded::recorded(root.path()).await;
+        let after = crate::supervisor::recorded::saved_state(root.path()).await;
         let raw = &after.steps["raw/ingest"];
         assert!(
             raw.version.as_deref().is_some_and(|v| v.ends_with(":v2")),

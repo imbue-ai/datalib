@@ -76,7 +76,7 @@ fn refuse_if_kept(env: &StepEnv, tree: &Path) -> Result<()> {
         crate::source::params_from_env()?,
     )?;
     anyhow::ensure!(
-        !matches!(planned.processors, crate::dispatch::Wave::Kept),
+        !matches!(planned.processors, crate::dispatch::Processors::Kept),
         "{} does not download (`common.download = false`), so nothing would fill its raw \
          store again after a reset; turn the download back on first",
         env.step

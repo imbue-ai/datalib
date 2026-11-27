@@ -31,13 +31,13 @@ pub struct PlannedSource {
     pub reach: Option<Reach>,
     /// Resolved rate-limit give-up bounds for the ingest step.
     pub download_params: DownloadParams,
-    pub processors: Wave,
+    pub processors: Processors,
 }
 
 /// A planned source's processors, which are of a different type per
 /// phase: download and render share no trait, because they share no run
 /// context.
-pub enum Wave {
+pub enum Processors {
     Ingest(Vec<Box<dyn DataProcessor>>),
     /// A download whose params say `common.download = false`: nothing to
     /// run, and the raw store it has is what it publishes.
@@ -45,26 +45,26 @@ pub enum Wave {
     Render(Vec<Box<dyn RenderProcessor>>),
 }
 
-impl Wave {
+impl Processors {
     pub fn len(&self) -> usize {
         match self {
-            Wave::Ingest(p) => p.len(),
-            Wave::Kept => 0,
-            Wave::Render(p) => p.len(),
+            Processors::Ingest(p) => p.len(),
+            Processors::Kept => 0,
+            Processors::Render(p) => p.len(),
         }
     }
 }
 
-/// What a download that no longer runs plans (`Wave::Kept`), or why
+/// What a download that no longer runs plans (`Processors::Kept`), or why
 /// `source_type` cannot keep what it has without its inputs.
-fn kept(source_type: SourceType) -> Result<Wave> {
+fn kept(source_type: SourceType) -> Result<Processors> {
     anyhow::ensure!(
         !source_type.renders_files_where_they_lie(),
         "a {source_type} source keeps a fingerprint of each file, not its bytes, and reads \
          the file itself when it renders, so `common.download = false` cannot keep it without \
          its folder; leave the download on and keep the folder"
     );
-    Ok(Wave::Kept)
+    Ok(Processors::Kept)
 }
 
 impl std::fmt::Debug for PlannedSource {
@@ -144,7 +144,7 @@ pub fn plan(
                         reach: Some(reach),
                         download_params,
                         processors: if cfg.common.download {
-                            Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?)
+                            Processors::Ingest($dlp::processor::plan_ingest(ctx, cfg)?)
                         } else {
                             kept(source_type)?
                         },
@@ -167,7 +167,7 @@ pub fn plan(
                         reach: None,
                         // Rate-limit bounds are download-only machinery.
                         download_params: Default::default(),
-                        processors: Wave::Render($rnp::processor::plan_render(ctx, cfg)?),
+                        processors: Processors::Render($rnp::processor::plan_render(ctx, cfg)?),
                     }
                 }
             }
@@ -198,7 +198,7 @@ pub fn plan(
                         reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
                         processors: if cfg.common.download {
-                            Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?)
+                            Processors::Ingest($dlp::processor::plan_ingest(ctx, cfg)?)
                         } else {
                             kept(source_type)?
                         },
@@ -215,7 +215,7 @@ pub fn plan(
                         raw_path: cfg.common.raw_path().to_path_buf(),
                         reach: None,
                         download_params: Default::default(),
-                        processors: Wave::Render(Vec::new()),
+                        processors: Processors::Render(Vec::new()),
                     }
                 }
             }
@@ -705,7 +705,7 @@ mod tests {
             params,
         )
         .unwrap();
-        let Wave::Render(processors) = planned.processors else {
+        let Processors::Render(processors) = planned.processors else {
             panic!("{source_type}: a render plan holds render processors");
         };
         crate::render::declared_render_params(&processors)
@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn a_download_turned_off_in_its_params_plans_nothing_to_run() {
         let td = tempfile::tempdir().unwrap();
-        let wave = |ty: &str, params| {
+        let processors = |ty: &str, params| {
             plan(
                 ty,
                 Phase::Ingest,
@@ -809,26 +809,26 @@ mod tests {
         };
         let export = serde_json::json!({"path": "/gone"});
         assert!(matches!(
-            wave("linkedin", serde_json::json!({"export": export})).unwrap(),
-            Wave::Ingest(_)
+            processors("linkedin", serde_json::json!({"export": export})).unwrap(),
+            Processors::Ingest(_)
         ));
         assert!(matches!(
-            wave(
+            processors(
                 "linkedin",
                 serde_json::json!({"export": export, "common": {"download": true}})
             )
             .unwrap(),
-            Wave::Ingest(_)
+            Processors::Ingest(_)
         ));
         assert!(matches!(
-            wave(
+            processors(
                 "linkedin",
                 serde_json::json!({"export": export, "common": {"download": false}})
             )
             .unwrap(),
-            Wave::Kept
+            Processors::Kept
         ));
-        let Err(err) = wave(
+        let Err(err) = processors(
             "pdf",
             serde_json::json!({"fswalk": export, "common": {"download": false}}),
         ) else {
@@ -1068,7 +1068,7 @@ mod tests {
                 assert!(ty.item_table().is_none(), "{ty}: no render plan to check");
                 continue;
             };
-            let Wave::Render(processors) = planned.processors else {
+            let Processors::Render(processors) = planned.processors else {
                 panic!("{ty}: a render phase planned another wave");
             };
             assert_eq!(

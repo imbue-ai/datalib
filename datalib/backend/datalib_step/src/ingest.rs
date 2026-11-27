@@ -8,7 +8,7 @@ use datalib_etl::processor::RunCtx;
 use datalib_etl::progress::Progress;
 use datalib_schema::problems::{metric_label, Severity, METRIC};
 
-use crate::dispatch::{PlannedSource, Wave};
+use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
 
 pub async fn run(
@@ -19,9 +19,9 @@ pub async fn run(
     emitter: &Emitter,
 ) -> Result<Vec<OutputClaim>> {
     let processors = match &planned.processors {
-        Wave::Ingest(processors) => processors,
-        Wave::Kept => return keep(planned, tree_rel, emitter).await,
-        Wave::Render(_) => anyhow::bail!(
+        Processors::Ingest(processors) => processors,
+        Processors::Kept => return keep(planned, tree_rel, emitter).await,
+        Processors::Render(_) => anyhow::bail!(
             "the download driver was handed source {:?}'s render wave",
             planned.name
         ),

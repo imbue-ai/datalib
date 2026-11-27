@@ -31,7 +31,7 @@ use datalib_columns::{
 };
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
 use datalib_dag::{Diagnostic, EntryKind, Severity};
-use datalib_supervisor_store::record::StepRecord;
+use datalib_supervisor_store::record::StepRow;
 use datalib_supervisor_store::state::StateKind;
 use datalib_supervisor_store::store::RequestRow;
 use serde::{Deserialize, Serialize};
@@ -1037,7 +1037,7 @@ impl RowCtx<'_> {
             .then(|| g.to_string())
     }
 
-    fn step(&self, id: &str) -> Option<&StepRecord> {
+    fn step(&self, id: &str) -> Option<&StepRow> {
         self.snap.record.steps.get(id)
     }
 

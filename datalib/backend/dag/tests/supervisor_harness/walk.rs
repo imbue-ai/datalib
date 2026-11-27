@@ -127,7 +127,7 @@ impl Walk {
             }
         }
         // The walk goes on at once, without waiting for the loop to start
-        // serving the request (`Store::taken_on`).
+        // serving the request (`Store::serving_started`).
         let id = self.h.sync(roots).await;
         self.open.push(id.clone());
         self.requests.push(id);
@@ -252,7 +252,7 @@ impl Walk {
 
     /// A step names only requests still open, and only while it has work
     /// left in them: running, waiting, or up to date with something above
-    /// it still moving. The requests are read before the `Record`, since
+    /// it still moving. The requests are read before the `LoopState`, since
     /// the loop saves a step's row before it closes a request.
     async fn check_served(&mut self) {
         let requests = self.h.state().await.requests;
