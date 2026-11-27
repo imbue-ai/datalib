@@ -1,7 +1,8 @@
-//! `--check`: before anything runs, ask each step whose program takes the
-//! verb whether it would run its params as written
+//! `--check`: before anything runs, run the command of each step whose
+//! program takes the verb with `--check` appended, and read from what it
+//! reports whether it would run its params as written
 //! (`docs/dev/step_protocol.md` § Check). `datalib-pipeline check` and the
-//! app's config save ask; the loop never does.
+//! app's config save do this; the loop never does.
 
 use std::ops::Range;
 use std::path::Path;
@@ -14,29 +15,29 @@ use crate::diagnostics::{Diagnostic, EntryRef, Severity};
 use crate::scheduler::Runner;
 use crate::step::Verb;
 
-/// How long one step may take to answer. A check reads its params and
-/// opens nothing, so one that has not answered by then is stuck.
+/// How long one step's `--check` process may take to exit. A check reads
+/// its params and opens nothing, so one still running by then is stuck.
 const TIMEOUT: Duration = Duration::from_secs(30);
 
-/// How many steps are asked at once.
+/// How many `--check` processes run at once.
 const AT_ONCE: usize = 8;
 
-/// What a step said when asked.
+/// What a step's `--check` process reported.
 #[derive(Debug, PartialEq)]
 enum Answer {
     /// It would run its params as written, warning about these.
     Accepted(Vec<String>),
     /// It would refuse them, saying why.
     Refused(String),
-    /// It did not answer within [`TIMEOUT`], or could not be started.
+    /// It did not exit within [`TIMEOUT`], or could not be started.
     Unanswered(String),
 }
 
 /// What every step of `checked` whose program takes `--check` says of its
 /// params, as diagnostics against `checked.text`: a refusal is
 /// [`Severity::Rejected`] at the step's line, or at the params key it
-/// names; a warning, and a step that did not answer or could not be
-/// started, are
+/// names; a warning, and a step whose process did not exit in time or
+/// could not be started, are
 /// [`Severity::Warning`]. `binary_dir` is the host's, as for a run.
 pub async fn check_params(
     checked: &ConfigCheck,
@@ -171,9 +172,9 @@ fn params_key_span(text: &str, header: Range<usize>, key: &str) -> Range<usize> 
 mod tests {
     use super::*;
 
-    /// A program that answers `--check` from a shell script in the data
-    /// root, so the asking, the reading and the placing are tested without
-    /// `datalib-step`.
+    /// A program that handles `--check` with a shell script in the data
+    /// root, so running it, reading what it reports and placing the
+    /// diagnostics are tested without `datalib-step`.
     const TEXT: &str = "[[programs]]\ncommand = \"sh\"\nverbs = [\"check\"]\n\n\
                         [[steps]]\nid = \"weather/ingest\"\ncommand = \"sh step.sh\"\n\
                         [steps.params]\nstaton = \"KSFO\"\n\n\
@@ -215,8 +216,8 @@ mod tests {
         assert_eq!(found[0].line, Some(5), "at the step's header");
     }
 
-    /// A program that is not there cannot answer, and a save is not refused
-    /// for it: the step will fail when it runs, saying so.
+    /// A program that is not there cannot be started, and a save is not
+    /// refused for it: the step will fail when it runs, saying so.
     #[tokio::test]
     async fn a_program_that_cannot_start_is_a_warning() {
         let text = TEXT
