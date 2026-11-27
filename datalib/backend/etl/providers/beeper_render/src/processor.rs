@@ -1,4 +1,4 @@
-//! The render wave for the beeper source: its planner and the
+//! The render step for the beeper source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -21,8 +21,8 @@ pub fn plan_render(
     ))
 }
 
-/// Beeper's render processor — reads the raw store and emits one rendered
-/// markdown per room through the fused-Load callback.
+/// Beeper's render processor — reads the raw store and hands one rendered
+/// markdown per room to `RenderCtx::emit_doc`.
 struct BeeperRender {
     /// The networks whose rooms render; `None` is every network.
     networks: Option<Vec<String>>,
@@ -76,8 +76,9 @@ impl SourceRender for BeeperRender {
             ctx.report_document_failed(&u.markdown_uuid, &u.why, Some(self.render_version()))?;
         }
         // A room this run looked at that has no event left builds no
-        // chat, so chat-common never sees it: declared with nothing, its
-        // documents go. The rendered ones follow and replace that.
+        // chat, so chat-common never sees it: it is declared with no
+        // inputs, so its documents are deleted. `finish` declares the
+        // rooms that did render again, with their inputs, and they stay.
         for room in parsed.scan.render.iter().flatten() {
             ctx.declare_render_unit(&crate::render::ids::room(ctx.name, room).uuid, &[])?;
         }
