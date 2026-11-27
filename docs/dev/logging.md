@@ -28,7 +28,7 @@ page's `at`), else the moment the writer saw it.
 
 **Two writers share the file through SQLite's own locking.** A writer
 that cannot take the lock waits ten seconds and is handed an error; a
-batch that failed that way wrote nothing, so the writer offers it once
+batch that failed that way wrote nothing, so the writer tries it once
 more, and if it gives up it logs how many lines went with it. Deciding
 what to do with the file at open is exclusive between processes
 (`runs.sqlite.open-lock`), and a store that has to be remade is emptied
@@ -451,7 +451,7 @@ For anyone adding a line, an event or an endpoint:
 - **One request or one record is `debug`.** A line per page, thread or
   batch is hundreds at `info` on a real sync. Say what it came to, once,
   at the end.
-- **Say a standing fact once.** What is still true on the next pass is a
+- **Say a standing fact once.** What is still true on the next run is a
   `problems` row, which a person sees as long as it holds; the log says
   when it became true.
 - **Say what happened, not who is saying it.** The `target` column
@@ -476,7 +476,7 @@ For anyone adding a line, an event or an endpoint:
   `fields.chain`. At 5, and again at 50, 500 and so on, it writes a
   `warn` with target `http.loop` naming the endpoint and the page:
   search `target:http.loop` to find one.
-- **A card off screen is not told.** A card that subscribes with
+- **A card off screen gets no frames.** A card that subscribes with
   `subscribeLive(handlers, { onScreen: el })` has its frames held while
   `el` is off screen and delivered, once each, when it is back. Every
   card that refetches on a frame passes its root element.
