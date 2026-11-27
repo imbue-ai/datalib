@@ -66,7 +66,7 @@ function ids() {
 }
 
 describe("standing", () => {
-  const mine = (key: string): Who => ({ mine: { ...record(), key }, sourceContacts: [] });
+  const mine = (key: string): Who => ({ mine: [{ ...record(), key }], sourceContacts: [] });
   const who: Record<string, Who> = {
     "email:a@b.test": mine("c1"),
     "email:troi@b.test": mine("troi"),
@@ -81,7 +81,7 @@ describe("standing", () => {
     });
     expect(standing("email:troi@b.test", "c1", whoOf)).toMatchObject({
       state: "other",
-      owner: { key: "troi" },
+      owners: [{ key: "troi" }],
     });
   });
 

@@ -25,12 +25,11 @@ applet="${DATALIB_APPLET:-$here/../../../bazel-bin/datalib/backend/bin/datalib-a
 mkdir -p "$state"
 umask 077
 head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$state/applet-secret"
-echo '{}' > "$state/params.json"
 cd "$root"
 for id in datalib_contacts unified_grid_and_search_index; do
   TZ=UTC DATALIB_DAG_DATA_ROOT="$root" DATALIB_APPLET_ID="$id" DATALIB_APPLET_BASE="/applet/$id/" \
-  DATALIB_APPLET_SECRET_FILE="$state/applet-secret" \
-    "$applet" "$id" --port 0 --params-file "$state/params.json" \
+  DATALIB_APPLET_SECRET_FILE="$state/applet-secret" DATALIB_DAG_PARAMS='{}' \
+    "$applet" "$id" --port 0 \
     > "$state/port.$id" 2> "$state/applet.$id.log" &
 done
 wait

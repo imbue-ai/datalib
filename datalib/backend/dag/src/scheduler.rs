@@ -68,11 +68,12 @@ pub struct Runner {
     pub lock_slots: BTreeMap<String, usize>,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
-    /// Extra environment applied to every subprocess step — run-wide
-    /// settings like `PATH` (with the binary dir prepended) and the
-    /// pinned `DATALIB_DAG_NOW`. A step's own `env:` entries win
-    /// on key collision.
-    pub child_env: Arc<BTreeMap<String, String>>,
+    /// Extra environment applied to every subprocess step — settings
+    /// for the whole busy period like `PATH` (with the binary dir
+    /// prepended) and the pinned `DATALIB_DAG_NOW`. A step's own `env:`
+    /// entries win on key collision. [`Runner::run_forever`] replaces it
+    /// as each period opens.
+    child_env: std::sync::RwLock<Arc<BTreeMap<String, String>>>,
     /// Flipped to `true` to stop the round: running steps get SIGINT on
     /// their process group and nothing new starts.
     pub stop: Option<tokio::sync::watch::Receiver<bool>>,
@@ -93,7 +94,7 @@ impl Runner {
             lock_slots: BTreeMap::new(),
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
-            child_env: Arc::new(BTreeMap::new()),
+            child_env: Default::default(),
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
             reload: None,
@@ -116,9 +117,21 @@ impl Runner {
         self
     }
 
-    pub fn child_env(mut self, env: BTreeMap<String, String>) -> Self {
-        self.child_env = Arc::new(env);
+    pub fn child_env(self, env: BTreeMap<String, String>) -> Self {
+        self.set_steps_env(Arc::new(env));
         self
+    }
+
+    /// The environment a step started now gets on top of the host's.
+    pub(crate) fn steps_env(&self) -> Arc<BTreeMap<String, String>> {
+        self.child_env
+            .read()
+            .expect("the steps' environment")
+            .clone()
+    }
+
+    pub(crate) fn set_steps_env(&self, env: Arc<BTreeMap<String, String>>) {
+        *self.child_env.write().expect("the steps' environment") = env;
     }
 
     /// `--parallelism N`: N downloads and N renders at once, whatever the
@@ -363,7 +376,7 @@ impl Runner {
             &argv,
             env,
             params.as_deref(),
-            &self.child_env,
+            &self.steps_env(),
             1,
             &ctx,
             &self.sink,
@@ -713,17 +726,18 @@ pub(crate) fn fresh_version(fingerprint: &str, invocation: &str) -> String {
 /// consumer's `queued{from=<producer>}` metric — the S of USE, kept by
 /// the runner from what producers say, so no store is opened to measure
 /// it.
+#[derive(Default)]
 pub(crate) struct QueueLedger {
-    /// Per consumer, per producer index: seals not yet consumed.
-    pending: Vec<BTreeMap<usize, Vec<Seal>>>,
+    /// Per consumer id, per producer id: seals not yet consumed.
+    pending: BTreeMap<String, BTreeMap<String, Vec<Seal>>>,
     /// Per consumer, per producer: the version last put on the queue,
     /// consumed or not. A producer re-announces a seal until its
     /// consumer has run (a checkpoint arriving mid-pass is dropped by
     /// design), and the repeat must not count its rows twice.
-    last_seen: Vec<BTreeMap<usize, String>>,
+    last_seen: BTreeMap<String, BTreeMap<String, String>>,
     /// Per consumer, per producer: the rows taken off the queue so far —
     /// the `dequeued_total{from=<producer>}` running total.
-    taken: Vec<BTreeMap<usize, u64>>,
+    taken: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
 /// One seal as the ledger keeps it: the qualified version, and the rows
@@ -731,14 +745,6 @@ pub(crate) struct QueueLedger {
 type Seal = (String, Option<u64>);
 
 impl QueueLedger {
-    pub(crate) fn new(n: usize) -> Self {
-        Self {
-            pending: vec![BTreeMap::new(); n],
-            last_seen: vec![BTreeMap::new(); n],
-            taken: vec![BTreeMap::new(); n],
-        }
-    }
-
     pub(crate) fn sealed(
         &mut self,
         graph: &Graph,
@@ -747,16 +753,21 @@ impl QueueLedger {
         rows: Option<u64>,
         sink: &dyn EventSink,
     ) {
+        let p = &graph.steps[producer].id;
         for &c in &graph.dependents[producer] {
-            if self.last_seen[c].get(&producer).map(String::as_str) == Some(qualified) {
+            let c = &graph.steps[c].id;
+            let seen = self.last_seen.entry(c.clone()).or_default();
+            if seen.get(p).map(String::as_str) == Some(qualified) {
                 continue;
             }
-            self.last_seen[c].insert(producer, qualified.to_string());
-            self.pending[c]
-                .entry(producer)
+            seen.insert(p.clone(), qualified.to_string());
+            self.pending
+                .entry(c.clone())
+                .or_default()
+                .entry(p.clone())
                 .or_default()
                 .push((qualified.to_string(), rows));
-            self.publish(graph, c, producer, sink);
+            self.publish(c, p, sink);
         }
     }
 
@@ -765,7 +776,7 @@ impl QueueLedger {
     /// A version not among the seals is one recorded before this ledger
     /// began (a previous run's), or a producer that finished without a
     /// row count; either way, if the producer is done there is nothing
-    /// more to come.
+    /// more to come. A producer the graph no longer has is left alone.
     pub(crate) fn consumed(
         &mut self,
         graph: &Graph,
@@ -774,63 +785,84 @@ impl QueueLedger {
         producer_done: impl Fn(usize) -> bool,
         sink: &dyn EventSink,
     ) {
-        let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
+        let c = &graph.steps[consumer].id;
+        let producers: Vec<String> = self
+            .pending
+            .get(c)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
         for p in producers {
-            let out = graph.steps[p].output().as_str().to_string();
+            let Some(&pi) = graph.by_id.get(&p) else {
+                continue;
+            };
+            let out = graph.steps[pi].output().as_str().to_string();
             let Some(read) = consumed.get(&out) else {
                 continue;
             };
-            let seals = self.pending[consumer].entry(p).or_default();
+            let seals = self
+                .pending
+                .entry(c.clone())
+                .or_default()
+                .entry(p.clone())
+                .or_default();
             let read_up_to = match seals.iter().position(|(v, _)| v == read) {
                 Some(idx) => idx + 1,
-                None if producer_done(p) => seals.len(),
+                None if producer_done(pi) => seals.len(),
                 None => 0,
             };
             let rows = rows_of(seals.drain(..read_up_to));
-            *self.taken[consumer].entry(p).or_default() += rows;
-            self.publish(graph, consumer, p, sink);
+            *self
+                .taken
+                .entry(c.clone())
+                .or_default()
+                .entry(p.clone())
+                .or_default() += rows;
+            self.publish(c, &p, sink);
         }
     }
 
     /// A consumer found up to date read everything there was.
     pub(crate) fn cleared(&mut self, graph: &Graph, consumer: usize, sink: &dyn EventSink) {
-        let producers: Vec<usize> = self.pending[consumer].keys().copied().collect();
-        for p in producers {
-            let rows =
-                rows_of(std::mem::take(self.pending[consumer].entry(p).or_default()).into_iter());
-            *self.taken[consumer].entry(p).or_default() += rows;
-            self.publish(graph, consumer, p, sink);
+        let c = &graph.steps[consumer].id;
+        let Some(pending) = self.pending.get_mut(c) else {
+            return;
+        };
+        let emptied: Vec<(String, u64)> = pending
+            .iter_mut()
+            .map(|(p, seals)| (p.clone(), rows_of(std::mem::take(seals).into_iter())))
+            .collect();
+        for (p, rows) in emptied {
+            *self
+                .taken
+                .entry(c.clone())
+                .or_default()
+                .entry(p.clone())
+                .or_default() += rows;
+            self.publish(c, &p, sink);
         }
     }
 
-    /// The same ledger over a new graph: `from_old[i]` is the index step
-    /// `i` of the new graph had in the old one. What a step the new graph
-    /// lacks had queued, or had queued for it, goes with it.
-    pub(crate) fn remap(&mut self, from_old: &[Option<usize>]) {
-        let to_new: HashMap<usize, usize> = from_old
-            .iter()
-            .enumerate()
-            .filter_map(|(new, old)| Some(((*old)?, new)))
-            .collect();
-        self.pending = remap_by_step(&mut self.pending, from_old, &to_new);
-        self.last_seen = remap_by_step(&mut self.last_seen, from_old, &to_new);
-        self.taken = remap_by_step(&mut self.taken, from_old, &to_new);
-    }
-
     /// Both halves of a queue: what is on it, and what has come off.
-    fn publish(&self, graph: &Graph, consumer: usize, producer: usize, sink: &dyn EventSink) {
-        let queued: u64 = self.pending[consumer]
-            .get(&producer)
+    fn publish(&self, consumer: &str, producer: &str, sink: &dyn EventSink) {
+        let queued: u64 = self
+            .pending
+            .get(consumer)
+            .and_then(|m| m.get(producer))
             .map(|seals| rows_of(seals.iter().cloned()))
             .unwrap_or(0);
-        let taken = self.taken[consumer].get(&producer).copied().unwrap_or(0);
-        let labels = BTreeMap::from([("from".to_string(), graph.steps[producer].id.clone())]);
+        let taken = self
+            .taken
+            .get(consumer)
+            .and_then(|m| m.get(producer))
+            .copied()
+            .unwrap_or(0);
+        let labels = BTreeMap::from([("from".to_string(), producer.to_string())]);
         for (name, value) in [
             (datalib_metrics::QUEUED, queued),
             (datalib_metrics::DEQUEUED, taken),
         ] {
             sink.emit(&Event::Metric {
-                step: graph.steps[consumer].id.clone(),
+                step: consumer.to_string(),
                 name: name.to_string(),
                 labels: labels.clone(),
                 value: value as i64,
@@ -843,25 +875,6 @@ impl QueueLedger {
 /// say as none.
 fn rows_of(seals: impl Iterator<Item = Seal>) -> u64 {
     seals.map(|(_, n)| n.unwrap_or(0)).sum()
-}
-
-fn remap_by_step<T>(
-    v: &mut [BTreeMap<usize, T>],
-    from_old: &[Option<usize>],
-    to_new: &HashMap<usize, usize>,
-) -> Vec<BTreeMap<usize, T>> {
-    from_old
-        .iter()
-        .map(|old| {
-            let Some(o) = *old else {
-                return BTreeMap::new();
-            };
-            std::mem::take(&mut v[o])
-                .into_iter()
-                .filter_map(|(p, x)| Some((*to_new.get(&p)?, x)))
-                .collect()
-        })
-        .collect()
 }
 
 /// A fresh run id. UUID v7, so ids sort in the order the runs started

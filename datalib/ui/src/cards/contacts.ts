@@ -56,10 +56,11 @@ export type ContactSummary = { contact_id: string; name: string; kind: string };
  *  the full numbers a source knows that it may be. */
 export type FullNumbers = Record<string, string[]>;
 
-/** For one handle: the contact a person made, if any, and every source's
- *  record of whoever holds it, ranked. */
+/** For one handle: the contacts a person made that have it, by name, and
+ *  every source's record of whoever holds it, ranked. Most handles are on
+ *  one contact at most; an address two people share is on both. */
 export type Who = {
-  mine: NormalizedContact | null;
+  mine: NormalizedContact[];
   sourceContacts: NormalizedContact[];
   /** For a number: the records that write it with no country code, so are
    *  theirs only by its digits. Absent when there are none. */
@@ -69,6 +70,20 @@ export type Who = {
 };
 
 // ── Pure rules ─────────────────────────────────────────────────────────
+
+/** The one contact of yours a handle is on; null when it is on none, or
+ *  shared by several. */
+export function onlyMine(who: Who | undefined): NormalizedContact | null {
+  return who?.mine.length === 1 ? who.mine[0]! : null;
+}
+
+/** What a chip for an address several contacts share is called: "Robert
+ *  Picard & Marie Picard", or "Robert Picard & 2 others". */
+export function sharedName(contacts: NormalizedContact[]): string {
+  const [first, second] = contacts.map(nameOf);
+  if (contacts.length === 2) return `${first} & ${second}`;
+  return `${first} & ${contacts.length - 1} others`;
+}
 
 export type HandleKind =
   | "email"
@@ -166,7 +181,9 @@ export function nameOf(c: NormalizedContact): string {
 function namesSomeoneElse(name: string, handle: string, who: Who): boolean {
   const named = handleNamedBy(name);
   if (!named || named === handle) return false;
-  return ![who.mine, ...who.sourceContacts].some((c) => c?.handles.some((h) => h.handle === named));
+  return ![...who.mine, ...who.sourceContacts].some((c) =>
+    c.handles.some((h) => h.handle === named),
+  );
 }
 
 /** What a source calls the person behind `handle`: its first name that is
@@ -209,13 +226,28 @@ export type ChipLook = {
   elide?: "left" | "right";
 };
 
-/** The photo to lead with: your contact's, else the first source's. */
+/** The photo to lead with: your contact's, else the first source's. None
+ *  for an address several contacts share: no one face is right. */
 function photoOf(who: Who): string | null {
-  return who.mine?.photo_url ?? who.sourceContacts.find((a) => a.photo_url)?.photo_url ?? null;
+  if (who.mine.length > 1) return null;
+  return who.mine[0]?.photo_url ?? who.sourceContacts.find((a) => a.photo_url)?.photo_url ?? null;
 }
 
 export function chipLook(handle: string, shownAs: string, who: Who, ownName = false): ChipLook {
-  const { mine } = who;
+  if (who.mine.length > 1) {
+    const text = sharedName(who.mine);
+    const stale = who.mine.every((c) => stoppedBy(c, handle));
+    return {
+      text,
+      ariaLabel: `${text}, ${handleValue(handle)}, shared`,
+      classes: ["handle-chip", "handle-resolved", ...(stale ? ["handle-stale"] : [])],
+      initial: null,
+      icon: handleIcon(handle),
+      photo: null,
+      title: chipTooltip(handle, shownAs, who, ownName),
+    };
+  }
+  const mine = onlyMine(who);
   if (!mine) {
     const text = unlinkedName(handle, shownAs, who, ownName);
     return {
@@ -264,7 +296,8 @@ export function chipMenu(
   const { text: name } = chipLook(handle, shownAs, who);
   const value = handleValue(handle);
   const named = name !== value;
-  const out: ChipMenuEntry[] = [{ id: "open", label: who.mine ? "Open contact" : "Open" }];
+  const one = who.mine.length === 1;
+  const out: ChipMenuEntry[] = [{ id: "open", label: one ? "Open contact" : "Open" }];
   if (composeUri(handle)) {
     out.push({ id: "compose", label: `Compose mail to ${value}`, separator: true });
   }
@@ -272,7 +305,9 @@ export function chipMenu(
   if (named) out.push({ id: "copy-name", label: `Copy “${name}”` });
   if (named) out.push({ id: "copy-both", label: `Copy “${copyText(handle, name)}”` });
   out.push({ id: "search", label: `Everything with ${name}`, separator: true });
-  if (canAdd && !who.mine) out.push({ id: "add", label: "Add to contacts…", separator: true });
+  if (canAdd && who.mine.length === 0) {
+    out.push({ id: "add", label: "Add to contacts…", separator: true });
+  }
   return out;
 }
 
@@ -293,10 +328,17 @@ const MAX_SOURCE_CONTACTS = 4;
 const MAX_OTHER_HANDLES = 4;
 
 export function chipTooltip(handle: string, shownAs: string, who: Who, ownName = false): string {
-  const { mine, sourceContacts } = who;
-  const name = mine ? nameOf(mine) : unlinkedName(handle, shownAs, who, ownName);
+  const { sourceContacts } = who;
+  const mine = onlyMine(who);
+  const shared = who.mine.length > 1;
+  const name = shared
+    ? sharedName(who.mine)
+    : mine
+      ? nameOf(mine)
+      : unlinkedName(handle, shownAs, who, ownName);
   const value = handleValue(handle);
   const lines: string[] = value === name ? [name] : [name, value];
+  if (shared) lines.push(`Shared by ${who.mine.map(nameOf).join(", ")}`);
   const stopped = stoppedBy(mine, handle);
   if (stopped) lines.push(`Stopped working by ${stopped}`);
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
@@ -411,10 +453,11 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
 const post = <T>(path: string, body: unknown) =>
   call<T>(path, { method: "POST", body: JSON.stringify(body) });
 
-/** `null` when no contacts app is configured. */
+/** Your contacts that have each handle, by name; `null` when no contacts
+ *  app is configured. */
 export async function resolveHandles(
   handles: string[],
-): Promise<Record<string, NormalizedContact> | null> {
+): Promise<Record<string, NormalizedContact[]> | null> {
   const r = await fetch(`${CONTACTS_APPLET}/resolve`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -423,7 +466,7 @@ export async function resolveHandles(
   const text = await r.text();
   if (isAbsent(r.status, text)) return null;
   if (!r.ok) throw new Error(`resolve → ${r.status}: ${text}`);
-  return (JSON.parse(text) as { resolved: Record<string, NormalizedContact> }).resolved;
+  return (JSON.parse(text) as { resolved: Record<string, NormalizedContact[]> }).resolved;
 }
 
 /** What the index says about some handles and some contacts' pages
@@ -462,17 +505,31 @@ export async function createContact(name: string, handles: string[]): Promise<st
   return id;
 }
 
-/** `handle` and every handle of `contactId` held so far: each one's
- *  answer carries the contact, and with it the list of its handles. */
-function withItsContact(handle: string, contactId: string | undefined): string[] {
-  if (!contactId) return [handle];
-  return [handle, ...people.keysWhere((who) => who.mine?.key === contactId)];
+/** `handle` and every handle held so far of each contact in `contactIds`:
+ *  each one's answer carries the contacts, and with them their handles. */
+function withItsContacts(handle: string, contactIds: string[]): string[] {
+  const ids = new Set(contactIds);
+  return [handle, ...people.keysWhere((who) => who.mine.some((c) => ids.has(c.key)))];
 }
 
-export async function linkHandle(handle: string, contactId: string): Promise<void> {
-  const before = people.get(handle)?.mine?.key;
-  await post("/link", { handle, contact_id: contactId });
-  people.forget([...withItsContact(handle, contactId), ...withItsContact(handle, before)]);
+/** The contacts `handle` is on, as answered so far. */
+function holderIds(handle: string): string[] {
+  return (people.get(handle)?.mine ?? []).map((c) => c.key);
+}
+
+/** What to do with a handle other contacts have (`datalib_contacts::WhenHeld`,
+ *  hand-kept): both have it, or it comes off them as not theirs. Without
+ *  one, linking such a handle is refused. */
+export type WhenHeld = "share" | "move";
+
+export async function linkHandle(
+  handle: string,
+  contactId: string,
+  held?: WhenHeld,
+): Promise<void> {
+  const before = holderIds(handle);
+  await post("/link", { handle, contact_id: contactId, ...(held ? { held } : {}) });
+  people.forget(withItsContacts(handle, [contactId, ...before]));
   contactsById.revalidate();
 }
 
@@ -516,16 +573,22 @@ export async function notTheirs(contactId: string): Promise<Set<string>> {
   return new Set(r.not_linked.filter((n) => n.contact_id === contactId).map((n) => n.handle));
 }
 
-export async function unlinkHandle(handle: string): Promise<void> {
-  const owner = people.get(handle)?.mine?.key;
-  await post("/unlink", { handle });
-  people.forget(withItsContact(handle, owner));
+/** Take `handle` off `contactId`; anyone else who has it keeps it. */
+export async function unlinkHandle(handle: string, contactId: string): Promise<void> {
+  const before = holderIds(handle);
+  await post("/unlink", { handle, contact_id: contactId });
+  people.forget(withItsContacts(handle, before));
   contactsById.revalidate();
 }
 
-export async function setStoppedWorking(handle: string, by: string | null): Promise<void> {
-  await post("/stopped_working", { handle, by });
-  people.forget(withItsContact(handle, people.get(handle)?.mine?.key));
+/** When `handle` stopped working for `contactId`, or `null` for working. */
+export async function setStoppedWorking(
+  handle: string,
+  contactId: string,
+  by: string | null,
+): Promise<void> {
+  await post("/stopped_working", { handle, contact_id: contactId, by });
+  people.forget(withItsContacts(handle, holderIds(handle)));
   contactsById.revalidate();
 }
 
@@ -657,7 +720,7 @@ export async function dropContactPhoto(contactId: string): Promise<void> {
 
 // ── Who a handle is, for the whole app ────────────────────────────────
 
-export const NOBODY: Who = { mine: null, sourceContacts: [] };
+export const NOBODY: Who = { mine: [], sourceContacts: [] };
 
 let contactsApp = false;
 
@@ -667,7 +730,7 @@ export function noteContactsApp(there: boolean): void {
 
 /** What `answer` says of `handle`, and no more: an answer about one handle
  *  that held another's numbers would change with what it was asked beside. */
-export function whoFrom(answer: PeopleAnswer, handle: string, mine: Who["mine"]): Who {
+export function whoFrom(answer: PeopleAnswer, handle: string, mine: NormalizedContact[]): Who {
   const sourceContacts = answer.people[handle] ?? [];
   const sameDigits = answer.same_digits[handle] ?? [];
   const fullNumbers = numbersOf([...sourceContacts, ...sameDigits], answer.full_numbers);
@@ -693,7 +756,7 @@ export const people = new Resolver<Who>(
     followLive();
     const [mine, answer] = await Promise.all([resolveHandles(handles), peopleFor(handles)]);
     noteContactsApp(mine !== null);
-    return new Map(handles.map((h) => [h, whoFrom(answer, h, mine?.[h] ?? null)]));
+    return new Map(handles.map((h) => [h, whoFrom(answer, h, mine?.[h] ?? [])]));
   },
   // The toast dedupes itself, so a page of chips failing says so once.
   (e) => pushToast(`Contacts: ${e.message}`),

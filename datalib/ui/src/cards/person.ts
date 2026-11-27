@@ -8,6 +8,8 @@ import {
   handleKind,
   handleValue,
   nameOf,
+  onlyMine,
+  sharedName,
   stoppedBy,
   suggestedName,
   type FullNumbers,
@@ -63,6 +65,9 @@ export type PersonModel = {
   title: string;
   /** Your contact, when the person is one. */
   mine: NormalizedContact | null;
+  /** For an address several of your contacts share, opened by it: them,
+   *  by name. The page is the address's own, and none of them is it. */
+  sharedBy: NormalizedContact[];
   /** The person's handles: your contact's, or the one handle opened. */
   handles: string[];
   sections: PersonSection[];
@@ -85,7 +90,7 @@ export function sureNumbers(contact: NormalizedContact, full: FullNumbers): stri
 function contactOf(subject: Subject, answers: Answers): NormalizedContact | null {
   switch (subject.kind) {
     case "handle":
-      return answers.who(subject.handle)?.mine ?? null;
+      return onlyMine(answers.who(subject.handle));
     case "contact":
       return answers.contact(subject.id) ?? null;
     case "page":
@@ -101,7 +106,7 @@ export function pageContact(
 ): NormalizedContact | null {
   if (!answer) return null;
   for (const h of sureNumbers(answer.contact, answer.fullNumbers)) {
-    const mine = whoOf(h)?.mine;
+    const mine = onlyMine(whoOf(h));
     if (mine) return mine;
   }
   return null;
@@ -117,6 +122,8 @@ export function personModel(
   answers: Answers,
 ): PersonModel {
   const mine = contactOf(subject, answers);
+  const owners = subject.kind === "handle" ? (answers.who(subject.handle)?.mine ?? []) : [];
+  const sharedBy = owners.length > 1 ? owners : [];
   const handles = personHandles(mine, subject.kind === "handle" ? subject.handle : null);
   const sections: PersonSection[] = [];
   const fullNumbers: FullNumbers = {};
@@ -162,9 +169,11 @@ export function personModel(
   );
   const lead = sections[0]?.contact;
   const bare = subject.kind === "handle" ? handleValue(subject.handle) : "";
+  const named = sharedBy.length ? sharedName(sharedBy) : mine ? nameOf(mine) : null;
   return {
-    title: mine ? nameOf(mine) : lead ? nameOf(lead) : bare,
+    title: named ?? (lead ? nameOf(lead) : bare),
     mine,
+    sharedBy,
     handles,
     sections,
     fullNumbers,
@@ -228,8 +237,9 @@ export type Offer = {
   /** The sources that say it is theirs, the page's order. */
   sources: string[];
   written: string | null;
-  /** Your contact who has it already, so it is not offered. */
-  owner: NormalizedContact | null;
+  /** Your contacts who have it already, so it is not ticked: adding it
+   *  asks whether both have it or it moves here. */
+  owners: NormalizedContact[];
   ticked: boolean;
 };
 
@@ -248,10 +258,10 @@ export function nameToOffer(subject: Subject, model: PersonModel): string {
  *  opened, then every other on any record that holds it. One that another
  *  contact has, or that is only one of several it could be, is not ticked. */
 export function offers(subject: Subject, model: PersonModel, answers: Answers): Offer[] {
-  if (model.mine) return [];
+  if (model.mine || model.sharedBy.length) return [];
   const out = new Map<string, Offer>();
   const put = (h: RecordHandle, source: string | null, sure: boolean) => {
-    const owner = answers.who(h.handle)?.mine ?? null;
+    const owners = answers.who(h.handle)?.mine ?? [];
     const had = out.get(h.handle);
     if (!had) {
       out.set(h.handle, {
@@ -260,15 +270,15 @@ export function offers(subject: Subject, model: PersonModel, answers: Answers): 
         label: h.label,
         sources: source ? [source] : [],
         written: h.written,
-        owner,
-        ticked: sure && !owner,
+        owners,
+        ticked: sure && owners.length === 0,
       });
       return;
     }
     if (source && !had.sources.includes(source)) had.sources.push(source);
     had.label ??= h.label;
     had.written ??= h.written;
-    had.ticked ||= sure && !owner;
+    had.ticked ||= sure && owners.length === 0;
   };
   if (subject.kind === "handle") {
     const shown = handleValue(subject.handle);
@@ -290,7 +300,7 @@ export function offers(subject: Subject, model: PersonModel, answers: Answers): 
 /** What an offered handle's line says beside it: who has it, or which
  *  sources say it is theirs, and how a card wrote it. */
 export function offerNote(o: Offer, sourceName: (id: string) => string): string {
-  if (o.owner) return `on ${nameOf(o.owner)}`;
+  if (o.owners.length) return `on ${o.owners.map(nameOf).join(" and ")}`;
   const names = o.sources.map(sourceName);
   const shown = names.length > 3 ? [...names.slice(0, 2), `${names.length - 2} more`] : names;
   return [...(o.written ? [`written ${o.written}`] : []), shown.join(", ")]
@@ -319,8 +329,8 @@ export function sectionLines(
   return out;
 }
 
-/** Where one handle stands against the card's contact: on it, on someone
- *  else's, or on nobody's. */
+/** Where one handle stands against the card's contact: on it (and maybe
+ *  others too), on others' only, or on nobody's. */
 export type LinkState = "this" | "other" | "none";
 
 export function linkState(
@@ -328,12 +338,28 @@ export function linkState(
   mine: NormalizedContact | null,
   whoOf: (handle: string) => Who | undefined,
 ): LinkState {
-  const owner = whoOf(handle)?.mine;
-  if (!owner) return "none";
-  return mine && owner.key === mine.key ? "this" : "other";
+  const owners = whoOf(handle)?.mine ?? [];
+  if (owners.length === 0) return "none";
+  return mine && owners.some((c) => c.key === mine.key) ? "this" : "other";
 }
 
-const HANDLE_ACTIONS = ["handle-add", "handle-remove", "handle-stopped", "handle-works"] as const;
+/** Your contacts other than `mine` that have `handle`. */
+export function othersWith(
+  handle: string,
+  mine: NormalizedContact | null,
+  whoOf: (handle: string) => Who | undefined,
+): NormalizedContact[] {
+  return (whoOf(handle)?.mine ?? []).filter((c) => c.key !== mine?.key);
+}
+
+const HANDLE_ACTIONS = [
+  "handle-add",
+  "handle-share",
+  "handle-move",
+  "handle-remove",
+  "handle-stopped",
+  "handle-works",
+] as const;
 export type HandleAction = (typeof HANDLE_ACTIONS)[number];
 
 export function isHandleAction(id: string): id is HandleAction {
@@ -341,8 +367,9 @@ export function isHandleAction(id: string): id is HandleAction {
 }
 
 /** What a handle's chip on the card offers beyond a chip anywhere: to go
- *  on the card's contact, or to come off it. Nothing for a handle someone
- *  else has, or with no contact to act on. */
+ *  on the card's contact, or to come off it. One someone else has goes on
+ *  it beside them, or moves here off them. Nothing with no contact to act
+ *  on. */
 export function handleMenu(
   handle: string,
   model: PersonModel,
@@ -359,8 +386,13 @@ export function handleMenu(
           ? { id: "handle-works", label: "Works again" }
           : { id: "handle-stopped", label: "No longer works" },
       ];
-    case "other":
-      return [];
+    case "other": {
+      const others = othersWith(handle, model.mine, whoOf).map(nameOf).join(" and ");
+      return [
+        { id: "handle-share", label: `Add to ${model.title} too`, separator: true },
+        { id: "handle-move", label: `Move from ${others} to ${model.title}` },
+      ];
+    }
   }
 }
 

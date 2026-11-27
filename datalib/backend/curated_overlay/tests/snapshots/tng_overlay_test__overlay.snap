@@ -196,6 +196,25 @@ expression: overlay
         "tng_contacts-diff"
       ]
     },
+    "Marie Picard (person)": {
+      "contact:Marie Picard": [
+        "tng_contacts"
+      ],
+      "email:marie@labarre.earth": [
+        "tng_contacts"
+      ],
+      "email:vineyard@labarre.earth": [
+        "tng_contacts"
+      ]
+    },
+    "Robert Picard (person)": {
+      "contact:Robert Picard": [
+        "tng_contacts"
+      ],
+      "email:vineyard@labarre.earth": [
+        "tng_contacts"
+      ]
+    },
     "Will Riker (person)": "merged into William T. Riker",
     "William T. Riker (person)": {
       "contact:William T. Riker": [

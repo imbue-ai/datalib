@@ -3109,6 +3109,7 @@ mod tests {
             .link(
                 &datalib_handle::Handle::slack("T1", "U_JLP").unwrap(),
                 &picard,
+                datalib_contacts::WhenHeld::Refuse,
             )
             .await
             .unwrap();

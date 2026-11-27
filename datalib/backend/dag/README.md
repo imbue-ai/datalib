@@ -224,14 +224,12 @@ Stopping. **Turning
 a step off** keeps it from starting and stops it if it is running; a
 step turned off that a request skipped takes no part and records no run.
 A run the loop stopped is not a failure (rule 4); one that reported
-`cancelled` on its own is. A step turned off while the loop is idle
-reaches the record through `Runner::settle`, one tick with nothing open;
-the idle host settles again after every busy period and on a config
-change, and compares the switches it finds later with the ones the
-settle recorded, not with any it read before. A request naming a step
-the loop's config lacks is closed `failed` if it was open when the busy
-period began; one that arrives mid-period waits for a config that has
-the step.
+`cancelled` on its own is. A step turned off or on while nothing is
+open reaches the record the same way: the loop does not exit when the
+last request closes, and every wake is a tick, with or without a request.
+A request naming a step the loop's config lacks is closed `failed` if
+the loop read it with no busy period open, or at a period's first look;
+one that arrives later in a period waits for a config that has the step.
 
 **The loop re-reads the config while it runs**, when told it changed
 (below, "What wakes the loop"). A source added mid-sync
@@ -459,7 +457,7 @@ point and says so with a `checkpoint` event
 the loop manage processes correctly? A puppet step (`tests/puppet`)
 does only what it is told over a FIFO and acks each instruction; the
 harness (`tests/supervisor_harness`) writes a real `config.toml` of
-puppets, runs the loop in-process under `host::run_idle` as `datalib-pipeline
+puppets, runs the loop in-process with `Runner::run_forever` as `datalib-pipeline
 serve` does, and plays a person through the store. It waits only on what it
 can observe (an ack, a loop event, an announcement), each under a
 deadline, and asserts only what the loop owns: processes started and
@@ -757,22 +755,26 @@ announced for it by the next look, a writer bypassed `Store` (a `sqlite3`
 shell, an older build): that is logged at ERROR and counted
 (`announce::missed_announcements`), and tests assert the count is zero.
 It is the only timer that wakes an idle loop, and it exists to catch
-that bug. The other, while a round is open, is a look at the disk every
-five seconds for the `[disk_space]` floor: nothing announces a disk
+that bug. The other, while a busy period is open, is a look at the disk
+every five seconds for the `[disk_space]` floor: nothing announces a disk
 filling or being freed.
 
 A `datalib-pipeline` running the loop with no server up, a sync or a
 `serve`, has nobody watching the config, so it takes an edit on at its
 next busy period, not mid-sync.
 
-The loop's idle side lives once, in `supervisor::host::run_idle`: a busy
-period whenever a request or a wipe is open, requests asked to stop
-before any period took them closed as `stopped`, the record settled when
-the switches or the config move, then a wait for an announcement or the
-host's stop. `supervisor::serve::run` runs it after taking the lock and
-the prepare pass; `datalib-pipeline serve` calls that, and
-the harness runs `run_idle` itself. A `datalib-pipeline` sync has no idle
-side: it serves until nothing is open, then exits.
+A host holding the lock runs one loop until it is told to stop,
+`Runner::run_forever` (`supervisor/round.rs`). Idle is a tick that starts
+nothing: a request asked to stop before the loop took it is closed as
+`stopped`, and a switch or a config edit reaches the record. The first
+request or wipe taken on with none open begins a busy period, which the
+host records through `supervisor::period::RunPeriods`: the loop asks it
+for the period's step environment when it opens, and tells it when it
+closes. `supervisor::serve::run` runs that loop after taking the lock and
+the prepare pass; `datalib-pipeline serve` calls that, and the harness
+runs `run_forever` itself. A `datalib-pipeline` sync has no idle side:
+`Runner::serve` opens one period, serves until nothing is open, then
+exits.
 
 `datalib-pipeline serve` says on stderr, one NDJSON line each
 (`supervisor::serve::ServeEvent`), what its parent needs and no store
