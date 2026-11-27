@@ -236,7 +236,7 @@ pub fn full_ddl() -> Vec<String> {
         CHAT_ITEMS_BY_CHAT_INDEX_DDL.to_string(),
         // Resume cursor — see INGESTED_BACKUPS_DDL. Not in
         // DATA_TABLES because it has no upstream-id / bookkeeping
-        // shape; reset() truncates it explicitly.
+        // shape.
         INGESTED_BACKUPS_DDL.to_string(),
     ];
     out.extend(ChatItemAttachmentRow::all_ddl());

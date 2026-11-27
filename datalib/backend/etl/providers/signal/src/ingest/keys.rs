@@ -145,10 +145,11 @@ mod tests {
         }
     }
 
-    /// A new phone numbers its recipients and chats anew, and every
-    /// message's key changed with them: the switch read as every message
-    /// deleted and written again. Two backups that number the same people
-    /// differently give them the same keys.
+    /// A new phone numbers its recipients and chats anew, and a key built
+    /// from those numbers would change every message's key with them, so
+    /// the switch would read as every message deleted and written again.
+    /// Two backups that number the same people differently give them the
+    /// same keys.
     #[test]
     fn two_backups_numbering_the_same_people_differently_key_them_alike() {
         let old_phone = {

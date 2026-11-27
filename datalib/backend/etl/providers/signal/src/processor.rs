@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `signal` source. A signal source
+//! The `DataProcessor`s for the `signal` source. A signal source
 //! with a `backup` table contributes download + render; the
 //! render processor is always present (renders whatever is in the raw
 //! store). The source owns its raw store (open/commit/checkpoint); the
@@ -51,7 +51,8 @@ impl DataProcessor for SignalIngest {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         // Before the store: opening it seals a commit, and a store that
-        // exists reads as published to the render and the migrate pass.
+        // exists reads as published to the render step and the prepare
+        // pass.
         let env_var = self
             .sync
             .aep_env_var
@@ -105,8 +106,8 @@ mod tests {
     use datalib_obs::diagnostics::Diagnostics;
 
     /// A download with no passphrase fails and leaves no store: a store,
-    /// even an empty one, reads as published, so the launch's migrate
-    /// pass would report the step succeeded (#1251).
+    /// even an empty one, reads as published, so the prepare pass at the
+    /// next start would report the step succeeded (#1251).
     #[tokio::test]
     async fn no_passphrase_leaves_no_store() {
         let td = tempfile::tempdir().unwrap();

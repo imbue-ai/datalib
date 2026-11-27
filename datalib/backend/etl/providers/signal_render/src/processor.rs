@@ -1,4 +1,4 @@
-//! The render wave for the signal source: its planner and the
+//! The render step for the signal source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};

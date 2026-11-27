@@ -112,7 +112,7 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
 
     // A temp cache: tests must never touch this host's real one.
     let cache = FingerprintCache::open(&tmp.path().join("fingerprints.sqlite")).await?;
-    // One handle for the whole pass: the file takes one writer at
+    // One handle for the whole download: the file takes one writer at
     // a time.
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&raw_db_path)).await?;
     let summary = ingest::fetch(FetchOptions {
@@ -207,9 +207,8 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
         "page-title H1 with markdown_uuid hook present in:\n{md}"
     );
     assert!(md.contains("Make it so."), "Picard's order rendered");
-    // Signal renders through `chat-common` now, so a message is the
-    // same `## …` header every chat source writes rather than the
-    // bulleted line this provider used to emit; the account is the
+    // Signal renders through `chat-common`, so a message is the same
+    // `## …` header every chat source writes; the account is the
     // `me:self` chip.
     assert!(
         md.contains("## [Me](datalib:handle/me/self \"Me\") "),
@@ -1045,9 +1044,9 @@ async fn texts(store: &Path) -> Result<Vec<String>> {
     Ok(rows)
 }
 
-/// Only the newest snapshot was read, so a folder of daily backups left
-/// no history to diff: a message lost or changed between two backups was
-/// invisible. Each is now a commit, dated when it was taken, and the
+/// Reading only the newest snapshot would leave a folder of daily backups
+/// no history to diff: a message lost or changed between two backups
+/// would be invisible. Each is a commit, dated when it was taken, and the
 /// diff between two of them names what went and what changed.
 #[tokio::test(flavor = "multi_thread")]
 async fn each_backup_is_a_commit_and_two_diff_to_show_what_was_lost() -> Result<()> {
@@ -1411,8 +1410,8 @@ fn chat_of(doc: &RenderedMarkdown) -> &str {
         .unwrap_or_default()
 }
 
-/// An incoming message's read flag sat in its stored frame, so a read
-/// rewrote the message. It is a row of its own in `read_marks` now, the
+/// An incoming message's read flag in its stored frame would make a read
+/// rewrite the message, so it is a row of its own in `read_marks`, the
 /// frame keeps none, and a message the next backup no longer holds takes
 /// its mark with it. Only an incoming message marked unread draws unread.
 #[tokio::test(flavor = "multi_thread")]
@@ -1469,8 +1468,7 @@ async fn an_incoming_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
 }
 
 /// A newer backup that says only that Riker's report was read changes no
-/// message, so it moved no version and nothing re-rendered: the report
-/// stayed unread. The mark moves the store's version, and the next
+/// message. The mark alone still moves the store's version, so the next
 /// render redraws Riker's chat and not Data's.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_read_alone_moves_the_version_and_redraws_its_chat() -> Result<()> {
@@ -1610,7 +1608,7 @@ async fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> 
 }
 
 /// A chat whose messages run from one month into the next is one
-/// document under the chat's own uuid; it was a document per month.
+/// document under the chat's own uuid, not a document per month.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
     let tmp = tempfile::tempdir()?;

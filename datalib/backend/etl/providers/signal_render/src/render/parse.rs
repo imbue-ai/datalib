@@ -701,7 +701,8 @@ mod tests {
     }
 
     /// The stored frame carries no `read`: the ingest keeps it as a read
-    /// mark. A frame from before still decodes, its `read` ignored.
+    /// mark. A frame stored with its `read` still decodes, the `read`
+    /// ignored.
     #[test]
     fn a_stored_frame_holds_no_read_flag_and_one_with_it_still_decodes() {
         let unread = stored(DirectionalDetails::Incoming(IncomingMessageDetails {
@@ -821,8 +822,8 @@ mod load_tests {
         assert!(docs.iter().all(|d| d.items.len() == 1));
     }
 
-    /// Messages whose `chats` row is gone were loaded by a cold render
-    /// only, then skipped with a log line; each such chat is now named.
+    /// Messages whose `chats` row is gone are counted by chat id on every
+    /// run, cold or incremental, rather than skipped with a log line.
     #[tokio::test]
     async fn messages_whose_chat_is_gone_are_counted_by_chat() {
         let pool = SqlitePoolOptions::new()
@@ -868,7 +869,7 @@ mod recipient_tests {
     /// lacking a field this build's requires, or carrying one it does not
     /// know, still gives its ACI; an ACI that is not one says what it
     /// looked like instead of vanishing. Decoding the whole `Recipient`
-    /// dropped every ACI the day the proto gained a required field.
+    /// would drop every ACI once the proto gains a required field.
     #[test]
     fn the_aci_is_read_alone_and_a_bad_one_is_said() {
         let aci: Vec<u8> = (0..16).collect();
