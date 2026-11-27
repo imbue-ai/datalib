@@ -1,7 +1,7 @@
 // The data nodes themselves, one row each: what every reader of the tree
 // reads. A document says of each node it sits in what it knows
 // (`data_nodes`), so a channel has a row there under every thread; the
-// index step settles those into one row here. In the grid index alone.
+// index step combines those into one row here. In the grid index alone.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
