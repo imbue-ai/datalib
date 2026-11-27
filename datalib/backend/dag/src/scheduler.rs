@@ -765,7 +765,7 @@ pub(crate) fn fresh_version(fingerprint: &str, invocation: &str) -> String {
 /// the runner from what producers say, so no store is opened to measure
 /// it.
 #[derive(Default)]
-pub(crate) struct QueueLedger {
+pub(crate) struct ConsumerQueues {
     /// Per consumer id, per producer id: seals not yet consumed.
     pending: BTreeMap<String, BTreeMap<String, Vec<Seal>>>,
     /// Per consumer, per producer: the version last put on the queue,
@@ -778,11 +778,11 @@ pub(crate) struct QueueLedger {
     taken: BTreeMap<String, BTreeMap<String, u64>>,
 }
 
-/// One seal as [`QueueLedger`] keeps it: the qualified version, and the rows
+/// One seal as [`ConsumerQueues`] keeps it: the qualified version, and the rows
 /// it added if the producer counted.
 type Seal = (String, Option<u64>);
 
-impl QueueLedger {
+impl ConsumerQueues {
     pub(crate) fn sealed(
         &mut self,
         graph: &Graph,
@@ -812,7 +812,7 @@ impl QueueLedger {
     /// A process of `consumer` finished having read its inputs as of
     /// `consumed`: every seal up to the version it read is off the queue.
     /// A version not among the seals is one recorded before this
-    /// `QueueLedger` began (a previous run's), or a producer that finished without a
+    /// `ConsumerQueues` began (a previous run's), or a producer that finished without a
     /// row count; either way, if the producer is done there is nothing
     /// more to come. A producer the graph no longer has is left alone.
     pub(crate) fn consumed(

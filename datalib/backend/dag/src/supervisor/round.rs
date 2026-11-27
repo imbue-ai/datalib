@@ -27,7 +27,7 @@ use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::scheduler::{
     apply_verb_outcome, fresh_version, invoke_with_retry, mark_running, new_run_id, now_stamp,
-    reported_version, step_summary, InvokeError, PrepareError, QueueLedger, RunReport, Runner,
+    reported_version, step_summary, ConsumerQueues, InvokeError, PrepareError, RunReport, Runner,
     StepReport, StepStatus, REFUSED_PREPARE,
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
@@ -452,7 +452,7 @@ impl Runner {
         let mut turned_off: BTreeMap<String, String> = BTreeMap::new();
         let mut wipes: Vec<JobRow> = Vec::new();
         let mut seq = 0u64;
-        let mut queue = QueueLedger::default();
+        let mut queue = ConsumerQueues::default();
         let mut cancelled = false;
         // Whether the loop starts serving new requests and jobs from the
         // store: not once it is told to stop, nor, for `serve`, once its
@@ -598,7 +598,7 @@ impl Runner {
                                 // What it starts serving was read with no
                                 // run open, as strictly as a run's first read.
                                 intent_reader.started = true;
-                                queue = QueueLedger::default();
+                                queue = ConsumerQueues::default();
                             }
                             Err(why) => {
                                 tracing::warn!("supervisor: cannot sync: {why}");
@@ -1223,7 +1223,7 @@ impl Runner {
         saver: &mut Saver<'_>,
         state: &mut Record,
         slots: &mut Slots,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
         cancelled: bool,
         this_run: OpenRun,
         host: Option<&dyn LoopHost>,
@@ -1681,7 +1681,7 @@ impl Runner {
         &self,
         graph: &Graph,
         state: &mut Record,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
         s: &mut Slot,
         i: usize,
         cancelled: bool,
@@ -1722,7 +1722,7 @@ impl Runner {
         graph: &Graph,
         signal: crate::step::StepSignal,
         state: &mut Record,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
         slots: &mut Slots,
     ) {
         use crate::step::StepSignal;
@@ -1794,7 +1794,7 @@ impl Runner {
         live: &Live,
         slots: &Slots,
         state: &mut Record,
-        queue: &mut QueueLedger,
+        queue: &mut ConsumerQueues,
     ) -> Ended {
         let spec = &graph.steps[i];
         let consumed = &live.consumed.in_graph(graph);

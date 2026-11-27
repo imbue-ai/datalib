@@ -691,7 +691,7 @@ From those two events the sink derives the pair a reader actually wants:
 leaves. `queued` is the Manage screen's Queue, and `done` (the series
 `done_total`) the pace its
 ETA reads. The scheduler keeps a pair of its own per producer for each
-consumer (`QueueLedger`): `queued{from=…}`, the rows sealed and not
+consumer (`ConsumerQueues`): `queued{from=…}`, the rows sealed and not
 yet read, which rises seal by seal and falls to zero when the
 consumer's process ends, and `dequeued_total{from=…}`, the rows taken off so far, which only
 grows — the pace a sampled sawtooth can lose the bottoms of. When a
