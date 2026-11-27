@@ -154,7 +154,8 @@ impl InferenceCache {
         tx.commit().await.context("commit the cut documents")
     }
 
-    /// Forgets what was filed for these documents.
+    /// Deletes the chunks filed for these documents, and their rows in
+    /// `search_chunked`.
     pub async fn forget_chunked(&self, markdown_uuids: &[String]) -> Result<()> {
         for batch in markdown_uuids.chunks(BATCH) {
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -179,7 +180,7 @@ impl InferenceCache {
         Ok(())
     }
 
-    /// Forgets the documents of every source but `sources`: one taken out
+    /// Deletes the filed chunks of every source but `sources`: one taken out
     /// of the config or out of search. Returns how many went.
     pub async fn keep_chunked_sources(&self, sources: &[String]) -> Result<usize> {
         let gone: Vec<String> = sql!(
