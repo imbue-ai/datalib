@@ -6,7 +6,7 @@ runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
 own tool. Items 2 and 9 are half done. Untouched: items 3 and 8 (item 8
-is decided). Of the reconciler in section 10, step 1 is done.
+is decided). Of the reconciler in section 10, steps 1 and 2 are done.
 
 ## The end state
 
@@ -483,7 +483,13 @@ Each step ships alone, and the harness stays green throughout.
    `Periods` trait and the at-rest tick are gone. The CLI's sync still
    serves one period and exits (`Runner::serve`), until step 3 makes it
    a client.
-2. **Key by step id.** This removes the remap code.
+2. **Key by step id (done).** The loop's own state is one slot per step
+   id (`round.rs`'s `Slots`), holding what an invocation read by producer
+   id; the facts the tick takes are laid out by index from the record and
+   those slots at every tick. A swap replaces the graph and the lock shape,
+   and finishes what a dropped step had ended. `carry`, `remap_consumed`,
+   `Slot::remapped`, `QueueLedger::remap` and `remap_by_step` are gone,
+   and the queue ledger is keyed by step id.
 3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
    and add prepare, with its progress in `job_steps` instead of the
    server's memory. Make the CLI's reset and shrink write jobs. Put
