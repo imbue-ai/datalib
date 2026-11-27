@@ -1,7 +1,8 @@
-//! A store written while what could not be stored sat in `dav_unstored`
-//! and nothing listed what the server had opens under this build
-//! listing every object it holds from a server, held at its etag, and
-//! owing what the old table named: rung 1 of `schema_raw::LADDER`.
+//! Rung 1 of `schema_raw::LADDER`, on a store an older build wrote: one
+//! with a `dav_unstored` table of objects it could not store, and no
+//! `dav_resources` listing of what the server had. Opened under this
+//! build, it lists in `dav_resources` every object it holds from a
+//! server, held at its etag, and owes the objects `dav_unstored` named.
 
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl::doltlite_raw as dr;

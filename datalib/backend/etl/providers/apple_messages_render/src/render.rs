@@ -719,8 +719,8 @@ mod tests {
         assert_eq!(problems, vec![], "none of these lost anything");
     }
 
-    /// A body that cannot be decoded rendered as a message with no text,
-    /// and only the log said why. Its size is reported, not its bytes.
+    /// A body that cannot be decoded is a problem on its message, not only
+    /// a log line. Its size is reported, not its bytes.
     #[test]
     fn a_body_that_cannot_be_decoded_is_a_problem_on_its_message() {
         let mut problems = Vec::new();

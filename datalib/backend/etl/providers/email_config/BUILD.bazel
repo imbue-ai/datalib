@@ -1,8 +1,8 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only config crate for the `email` source.
-# Depends on serde + anyhow only — no extraction code — so the orchestrator
-# and the `http` backend can name `EmailConfig` without linking the provider.
+# Schema-only config crate for the `email` source: serde structs and no
+# extraction code, so anything that reads an email config (`datalib-step`
+# among them) can name `EmailConfig` without linking the provider.
 #
 # See AGENTS.md §"Repo layout" (why each provider has a <p>_config crate).
 rust_library(

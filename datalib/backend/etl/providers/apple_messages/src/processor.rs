@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor` for the `apple_messages` source.
+//! The `DataProcessor` for the `apple_messages` source's ingest step.
 
 use std::path::PathBuf;
 

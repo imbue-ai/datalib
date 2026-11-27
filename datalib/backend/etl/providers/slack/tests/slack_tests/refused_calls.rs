@@ -1,7 +1,7 @@
 //! `client.counts` and `saved.list` answer only some tokens. One that is
 //! refused them was asked both every sync, and each refusal was a
 //! warning (an error, through a latchkey gateway) on the Manage row of a
-//! mirror missing nothing else. A refusal is now remembered for a week:
+//! mirror missing nothing else. A refusal is remembered for a week:
 //! the call is not asked meanwhile, and stands as one `info` row.
 
 use std::collections::BTreeMap;
@@ -262,8 +262,8 @@ async fn every_kind_of_refusal_is_remembered() {
     }
 }
 
-/// A failure that may pass is an error row, as before, and the next
-/// sync asks again.
+/// A failure that may pass is an error row, and the next sync asks
+/// again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_transient_failure_is_not_remembered() {
     for call in [&COUNTS, &SAVED] {

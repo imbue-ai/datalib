@@ -17,7 +17,8 @@ use datalib_etl_web::http::{
 };
 
 /// Playback key. `HttpService::Gmail.impersonates()` is false — Google
-/// does not front the API with a JA3 wall.
+/// does not refuse a request by its TLS fingerprint (JA3), so the API
+/// needs no Chrome-impersonating curl.
 pub const HTTP_SERVICE: HttpService = HttpService::Gmail;
 
 const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users";
@@ -36,7 +37,7 @@ pub const UNITS_GET_PROFILE: u32 = 1;
 
 /// What every request carries: the latchkey identity to send as, and the
 /// counter the retry classifier bumps on each rate-limit response so the
-/// [`QuotaThrottle`] that minted it can hear about it.
+/// [`QuotaThrottle`] that created it can read the count.
 #[derive(Debug, Clone)]
 pub struct Client {
     latchkey: LatchkeySettings,
@@ -64,7 +65,7 @@ fn bucket_capacity(units_per_minute: u32) -> f64 {
 /// Client-side quota throttle: a leaky bucket over Gmail's per-user
 /// "quota units per minute" limit. Google's own answer is the authority:
 /// a request it rate-limits lowers the ceiling for the rest of the run,
-/// so a long backfill settles under the real limit instead of bumping
+/// so a long backfill runs below the real limit instead of bumping
 /// into it once a minute.
 #[derive(Debug)]
 pub struct QuotaThrottle {
@@ -135,7 +136,7 @@ impl QuotaThrottle {
     }
 
     /// One cut per rate-limited *request*, however many attempts it took,
-    /// and an empty bucket: the request the chokepoint just retried went
+    /// and an empty bucket: the request the HTTP layer just retried went
     /// out at the old rate, and the next one must not be another burst.
     fn absorb_rate_limits(&mut self) {
         let seen = self.rate_limited.load(Ordering::Relaxed);
@@ -388,8 +389,9 @@ fn messages_list_url(
     label_id: Option<&str>,
     after: Option<i64>,
 ) -> String {
-    // A `since` before 1970 is negative seconds, which Slack answered with
-    // nothing (#1048). No mail is older than the epoch.
+    // A `since` before 1970 would be negative seconds, which Gmail's
+    // `after:` is not known to accept (Slack's API answered them with
+    // nothing, #1048). No mail is older than the epoch, so 0 loses none.
     let q = after.map(|secs| format!("after:{}", secs.max(0)));
     search_url(user_id, page_token, page_size, label_id, q.as_deref())
 }
@@ -981,8 +983,9 @@ mod tests {
         "details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
 
     /// Google's per-user rate limit arrives as a 403 as often as a 429,
-    /// and a 403 read as an auth failure held the cursor and walked on —
-    /// the run "succeeded" with every remaining message marked failed.
+    /// and a 403 read as an auth failure left the cursor where it was and
+    /// went on: the run "succeeded" with every remaining message marked
+    /// failed.
     #[test]
     fn retries_the_403_that_is_really_a_rate_limit() {
         assert!(matches!(
@@ -1051,7 +1054,7 @@ mod tests {
         );
 
         // One cut per rate-limited request, however many attempts the
-        // chokepoint made, and never below the floor.
+        // HTTP layer made, and never below the floor.
         client.rate_limited.fetch_add(5, Ordering::Relaxed);
         t.acquire(0).await;
         assert_eq!(t.units_per_minute(), 3_840);

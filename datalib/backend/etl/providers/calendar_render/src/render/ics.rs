@@ -396,8 +396,9 @@ ATTACH;FILENAME=Menu.pdf:https://files.enterprise.test/menu.pdf\r\nATTACH;ENCODI
     }
 
     /// An event made in Google keeps Google's HTML in `DESCRIPTION` when
-    /// Fastmail serves it over CalDAV; its page showed the tags as text,
-    /// `&lt;a href="mailto:…"&gt;`, and every `&amp;` twice escaped.
+    /// Fastmail serves it over CalDAV. Guards against its page showing the
+    /// tags as text, `&lt;a href="mailto:…"&gt;`, with every `&amp;`
+    /// escaped twice.
     #[test]
     fn a_description_written_as_html_is_read_as_text() {
         let ev = "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x@google.com\r\nDTSTART:20260713T170000Z\r\n\

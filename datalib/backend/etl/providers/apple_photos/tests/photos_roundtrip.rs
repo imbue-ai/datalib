@@ -222,7 +222,7 @@ async fn default_run_keeps_the_photos_and_drops_the_bookkeeping() -> Result<()> 
     Ok(())
 }
 
-/// `ZUUID` is never declared UNIQUE, so the run vouches for it table by
+/// `ZUUID` is never declared UNIQUE, so the run checks it table by
 /// table: the two tables where every row has one are keyed on it, and
 /// the one with a NULL keeps `Z_PK` rather than failing the run.
 #[tokio::test]

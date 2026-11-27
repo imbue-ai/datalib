@@ -1,7 +1,7 @@
-//! `list_every_hours` decides how soon a run reads the user list again:
-//! the six hours it was fixed at are now a setting. The second sync's
-//! tape has no `users.list`, so a run that asks for it records a failed
-//! listing, and one that does not, none.
+//! `list_every_hours` decides how soon a run reads the user list again
+//! (six hours unless set). The second sync's tape has no `users.list`,
+//! so a run that asks for it records a failed listing, and one that does
+//! not, none.
 
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 use datalib_etl_slack::recorded::History;

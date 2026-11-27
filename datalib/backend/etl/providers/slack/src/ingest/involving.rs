@@ -226,7 +226,7 @@ pub(super) struct InvolvingSearch<'a> {
 impl InvolvingSearch<'_> {
     /// Each of `queries` over the part of `[since, top]` it has not
     /// searched, newest first. The first error ends the search; what it
-    /// settled before then is kept.
+    /// covered before then is kept.
     pub async fn run(
         &self,
         queries: &[Query],

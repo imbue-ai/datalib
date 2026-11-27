@@ -1,8 +1,8 @@
-//! Read-only account probe. Asked for the account: "can these
-//! credentials reach this mailbox, and whose is it?" Asked for its
-//! labels or mailboxes — one listing either way, which a picker of
-//! either kind filters — that as well. The report's shape is shared
-//! with every other probeable provider — see `datalib_probe`.
+//! Read-only account probe. For the account it answers "can these
+//! credentials reach this mailbox, and whose is it?"; for its labels or
+//! mailboxes it returns one listing either way, which a picker of either
+//! kind filters. The report's shape is shared with every other
+//! probeable provider — see `datalib_probe`.
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};

@@ -52,7 +52,8 @@ pub struct FetchOptions {
     pub addressbooks: Vec<String>,
     pub progress: Progress,
     pub control: DownloadControl,
-    /// Seals as pages land, when the step driver hands one over.
+    /// Told after each page is stored, so it seals when a seal is due;
+    /// the processor passes the one `RunCtx::run_store` gives it.
     pub sealer: Option<Sealer>,
 }
 
@@ -250,7 +251,7 @@ fn report_unmatched_names(
     Ok(())
 }
 
-/// Resource the orchestrator carries around per addressbook —
+/// What a run keeps per address book —
 /// `href` is the relative path stored on the row, `url` is the
 /// absolute URL we hit for REPORTs (server URL + href, with the
 /// usual care around already-absolute hrefs).

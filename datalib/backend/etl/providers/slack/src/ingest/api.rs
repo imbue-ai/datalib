@@ -121,9 +121,9 @@ async fn call_slack_once(
         .latchkey(latchkey.clone())
         .timeout(LATCHKEY_TIMEOUT);
     // A 429, a 502 to 504 and a 200 naming one of `TRANSIENT_CODES` are
-    // retried by the shared chokepoint via `slack_retryability`; a terminal
-    // error here (incl. `GaveUp` after the guard tripped) is mapped
-    // straight to `Permanent`.
+    // retried by `latchkey_curl_classified` via `slack_retryability`; a
+    // terminal error here (incl. `GaveUp` after the guard tripped) is
+    // mapped straight to `Permanent`.
     let resp = latchkey_curl_classified(&req, slack_retryability)
         .await
         .map_err(|e: HttpError| match e {
@@ -152,9 +152,10 @@ async fn call_slack_once(
     })?;
     let ok = data.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     if !ok {
-        // `TRANSIENT_CODES` are retried by the chokepoint until it gives up,
-        // which surfaces as `GaveUp` → `Permanent` above, so reaching here
-        // with `ok:false` means an error that asking again will not fix.
+        // `TRANSIENT_CODES` are retried by `latchkey_curl_classified` until
+        // it gives up, which surfaces as `GaveUp` → `Permanent` above, so
+        // reaching here with `ok:false` means an error that asking again
+        // will not fix.
         let err = data
             .get("error")
             .and_then(|v| v.as_str())

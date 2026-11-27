@@ -69,7 +69,7 @@ pub fn copy_store(earlier: &Path, dir: &Path) -> Result<()> {
 
 struct Jmap {
     playback: PathBuf,
-    /// A store an earlier run left, which every run of this rig starts
+    /// A store an earlier run left, which every run of this harness starts
     /// from in place of an empty one.
     earlier: Option<PathBuf>,
 }

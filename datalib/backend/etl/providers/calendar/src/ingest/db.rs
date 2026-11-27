@@ -196,9 +196,9 @@ impl RawDb {
     }
 
     /// Drop the calendar an `.ics` file was, with its events and sidecar
-    /// rows, and forget the file's cursor entry — in one transaction, so a
-    /// crash leaves the file stamped and the next run retries. Returns how
-    /// many events went.
+    /// rows, and delete the file's `ingested_files` row — in one
+    /// transaction, so a crash leaves that row in place and the next run
+    /// retries. Returns how many events went.
     pub async fn delete_file_calendar(
         &self,
         calendar_id: &str,

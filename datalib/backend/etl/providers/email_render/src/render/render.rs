@@ -1,6 +1,6 @@
 //! Email (JMAP) render: convert parsed threads into the shared
-//! `chat-common` normalized model and delegate markdown / grid-row /
-//! grid-row plumbing to [`datalib_etl_chat_common::render::ChatRenderer`].
+//! `chat-common` normalized model, and leave writing the markdown and
+//! the grid rows to [`datalib_etl_chat_common::render::ChatRenderer`].
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -80,8 +80,8 @@ use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 pub const RENDER_VERSION: u32 = 25;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
-/// `datalib_core::config::EmailOutlink`; the orchestrator maps the
-/// config enum onto this one (the provider crate doesn't depend on core).
+/// `datalib_etl_email_config::EmailOutlink`; `outlink_format` in this
+/// crate's `processor.rs` maps the config enum onto this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutlinkFormat {
     Gmail,
@@ -162,12 +162,12 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// The render params recorded alongside the cursor. Both knobs change
-/// what the tree should contain for documents the upstream diff would
-/// never surface, so a change to either re-renders everything.
 /// The config key the render's label filter is written under.
 const K_ONLY_RENDER_LABELS: &str = "only_render_labels";
 
+/// The render params recorded alongside the cursor. Both params change
+/// what the tree should contain for documents the upstream diff would
+/// never surface, so a change to either re-renders everything.
 pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> serde_json::Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = only_labels.iter().map(String::as_str).collect();
@@ -289,7 +289,7 @@ impl Lookups {
 }
 
 /// Renders every thread `store` hands out, a page at a time; `on_page`
-/// hears how each page ended before the next is read. On a full walk
+/// is called with how each page ended before the next is read. On a full walk
 /// under a label filter, a first page names the threads the filter
 /// keeps out, which were never loaded.
 pub fn render_store(

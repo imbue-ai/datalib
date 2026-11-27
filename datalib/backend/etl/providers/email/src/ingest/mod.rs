@@ -773,7 +773,8 @@ impl EmailListing<'_> {
             let mut tx = self.db.pool().begin().await.context("begin changes tx")?;
             listed::list_in_tx(&mut tx, &named, Some(&new_state), Named::Changed).await?;
             summary.emails_destroyed +=
-                listed::forget_in_tx(&mut tx, self.now, &destroyed, listed::same_id).await?;
+                listed::delete_gone_messages_in_tx(&mut tx, self.now, &destroyed, listed::same_id)
+                    .await?;
             if self.indexing {
                 listed::unmember_in_tx(&mut tx, &destroyed).await?;
             }
@@ -806,12 +807,12 @@ impl EmailListing<'_> {
     }
 
     /// Enumerate, with `Email/query`, the admitted mailboxes (or the
-    /// account) no enumeration has listed whole: a first run, a start
-    /// over, a mailbox the label filter newly admits. Each page lists its
-    /// ids; an email already listed is left as it is. The walk starts
-    /// again every run until one reaches its end, and only that one
-    /// records its scopes as listed whole and, when it covered the whole
-    /// account, deletes what it did not name.
+    /// account) no enumeration has listed whole: a first run, a run after
+    /// `listed::start_over`, a mailbox the label filter newly admits.
+    /// Each page lists its ids; an email already listed is left as it is.
+    /// The walk starts again every run until one reaches its end, and only
+    /// that one records its scopes as listed whole and, when it covered
+    /// the whole account, deletes what it did not name.
     async fn enumerate_unlisted_scopes(
         &self,
         mailbox_filter: Option<&BTreeSet<String>>,
@@ -1240,9 +1241,10 @@ async fn email_get(session: &Session, account_id: &str, ids: &[String]) -> Resul
 /// Download the `.eml` of every email that has no stored bytes:
 /// `owed::drain` over the edges, `blob_download_concurrency` at once,
 /// each body into the CAS as it lands and its edge row written a flush
-/// at a time. The email rows are already stored, so a download the
-/// phase could not do leaves something to keep, and the next run
-/// downloads whatever still has no bytes.
+/// at a time. The email rows are already stored, so when the loop gives
+/// up it records a `phase:eml_download` row rather than failing the run:
+/// what the run stored is still written, and the next run downloads
+/// whatever still has no bytes.
 async fn sync_blobs(
     db: &RawDb,
     session: &Session,

@@ -1,4 +1,4 @@
-//! Gmail REST API downloader — the third mode of `type: email`.
+//! Gmail REST API downloader, one of the four modes of `type: email`.
 //!
 //! `history.list` or a `messages.list` walk says which messages exist
 //! and which changed; `super::listed` keeps that apart from what has
@@ -302,7 +302,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let db = opts.db.clone();
 
-    // Stamp a `sync_runs` row for this pass, the same as every other
+    // Stamp a `sync_runs` row for this run, the same as every other
     // live source. It is what the DAG-level run-2 incrementality golden
     // reads: a source with no row there is reported as file-backed, so
     // skipping this would make a Gmail incrementality regression
@@ -504,7 +504,7 @@ struct Run<'a> {
     /// failed.
     muted: Option<HashSet<String>>,
     now: &'a IsoOffsetTimestamp,
-    /// The run's one progress bar. Announcing a total is what turns the
+    /// The run's one progress bar. Reporting a total is what turns the
     /// Manage screen's activity cell from a bare count into "N queued"
     /// ticking down.
     bar: RunBar,
@@ -675,20 +675,22 @@ impl Run<'_> {
             listed::unmember_in_tx(&mut tx, &changes.deleted).await?;
         }
         summary.emails_destroyed +=
-            listed::forget_in_tx(&mut tx, self.now, &changes.deleted, email_id_of).await?;
+            listed::delete_gone_messages_in_tx(&mut tx, self.now, &changes.deleted, email_id_of)
+                .await?;
         listed::save_token_in_tx(&mut tx, &scope, history_id).await?;
         tx.commit().await.context("commit history tx")?;
         Ok(true)
     }
 
     /// Walk `messages.list` over every configured label (or the account)
-    /// no walk has listed whole: a first run, a start over, a label the
-    /// filter newly admits, a scope an earlier `since` now reaches back
-    /// past. With `since`, a walk lists only mail after it. Each page
-    /// lists its ids; a message already listed is left as it is. A walk
-    /// starts again every run until it reaches its end, and only then is
-    /// its scope recorded as listed whole and, when it covered the whole
-    /// account with no window, what it did not name deleted.
+    /// no walk has listed whole: a first run, a run after
+    /// `listed::start_over`, a label the filter newly admits, a scope an
+    /// earlier `since` now reaches back past. With `since`, a walk lists
+    /// only mail after it. Each page lists its ids; a message already
+    /// listed is left as it is. A walk starts again every run until it
+    /// reaches its end, and only then is its scope recorded as listed
+    /// whole and, when it covered the whole account with no window, what
+    /// it did not name deleted.
     async fn walk_unlisted_scopes(
         &mut self,
         throttle: &mut QuotaThrottle,
@@ -930,7 +932,7 @@ impl Run<'_> {
             muted: self.muted.as_ref(),
             stop: &self.opts.control.stop,
             cap: self.opts.blob_size_limit_bytes,
-            // Belt-and-braces client-side label check. A walk is narrowed
+            // A second label check, client-side. A walk is narrowed
             // server-side, but `history.list` names every message in the
             // account.
             only_label_ids: filter_label_ids.iter().map(String::as_str).collect(),
@@ -1391,8 +1393,8 @@ impl Fetcher<Stored> for MessagesGet<'_> {
     /// The flush's bytes into the CAS; then the email rows, their joins
     /// and threads, and the messages that are gone
     /// (`listed::write_batch_in_tx`), and the thread each message is in;
-    /// then the `.eml` edges, whose sidecar is this fetcher's to stamp,
-    /// the listing's being the loop's.
+    /// then the `.eml` edges, whose sidecar is this fetcher's to stamp;
+    /// the listing's sidecar is stamped by `owed::drain`.
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,
