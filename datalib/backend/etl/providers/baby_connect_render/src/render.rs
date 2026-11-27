@@ -27,8 +27,7 @@ use crate::categories;
 use crate::ids;
 use crate::store::{id_of, str_of, Store};
 
-/// Bump when the rendered layout changes enough that every child's
-/// document needs re-rendering.
+/// v2: one document per child, where v1 had one per child per month.
 pub const RENDER_VERSION: u32 = 2;
 
 const SOURCE_LABEL: &str = "Baby Connect";

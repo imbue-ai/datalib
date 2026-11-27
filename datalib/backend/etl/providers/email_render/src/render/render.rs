@@ -37,6 +37,46 @@ use datalib_schema::providers::Provider;
 use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
+/// v3: render via chat-common (+ quoted-text folding, label chips).
+/// v4: an email with a missing or malformed `Date` header gets a null
+///     `created_at` instead of a real-looking `1970-01-01T00:00:00` — see
+///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
+///     `Date` headers are common in real mail, so this changes real
+///     output and stale docs must be re-rendered.
+/// v6: `account` is the mailbox's address rather than the JMAP account
+///     id (`u432643a7`).
+/// v7: v6 only managed that for mbox and Gmail — a JMAP account object
+///     has no `id` field, so the lookup missed every Fastmail row.
+/// v8: ids are minted through `datalib_id` under `Upstream(account_id)`,
+///     every row carries its backpointer, and an email's id carries its
+///     `received_at` in its leading bits (`datalib_id`'s v8 layout).
+///     Every uuid moved, `chat_uuid` among them.
+/// v10: the label line leads with Starred and Important, and leaves out
+///     Gmail's All Mail.
+/// v11: the author span carries the author's handle as `data-handle`.
+/// v12: a recipients line (To, Cc) under the header, each with its handle.
+/// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
+/// v14: attachments and inline images are linked inside the stored
+///     `.eml`, and no `blobs/` is written beside the page.
+/// v16: the account's own address is a source contact marked as the
+///     account, so search reads it as `me`.
+/// v17: mail-parser 1.0: base64 without its final `=` decodes whole,
+///     RFC 8621's body lists, and a `Fr om:` line is no longer From.
+/// v18: whether an email is unread comes from its read mark, and every
+///     thread declares the marks it reads.
+/// v19: an email attached to an email is listed among the attachments.
+/// v20: an email's stamp keeps the offset its `Date` was written in.
+/// v21: a quote's attribution line is plain text, and an HTML body's
+///     `<pre>` and `&amp;lt;` read as the sender wrote them.
+/// v22: a body part is HTML only when its Content-Type says so: a
+///     plain-text email went through the HTML converter, losing every
+///     `<…>` and running its lines together.
+/// v23: a thread sits in its account and is filed under its emails'
+///     labels; an email's `In-Reply-To` is a reply edge.
+/// v24: a sender's hover title names their address once, not twice.
+/// v25: a body loses its preheader padding, runs of characters that show
+///     nothing; a link around blocks or around another link is written
+///     on one line.
 pub const RENDER_VERSION: u32 = 25;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors

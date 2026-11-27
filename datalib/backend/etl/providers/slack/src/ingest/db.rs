@@ -1369,8 +1369,8 @@ async fn prune_enumerated(
 
 /// Participant ids out of one conversation payload. An `im` names
 /// exactly one counterpart in `user`; an `mpim` lists everyone — the
-/// account included — in `members`. Verified against the live API; see
-/// [`super::schema_raw::ChannelRow::dm_user_ids`].
+/// account included — in `members`. Verified against the live API
+/// 2026-08-31; see [`super::schema_raw::ChannelRow::dm_user_ids`].
 pub fn dm_participants(payload: &Value, is_im: bool) -> Vec<String> {
     if is_im {
         return payload

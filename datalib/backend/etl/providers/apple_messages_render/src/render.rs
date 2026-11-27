@@ -36,8 +36,17 @@ use sqlx::Row;
 use crate::typedstream::attributed_body_text;
 use datalib_sql::{sql, sql_id, Sql};
 
-/// Bump when the rendered layout changes enough that every existing
-/// chat's page needs re-rendering.
+/// v2: every id carries its row's `created_at` in its leading bits
+///     (`datalib_id`'s v8 layout).
+/// v4: the author span carries the author's handle as `data-handle`.
+/// v5: a `+1` number without ten digits after the 1 has no handle.
+/// v6: a message someone else sent is to the account (`to:me`).
+/// v7: a body that cannot be decoded is a problem on its message.
+/// v8: a body archived as an NSMutableAttributedString decodes; a
+///     message in no chat is a problem.
+/// v9: a chat is one document, keyed on the chat's own uuid, rather than
+///     one per month; an inline reply is a reply edge to its thread's
+///     first message.
 pub const RENDER_VERSION: u32 = 9;
 
 pub const STAMP_PRECISION: RecordStampPrecision = RecordStampPrecision::Seconds;

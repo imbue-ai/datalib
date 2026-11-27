@@ -1,8 +1,8 @@
-//! A CardDAV account shaped like Fastmail's, as measured live: the bare
-//! host answers 404, `/.well-known/carddav` redirects to
-//! `/dav/addressbooks`, every value is CDATA, each collection's missing
-//! properties come back in a 404 propstat, and the cards are the
-//! `Bridge.vcf` fixture's own, CRLF and folded as served.
+//! A CardDAV account shaped like Fastmail's, measured live on
+//! 2026-09-24: the bare host answers 404, `/.well-known/carddav`
+//! redirects to `/dav/addressbooks`, every value is CDATA, each
+//! collection's missing properties come back in a 404 propstat, and the
+//! cards are the `Bridge.vcf` fixture's own, CRLF and folded as served.
 
 use std::collections::BTreeMap;
 use std::path::Path;

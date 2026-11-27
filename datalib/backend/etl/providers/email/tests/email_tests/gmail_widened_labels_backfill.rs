@@ -3,10 +3,10 @@
 //! The historyId cursor answers "what changed since last run?", and mail
 //! that already sat outside the old label filter never changed — so an
 //! incremental run after a widening is a silent no-op unless the newly
-//! admitted label is walked. Found on a real account: three labels,
-//! then no filter, and two further syncs spent 4 quota units each and
-//! mirrored nothing. The store records each label a walk has listed
-//! whole, so a label with no such record is walked.
+//! admitted label is walked. Found on a real account on 2026-09-15:
+//! three labels, then no filter, and two further syncs spent 4 quota
+//! units each and mirrored nothing. The store records each label a walk
+//! has listed whole, so a label with no such record is walked.
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 

@@ -18,4 +18,10 @@ pub mod units;
 /// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params`, so a bump invalidates the "HEAD unchanged → skip"
 /// fast path too.
+/// v2: ids moved to `datalib_id`'s v8 layout (none carries a stamp
+///     here, but the layout changed under them).
+/// v7: every stamp on a page is a `<time>`.
+/// v8: a reading is at its real time, not the device's local clock read as
+///     UTC.
+/// v9: a device's box is a part of the page (`PAGE_PART`), drawn flat.
 pub const RENDER_VERSION: u32 = 9;

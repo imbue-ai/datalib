@@ -2,9 +2,9 @@
 //!
 //! Driven through the HTTP playback layer, so it runs in CI with no
 //! credential and no network. The fixtures model Gmail's real behaviour,
-//! measured live: repeated `labelIds` in one request **intersect**, so
-//! asking for two labels at once returns only the messages carrying
-//! both. That is what made a three-label config
+//! measured live on 2026-09-08: repeated `labelIds` in one request
+//! **intersect**, so asking for two labels at once returns only the
+//! messages carrying both. That is what made a three-label config
 //! download nothing at all while reporting success.
 
 use std::collections::BTreeSet;

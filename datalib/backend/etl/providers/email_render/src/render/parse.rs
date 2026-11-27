@@ -919,6 +919,9 @@ mod tests {
         assert!(atts[0].size.unwrap() > 0);
     }
 
+    /// A full render of a mailbox with more threads than SQLite binds in
+    /// one statement (#1156): each thread, its email and the email's
+    /// mailbox and keyword all come back.
     #[tokio::test]
     async fn loads_more_threads_than_sqlite_binds_in_one_statement() {
         let pool = SqlitePoolOptions::new()

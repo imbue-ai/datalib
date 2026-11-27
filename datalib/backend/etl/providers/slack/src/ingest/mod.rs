@@ -293,7 +293,8 @@ pub(crate) fn next_cursor(resp: &Value) -> Option<String> {
 
 /// Filters `saved.list` walks, one listing each. With no `filter` it
 /// answers only what `saved` does; the three together are every item
-/// (checked against the response's own `counts.total_count`).
+/// (checked against the response's own `counts.total_count` on
+/// 2026-09-24).
 const SAVED_FILTERS: &[&str] = &["saved", "completed", "archived"];
 
 fn refused(e: &anyhow::Error) -> bool {

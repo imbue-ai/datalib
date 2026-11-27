@@ -1,7 +1,7 @@
-//! A CalDAV account shaped like Fastmail's, as measured live: the bare
-//! host answers 404, `/.well-known/caldav` redirects to the DAV root,
-//! every value is CDATA, and the home lists scheduling boxes beside the
-//! calendars.
+//! A CalDAV account shaped like Fastmail's, measured live on
+//! 2026-09-24: the bare host answers 404, `/.well-known/caldav` redirects
+//! to the DAV root, every value is CDATA, and the home lists scheduling
+//! boxes beside the calendars.
 
 use datalib_probe::{ProbeAsk, ProbeList};
 use std::collections::BTreeMap;

@@ -252,7 +252,7 @@ pub struct ChannelReadStateRow {
 }
 
 /// The fields of a `client.counts` entry but its read mark, as the live
-/// API returned them. `latest` is a message `ts`; `updated`
+/// API returned them on 2026-09-24. `latest` is a message `ts`; `updated`
 /// and `history_invalid` are `ts`-shaped stamps Slack keeps for its own
 /// cache.
 pub const READ_STATE_VOLATILE_PATHS: &[dr::VolatilePath] = &[
@@ -588,7 +588,7 @@ mod tests {
     /// the same content payload, or `dolt_diff_users` calls them
     /// modified, the render re-runs, and the grid churns.
     ///
-    /// The manual-e2e bake caught this for real: a
+    /// The manual-e2e bake caught this for real on 2026-09-08: a
     /// calendar integration flipped someone to "In a meeting" between
     /// two runs four minutes apart, and the reset-then-resync
     /// stability check failed on four `profile.status_*` paths.
