@@ -17,7 +17,7 @@ use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, IcsObjectRow};
-use super::{noting_how_it_ended, FetchSummary};
+use super::{recorded, FetchSummary};
 use crate::ical;
 
 pub struct FetchOptions {
@@ -34,8 +34,9 @@ const ACCOUNT_ID: &str = "ics";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let config = serde_json::json!({"method": "ics", "path": opts.input_path});
     run_problems::collecting(&pool, &stop, |found| {
-        noting_how_it_ended(found.clone(), read_folder(opts, found))
+        recorded(found.clone(), &pool, &config, read_folder(opts, found))
     })
     .await
 }

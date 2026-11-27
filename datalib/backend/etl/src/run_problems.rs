@@ -24,12 +24,17 @@ use crate::download_problems::{
     self as rows, DownloadProblem, RecordProblem, RunProblem, RunProblemKind, SilentEntry,
     SkippedRecord, Sweep, Untried,
 };
+use crate::download_run::OpenRun;
 use crate::raw_store::Sealer;
 use crate::stop::StopFlag;
 
 /// Run a download's `body` with a collector, and write what it collected
 /// when the body returns, whichever way it returns. Writing never fails
 /// the run: a store that cannot take the rows is said and passed over.
+/// The row the body opened in `sync_runs` ([`DownloadRun::start`])
+/// closes after that, so its deltas count those rows too.
+///
+/// [`DownloadRun::start`]: crate::download_run::DownloadRun::start
 pub async fn collecting<T, Fut>(
     pool: &sqlx::SqlitePool,
     stop: &StopFlag,
@@ -73,6 +78,9 @@ where
         Ran::PartWay
     };
     problems.write_or_say(pool, ran).await;
+    if let Some(run) = problems.take_run() {
+        run.close(pool, problems.ended_early(), &result).await;
+    }
     result
 }
 
@@ -158,6 +166,9 @@ struct State {
     records: BTreeMap<String, Records>,
     skipped: BTreeMap<String, Vec<SkippedRecord>>,
     silent: Option<Vec<SilentEntry>>,
+    /// The run's row in `sync_runs`, which closes after this set is
+    /// written.
+    open_run: Option<OpenRun>,
 }
 
 #[derive(Default)]
@@ -426,6 +437,25 @@ impl RunProblems {
             return Ok(());
         }
         rows::apply(pool, &sweeps, out).await
+    }
+
+    pub(crate) fn open_run(&self, run: OpenRun) -> Result<()> {
+        let mut state = self.lock();
+        if state.open_run.is_some() {
+            anyhow::bail!("this download already has a run open in `sync_runs`");
+        }
+        state.open_run = Some(run);
+        Ok(())
+    }
+
+    pub(crate) fn summarize_run(&self, summary: serde_json::Value) {
+        if let Some(run) = self.lock().open_run.as_mut() {
+            run.summary = summary;
+        }
+    }
+
+    fn take_run(&self) -> Option<OpenRun> {
+        self.lock().open_run.take()
     }
 
     fn changed(&self) -> MutexGuard<'_, State> {

@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use async_trait::async_trait;
 
-use datalib_etl::download_run::DownloadRun;
 use datalib_etl::processor::{DataProcessor, PlanContext, RunCtx};
 use datalib_etl_calendar_config::{CalendarConfig, CalendarMethod};
 use datalib_etl_files::fingerprint_cache::{self, FingerprintCache};
@@ -77,28 +76,6 @@ pub struct CalendarIngest {
     method: Method,
 }
 
-impl CalendarIngest {
-    fn run_config(&self, window: Option<ingest::Window>) -> serde_json::Value {
-        match &self.method {
-            Method::Google { calendars, .. } => serde_json::json!({
-                "method": "google", "calendars": calendars, "window": window
-            }),
-            Method::Caldav {
-                server_url,
-                calendars,
-                ..
-            } => serde_json::json!({
-                "method": "caldav", "server_url": server_url, "calendars": calendars,
-                "window": window
-            }),
-            Method::Calendly { .. } => {
-                serde_json::json!({"method": "calendly", "window": window})
-            }
-            Method::Ics { path } => serde_json::json!({"method": "ics", "path": path}),
-        }
-    }
-}
-
 #[async_trait]
 impl DataProcessor for CalendarIngest {
     fn id(&self) -> &str {
@@ -115,11 +92,7 @@ impl DataProcessor for CalendarIngest {
             Method::Ics { .. } => None,
         };
         let db = ingest::RawDb::open(&ingest::db_path_for(&self.raw_path)).await?;
-        let pool = db.pool().clone();
-        ctx.run_store(pool.clone(), None, |sealer| async {
-            // The run's own record in `sync_runs`: its summary, and what it
-            // changed in each table.
-            let run = DownloadRun::start(&pool, &self.run_config(window)).await?;
+        ctx.run_store(db.pool().clone(), None, |sealer| async {
             let result = match &self.method {
                 Method::Google { calendars, .. } => {
                     ingest::google::fetch(ingest::google::FetchOptions {
@@ -174,8 +147,6 @@ impl DataProcessor for CalendarIngest {
                     .await
                 }
             };
-            let summary = result.as_ref().cloned().unwrap_or_default();
-            run.finish(summary.ended_early, &result, &summary).await;
             Ok(result?.line())
         })
         .await

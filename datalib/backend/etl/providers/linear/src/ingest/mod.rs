@@ -529,7 +529,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({ "teams": opts.sync.teams, "projects": opts.sync.projects });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let mut ctx = Ctx {
         api,
         opts: &opts,
@@ -540,7 +540,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     let result = phases(&mut ctx, &mut s).await;
     let result = ctx.writes.settle(result).await;
     s.requests = api.requests();
-    run.finish(found.ended_early(), &result, &s).await;
+    run.summarize(&s);
     result.map(|()| s)
 }
 

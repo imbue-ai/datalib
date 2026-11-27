@@ -5,7 +5,9 @@
 //! on first use, and only where there is an NVIDIA driver to run it
 //! (`docs/dev/runtime_fetch.md` § "The CUDA module"). The fetch lives in
 //! `datalib_fetch`; a binary that wants it installs a [`CudaFetcher`]
-//! through [`enable_fetch`].
+//! through [`enable_fetch`]. A binary that embeds on a GPU hands [`find`]
+//! to the embedder (`datalib_embedder::look_for_cuda_module`), which
+//! does not link this crate.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -144,10 +146,11 @@ pub fn look(driver: bool) -> Seen {
 }
 
 /// The module to load, fetching it first when [`choose`] says to, or why
-/// there is none. `driver` is whether NVIDIA's driver library loads,
-/// which the caller (the embedder, which can `dlopen`) knows.
-pub fn find(driver: bool) -> Result<PathBuf, String> {
-    match choose(look(driver)) {
+/// there is none. `can_load` says whether the dynamic loader can load a
+/// library, which the embedder, which can `dlopen`, knows; it is asked
+/// about [`DRIVER_LIBRARY`].
+pub fn find(can_load: fn(&str) -> bool) -> Result<PathBuf, String> {
+    match choose(look(can_load(DRIVER_LIBRARY))) {
         Choice::Load(path) => Ok(path),
         Choice::None(why) => Err(why),
         Choice::Fetch { asset, cache } => match FETCHER.get() {
@@ -192,6 +195,14 @@ mod tests {
             manifest: Ok(with_cuda()),
             cache: Some((PathBuf::from("/home/u/.cache/datalib/cuda"), false)),
         }
+    }
+
+    #[test]
+    fn the_module_is_looked_for_in_lib_beside_the_binary() {
+        assert_eq!(
+            beside(Path::new("/opt/datalib/datalib-step")).unwrap(),
+            Path::new("/opt/datalib/lib/libggml-cuda.so")
+        );
     }
 
     #[test]

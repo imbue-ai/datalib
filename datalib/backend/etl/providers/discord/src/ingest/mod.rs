@@ -620,7 +620,7 @@ pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
 async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
-    let run = DownloadRun::start(db.pool(), &serde_json::to_value(&opts.sync)?).await?;
+    let run = DownloadRun::start(&found, db.pool(), &serde_json::to_value(&opts.sync)?).await?;
     let floor = match &opts.sync.since {
         Some(since) => {
             let at = datalib_time::TimeBound::absolute(since, &opts.now)?;
@@ -643,7 +643,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     s.requests = ctx.requests.load(Ordering::Relaxed);
     s.files = ctx.downloaded.load(Ordering::Relaxed);
     let result = ctx.writes.settle(result).await;
-    run.finish(found.ended_early(), &result, &s).await;
+    run.summarize(&s);
     result.map(|()| s)
 }
 

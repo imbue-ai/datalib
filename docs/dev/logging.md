@@ -210,10 +210,13 @@ own `warn`.
 each SQLite statement did (`datalib_sql_work`): the steps SQLite's engine
 ran, about three for each row it walks, and the rows the statement
 answered with. One that ran 100,000 steps or more, and 100 or more for
-each row it answered, writes a `warn` line under the target
+each row it answered or each key it was handed as a set (`inputs`, the
+values a `json_each(?)` gave it, which an index looks up one by one
+whether it finds them or not), writes a `warn` line under the target
 `datalib::sql_work`: the `statement`, the `file` it ran on, its
-`params` by shape (`text(12)`, `json[9577]`, `int`) and SQLite's
-counters, `fullscan_steps` among them. Work, unlike time, does not
+`params` by shape (`text(12)`, `json[9577]`, `int`), SQLite's
+counters, `fullscan_steps` among them, and in `loops` each loop with
+the rows it visited, which says which one did the walking. Work, unlike time, does not
 change with a cold disk, a lock or a busy machine, so such a line is a
 plan to look at: a missing index, or one that does not narrow the
 search. A statement whose job is to walk what it keeps (the retention of
@@ -244,20 +247,23 @@ goes:
 | who | where |
 |---|---|
 | a step | its metrics, as it ends: `sql_runs_total`, `sql_rows_total`, `sql_rows_scanned_total` and `sql_microseconds_total`, each labelled `sql=<name>`, and `sql_loop_rows_scanned_total{sql, loop}` (`datalib_metrics`) |
-| the server, per request | the request line's `sql` field: the request's own statements, or what its applet sent in `X-Datalib-Sql-Work`, as JSON by name; the loops are left off a large one |
-| the server and its applets | `GET /metrics`, as `datalib_sql_*{process, sql}` since the process started (below) |
+| the server, per request | the request line's `sql_ms`, its statements' time in all; and on a line at `info` or above, or a request that took a second or more, its `sql` field: the request's own statements, or what its applet sent in `X-Datalib-Sql-Work`, as JSON by name, the loops left off a large one. A page's polls are `debug` lines about once a second, and their statements would be most of the log |
+| the server and its applets | `GET /metrics`, as `datalib_sql_*{process, sql}`: the server's own since it started, and each applet's summed from the answers it sent through the gateway (below) |
 | the runner | one `debug` line under `datalib::sql_work` as each sync ends, its statements during that sync in `statements` |
 
 The rows a loop visited are SQLite's scan statistics
 (`SQLITE_ENABLE_STMT_SCANSTATUS`, in `third-party/doltlite/BUILD.bazel`),
 which time each opcode too: a scan bound by SQLite's own loop ran some 5%
 slower for them on an M-series mac, and a store's pages cost far more
-than the loop on any real statement. What a statement's work was most
-of, once a sync is over:
+than the loop on any real statement. A metric's `labels` column is its
+labels as one string, `k=v` pairs joined by `,` in key order, so a
+statement's series is labelled `sql=<name>` and a loop's
+`loop=<loop>,sql=<name>`. What a statement's work was most of, once a
+sync is over:
 
 ```sh
 sqlite3 -readonly <root>/system/runs/runs.sqlite \
-  "SELECT step, json_extract(labels, '$.sql') AS statement, value AS microseconds
+  "SELECT step, substr(labels, length('sql=') + 1) AS statement, value AS microseconds
      FROM metrics WHERE name = 'sql_microseconds_total'
     ORDER BY value DESC LIMIT 20"
 ```

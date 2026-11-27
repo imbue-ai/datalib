@@ -308,6 +308,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // skipping this would make a Gmail incrementality regression
     // invisible to the golden whose whole job is catching one.
     let run = DownloadRun::start(
+        &found,
         db.pool(),
         &json!({
             "user_id": opts.config.user_id(),
@@ -323,8 +324,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // fields a successful one does — the defaults populated as far as
     // the run got. Mirrors the JMAP path.
     let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
-    run.finish(found.ended_early(), &result, &summary_for_bookkeeping)
-        .await;
+    run.summarize(&summary_for_bookkeeping);
     result
 }
 

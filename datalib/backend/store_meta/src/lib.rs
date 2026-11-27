@@ -25,7 +25,7 @@ pub mod ladder;
 pub mod shape;
 pub use guard::{inspect_root, refuse_if_newer, NewerBuild};
 pub use ladder::{Ladder, Migration};
-pub use shape::{other_shape, require, step_of, OtherShape, Shape};
+pub use shape::{other_shape, require, require_recorded, step_of, OtherShape, Shape};
 
 pub const TABLE: &str = "_datalib_meta";
 
@@ -144,7 +144,14 @@ pub struct Meta {
     /// The latest of the rows' stamps: when this build first wrote the
     /// store, or when its shape last moved.
     pub written_at_utc: String,
+    /// part → the hash of its tables, for a store whose owner keeps its
+    /// tables in parts that each move alone ([`write_parts`]); empty for
+    /// every other store.
+    pub parts: std::collections::BTreeMap<String, String>,
 }
+
+/// What a part's hash is kept under: `schema_hash.<part>`.
+const PART_PREFIX: &str = "schema_hash.";
 
 /// blake3 over the DDL statements in order, hex. Two builds that would
 /// open a store with the same statements agree on it; any change to
@@ -277,7 +284,59 @@ pub async fn read_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<Meta>> 
             .unwrap_or(0),
         store_kind: get(Key::StoreKind).and_then(|s| StoreKind::parse(&s)),
         written_at_utc,
+        parts: rows
+            .iter()
+            .filter_map(|(k, (v, _))| Some((k.strip_prefix(PART_PREFIX)?.to_string(), v.clone())))
+            .collect(),
     }))
+}
+
+/// Records the hash of each part of a store's tables, `(part, hash)`,
+/// and forgets any part not listed: what lets the owner of a store whose
+/// tables fall into parts empty only the parts that moved. Called after
+/// [`write`], which makes the table. Returns whether any row changed.
+pub async fn write_parts(pool: &SqlitePool, parts: &[(&str, String)]) -> Result<bool> {
+    let current = rows(pool).await?;
+    let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+    let mut changed = false;
+    for (part, hash) in parts {
+        let key = format!("{PART_PREFIX}{part}");
+        if current.get(&key).map(|(v, _)| v) == Some(hash) {
+            continue;
+        }
+        sql!(
+            "store_meta.upsert_part_hash",
+            "INSERT INTO _datalib_meta (key, value, written_at_utc, tz_offset) \
+             VALUES (?, ?, ?, ?) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, \
+             written_at_utc = excluded.written_at_utc, tz_offset = excluded.tz_offset"
+        )
+        .query()
+        .bind(&key)
+        .bind(hash)
+        .bind(&now)
+        .bind(&tz_offset)
+        .execute(pool)
+        .await
+        .with_context(|| format!("write _datalib_meta.{key}"))?;
+        changed = true;
+    }
+    for key in current.keys().filter(|k| {
+        k.strip_prefix(PART_PREFIX)
+            .is_some_and(|part| !parts.iter().any(|(p, _)| *p == part))
+    }) {
+        sql!(
+            "store_meta.delete_part_hash",
+            "DELETE FROM _datalib_meta WHERE key = ?"
+        )
+        .query()
+        .bind(key)
+        .execute(pool)
+        .await
+        .with_context(|| format!("clear _datalib_meta.{key}"))?;
+        changed = true;
+    }
+    Ok(changed)
 }
 
 async fn table_exists(conn: &mut sqlx::SqliteConnection) -> Result<bool> {
@@ -478,6 +537,39 @@ mod tests {
         };
         assert!(write(&p, StoreKind::Render, &without).await.unwrap());
         assert_eq!(read(&p).await.unwrap().unwrap().index_hash, None);
+    }
+
+    /// Each part's hash reads back under its own name, apart from the
+    /// store's own shape; a part no longer listed is forgotten, and a
+    /// write that moves nothing says so.
+    #[tokio::test]
+    async fn a_parts_hash_reads_back_and_a_part_dropped_is_forgotten() {
+        let td = tempfile::tempdir().unwrap();
+        let p = pool(&td.path().join("s.db")).await;
+        write(&p, StoreKind::GridIndex, &Shape::of_tables("whole".into()))
+            .await
+            .unwrap();
+        assert!(read(&p).await.unwrap().unwrap().parts.is_empty());
+        let both = [("grid", "g1".to_string()), ("keywords", "k1".to_string())];
+        assert!(write_parts(&p, &both).await.unwrap());
+        assert!(!write_parts(&p, &both).await.unwrap());
+        let meta = read(&p).await.unwrap().unwrap();
+        assert_eq!(meta.schema_hash, "whole");
+        assert_eq!(
+            meta.parts.into_iter().collect::<Vec<_>>(),
+            [
+                ("grid".into(), "g1".into()),
+                ("keywords".into(), "k1".into())
+            ]
+        );
+        assert!(write_parts(&p, &[("grid", "g2".to_string())])
+            .await
+            .unwrap());
+        let meta = read(&p).await.unwrap().unwrap();
+        assert_eq!(
+            meta.parts.into_iter().collect::<Vec<_>>(),
+            [("grid".into(), "g2".into())]
+        );
     }
 
     /// A kind or a hash written by a newer build reads as `None` /

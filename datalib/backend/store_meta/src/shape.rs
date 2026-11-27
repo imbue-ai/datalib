@@ -99,7 +99,17 @@ pub fn require(
     meta: Option<&Meta>,
     want: &Shape,
 ) -> anyhow::Result<()> {
-    let have = meta.map(Meta::shape);
+    require_recorded(store, step, meta.map(Meta::shape), want)
+}
+
+/// [`require`] for a shape the caller read out of the store's meta
+/// itself: one part of it, for a reader that reads only that part.
+pub fn require_recorded(
+    store: &Path,
+    step: Option<&str>,
+    have: Option<Shape>,
+    want: &Shape,
+) -> anyhow::Result<()> {
     if have.as_ref() == Some(want) {
         return Ok(());
     }
@@ -131,6 +141,7 @@ mod tests {
             shared_schema_version: 1,
             store_kind: None,
             written_at_utc: String::new(),
+            parts: Default::default(),
         }
     }
 

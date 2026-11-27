@@ -125,6 +125,12 @@ are in `docs/dev/plans/embed_on_modal.md` § "Measured on Modal".
   loads, logging which and why (`cuda_module_report`). The module needs
   the host's driver and cuBLAS 12 (`libcublas.so.12`,
   `libcublasLt.so.12`).
+- **Only a binary that hands over the lookup looks.** The embedder links
+  no install layout: `datalib-step`, `datalib-applet` and `gpu_check`
+  pass `datalib_runtime::cuda_module::find` to `look_for_cuda_module`
+  at start. `embed_prompts`, the fixture's embed, passes nothing and
+  runs on the CPU on Linux, so a change to `datalib_runtime` does not
+  make Bazel embed the fixture again.
 - **CUDA agrees with Metal** as closely as any two devices do (worst
   cosine 0.9991), and with the CPU to 0.9983 at worst, on one 26-token
   prompt; `gpu_check` holds it to 0.998.

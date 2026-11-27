@@ -1,4 +1,4 @@
-//! [`DownloadRun`] — bookkeeping wrapper for provider `ingest::fetch` calls.
+//! [`DownloadRun`]: a download's row in `sync_runs`, with what it changed.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -8,6 +8,7 @@ use serde_json::Value;
 use sqlx::SqlitePool;
 
 use crate::doltlite_raw::{finish_run, has_dolt_extensions, start_run};
+use crate::run_problems::RunProblems;
 use crate::scope_state;
 use datalib_sql::{sql, sql_id, Sql};
 
@@ -24,26 +25,19 @@ impl RowDelta {
     }
 }
 
-pub struct DownloadRun<'p> {
+/// A download's row in `sync_runs`, opened by [`start`](Self::start)
+/// inside the run's problem collector ([`crate::run_problems::collecting`]).
+/// The collector closes it after it has written the run's problems, so
+/// the `deltas` it records count every row the run wrote, problems
+/// included, however the seals fell; its status is what the collector's
+/// body returned.
+pub struct DownloadRun {
+    found: RunProblems,
     run_id: i64,
-    pool: &'p SqlitePool,
-    started: std::time::Instant,
-    /// HEAD before this run wrote anything, and the `from_ref` the
-    /// `deltas` summary is measured against. It has to be the run's own
-    /// starting point rather than the store's last commit: a provider that
-    /// commits mid-run — so render can start on the batches that have
-    /// landed — leaves those batches clean, and "since the last commit"
-    /// then reports only the final one.
-    head_at_start: Option<String>,
-    /// `sync_scope_state` snapshot taken right after `start_run`;
-    /// diffed against another snapshot at `finish` time so the
-    /// resulting `cursors` summary records every scope that moved
-    /// during this run.
-    cursors_before: HashMap<String, String>,
 }
 
-impl<'p> DownloadRun<'p> {
-    pub async fn start(pool: &'p SqlitePool, config: &Value) -> Result<Self> {
+impl DownloadRun {
+    pub async fn start(found: &RunProblems, pool: &SqlitePool, config: &Value) -> Result<Self> {
         let head_at_start = crate::doltlite_raw::head_commit(pool)
             .await
             .unwrap_or_else(|e| {
@@ -55,12 +49,16 @@ impl<'p> DownloadRun<'p> {
             tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at start failed");
             HashMap::new()
         });
-        Ok(Self {
+        found.open_run(OpenRun {
             run_id,
-            pool,
             started: std::time::Instant::now(),
             head_at_start,
             cursors_before,
+            summary: Value::Object(Default::default()),
+        })?;
+        Ok(Self {
+            found: found.clone(),
+            run_id,
         })
     }
 
@@ -68,19 +66,42 @@ impl<'p> DownloadRun<'p> {
         self.run_id
     }
 
-    pub async fn finish<S, T>(self, ended_early: bool, result: &Result<T>, summary: &S)
-    where
-        S: Serialize,
-    {
+    /// What the row's summary says. A run that never gets here, because
+    /// its body returned early, is closed with only the run's own fields.
+    pub fn summarize<S: Serialize>(self, summary: &S) {
+        self.found
+            .summarize_run(serde_json::to_value(summary).unwrap_or(Value::Null));
+    }
+}
+
+pub(crate) struct OpenRun {
+    run_id: i64,
+    started: std::time::Instant,
+    /// HEAD before this run wrote anything, and the `from_ref` the
+    /// `deltas` summary is measured against. It has to be the run's own
+    /// starting point rather than the store's last commit: a provider that
+    /// commits mid-run — so render can start on the batches that have
+    /// landed — leaves those batches clean, and "since the last commit"
+    /// then reports only the final one.
+    head_at_start: Option<String>,
+    /// `sync_scope_state` snapshot taken right after `start_run`;
+    /// diffed against another snapshot at close so the resulting
+    /// `cursors` summary records every scope that moved during this run.
+    cursors_before: HashMap<String, String>,
+    pub(crate) summary: Value,
+}
+
+impl OpenRun {
+    pub(crate) async fn close<T>(self, pool: &SqlitePool, ended_early: bool, result: &Result<T>) {
         let elapsed_ms = self.started.elapsed().as_millis() as u64;
         let status = final_status(result.is_ok(), ended_early);
-        let deltas = compute_deltas(self.pool, self.head_at_start.as_deref()).await;
-        let cursors_after = scope_state::snapshot(self.pool).await.unwrap_or_else(|e| {
+        let deltas = compute_deltas(pool, self.head_at_start.as_deref()).await;
+        let cursors_after = scope_state::snapshot(pool).await.unwrap_or_else(|e| {
             tracing::warn!(error = %format!("{e:#}"), "scope_state snapshot at finish failed");
             HashMap::new()
         });
         let cursor_moves = scope_state::diff(self.cursors_before, cursors_after);
-        let mut summary_json = serde_json::to_value(summary).unwrap_or(Value::Null);
+        let mut summary_json = self.summary;
         if let Value::Object(map) = &mut summary_json {
             map.insert("elapsed_ms".into(), Value::from(elapsed_ms));
             if let Some(d) = deltas {
@@ -106,7 +127,7 @@ impl<'p> DownloadRun<'p> {
                 map.insert("error".into(), Value::from(format!("{e:#}")));
             }
         }
-        if let Err(e) = finish_run(self.pool, self.run_id, status, &summary_json).await {
+        if let Err(e) = finish_run(pool, self.run_id, status, &summary_json).await {
             tracing::warn!(
                 run_id = self.run_id,
                 error = %format!("{e:#}"),
@@ -253,6 +274,17 @@ mod tests {
         skipped: usize,
     }
 
+    /// The newest row in `sync_runs`: its id, status and summary.
+    async fn last_run(pool: &SqlitePool) -> (i64, String, Value) {
+        let row: (i64, String, String) =
+            test_sql!("SELECT run_id, status, summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+                .query_as()
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        (row.0, row.1, serde_json::from_str(&row.2).unwrap())
+    }
+
     /// #1606: `ok` promises the run read everything it set out to, and a
     /// run that ended early used to write it too, so the newest `ok` row
     /// said nothing about how recent the mirror was.
@@ -263,27 +295,16 @@ mod tests {
             let pool = pool.clone();
             async move {
                 let stop = crate::stop::StopFlag::new();
-                let (status_of, ran) = (pool.clone(), stop.clone());
-                let run_id = crate::run_problems::collecting(&pool, &stop, |found| async move {
-                    let run = DownloadRun::start(&status_of, &json!({})).await?;
-                    let run_id = run.run_id();
+                let (store, ran) = (pool.clone(), stop.clone());
+                crate::run_problems::collecting(&pool, &stop, |found| async move {
+                    let run = DownloadRun::start(&found, &store, &json!({})).await?;
                     end(&found, &ran);
-                    run.finish(
-                        found.ended_early(),
-                        &Ok::<(), anyhow::Error>(()),
-                        &DummySummary { new: 0, skipped: 0 },
-                    )
-                    .await;
-                    Ok(run_id)
+                    run.summarize(&DummySummary { new: 0, skipped: 0 });
+                    Ok(())
                 })
                 .await
                 .unwrap();
-                test_sql!("SELECT status FROM sync_runs WHERE run_id = ?")
-                    .query_scalar::<String>()
-                    .bind(run_id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap()
+                last_run(&pool).await.1
             }
         };
         assert_eq!(status_after(|_, _| {}).await, "ok");
@@ -303,21 +324,18 @@ mod tests {
     #[tokio::test]
     async fn ok_path_writes_ok_status_with_elapsed_and_summary_fields() {
         let (pool, _dir) = fresh_pool().await;
-        let run = DownloadRun::start(&pool, &json!({"k": "v"})).await.unwrap();
-        let run_id = run.run_id();
-        let work_result: Result<()> = Ok(());
-        let summary = DummySummary { new: 7, skipped: 3 };
-        run.finish(false, &work_result, &summary).await;
+        let store = &pool;
+        let stop = crate::stop::StopFlag::new();
+        crate::run_problems::collecting(&pool, &stop, |found| async move {
+            let run = DownloadRun::start(&found, store, &json!({"k": "v"})).await?;
+            run.summarize(&DummySummary { new: 7, skipped: 3 });
+            Ok(())
+        })
+        .await
+        .unwrap();
 
-        let row: (String, String) =
-            test_sql!("SELECT status, summary FROM sync_runs WHERE run_id = ?")
-                .query_as()
-                .bind(run_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(row.0, "ok");
-        let s: Value = serde_json::from_str(&row.1).unwrap();
+        let (_, status, s) = last_run(&pool).await;
+        assert_eq!(status, "ok");
         assert_eq!(s["new"], 7);
         assert_eq!(s["skipped"], 3);
         // elapsed_ms always merged in.
@@ -350,19 +368,23 @@ mod tests {
             .await
             .unwrap();
 
-        let run = DownloadRun::start(&pool, &json!({"k": "v"})).await.unwrap();
-        let run_id = run.run_id();
-        test_sql!("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, ?)")
-            .query()
-            .bind("test_scope")
-            .bind("2026-01-01T00:00:00Z")
-            .execute(&pool)
-            .await
-            .unwrap();
-        let work_result: Result<()> = Ok(());
-        let summary = DummySummary { new: 0, skipped: 0 };
-        run.finish(false, &work_result, &summary).await;
+        let store = &pool;
+        let stop = crate::stop::StopFlag::new();
+        crate::run_problems::collecting(&pool, &stop, |found| async move {
+            let run = DownloadRun::start(&found, store, &json!({"k": "v"})).await?;
+            test_sql!("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES (?, ?)")
+                .query()
+                .bind("test_scope")
+                .bind("2026-01-01T00:00:00Z")
+                .execute(store)
+                .await?;
+            run.summarize(&DummySummary { new: 0, skipped: 0 });
+            Ok(())
+        })
+        .await
+        .unwrap();
 
+        let run_id = last_run(&pool).await.0;
         let deltas = summary_deltas(&pool, run_id).await;
         // sync_scope_state: 1 row inserted since baseline.
         let scope_state = deltas
@@ -372,7 +394,7 @@ mod tests {
             scope_state["added"], 1,
             "sync_scope_state should show 1 added row; got {scope_state}"
         );
-        // sync_runs: DownloadRun::start added one row, finish UPDATEd
+        // sync_runs: DownloadRun::start added one row, its close UPDATEd
         // it. Net for dolt is one added row.
         let sync_runs = deltas
             .get("sync_runs")
@@ -383,17 +405,19 @@ mod tests {
         );
     }
 
-    /// A run killed before `finish` left its row `running` for good, so
+    /// A run killed before its row closed left it `running` for good, so
     /// a reader could not tell it from one in progress. A store has one
     /// writer, so the next run to start knows no other is running.
     #[tokio::test]
     async fn a_run_left_running_is_marked_interrupted_when_the_next_starts() {
         let (pool, _dir) = fresh_pool().await;
-        let killed = DownloadRun::start(&pool, &json!({}))
+        // No collector closes a run opened on these, as none closes a
+        // killed one.
+        let killed = DownloadRun::start(&RunProblems::unwritten(), &pool, &json!({}))
             .await
             .unwrap()
             .run_id();
-        let next = DownloadRun::start(&pool, &json!({}))
+        let next = DownloadRun::start(&RunProblems::unwritten(), &pool, &json!({}))
             .await
             .unwrap()
             .run_id();
@@ -410,26 +434,46 @@ mod tests {
     #[tokio::test]
     async fn err_path_writes_error_status_and_keeps_partial_summary() {
         let (pool, _dir) = fresh_pool().await;
-        let run = DownloadRun::start(&pool, &json!({"k": "v"})).await.unwrap();
-        let run_id = run.run_id();
-        let work_result: Result<()> = Err(anyhow::anyhow!("upstream 503"));
-        // Even on error, the partial summary the provider populated
-        // before the failure is preserved — that's what makes
-        // post-mortem analysis possible.
-        let summary = DummySummary { new: 4, skipped: 0 };
-        run.finish(false, &work_result, &summary).await;
+        let store = &pool;
+        let stop = crate::stop::StopFlag::new();
+        let ran = crate::run_problems::collecting(&pool, &stop, |found| async move {
+            let run = DownloadRun::start(&found, store, &json!({"k": "v"})).await?;
+            // Even on error, the partial summary the provider populated
+            // before the failure is preserved — that's what makes
+            // post-mortem analysis possible.
+            run.summarize(&DummySummary { new: 4, skipped: 0 });
+            Err::<(), _>(anyhow::anyhow!("upstream 503"))
+        })
+        .await;
+        assert!(ran.is_err());
 
-        let row: (String, String) =
-            test_sql!("SELECT status, summary FROM sync_runs WHERE run_id = ?")
-                .query_as()
-                .bind(run_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(row.0, "error");
-        let s: Value = serde_json::from_str(&row.1).unwrap();
+        let (_, status, s) = last_run(&pool).await;
+        assert_eq!(status, "error");
         assert_eq!(s["new"], 4);
         assert_eq!(s["error"].as_str().unwrap(), "upstream 503");
+    }
+
+    /// A body that returned early with `?` never summarized its run, and
+    /// its row is closed anyway, rather than left `running` until the next
+    /// run marks it interrupted.
+    #[tokio::test]
+    async fn a_run_whose_body_bailed_is_closed_as_an_error() {
+        let (pool, _dir) = fresh_pool().await;
+        let store = &pool;
+        let stop = crate::stop::StopFlag::new();
+        let ran = crate::run_problems::collecting(&pool, &stop, |found| async move {
+            let _run = DownloadRun::start(&found, store, &json!({})).await?;
+            anyhow::bail!("the account listing failed");
+            #[allow(unreachable_code)]
+            Ok(())
+        })
+        .await;
+        assert!(ran.is_err());
+
+        let (_, status, s) = last_run(&pool).await;
+        assert_eq!(status, "error");
+        assert_eq!(s["error"], "the account listing failed");
+        assert!(s["elapsed_ms"].is_number());
     }
 
     #[tokio::test]
@@ -487,34 +531,35 @@ mod tests {
             return;
         }
 
-        let run = DownloadRun::start(&pool, &json!({})).await.unwrap();
-        let run_id = run.run_id();
-        for i in 0..4 {
-            test_sql!("INSERT INTO notes (id, body) VALUES (?, ?)")
-                .query()
-                .bind(format!("first-{i}"))
-                .bind("{}")
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        // The batch handoff that makes this a streaming download.
-        crate::doltlite_raw::commit_run(&pool, "batch 1")
-            .await
-            .unwrap();
-        for i in 0..3 {
-            test_sql!("INSERT INTO notes (id, body) VALUES (?, ?)")
-                .query()
-                .bind(format!("second-{i}"))
-                .bind("{}")
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
-        let work_result: Result<()> = Ok(());
-        run.finish(false, &work_result, &DummySummary { new: 7, skipped: 0 })
-            .await;
+        let store = &pool;
+        let stop = crate::stop::StopFlag::new();
+        crate::run_problems::collecting(&pool, &stop, |found| async move {
+            let run = DownloadRun::start(&found, store, &json!({})).await?;
+            for i in 0..4 {
+                test_sql!("INSERT INTO notes (id, body) VALUES (?, ?)")
+                    .query()
+                    .bind(format!("first-{i}"))
+                    .bind("{}")
+                    .execute(store)
+                    .await?;
+            }
+            // The batch handoff that makes this a streaming download.
+            crate::doltlite_raw::commit_run(store, "batch 1").await?;
+            for i in 0..3 {
+                test_sql!("INSERT INTO notes (id, body) VALUES (?, ?)")
+                    .query()
+                    .bind(format!("second-{i}"))
+                    .bind("{}")
+                    .execute(store)
+                    .await?;
+            }
+            run.summarize(&DummySummary { new: 7, skipped: 0 });
+            Ok(())
+        })
+        .await
+        .unwrap();
 
+        let run_id = last_run(&pool).await.0;
         let deltas = summary_deltas(&pool, run_id).await;
         let notes = deltas
             .get("notes")
@@ -523,6 +568,51 @@ mod tests {
             notes["added"], 7,
             "both batches should count, not just the one after the mid-run commit; got {notes}"
         );
+    }
+
+    /// A seal writes the problems a run has found so far, and the rest
+    /// are written when the run ends. The deltas were counted before that
+    /// last write, so a run's problems were in them only when a seal
+    /// landed after they were found: one bake's golden named `problems`
+    /// and the next did not. Counted after it, they are there either way.
+    #[tokio::test]
+    async fn a_runs_problems_are_in_its_deltas_however_the_seals_fell() {
+        let (pool, _dir) = fresh_pool().await;
+        assert!(
+            crate::doltlite_raw::has_dolt_extensions(&pool).await,
+            "this test measures deltas, which need the dolt extensions"
+        );
+        for sealed_after_the_problem in [true, false] {
+            let store = &pool;
+            let stop = crate::stop::StopFlag::new();
+            crate::run_problems::collecting(&pool, &stop, |found| async move {
+                let run = DownloadRun::start(&found, store, &json!({})).await?;
+                found.listing(
+                    &format!("channels sealed={sealed_after_the_problem}"),
+                    "HTTP 500",
+                );
+                if sealed_after_the_problem {
+                    found
+                        .write_or_say(store, crate::run_problems::Ran::PartWay)
+                        .await;
+                    crate::doltlite_raw::commit_run(store, "a seal").await?;
+                }
+                run.summarize(&DummySummary { new: 0, skipped: 0 });
+                Ok(())
+            })
+            .await
+            .unwrap();
+            let run_id = last_run(&pool).await.0;
+            let deltas = summary_deltas(&pool, run_id).await;
+            assert_eq!(
+                deltas.get("problems").map(|d| &d["added"]),
+                Some(&json!(1)),
+                "sealed after the problem: {sealed_after_the_problem}; got {deltas:?}"
+            );
+            crate::doltlite_raw::commit_run(&pool, "between runs")
+                .await
+                .unwrap();
+        }
     }
 
     #[tokio::test]

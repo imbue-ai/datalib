@@ -22,12 +22,17 @@ fallbacks, no workarounds: one way to do it" is the rule this serves.
 | `schema_version` | its place on its owner's migration ladder (`ladder.rs`) |
 | `shared_schema_version` | its place on the framework's ladder for the tables every store shares, `problems` among them (`datalib_problems::SHAPE_VERSION`) |
 | `store_kind` | which of Datalib's stores it is (`StoreKind`) |
+| `schema_hash.<part>` | blake3 over the DDL of one part of its tables, for a store whose owner empties each part alone (`write_parts`); only the grid index has any |
 
 The last five make a store's **shape** (`Shape`: its tables, its
-indexes and its two ladder positions). A file has one shape: the
-keyword index's tables are part of the grid index's, and the inference
-cache's chunk tables are part of the cache's `index_hash`, so a change
-to them drops the chunks, which are cut again, and keeps the vectors.
+indexes and its two ladder positions). A file has one shape, and its
+`schema_hash` covers every table in it. The grid index's tables also fall
+into parts (`grid_index::Part`): the grid's own, and the keyword index's
+`search_*` tables. Its writer empties only the parts whose hash moved,
+and keyword search requires only its part's, so it reads while the
+grid's tables are rebuilt. The inference cache's chunk tables are part
+of the cache's `index_hash`, so a change to them drops the chunks, which
+are cut again, and keeps the vectors.
 
 The inference cache's shape has one part `_datalib_meta` does not hold:
 its page size, which the file's own header records
@@ -52,7 +57,8 @@ says it is new, so one whose columns change takes a new name.
 
 `require(store, step, meta, want)` compares the shape a store records
 with the one this build writes, and refuses anything else as an
-`OtherShape`. That covers a store in an older shape, one in a newer
+`OtherShape`; `require_recorded` does the same for a shape the caller
+read out of the meta itself, one part's. That covers a store in an older shape, one in a newer
 shape, and one that records no shape at all. The refusal names the
 store and the step to run; `step_of(store)` names the `<group>/<function>`
 folder a store sits in, which is its step for most stores.
@@ -67,7 +73,7 @@ in, and one reader-open that checks it:
 | raw store | a new store made in scratch (`datalib_step::prepare::raw_shape`) | the render step, before any provider reads (`render::require_raw_shape`) |
 | render store | `indexed_markdown::shape` | `IndexedMarkdownStore::open_for_reading` |
 | grid index | `grid_index::shape` | `DoltRepo::pinned`, inside each read; `grid_index::open_for_reading` |
-| search index (in the grid index's file) | `grid_index::shape` | `search_index::open` in the grid's crate |
+| search index (in the grid index's file) | `grid_index::Part::Keywords`, its part of the grid index's | `search_index::open` in the grid's crate, through `grid_index::keywords_readable` |
 | inference cache | `search_index::cache::shape` | `search_index::Reader::open` |
 | time-series store, its index | `datalib_etl_time_series::store::shape` | `datalib_etl_time_series::store::open_reader` |
 | occurrences | `occurrences::store::shape` | (read only by its own step) |
