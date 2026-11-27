@@ -13,8 +13,9 @@ confusion:
 - **parse** — deserialize a stored payload into the provider's typed
   in-memory representation. Pure, no I/O; usually `render/parse.rs` in
   the provider's `_render` crate.
-- **render** — turn that representation into the artifacts: a `.md`
-  for humans and the rows of the render store for the index.
+- **render** — turn that representation into what the render store
+  keeps: a document's markdown, section by section, for people, and its
+  `grid_rows` for the index. No `.md` file is written.
 
 Together they are one pipeline stage, the `render_markdown` step of a
 source's group. When this doc needs a word for the whole transform it
@@ -1045,6 +1046,74 @@ removes.
    same as a store with no commit to pin (case 3): nothing to read,
    cursor untouched.
 
+### Incremental equals cold: the property the tests hold
+
+Everything above — the cursor, the diff, the reverse lookup, the sweep,
+the checkpoints — exists so that a run does less work than rendering
+from scratch, and it is correct exactly when doing less does not change
+the answer:
+
+> **For any history of raw-store commits, cut into runs any way, the
+> render store after the last run holds what one cold render of the raw
+> store at its last commit would.**
+
+"Holds the same" means the same rows with their per-run stamps left out,
+not the same file or commit hashes. Two consequences are checked on
+their own, because a run can break either and still end right:
+
+- **Every commit is truthful.** Each commit the render store makes,
+  at a checkpoint or at the end, is the cold render of some of the
+  render units at the pinned commit: never a document with its rows
+  deleted and not yet written again, never a store emptied ahead of a
+  refill. That is what the SQL transaction around each batch of
+  documents is for (`etl/render/src/indexed_markdown.rs`).
+- **The index converges.** `unified_grid_and_search_index` pinning any
+  sequence of those commits ends equal to the render store, deletions
+  included.
+
+The framework keeps the property for a provider that keeps five
+promises:
+
+1. **Pure.** What it emits is a function of the raw store at the pin and
+   of its `render_params`: not of the clock (`RenderCtx::now` is stamped,
+   never read to decide anything), not of files outside the raw store,
+   not of iteration order.
+2. **The changed set is complete.** Every render unit whose documents
+   would differ between two commits is named, by its forward scan or by
+   the rows it declared. A miss is silent: the run succeeds and the
+   document is simply old.
+3. **Removals are declared.** It declares every render unit it looked
+   at, with nothing when the unit's rows are gone (§"The sweep").
+4. **Byte-stable.** The same render unit rendered twice from one commit
+   gives identical rows, so a steady-state run moves nothing.
+5. **`consumed` exactly when it read.** It reports the commit it pinned
+   when it read the store, and nothing when it could not.
+
+Two tests hold it:
+
+- **`datalib_step/src/render_model_test.rs`** drives the real driver,
+  store, diff scan and index with one fake provider over a synthetic raw
+  store of three tables, one for each shape a render unit query meets: the
+  unit itself (`parents`), rows that reach it through a foreign key
+  (`children`), and a table every document reads and none owns
+  (`authors`). Over twelve fixed seeds it commits random mutations, cuts
+  them into random runs with random checkpoint cadence, bumps the version
+  or the params now and then, fails runs partway, and after every run
+  checks the store against a reference renderer's cold answer, every new
+  commit for truthfulness, and, after some runs and at the end, the index.
+  A failure prints its seed and the whole history.
+- **`tests/fixtures/render_contract_test.py`** checks promises 2 and 3 for
+  every real provider against its TNG store, by mutating each raw table
+  (its docstring lists the mutations), rendering incrementally and cold,
+  and comparing. Breaches it knows of are named in `KNOWN_GAPS`, each
+  with why, and the list is exact: an entry that stops failing fails the
+  run until it is removed. A table the fixture leaves empty has nothing
+  to mutate and is passed over without a word, so a provider's gap in a
+  table the fixture never fills goes unseen. Promise
+  1 has no general test: the mutation loop finds the common breach,
+  reading the clock to decide something, as a nondeterminism, and the
+  rest is review.
+
 ### Memory: a page at a time
 
 A render's memory should follow how much it reads at once, not how big
@@ -1141,8 +1210,35 @@ the renderer must say what its sections are (`RenderedMarkdown.sections`,
 concatenated they are the `.md`) rather than leaving the driver to
 parse them back. A renderer that declares no sections has its
 documents diff as one block.
-[`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md)
-is the design record.
+
+How the step gets there (`datalib_step/src/render_diff.rs`):
+
+- **One pass per side, each scanning from the other.** The `to` side
+  renders, at `to`, the render units the provider's forward scan names
+  over the raw diff from `from`; the `from` side does the same at
+  `from`, scanning from `to`. Both are needed because a row deleted
+  between the two has no render unit at `to` to load it into, so only
+  the pass at `from` names it, and an added row only the pass at `to`.
+  Each pass is handed an empty stale set rather than none, so the scan
+  alone decides (none would mean "render everything"), and the
+  `render_inputs` reverse lookup is not used.
+- **Every run is a full walk of its pair**, so a changed pair sweeps out
+  what the old one produced. A document the scan named that renders the
+  same on both sides is not a document of the diff. A removed row is the
+  `from` side's row as it was, so the grid can show what left.
+
+What a diff therefore cannot show:
+
+- **A change only in a lookup table** (a user renamed in `users`, no
+  message touched) names no render unit in a forward scan, so the diff
+  shows nothing for it. The ordinary render catches it through the
+  reverse lookup, which the diff does not run.
+- **A source rendered as one unit by staleness alone** — AirVisual,
+  Garmin and YoLink, one page of plots each — renders nothing under a
+  diff: with an empty stale set its page is never stale. A source that
+  renders nothing at all is refused.
+- **What the ingest never saw**: [ingestion § "The delta as a source:
+  diff groups"](data_architecture_ingestion.md#the-delta-as-a-source-diff-groups).
 
 ## 6. Timestamps
 
@@ -1212,8 +1308,9 @@ For these `created_at` is **null**, and `before:`/`after:` exclude the row — t
 
 ## See also
 
-- [`plans/completed/one_mode.md`](plans/completed/one_mode.md) — the rule every step's
-  writes follow, of which §5's sweep is the render-side half.
+- [ingestion § "Noticing when the *upstream* loses data"](data_architecture_ingestion.md#noticing-when-the-upstream-loses-data)
+  — the download side of deletion, of which §5's sweep is the
+  render-side half.
 - [`step_protocol.md`](step_protocol.md) — where R2's third category
   has to be written down to mean anything.
 - [`grid_rows.md`](grid_rows.md), [`edges.md`](edges.md),

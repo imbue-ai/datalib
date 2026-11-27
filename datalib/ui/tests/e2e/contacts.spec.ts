@@ -450,9 +450,10 @@ const PNG_1PX =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 /// Copying what a source says into your contact: the address book's
-/// record of Geordi offers each value, a copied address that nobody holds
-/// offers to be added, and the saved field remembers where it came from.
-test("a source's values copy into the contact, and a copied address is added in one click", async ({
+/// record of Geordi offers *Use* beside each value, an address copied in
+/// is his from the save on, keeping the card's label and the card, and a
+/// handle's line in the form takes a label at once.
+test("a source's values copy into the contact, and a copied address is his from the save", async ({
   page,
   request,
 }) => {
@@ -464,6 +465,9 @@ test("a source's values copy into the contact, and a copied address is added in 
   });
   expect(made.ok(), await made.text()).toBeTruthy();
   const { contact_id: id } = (await made.json()) as { contact_id: string };
+  type Contact = { handles: { handle: string | null; label: string | null }[] };
+  const contact = async () =>
+    (await (await request.get(`/applet/datalib_contacts/contact/${id}`)).json()) as Contact;
 
   await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(handle)}, {})`)}`);
   const card = page.locator(".person");
@@ -480,31 +484,17 @@ test("a source's values copy into the contact, and a copied address is added in 
 
   // The address book's record holds his second address too.
   const book = card.locator(".person-section", { hasText: "laforge@enterprise.starfleet" }).last();
-  await book.locator(".person-copy summary").click();
-  await book.getByRole("button", { name: "Use Title “Chief Engineer”" }).click();
+  const useTitle = book.getByRole("button", { name: "Use Title “Chief Engineer”" });
+  await useTitle.click();
   await book
     .getByRole("button", { name: "Use Email (work) “laforge@enterprise.starfleet”" })
     .click();
   letDraftOpen();
   await expect(card.getByLabel("Title", { exact: true })).toHaveValue("Chief Engineer");
-  await expect(book.locator(".person-copy-values")).toContainText(
-    "Title “Chief Engineer”in your contact",
-  );
+  await expect(useTitle, "a value the contact holds offers no Use").toHaveCount(0);
 
-  // The copied address is on nobody; one click adds it here.
-  await card.getByRole("button", { name: "Add it", exact: true }).click();
-  await expect
-    .poll(async () => {
-      const r = await request.post("/applet/datalib_contacts/resolve", {
-        data: { handles: [other] },
-      });
-      return ((await r.json()) as { resolved: Record<string, { key: string }[]> }).resolved[
-        other
-      ]?.[0]?.key;
-    })
-    .toBe(id);
-  await expect(card.getByRole("button", { name: "Add it", exact: true })).toHaveCount(0);
-
+  // The copied address is his only once the draft is saved.
+  expect((await contact()).handles.map((h) => h.handle)).toEqual([handle]);
   await card.getByRole("button", { name: "Save", exact: true }).click();
   await expect(card.getByRole("button", { name: "Edit", exact: true })).toBeVisible();
   const published = (await (
@@ -516,8 +506,26 @@ test("a source's values copy into the contact, and a copied address is added in 
       value: "Chief Engineer",
       copied_from: expect.objectContaining({ source_id: expect.any(String) }),
     }),
-    expect.objectContaining({ kind: "email", value: "laforge@enterprise.starfleet" }),
   ]);
+  await expect
+    .poll(async () => (await contact()).handles)
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ handle: other, label: "work" }),
+        expect.objectContaining({ handle, label: null }),
+      ]),
+    );
+  await expect(card.locator(".person-mine .person-handles")).toContainText("work");
+
+  // In the form, a handle is a line, and its label changes at once.
+  await card.getByRole("button", { name: "Edit", exact: true }).click();
+  const label = card.getByLabel("Label for glaforge@enterprise.starfleet", { exact: true });
+  await label.fill("old");
+  await label.press("Tab");
+  await expect
+    .poll(async () => (await contact()).handles.find((h) => h.handle === handle)?.label)
+    .toBe("old");
+  await card.getByRole("button", { name: "Discard", exact: true }).click();
 });
 
 type Held = { id: string; name: string; handles: (string | null)[] };

@@ -5,9 +5,10 @@ Generates the DAG config `datalib-pipeline` needs, runs the synth phase
 (per-source `datalib-step synthesize`) and then the pipeline
 (download → render → index) hermetically against playback fixtures,
 and leaves the staged outputs where `tar_rendered.py` can pick them up.
-Beside them it writes `config_body.toml`: the same sources as
-render-only groups, for `materialize_tng_root.sh` to declare in the
-root it builds from the tars.
+Beside them it writes the TNG library's config, `config_body.toml`,
+and copies each file-reading source's files to `inputs/`: the same
+sources, synced again from those copies or kept as their raw stores
+hold them, for `materialize_tng_root.sh` to lay down from the tars.
 
 Splitting the genrule into a python driver keeps the Bazel `cmd =` block
 readable and concentrates the file-layout logic in one place — the
@@ -140,6 +141,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -172,16 +174,36 @@ FIXTURE_WHATSAPP_KEY = "0" * 64
 # synthesize` records playback tapes for. So `yolink-make-fixture`
 # writes the store and the pipeline skips straight to render.
 #
-# Emitting a download step anyway is not an option: `datalib-step
-# download` treats "planned zero processors" as an error (download.rs:
-# "has no download work"), and rightly so — for every other source that
-# state means a misconfigured `sync:`.
-#
 # The render step declares no `inputs` either: the store it reads has no
 # producer step in this config, so there is no step id to name. That
 # makes it a fringe step the runner always runs, and the per-document
-# fingerprints keep the re-runs cheap.
+# fingerprints keep the re-runs cheap. The library's config gives YoLink
+# a kept download instead (`_kept_yolink`), so there its render reads it.
 PRESEEDED_RAW = {"yolink"}
+
+# The sources the TNG library syncs: each reads files where they lie, so
+# the library carries a copy of them under `inputs/<source>/` and a sync
+# reads that again. Every other source's fixture stands in for a service
+# or is built from a spec, which nothing outside this build can replay,
+# so the library keeps what its raw store holds (`common.download =
+# false`, docs/dev/config_model.md §"A source that no longer downloads").
+READ_WHERE_THEY_LIE = {
+    "tng_contacts",
+    "tng_email",
+    "google-takeout",
+    "linkedin",
+    "sms-backup-restore",
+    "tng_pdfs",
+    "ship-air",
+    "facebook",
+    "claude-code",
+    "codex",
+    "tng_calendar",
+}
+
+# Where the library's config says its inputs are, until whoever lays the
+# library down writes the real place (`materialize_tng_root.sh`).
+INPUTS = "@INPUTS@"
 
 # Source types whose data is also time series
 # (`SourceType::renders_time_series` in datalib-step). Each gets a
@@ -211,6 +233,8 @@ class Prepared:
     env: dict[str, str]
     sources: list[str]
     ingest_ids: list[str]
+    # Each source in `READ_WHERE_THEY_LIE` → the file or folder it reads.
+    library_inputs: dict[str, Path]
     # `(diffs, count)` → the DAG's config text and a materialized root's.
     config_texts: Callable[..., tuple[str, str]]
     reset: bool
@@ -557,15 +581,30 @@ id = "{name}"
 type = "{type_str}"
 
 """
-        ingest_block = (
-            ""
-            if name in PRESEEDED_RAW
-            else step(name, "ingest", run("ingest", type_str), None, None)
-            + f"""
-params = {params}
+        ingest_head = step(name, "ingest", run("ingest", type_str), None, None)
 
-"""
+        # The library's own ingest: a source that reads files where they
+        # lie reads its copy under the library's inputs; any other is
+        # kept, publishing what its raw store holds.
+        reads_files = name in READ_WHERE_THEY_LIE
+        # A kept source's path names its folder under the inputs too, where
+        # nothing is: as a person's does once the export is gone.
+        inputs_dir = Path(INPUTS) / name
+        library_source = _source_config(
+            type_str,
+            inputs_dir / extract_input.name,
+            notion_seed=notion_seed,
+            beeper_data_dir=inputs_dir / beeper_data_dir.name,
+            signal_snapshot_root=inputs_dir / signal_snapshot_root.name,
+            whatsapp_dir=inputs_dir / whatsapp_dir.name,
         )
+        if name in PRESEEDED_RAW:
+            library_source = _kept_yolink(yolink_spec)
+        if not reads_files:
+            library_source.setdefault("common", {})["download"] = False
+        # In the library every source has a download, if only a kept one,
+        # so each render reads it.
+        library_inputs_line = f'\ninputs = ["{name}/ingest"]'
         # A source whose store this harness pre-seeded has no ingest
         # step to name, so its render declares no inputs — which also
         # makes it a fringe step the runner always runs.
@@ -591,17 +630,19 @@ params = {params}
             )
         steps.append(
             group_block
-            + ingest_block
+            + ("" if name in PRESEEDED_RAW else _ingest_block(ingest_head, params))
             + render_block
             + inputs_line
             + render_params_line
             + (series_block + inputs_line if series_block else "")
         )
-        # The materialized root gets the render tree but not the raw
-        # store, so there every source is shaped like a pre-seeded one:
-        # a group, render steps with no inputs, no ingest step.
         root_entries.append(
-            group_block + render_block + render_params_line + series_block
+            group_block
+            + _ingest_block(ingest_head, _toml_value(library_source))
+            + render_block
+            + library_inputs_line
+            + render_params_line
+            + (series_block + library_inputs_line if series_block else "")
         )
 
     def config_texts(
@@ -612,8 +653,9 @@ params = {params}
         group is `type = "diff"`; its one step is `render_markdown`
         reading the source's ingest tree, its command naming the source's
         type, and the fan-in names it like any render step. Two texts: the DAG's own,
-        and the body of a materialized root's, where the diff step — like
-        every render step there — declares no inputs."""
+        and the TNG library's, which `main` writes as `config_body.toml`:
+        there every source's ingest reads the library's copy of its files
+        or keeps what it has."""
         names = list(sources)[:count]
         blocks = [preamble, DISK_FLOOR] + steps[: len(names)]
         root_blocks = [preamble] + root_entries[: len(names)]
@@ -634,10 +676,11 @@ params = {params}
             params_line = (
                 f'params.diff = {{ from = "{from_commit}", to = "{to_commit}" }}'
             )
-            blocks.append(
+            diff_block = (
                 f'{group_block}\ninputs = ["{source_id}/ingest"]\n{params_line}'
             )
-            root_blocks.append(f"{group_block}\n{params_line}")
+            blocks.append(diff_block)
+            root_blocks.append(diff_block)
             rendered.append(f'"{group}/render_markdown"')
         # The fan-ins read every source by pattern, as the starter config
         # and the app's config upgrade write them.
@@ -667,11 +710,9 @@ inputs = ["*/render_time_series"]"""
         if series_index:
             blocks.append(series_index)
         dag_text = "\n\n".join(blocks) + "\n"
-        # Everything a materialized root's config needs but `data_root`
-        # and the applet, which only the materializer knows. The fan-in
-        # is declared and wired the way a real root's is; the index
-        # arrives pre-built, so it need not run for the root to be
-        # browsable.
+        # Everything the library's config needs but `data_root`, the
+        # applets and where its inputs are, which only the one laying it
+        # down knows.
         root_blocks.append(
             f"""[[groups]]
 id = "unified_grid_and_search_index"
@@ -750,6 +791,7 @@ inputs = [{grid_list}]"""
         env=pipeline_env,
         sources=list(sources),
         ingest_ids=ingest_ids,
+        library_inputs={n: sources[n][2] for n in READ_WHERE_THEY_LIE},
         config_texts=config_texts,
         reset=reset,
         carddav_work=carddav_work,
@@ -809,11 +851,29 @@ def main() -> int:
         )
     finally:
         driver.close()
+    _copy_library_inputs(workspace, fx.library_inputs)
     return 0
 
 
+def _copy_library_inputs(workspace: Path, inputs: dict[str, Path]) -> None:
+    """Each file-reading source's files as its last sync read them, at
+    `inputs/<source>/<name>`, where the library's config points. Real
+    files, and writable, as a person's own are."""
+    dest_root = workspace / "inputs"
+    shutil.rmtree(dest_root, ignore_errors=True)
+    for name, src in sorted(inputs.items()):
+        dest = dest_root / name / src.name
+        dest.parent.mkdir(parents=True)
+        if src.is_dir():
+            shutil.copytree(src, dest)
+        else:
+            shutil.copyfile(src, dest)
+    for p in [dest_root, *dest_root.rglob("*")]:
+        p.chmod(p.stat().st_mode | 0o200)
+
+
 # The diff group each source gets, by the source's id — the delta
-# between its first ingest and its second (`docs/dev/plans/completed/diff_renderer.md`).
+# between its first ingest and its second (`docs/dev/config_model.md`).
 DIFF_GROUPS = {"tng_contacts": "tng_contacts-diff", "slack": "slack-diff"}
 
 
@@ -1106,6 +1166,32 @@ def _source_config(
     else:
         source["api"] = {}
     return source
+
+
+def _ingest_block(head: str, params: str) -> str:
+    return f"""{head}
+params = {params}
+
+"""
+
+
+def _kept_yolink(spec: Path) -> dict:
+    """YoLink's method for the library, where its download is kept: the
+    spec's devices, each under ids that say they are fake. The method
+    has to be named for the step to plan, though nothing fetches."""
+    world = json.loads(spec.read_text())
+    start = time.strftime("%Y-%m-%d", time.gmtime(world["start_ms"] // 1000))
+    devices = [
+        {
+            "name": d["name"],
+            "kind": d["kind"],
+            "start": start,
+            "family_device_id": f"{i:08x}17014d008000{0:012x}",
+            "device_udid": f"{i:08x}17014d008000{1:012x}",
+        }
+        for i, d in enumerate(world["devices"], start=1)
+    ]
+    return {"api": {"devices": devices}}
 
 
 def _render_config(type_str: str) -> dict | None:

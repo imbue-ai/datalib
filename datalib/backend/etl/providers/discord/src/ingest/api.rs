@@ -18,6 +18,9 @@ pub const HTTP_SERVICE: HttpService = HttpService::Discord;
 
 const TIMEOUT: Duration = Duration::from_secs(60);
 const FILE_TIMEOUT: Duration = Duration::from_secs(300);
+/// A file that breaks this many times in a row fails alone, and stays
+/// owed for the next run, rather than holding up every file after it.
+const FILE_ATTEMPTS: u32 = 5;
 
 /// The most messages Discord answers at once.
 pub const MESSAGES_PER_PAGE: u32 = 100;
@@ -149,7 +152,8 @@ pub fn file_request(url: &str, max_bytes: Option<u64>) -> Option<HttpRequest> {
     }
     let req = HttpRequest::get(HTTP_SERVICE, url)
         .plain()
-        .timeout(FILE_TIMEOUT);
+        .timeout(FILE_TIMEOUT)
+        .attempts(FILE_ATTEMPTS);
     Some(match max_bytes {
         Some(max) => req.max_bytes(max),
         None => req,

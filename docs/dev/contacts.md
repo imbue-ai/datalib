@@ -432,12 +432,12 @@ work, and nothing can rebuild it:
 | table | key | holds |
 |---|---|---|
 | `contacts` | `contact_id`, a random v4 (the one id here that is a person's act, not a function of a record) | `kind`, `name`, `note`, `merged_into`, `agent` (the agent that made it, if one did), stamps |
-| `handles` | `(handle, contact_id)`, the handle as `datalib_handle` spells it | `linked_how` (`manual` or `agent`), `linked_at_utc`, `stopped_working_by`, `agent`, `reason`, `confidence`, `run`, `reviewed_at_utc` |
+| `handles` | `(handle, contact_id)`, the handle as `datalib_handle` spells it | `linked_how` (`manual` or `agent`), `linked_at_utc`, `stopped_working_by`, `agent`, `reason`, `confidence`, `run`, `reviewed_at_utc`; `label` ("work") and `copied_from_source` and `_key`, the card it was added from |
 | `not_linked` | `(handle, contact_id)` | a handle a person took off a contact: `contact_name`, the `agent` and `reason` that proposed it where an agent did, `decided_at_utc`, `contact_rejected` (the agent's whole contact was rejected) |
 | `labels` | `(subject, label)`, the subject a handle or `contact:<id>` | `applies` (in or out), `decided_how`, `agent`, `reason`, `confidence`, `run`, `decided_at_utc`, `reviewed_at_utc` |
 | `members` | `(group_id, member_id)` | `added_at_utc` |
 | `photos` | `contact_id` | `content_type`, `bytes`, `set_at_utc` |
-| `fields` | `field_id`, minted by the card | `contact_id`, `kind` (`FieldKind`), `label`, `value`, `handle`, `position`, `copied_from_source` and `_key` |
+| `fields` | `field_id`, minted by the card | `contact_id`, `kind` (`FieldKind`), `label`, `value`, `handle`, `position`, `copied_from_source` and `_key`: everything a contact says that is not a handle |
 | `me` | `contact_id` | `marked_at_utc`: the person said this contact is them |
 
 Each table is a row struct in `contacts/src/schema.rs`, and its DDL
@@ -485,11 +485,12 @@ for an agent, as steps:
 | `GET /search?q=` | contacts whose name contains `q`, for the person card's *Add to contacts* |
 | `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the person as a chip by their first working address, else number, else any handle, else as the contact itself (`datalib:contact/<id>`); a "me" chip on a contact marked as you; the first address and number; how many handles; the note; group or person; when it changed. What the contacts app's own table shows |
 | `POST /contacts` | create, with `name`, optional `kind`, and the `handles` to link at once |
-| `POST /contacts/add` | `{people: [{name, handles, held?}]}`, in one commit (`add_people.rs`): each a new contact with every handle, unless a contact has one of them; then, when it has their name (case aside), they are that contact, which gets the rest, less any taken off it as not theirs, and when it has another name they are skipped, since it may be an address two people share and only the person can say. `held`, `{<handle>: "share" \| "move"}`, names handles other contacts have that are theirs too or theirs alone; those never make them one of those contacts. A person with no handle is already there when a contact has their name. Answers `{created, added_to, already, skipped: [{what, why}]}`; skipped are those with no name, those whose handles are on a contact of another name, and those whose handles are on several contacts |
+| `POST /contacts/add` | `{people: [{name, handles, held?, said?}]}`, in one commit (`add_people.rs`): each a new contact with every handle, unless a contact has one of them; then, when it has their name (case aside), they are that contact, which gets the rest, less any taken off it as not theirs, and when it has another name they are skipped, since it may be an address two people share and only the person can say. `held`, `{<handle>: "share" \| "move"}`, names handles other contacts have that are theirs too or theirs alone; those never make them one of those contacts. `said`, `{<handle>: {label?, copied_from?}}`, is what the card each handle came from said of it, its label and the card as `{source_id, key}`, and the handle keeps both. A person with no handle is already there when a contact has their name. Answers `{created, added_to, already, skipped: [{what, why}]}`; skipped are those with no name, those whose handles are on a contact of another name, and those whose handles are on several contacts |
 | `GET /contact/{id}` | one contact, working handles first; a merged-away id answers as its survivor |
 | `DELETE /contact/{id}` | delete the contact and every contact merged into it: their links, fields, photo, drafts and memberships. Its handles are nobody's afterwards; the commit before holds it all |
 | `POST /merge` | `{from, into}`: `into` survives and takes `from`'s links, fields and memberships, its photo and note where it has none (two notes are kept one after the other); `from` stays as a row whose `merged_into` names `into`, so a `contact:<id>` saved anywhere still reaches the person, and anything merged into `from` now points at `into`. Two people or two groups, never one of each |
-| `POST /link`, `POST /unlink` | `{handle, contact_id, held?}` / `{handle, contact_id}`: one handle to or from a contact, as the person's own act; an agent proposes instead. A handle another contact has is refused (409, naming who) unless `held` is `share`, so both have it, or `move`, which unlinks it from the others. Unlinking is written down in `not_linked`; anyone else who has the handle keeps it |
+| `POST /link`, `POST /unlink` | `{handle, contact_id, held?, label?, copied_from?}` / `{handle, contact_id}`: one handle to or from a contact, as the person's own act; an agent proposes instead. A handle another contact has is refused (409, naming who) unless `held` is `share`, so both have it, or `move`, which unlinks it from the others. `label` and `copied_from` are what the card it came from said; a handle linked already keeps its own. Unlinking is written down in `not_linked`; anyone else who has the handle keeps it |
+| `POST /handle_label` | `{handle, contact_id, label}`: the contact's label for one of its handles; `label: null` clears it |
 | `POST /stopped_working` | `{handle, contact_id, by}`: by when it stopped working for that contact; `by: null` means it works again |
 | `POST /rename` | `{contact_id, name}`, at once, without a draft |
 | `POST /me` | `{contact_id, me}`: say the contact is you, or stop; answers `{changed}`. A merged-away id marks its survivor, and a group is refused |
@@ -497,7 +498,7 @@ for an agent, as steps:
 | `GET /contact/{id}/edit` | what the card edits, as published: name, note, fields |
 | `POST`, `GET /contact/{id}/draft` | open the contact's draft (cut it if there is none) / read it: `{base, mine, published, published_commit}` |
 | `PUT`, `DELETE /contact/{id}/draft` | autosave the whole edit onto the draft, uncommitted, answering `{handles: {<field_id>: <handle>}}` for each field whose value is an address or number / discard the draft |
-| `POST /contact/{id}/draft/save` | `{seen}`, the published commit the card last showed; `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}` with nothing saved when the contact moved since |
+| `POST /contact/{id}/draft/save` | `{seen, held?}`, the published commit the card last showed: publishes the draft, and each email and number in its fields becomes a handle of the contact. `{"outcome": "saved", "commit"}`; `{"outcome": "stale", "view"}` when the contact moved since; or `{"outcome": "held", "held": [{handle, by}]}` for a handle other contacts have (`by` their names) that `held`, `{<handle>: "share" \| "move"}`, says nothing of. Only `saved` saved anything |
 | `POST /proposals` | an agent's batch, one commit: `{agent, run?, contacts: [{contact_id?, name?, handles, reason?, confidence?, labels}], handles: [{handle, labels}]}`, each label `{label, applies?, reason?, confidence?}`, a confidence 0 to 1. Answers `{contacts_created, linked, labelled, skipped: [{what, why}]}` |
 | `GET /review?label=` | the review as a typed table, one row per contact or handle with anything an agent proposed or a label, with a `membership` column for `real` and for `label` if given; `GET /review/items` the same as plain records, for an agent |
 | `POST /review/confirm`, `POST /review/reject` | `{subjects}`, each a handle or `contact:<id>`: agree with, or turn down, everything an agent proposed for each |
@@ -512,12 +513,16 @@ adds it by hand.
 
 ### Fields, and editing a contact through a draft
 
-A **field** is a line of what a contact says about the person (a
-number, an address, a title), and a **link** is a handle the contact
-holds. Neither implies the other: a household's landline can be a
-field on two contacts and linked to nobody. A field's `handle` is its
-value as a handle where it is one, so the card can say how the field
-stands against the links; it links nothing.
+A contact is a list of lines. A **handle** on it (a row of `handles`)
+is one line, with the person's label ("work", "cell") and the card it
+was copied from, where it was; an address two people share is a line of
+each. Every other line is a **field** (a title, a street address, a
+birthday, a number written without its country code), which links
+nothing. An email or a number typed into the card is a field only
+until the save, which makes it a handle (below); a field's `handle` is
+its value as a handle meanwhile, so the card can say who else has it.
+A field with a `handle` that an older build saved stays a field until
+the contact's next save.
 
 The card edits a contact's name, note and fields through a **draft**
 (`contacts/src/drafts.rs`, over `datalib_etl::draft`): a branch
@@ -526,50 +531,63 @@ no reader sees. A save publishes it as one commit, the draft winning
 only the cells it changed, so a link or a rename made meanwhile
 survives. The save names the published commit the card last showed; if
 this contact's name, note or fields have moved since, nothing is saved
-and the card gets the new state to show. Links and photos change at
-once, never through a draft.
+and the card gets the new state to show. In the same commit, after the
+merge, each email and number among the fields becomes a handle of the
+contact, keeping the field's label and card, and stops being a field
+(`draft::Finish`); one already theirs takes the label where it had
+none. One another contact has needs the person to say whether both have
+it or it moves here: the save without that answer saves nothing and
+names who has it. Links and photos change at once, never through a
+draft: a handle's label (`POST /handle_label`) and its removal, which is
+*Not theirs*, take effect as they are made, and Discard does not undo
+them.
 
-On the person card, `ContactEditor.ce.vue` is the part under *Your
-contact*: the contact's fields and note as published, *Edit*, and the
-photo, which changes at once: *Set photo…*, *Remove photo*, or a drop
-on it of an image file or of an image dragged from the app itself, such
-as a source's photo on the same card (`photoDrop` in `contactEdit.ts`).
-An image dragged from another site is refused rather than fetched. *Edit*
-opens the draft (`POST …/draft`) and shows the name, the fields (a kind,
-a value and a free-text label each) and the note as a form. Each pause
-in typing, and each time a field loses focus, autosaves the whole edit
-(`PUT …/draft`), less any field still empty; *Save* and *Discard* end
-it. A card opened on a contact that has a draft resumes it, in any
-window, after a reload or a restart. When it opens the draft, on each
-`curated` frame, and on a save refused as stale, the card compares what
-the draft was cut from, the form and what is published (`merge3` in
-`contactEdit.ts`, the same three-way merge the save makes): a change
-published elsewhere to something the draft left alone is taken into the
-form, and a part both changed differently is marked "changed elsewhere"
-with *Use theirs* and *Keep mine*. After a stale save, saving again
-keeps what the form says.
+On the person card, under *Your contact*, the card lists the contact's
+handles as chips with their labels, and `ContactEditor.ce.vue` is the
+rest: its fields and note as published, *Edit*, and the photo, which changes at once:
+*Set photo…*, *Remove photo*, or a drop on it of an image file or of an
+image dragged from the app itself, such as a source's photo on the same
+card (`photoDrop` in `contactEdit.ts`). An image dragged from another
+site is refused rather than fetched. *Edit* opens the draft (`POST
+…/draft`) and shows, in place of the chips, the name, a line per handle
+(its kind, its address, a label and ×), the fields (a kind, a value and a free-text label each)
+and the note as a form. Each pause in typing, and each time a field
+loses focus, autosaves the whole edit (`PUT …/draft`), less any field
+still empty; *Save* and *Discard* end it. A card opened on a contact
+that has a draft resumes it, in any window, after a reload or a
+restart. When it opens the draft, on each `curated` frame, and on a
+save refused as stale, the card compares what the draft was cut from,
+the form and what is published (`merge3` in `contactEdit.ts`, the same
+three-way merge the save makes): a change published elsewhere to
+something the draft left alone is taken into the form, and a part both
+changed differently is marked "changed elsewhere" with *Use theirs* and
+*Keep mine*. After a stale save, saving again keeps what the form says.
 
-The card also sets the contact's fields beside the rest of what it
+The card also sets the contact's lines beside the rest of what it
 knows (`contactFields.ts`):
 
-- **Each address or number field says how it stands against the
-  links.** Linked to this contact, it says nothing more; linked to
-  nobody, it offers *Add it*, one click and never automatic; linked to
-  someone else, it shows that contact's chip, which also catches a
-  typo. The handle comes from the store, which answers each field's
-  handle on every autosave, so the card never repeats the handle rules.
-  A linked address or number that no field holds offers *Add it there*.
-- **A source's section copies into the contact.** *Use what it says*
-  under each source lists what it says that a contact can hold (name,
-  addresses and numbers, title, organization, its details as fields,
-  note), each with *Use*, and *Use all*, which leaves the name to be
-  picked on its own. Copying opens the draft if it is not open; a value
-  the contact already holds, written however, says so instead. A copied
-  field records the source and record it came from (`copied_from`), and
-  typing over it makes it the person's own.
+- **A typed address or number another contact has says so.** It shows
+  that contact's chip, which also catches a typo, with *Both* and *Move
+  it here*; the save sends the answer. The handle comes from the store,
+  which answers each field's handle on every autosave, so the card
+  never repeats the handle rules.
+- **A source's section copies into the contact.** Beside each thing a
+  source says that a contact can hold (its name, each address and
+  number, title, organization, its details, note) is *Use*, which puts
+  it in the draft, opening the draft if it is not open; a value the
+  contact already holds, written however, offers none. A copied field
+  records the source and record it came from (`copied_from`), and
+  typing over it makes it the person's own; a copied address or number
+  takes both to its handle at the save.
 - **A copy does not follow its source.** Where the source a field was
   copied from now says something else, the field says so ("… now says
   *X*", with *Take it*), or that the source no longer says it.
+
+Adding someone from their page (*Add to contacts*), adding a card's
+other handles to your contact, and adding the rows of an address book
+each keep the card's label of every handle and the card itself
+(`HandleFrom`; `said` on `POST /contacts/add`). A card's other details
+stay on the card until you *Use* one.
 
 Not built yet: history and undo, and the export.
 

@@ -1,12 +1,17 @@
 # What is left after the runner stopped knowing datalib-step
 
-**Status: notes, partly built; checked against the tree 2026-11-20.**
+**Status: notes, partly built; checked against the tree 2026-11-27.**
 The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
-is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but one
-constant; item 5 is closed as not a coupling, and item 4 as Datalib's
-own tool. Items 2 and 9 are half done. Untouched: items 3 and 8 (item 8
-is decided). Of the reconciler in section 10, steps 1 and 2 are done.
+is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but
+one constant; item 5 is closed as not a coupling, and item 4 as
+Datalib's own tool. Half done: item 2 (a package's probe runs, every
+other type's is still `datalib-step probe`), item 8 (applets and probes
+get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
+crate of its own is decided, not done) and item 9 (the lint checks are
+in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
+in section 10, steps 1 and 2 are done (#2033, #2034); steps 3 to 6
+are not.
 
 ## The end state
 

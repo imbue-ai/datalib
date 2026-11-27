@@ -268,7 +268,7 @@ cc_library(
 
 # The CUDA backend as a module, libggml-cuda.so, that a gnu build loads
 # with ggml_backend_load when there is a GPU
-# (docs/dev/plans/embed_on_modal.md). Upstream links such a module against
+# (docs/dev/embed_on_modal.md). Upstream links such a module against
 # a shared libggml-base.so; ours leaves ggml's symbols undefined and takes
 # them from the program that loads it, whose ggml is linked in statically
 # and exported (`ggml`'s linkopts above), so the process holds one ggml

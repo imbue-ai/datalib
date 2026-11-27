@@ -496,13 +496,13 @@ range recorded in `sync_runs` — is #513.
 
 The commits answer "what changed?" at the level of rows; a person asks
 it at the level of the things the rows make up. A **diff group**
-(`type = "diff"`, `source = <group>`, two raw commits under
+(`type = "diff"`, reading `<source>/ingest`, two raw commits under
 `params.diff`) is the source's own render step run at both commits and
 subtracted, written as an ordinary render tree — documents with the
 changes marked, `grid_rows` with `diff_status` set — so everything that
 serves a source serves the difference. "Compare two versions…" on a
 Manage row opens its commit history, where one is written; [`config_model.md`](config_model.md) has the
-shape and [`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md) the design.
+shape and [parse and render § "Rendering the delta itself"](data_architecture_parse_and_render.md#rendering-the-delta-itself) how it is computed.
 
 What a diff can show is bounded by what the ingest carried into the
 store. A provider that syncs forward from a cursor — an API
@@ -797,6 +797,8 @@ There are existing chokepoint mechanisms to enforce some of these rules, but not
 A rate limit is not slept through. The shared HTTP chokepoint ([`http.rs`](/datalib/backend/etl/web/src/http.rs)) honours `Retry-After` and backs off exponentially until the source's give-up guard ([`retry.rs`](/datalib/backend/etl/web/src/retry.rs)) says the run has gone too long without progress, or has failed too many requests in a row (`download_params`, 30 minutes and 50 by default); then the provider stops cleanly with what it committed, and the next run resumes from the cursor. ChatGPT's `RateLimited` error is the worked example.
 
 A network that is not there is the same case. A request that got no answer (a timeout, or curl failing in any way but the few that go the same every time: a malformed URL, a certificate it will not trust, a body past the limit, a fault on this machine) is retried like a 429, so a laptop waking from sleep rides through its first seconds without DNS. Only an answer counts as progress. When the guard gives up, the request that tripped it fails as itself, for its caller to report, and the source's next request stops the whole source instead of leaving (`StopFlag::give_up`): every loop ends at its next boundary as on a stop, sealed, and `datalib-step` ends the ingest `incomplete`, saying why, even when the provider took the failure in its stride. A provider needs no failure budget of its own for an outage; it needs one only for failures the chokepoint does not retry, such as a run of 404s.
+
+One request can fail by itself while its service is fine: a file whose link always breaks. Retried until the guard gave up, it would hold the source for the guard's thirty minutes and then cost it every record after it. A request whose failure costs one record says so with `HttpRequest::attempts(n)`: after `n` failures that are about it alone (no answer, or a 5xx with no `Retry-After`) it is handed back as that failure, for its caller to record as the record's. A rate limit does not use up its attempts. Its failures still count toward the source's streak, and the next request's backoff starts from that streak (`RetryGuard::backoff_now`), so in an outage the guard still takes its full time to give up. Set it only where the caller records a failure as one record's (`Outcome::Failed`): a fetcher that turns any error into `BatchError::Abort` would end the run on one bad record instead. Discord's files are the worked example.
 
 ## Transient vs non-transient
 The retry mechanism is for *transient* failures. Some signals deserve a different mark:

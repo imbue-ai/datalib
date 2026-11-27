@@ -443,7 +443,13 @@ or `unchanged` (`datalib_schema::diff_status::DiffStatus`), and for a
 modified row `diff_changed_columns` names the columns that differ,
 sorted and `|`-joined. A non-NULL `diff_status` is the one thing that
 says a row came from a diff tree; nothing else about the row changes —
-`provider` is still the source's, so its icon and CSS apply.
+`provider` is still the source's, so its icon and CSS apply. A
+`removed` row is the earlier render's row as it was. The search key
+`change:` reads `diff_status`; its negation keeps NULL, so
+`-change:unchanged` over the whole grid keeps every real source's row,
+and a diff group's Browse opens on `source:<group> -change:unchanged`
+(`ui/src/config/browsePresets.ts`). How the rows are made:
+[parse and render § "Rendering the delta itself"](data_architecture_parse_and_render.md#rendering-the-delta-itself).
 
 ### `image`, `latitude`, `longitude`
 

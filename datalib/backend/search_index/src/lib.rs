@@ -4,7 +4,7 @@
 //! in the grid index's file; the chunks and their vectors in a file of
 //! their own, which each source's `embed` writes. A document comes in as
 //! a value, so whoever has it in memory can index it; nothing here reads
-//! a file. The plan: docs/dev/plans/completed/search_index_from_ram.md.
+//! a file. How it works and why: README.md.
 
 use std::borrow::Cow;
 

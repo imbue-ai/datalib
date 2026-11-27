@@ -12,8 +12,7 @@
 //! (a checkpoint, the end of the run) without anyone checking what is
 //! in it. How many documents share one transaction is a throughput choice
 //! ([`IndexedMarkdownStore::begin_batch`]): each transaction rewrites every
-//! page it touched (docs/dev/doltlite.md#what-a-write-costs). See
-//! `docs/dev/plans/completed/one_mode.md`.
+//! page it touched (docs/dev/doltlite.md#what-a-write-costs).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "license": "MIT",
-  "//": "Modal's JavaScript SDK, which `datalib-step embed` drives to embed a source on the person's own Modal account (docs/dev/plans/embed_on_modal.md). One dependency, pinned to MODAL_SDK_VERSION in datalib/backend/runtime/src/node_runtime.rs; //tools:version_pins_test keeps the two in step.",
+  "//": "Modal's JavaScript SDK, which `datalib-step embed` drives to embed a source on the person's own Modal account (docs/dev/embed_on_modal.md). One dependency, pinned to MODAL_SDK_VERSION in datalib/backend/runtime/src/node_runtime.rs; //tools:version_pins_test keeps the two in step.",
   "dependencies": {
     "modal": "0.11.1"
   },
