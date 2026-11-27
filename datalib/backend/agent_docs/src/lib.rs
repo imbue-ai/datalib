@@ -102,6 +102,13 @@ pub const DOCS: &[Doc] = &[
         text: include_str!("../../../../docs/user/docker.md"),
     },
     Doc {
+        topic: "backing-up",
+        path: "docs/user/backing_up.md",
+        kind: Kind::Guide,
+        about: "backing up a library and putting it back: what to copy, and what a sync rebuilds",
+        text: include_str!("../../../../docs/user/backing_up.md"),
+    },
+    Doc {
         topic: "raw-stores",
         path: RAW_STORES,
         kind: Kind::Guide,

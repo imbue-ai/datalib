@@ -24,6 +24,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     if env.function == Function::Ingest {
         return prepare_raw_store(env, &tree, emitter).await;
     }
+    remove_cache_tags(env, data_root, &tree)?;
     if env.function == Function::EmbeddingMap {
         return prepare_embedding_map(env, data_root, emitter);
     }
@@ -53,6 +54,23 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
         emitter.needs_rerun();
     }
     Ok(Vec::new())
+}
+
+/// Earlier builds marked each render tree and the index tree with a
+/// `CACHEDIR.TAG`, which backup tools skip. A library put back without
+/// them stays without them: the loop's record, in `system/`, says their
+/// steps are up to date (`docs/user/backing_up.md`).
+fn remove_cache_tags(env: &StepEnv, data_root: &Path, tree: &Path) -> Result<()> {
+    let index = datalib_core::layout::unified_grid_and_search_index_dir(data_root);
+    let trees: &[&Path] = match env.function {
+        Function::UnifiedGridAndSearchIndex | Function::EmbeddingMap => &[tree, &index],
+        _ => &[tree],
+    };
+    for dir in trees {
+        datalib_core::layout::unmark_cache(dir)
+            .with_context(|| format!("remove the cache tag in {}", dir.display()))?;
+    }
+    Ok(())
 }
 
 /// The one thing of the inference cache's shape prepare moves itself: its
@@ -1346,6 +1364,41 @@ mod tests {
         assert!(ask().await, "drawn by an older version");
         put(format!("h{}", datalib_search_index::text::key_suffix())).await;
         assert!(!ask().await, "this build's version");
+    }
+
+    /// A tag an earlier build left on a render tree or the index tree is
+    /// gone after the prepare at the next start, so a backup tool that
+    /// skips caches copies the whole library.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_cache_tags_an_earlier_build_left_are_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let tagged = [
+            "mail/render_markdown",
+            "unified_grid_and_search_index",
+            "unified_grid_and_search_index/unified_grid_and_search_index",
+        ];
+        for dir in tagged {
+            std::fs::create_dir_all(root.path().join(dir)).unwrap();
+            datalib_core::layout::mark_cache(&root.path().join(dir));
+        }
+        for (step, function) in [
+            ("mail/render_markdown", Function::RenderMarkdown),
+            (
+                "unified_grid_and_search_index/unified_grid_and_search_index",
+                Function::UnifiedGridAndSearchIndex,
+            ),
+        ] {
+            let env = env_of(step, function);
+            run(&env, root.path(), &Emitter::new(env.step.clone()))
+                .await
+                .unwrap();
+        }
+        for dir in tagged {
+            assert!(
+                !root.path().join(dir).join("CACHEDIR.TAG").exists(),
+                "{dir} is still tagged"
+            );
+        }
     }
 
     /// A source that has never downloaded gets no store from a prepare:

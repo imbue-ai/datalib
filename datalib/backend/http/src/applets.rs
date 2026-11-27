@@ -129,10 +129,10 @@ fn frontend_root(data_root: &Path) -> anyhow::Result<PathBuf> {
     let root = crate::frontend::frontend_dir(data_root);
     std::fs::create_dir_all(&root)
         .map_err(|e| anyhow::anyhow!("create {}: {e}", root.display()))?;
-    // Everything under here is reproducible by restarting the applets,
-    // so cache-aware backups may skip it — except `user`, which is not.
-    // Marking the parent is close enough: the tag is advisory.
-    datalib_core::layout::mark_derived_cache(&root);
+    // `user/` below is what a person or an agent wrote, so nothing here
+    // may tell a backup to skip it; an earlier build did.
+    datalib_core::layout::unmark_cache(&root)
+        .map_err(|e| anyhow::anyhow!("remove the cache tag in {}: {e}", root.display()))?;
     Ok(root)
 }
 
