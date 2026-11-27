@@ -752,7 +752,7 @@ impl Store {
     }
 
     /// Open and closed, oldest first.
-    pub async fn wipes(&self) -> Result<Vec<JobRow>> {
+    pub async fn jobs(&self) -> Result<Vec<JobRow>> {
         let rows = sql!(
             "dag.supervisor.list_jobs",
             "SELECT id, kind, targets, opened_by, closed_at_utc, error \
@@ -764,7 +764,7 @@ impl Store {
         rows.iter().map(wipe_of).collect()
     }
 
-    pub async fn wipe(&self, id: &str) -> Result<Option<JobRow>> {
+    pub async fn job(&self, id: &str) -> Result<Option<JobRow>> {
         let row = sql!(
             "dag.supervisor.read_job",
             "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs WHERE id = ?"
@@ -1462,7 +1462,7 @@ mod tests {
         );
         store.close_job(&id, Some("refused")).await.unwrap();
         store.close_job(&id, None).await.unwrap();
-        let row = store.wipe(&id).await.unwrap().unwrap();
+        let row = store.job(&id).await.unwrap().unwrap();
         assert_eq!(row.closed, Some(Some("refused".into())), "closed once");
         assert!(store.open_jobs().await.unwrap().is_empty());
     }

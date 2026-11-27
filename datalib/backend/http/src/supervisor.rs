@@ -227,7 +227,7 @@ impl SyncControl {
             .map_err(|e| format!("{e:#}"))?;
         let answer = async {
             loop {
-                let row = store.wipe(&id).await.map_err(|e| format!("{e:#}"))?;
+                let row = store.job(&id).await.map_err(|e| format!("{e:#}"))?;
                 if let Some(closed) = row.and_then(|r| r.closed) {
                     return closed.map_or(Ok(()), Err);
                 }

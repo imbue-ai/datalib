@@ -628,7 +628,7 @@ impl Harness {
             record: self.person.load_record().await.unwrap(),
             invocations: self.person.invocations().await.unwrap(),
             requests: self.person.recent_requests(1000).await.unwrap(),
-            wipes: self.person.wipes().await.unwrap(),
+            wipes: self.person.jobs().await.unwrap(),
         }
     }
 

@@ -22,7 +22,7 @@ use crate::supervisor::reload::ConfigFile;
 use crate::supervisor::store::{RequestOutcome, Store};
 
 /// What the process running the loop needs beyond the data root.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct ServeOptions {
     pub root: PathBuf,
     /// The step binaries' directory, ahead of the config's `binary_dir`.
@@ -32,6 +32,23 @@ pub struct ServeOptions {
     pub now: Option<String>,
     /// At most this many steps at once; the runner's default when `None`.
     pub parallelism: Option<usize>,
+    /// Where every event also goes, beside the open busy period's run
+    /// store record: a `datalib-pipeline` verb's stderr.
+    pub events: Option<Arc<dyn crate::events::EventSink>>,
+    /// The first busy period's run id, in place of a fresh one. For a
+    /// fixture that finds its run by id.
+    pub run_id: Option<String>,
+    /// The config file, when it is not the root's own `config.toml`: a
+    /// `datalib-pipeline` verb may be given one that names its root.
+    pub config: Option<PathBuf>,
+}
+
+impl ServeOptions {
+    fn config_path(&self) -> PathBuf {
+        self.config
+            .clone()
+            .unwrap_or_else(|| crate::config::root_config_path(&self.root))
+    }
 }
 
 /// One thing the loop says to whoever started it, one NDJSON line each
@@ -77,7 +94,44 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
         return;
     };
     emit(ServeEvent::Holding);
-    match host::take_over(&store, root).await {
+    let _ = hold(opts, emit, &store, &mut listener, &mut stop, Until::Stopped).await;
+    store.close().await;
+}
+
+/// The loop for as long as anything is open, for a `datalib-pipeline`
+/// verb that wrote its request or job and found no other process running
+/// the loop. The caller holds `runner-lock`. The last busy period's
+/// report, or why the loop could not go on.
+pub async fn run_until_idle(
+    opts: &ServeOptions,
+    store: &Store,
+    mut stop: watch::Receiver<bool>,
+) -> Result<Option<crate::scheduler::RunReport>, String> {
+    let mut listener = Listener::new(store, "the loop");
+    let emit: Emit = Arc::new(|_| {});
+    hold(opts, emit, store, &mut listener, &mut stop, Until::Idle).await
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Until {
+    Stopped,
+    Idle,
+}
+
+/// What a process holding the lock does: close what a dead loop left,
+/// then run the loop. One held until `stop` starts again at the next
+/// change to the store or the config when it fails; one held until idle
+/// says why and returns.
+async fn hold(
+    opts: &ServeOptions,
+    emit: Emit,
+    store: &Store,
+    listener: &mut Listener,
+    stop: &mut watch::Receiver<bool>,
+    until: Until,
+) -> Result<Option<crate::scheduler::RunReport>, String> {
+    let root = opts.root.as_path();
+    match host::take_over(store, root).await {
         Ok(taken) => {
             if let Some(run) = &taken.closed_run {
                 tracing::warn!(
@@ -92,41 +146,50 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
     tracing::info!("supervisor: running the loop on {}", root.display());
     let periods = Periods {
         opts,
-        emit: emit.clone(),
+        emit,
         record: Arc::new(PeriodSink::default()),
         open: Mutex::new(None),
+        first_run_id: Mutex::new(opts.run_id.clone()),
     };
     let mut said_no_pass = false;
-    while !*stop.borrow() {
-        let failed = match load_config(root) {
-            Ok(checked) => run_the_loop(opts, &checked, &store, &periods, &stop).await,
+    loop {
+        let ran = match load_config_at(&opts.root, &opts.config_path()) {
+            Ok(checked) => run_the_loop(opts, &checked, store, &periods, stop, until).await,
             Err(why) => {
                 // With no config there is no step to ask: the pass is over,
                 // and a root waiting for its first config is not waiting
                 // on it. A closed job with no steps says so.
                 if !std::mem::replace(&mut said_no_pass, true) {
-                    if let Err(e) = no_pass(&store).await {
+                    if let Err(e) = no_pass(store).await {
                         tracing::error!("supervisor: could not record the empty pass: {e:#}");
                     }
                 }
                 Err(why)
             }
         };
-        let Err(why) = failed else { break };
+        let why = match ran {
+            Ok(report) => return Ok(report),
+            Err(why) => why,
+        };
         // Its requests would otherwise be taken on at once, and fail the
         // same way; the next change to the store or the config is the
         // next try.
         periods.close_any();
-        fail_open_requests(&store, &why).await;
-        if let Err(e) = host::take_over(&store, root).await {
+        fail_open_requests(store, &why).await;
+        if let Err(e) = host::take_over(store, root).await {
             tracing::error!("supervisor: could not close the failed run: {e:#}");
+        }
+        if until == Until::Idle {
+            return Err(why);
         }
         tokio::select! {
             _ = listener.next() => {}
             _ = stop.changed() => {}
         }
+        if *stop.borrow() {
+            return Ok(None);
+        }
     }
-    store.close().await;
 }
 
 /// A prepare pass with nothing to ask, open and closed at once.
@@ -149,29 +212,41 @@ async fn run_the_loop(
     store: &Store,
     periods: &Periods<'_>,
     stop: &watch::Receiver<bool>,
-) -> Result<(), String> {
+    until: Until,
+) -> Result<Option<crate::scheduler::RunReport>, String> {
     let root = opts.root.as_path();
+    let record: Arc<dyn crate::events::EventSink> = periods.record.clone();
+    let sink: Arc<dyn crate::events::EventSink> = match &opts.events {
+        Some(events) => Arc::new(crate::events::FanOutSink(vec![events.clone(), record])),
+        None => record,
+    };
     let mut runner = Runner::new(root)
-        .sink(periods.record.clone())
+        .sink(sink)
         .stop_on(stop.clone())
-        .reload_from(Arc::new(ConfigFile::new(crate::config::root_config_path(
-            root,
-        ))));
+        .reload_from(Arc::new(ConfigFile::new(opts.config_path())));
     if let Some(n) = opts.parallelism {
         runner = runner.parallelism(n);
     }
-    runner
-        .run_forever(&checked.graph, store, periods)
-        .await
-        .map_err(|e| {
-            tracing::error!("supervisor: the loop failed: {e:#}");
-            format!("the sync failed: {e:#}")
-        })
+    let ran = match until {
+        Until::Stopped => runner
+            .run_forever(&checked.graph, store, periods)
+            .await
+            .map(|()| None),
+        Until::Idle => runner.run_until_idle(&checked.graph, store, periods).await,
+    };
+    ran.map_err(|e| {
+        tracing::error!("supervisor: the loop failed: {e:#}");
+        format!("the sync failed: {e:#}")
+    })
 }
 
 /// The config as the loop would run it, or why it cannot.
 pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
-    let path = crate::config::root_config_path(root);
+    load_config_at(root, &crate::config::root_config_path(root))
+}
+
+/// The config at `path`, for the library at `root`, as the loop would run it, or why it cannot.
+fn load_config_at(root: &Path, path: &Path) -> Result<ConfigCheck, String> {
     if !path.is_file() {
         return Err(format!(
             "no config at {} — create one before syncing: in the app's Setup tab, or from \
@@ -180,12 +255,12 @@ pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
             root.display()
         ));
     }
-    let (checked, _) = crate::config::load_graded(&path).map_err(|e| format!("{e:#}"))?;
+    let (checked, _) = crate::config::load_graded(path).map_err(|e| format!("{e:#}"))?;
     if checked.is_fatal() {
         return Err(format!(
             "{} is not a config: nothing in it could be read\n{}",
             path.display(),
-            checked.render(&path)
+            checked.render(path)
         ));
     }
     Ok(checked)
@@ -267,6 +342,8 @@ struct Periods<'a> {
     record: Arc<PeriodSink>,
     /// The run id of the period open now.
     open: Mutex<Option<String>>,
+    /// [`ServeOptions::run_id`], until the first period takes it.
+    first_run_id: Mutex<Option<String>>,
 }
 
 impl Periods<'_> {
@@ -282,8 +359,13 @@ impl Periods<'_> {
 impl LoopHost for Periods<'_> {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let root = self.opts.root.as_path();
-        let checked = load_config(root)?;
-        let run_id = crate::scheduler::new_run_id();
+        let checked = load_config_at(&self.opts.root, &self.opts.config_path())?;
+        let run_id = self
+            .first_run_id
+            .lock()
+            .expect("the first run id's lock")
+            .take()
+            .unwrap_or_else(crate::scheduler::new_run_id);
         let now = now(self.opts);
         let env =
             steps_env(self.opts, &checked.cfg, &now, &run_id).map_err(|e| format!("{e:#}"))?;
