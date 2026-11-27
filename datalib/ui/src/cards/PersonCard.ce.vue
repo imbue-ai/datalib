@@ -687,6 +687,30 @@ const headPhoto = computed(() => {
         />
         This is me
       </label>
+      <ul v-if="!editor?.editing" class="person-handles">
+        <li v-for="h in model.mine.handles" :key="h.value">
+          <span
+            v-if="h.handle"
+            class="person-chip"
+            :ref="(el) => drawInto(el, h.handle!, shownValue(h), version)"
+          ></span>
+          <span v-else>{{ h.value }}</span>
+          <span v-if="h.label" class="person-muted">{{ h.label }}</span>
+          <span v-if="othersNamed(h.handle)" class="person-muted">
+            shared with {{ othersNamed(h.handle) }}
+          </span>
+          <label v-if="h.handle && h.stopped_working_by" class="person-muted">
+            stopped working by
+            <input
+              class="person-input person-date"
+              :value="h.stopped_working_by"
+              :disabled="busy"
+              title="2019, 2019-06 or 2019-06-14; empty when it works again"
+              @change="stoppedBy(h.handle, $event)"
+            />
+          </label>
+        </li>
+      </ul>
       <ContactEditor
         ref="editor"
         :contact-id="model.mine.key"
@@ -694,32 +718,7 @@ const headPhoto = computed(() => {
         :linked="model.mine.handles"
         :sources="model.sections.map((s) => s.contact)"
         :source-name="sourceLabel"
-      >
-        <ul class="person-handles">
-          <li v-for="h in model.mine.handles" :key="h.value">
-            <span
-              v-if="h.handle"
-              class="person-chip"
-              :ref="(el) => drawInto(el, h.handle!, shownValue(h), version)"
-            ></span>
-            <span v-else>{{ h.value }}</span>
-            <span v-if="h.label" class="person-muted">{{ h.label }}</span>
-            <span v-if="othersNamed(h.handle)" class="person-muted">
-              shared with {{ othersNamed(h.handle) }}
-            </span>
-            <label v-if="h.handle && h.stopped_working_by" class="person-muted">
-              stopped working by
-              <input
-                class="person-input person-date"
-                :value="h.stopped_working_by"
-                :disabled="busy"
-                title="2019, 2019-06 or 2019-06-14; empty when it works again"
-                @change="stoppedBy(h.handle, $event)"
-              />
-            </label>
-          </li>
-        </ul>
-      </ContactEditor>
+      />
     </section>
 
     <section

@@ -542,15 +542,15 @@ draft: a handle's label (`POST /handle_label`) and its removal, which is
 *Not theirs*, take effect as they are made, and Discard does not undo
 them.
 
-On the person card, `ContactEditor.ce.vue` is the part under *Your
-contact*: the contact's handles, as chips with their labels, its fields
-and note as published, *Edit*, and the photo, which changes at once:
+On the person card, under *Your contact*, the card lists the contact's
+handles as chips with their labels, and `ContactEditor.ce.vue` is the
+rest: its fields and note as published, *Edit*, and the photo, which changes at once:
 *Set photo…*, *Remove photo*, or a drop on it of an image file or of an
 image dragged from the app itself, such as a source's photo on the same
 card (`photoDrop` in `contactEdit.ts`). An image dragged from another
 site is refused rather than fetched. *Edit* opens the draft (`POST
-…/draft`) and shows the name, a line per handle (its kind, its chip, a
-label and ×), the fields (a kind, a value and a free-text label each)
+…/draft`) and shows, in place of the chips, the name, a line per handle
+(its kind, its address, a label and ×), the fields (a kind, a value and a free-text label each)
 and the note as a form. Each pause in typing, and each time a field
 loses focus, autosaves the whole edit (`PUT …/draft`), less any field
 still empty; *Save* and *Discard* end it. A card opened on a contact

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// Your contact's own part of the person card: its handles, fields and
-// note, and the editor that changes them, the name with them. In the
+// Your contact's own part of the person card: its fields and note, and
+// the editor that changes them, its handles and name with them. In the
 // editor each handle is a line whose label and removal take effect at
 // once, as a link always has; every other line goes to the contact's
 // draft as you type, which nobody else sees, until Save publishes it or
@@ -420,7 +420,7 @@ async function copy(v: SourceValue, from: CopiedFrom) {
 
 /** What the contact says as the card shows it: the form while editing. */
 const current = computed(() => (editing.value ? form.value : published.value));
-defineExpose({ copy, current });
+defineExpose({ copy, current, editing });
 
 // ── Photo ─────────────────────────────────────────────────────────────
 
@@ -572,7 +572,6 @@ onUnmounted(() => {
     </div>
 
     <template v-if="!editing">
-      <slot></slot>
       <dl v-if="lines.length" class="person-lines">
         <template v-for="(line, i) in lines" :key="i">
           <dt>{{ line.label }}</dt>
