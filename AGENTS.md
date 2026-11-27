@@ -157,16 +157,46 @@ from it, and the test then checks something nobody runs. Call it to
 
 ## Write plainspoken
 
-In docs — and in the few comments you keep — be clear and unhurried,
-explain a term the first time it appears, and don't assume the reader
-already shares your context. Plainspoken means *clear*, not *long*.
+In docs, PR descriptions, reviews and the few comments you keep, be
+clear and unhurried, and don't assume the reader already shares your
+context. Plainspoken means *clear*, not *long*: every word the reader
+has to translate into what actually happens is a cost, so the default
+is the literal description.
 
-**Name the operation the code performs, not a higher-level stand-in.**
-Say "runs the step's command with `--prepare` appended" and "when that
-process exits", not "asks the step" and "the step answers". The
-stand-in saves a few words, and the reader then has to work out what it
-maps to. Someone reading an explanation, a review or a doc usually wants
-the lower level; write that, even when it is longer.
+**Words: say what happens.**
+
+- **Prefer the operation itself to a higher-level word for it.** "Runs
+  the step's command with `--prepare` appended" and "when that process
+  exits" say what happens; "asks the step" and "the step answers" make
+  the reader work it out. A higher-level word is justified only when
+  all of these hold:
+  1. **A reader understands it without context.** "Ask" fails: nothing
+     in it says a `--prepare` invocation is meant. "The step's
+     `--prepare` run" passes, though it does not spell out the exact
+     operation.
+  2. **It saves more than it costs.** It earns its place when it stands
+     for a series of connected operations that cannot be described more
+     briefly. As a stand-in for one operation it almost never does:
+     name the operation, or abbreviate it transparently.
+  3. **It needs no definition.** Defining a word first is one more
+     thing the reader has to hold. Where the plain description is
+     available, use it instead of defining a word for it.
+- **Match the level the reader asked for.** When someone asks how a
+  thing works, keep higher-level words to what is strictly necessary,
+  even when the text gets longer.
+- **No invented metaphors and no coined terms.** Use an established
+  term unmodified, or describe the behavior directly: "the fallback is
+  never reached", not "the road not taken"; never decorate a known term
+  into an unknown one ("a standing dirty bit").
+
+**Structure: let the reader see what you refer to.**
+
+- **Don't refer back to something the reader can't see.** State a list,
+  number it, then refer to its items by number.
+- **If it's a list, make it a list.** Three or more parallel items go in
+  bullets or a numbered list, not a run of clauses in a paragraph.
+- **Don't signpost structure that isn't there.** "The second half of X"
+  needs a first half the reader can point at.
 
 ## Explain a change by what it does, before and after
 
@@ -178,11 +208,10 @@ read the code:
 - **Start with the problem as something that could happen**: "an
   `<img>` in an email made the app re-measure the whole data root",
   not "closes the GET-walk hole".
-- **Define a word the code uses in a narrow sense** the first time it
-  appears, or write the plain description instead. "Walks the data
-  root" means nothing to a reader until it says "measures the size of
-  every directory under the data root, which takes minutes on a large
-  one".
+- **Write the plain description instead of a word the code uses in a
+  narrow sense** (§"Write plainspoken"). "Walks the data root" means
+  nothing to a reader; "measures the size of every directory under the
+  data root, which takes minutes on a large one" does.
 - **Give each change a before, an after, and what a person notices.**
   "Nothing visible" is a valid answer; say it, so the reader knows it
   was checked. When a route or a flag changes, say what happens to a
