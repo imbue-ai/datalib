@@ -285,7 +285,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        store.save_state(&LoopState::default(), &open).await.unwrap();
+        store
+            .save_state(&LoopState::default(), &open)
+            .await
+            .unwrap();
         store
             .open_invocation(&InvocationRow {
                 id: "i1".into(),

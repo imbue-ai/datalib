@@ -114,7 +114,11 @@ pub async fn record_file_with_problem(
 /// Drop one path's stamp, inside the transaction that deleted the rows it
 /// produced — so a crash between the two leaves the path still stamped,
 /// and the next run sees it removed again and retries.
-pub async fn delete_file_stamp(tx: &mut Transaction<'_, Sqlite>, scope: &str, rel: &str) -> Result<()> {
+pub async fn delete_file_stamp(
+    tx: &mut Transaction<'_, Sqlite>,
+    scope: &str,
+    rel: &str,
+) -> Result<()> {
     replace_file_problem(tx, scope, rel, None).await?;
     sql!(
         "etl.files.checkpoint.delete_ingested_file",
@@ -505,7 +509,9 @@ mod tests {
 
         stamp(&e, "p/feed", a, None).await;
         let mut tx = e.pool.begin().await.unwrap();
-        delete_file_stamp(&mut tx, "p/feed", "b.mbox").await.unwrap();
+        delete_file_stamp(&mut tx, "p/feed", "b.mbox")
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         assert!(file_problems(&e.pool).await.is_empty());
 

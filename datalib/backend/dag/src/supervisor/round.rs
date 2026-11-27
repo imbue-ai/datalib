@@ -1147,7 +1147,12 @@ impl Runner {
     /// wrote is not shown until they run, and none of them downloads. One
     /// request, unless one this requester opened is still open. Whether it
     /// opened one.
-    async fn open_the_reruns(&self, graph: &Graph, store: &Store, state: &LoopState) -> Result<bool> {
+    async fn open_the_reruns(
+        &self,
+        graph: &Graph,
+        store: &Store,
+        state: &LoopState,
+    ) -> Result<bool> {
         use super::serve::UPGRADE_REQUESTER;
         let roots = rerun_offer(graph, state);
         if roots.is_empty() {
@@ -3175,7 +3180,10 @@ mod tests {
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
-        let a = crate::supervisor::record::saved_state(root.path()).await.steps["a/raw"].clone();
+        let a = crate::supervisor::record::saved_state(root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
         assert_ne!(a.state, Some(StateKind::Running));
         assert_eq!(a.last_run.unwrap().status, "stopped");
     }

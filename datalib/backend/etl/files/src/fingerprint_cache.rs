@@ -801,7 +801,10 @@ mod tests {
         assert_eq!(tree.blake3("b.bin"), Some([2u8; 32]));
 
         // `delete_paths` of a key the cache does not hold is not an error.
-        assert_eq!(cache.delete_paths(&[abs_key(root, "never")]).await.unwrap(), 0);
+        assert_eq!(
+            cache.delete_paths(&[abs_key(root, "never")]).await.unwrap(),
+            0
+        );
         assert_eq!(cache.delete_paths(&[]).await.unwrap(), 0);
     }
 
