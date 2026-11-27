@@ -1047,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn the_config_and_the_runner_record_are_told_apart() {
+    fn the_config_and_the_supervisor_store_are_told_apart() {
         let root = Path::new("/data");
         assert_eq!(
             classify(root, &root.join("config.toml")),
@@ -1297,7 +1297,7 @@ mod tests {
     /// `DagChanged` would make every reader refetch the loop's store
     /// for nothing.
     #[test]
-    fn the_stores_beside_the_runner_record_are_not_the_runner_record() {
+    fn the_stores_beside_the_supervisor_store_are_not_the_supervisor_store() {
         let root = Path::new("/data");
         for quiet in [
             "system/remote_media.doltlite_db",
@@ -1453,7 +1453,7 @@ mod tests {
     /// appearing once is not what a subscriber needs to hear, its every
     /// commit is.
     #[tokio::test]
-    async fn a_terminal_loops_record_write_reaches_a_subscriber() {
+    async fn a_terminal_loops_supervisor_store_write_reaches_a_subscriber() {
         let td = tempfile::tempdir().unwrap();
         let store = datalib_dag::supervisor::store::Store::open(td.path())
             .await

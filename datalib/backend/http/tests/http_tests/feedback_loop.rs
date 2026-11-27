@@ -85,7 +85,7 @@ async fn refetch_on_log_frames(
     get(state, "/api/health", None).await;
     let mut seen = Vec::new();
     for _ in 0..hops {
-        let frame = settle(root, log, feed, rx)
+        let frame = commit_and_take_frames(root, log, feed, rx)
             .await
             .pop()
             .expect("the request's own line should come back as a log frame");
@@ -110,7 +110,7 @@ async fn loop_warnings(state: &AppState) -> Vec<serde_json::Value> {
 /// write of the test's own under `system/frontend/` comes back, the run
 /// store's has been reported; a burst is sent whole, so what came with
 /// it is already queued.
-async fn settle(
+async fn commit_and_take_frames(
     root: &Path,
     log: &ProcessLogWriter,
     feed: &Feed,
@@ -168,7 +168,7 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
         .expect("the watch never reported ready");
     // The boot lines `init` just wrote are not a page's doing; let them
     // land before the page starts.
-    settle(root, &log, &feed, &mut rx).await;
+    commit_and_take_frames(root, &log, &feed, &mut rx).await;
 
     // A page that does not echo: every frame is one hop from a fetch
     // nothing caused, so the chain never grows.
@@ -178,7 +178,7 @@ async fn a_page_refetching_on_its_own_echo_is_warned_about_once_the_chain_is_a_l
     log.flush().await;
     assert!(loop_warnings(&state).await.is_empty());
     // After the read: its own request is a line too.
-    settle(root, &log, &feed, &mut rx).await;
+    commit_and_take_frames(root, &log, &feed, &mut rx).await;
 
     // The same page echoing: each hop is one longer than the last.
     let seen = refetch_on_log_frames(&state, root, &log, &feed, &mut rx, hops, true).await;

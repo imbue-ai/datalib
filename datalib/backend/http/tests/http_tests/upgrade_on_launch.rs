@@ -288,7 +288,7 @@ async fn the_prepare_run_lists_every_step_it_will_prepare_from_the_start() {
 /// Before, every Sync was disabled until the whole pass was over, and the
 /// loop served no request at all until then.
 #[tokio::test]
-async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
+async fn a_sync_waits_only_for_the_steps_the_pass_has_not_reached() {
     use datalib_dag::supervisor::tick::WaitKind;
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
@@ -386,7 +386,7 @@ async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
 /// into the loop, a loop that could not start for want of a config never
 /// said it, and the screen waited for good.
 #[tokio::test]
-async fn a_root_with_no_config_settles_its_pass_at_once() {
+async fn a_root_with_no_config_ends_its_pass_at_once() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();

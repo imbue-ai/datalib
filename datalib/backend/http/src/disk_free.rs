@@ -251,7 +251,7 @@ mod tests {
     /// pause line until the resume line, and a frame sent for each
     /// crossing however small the move that made it.
     #[tokio::test]
-    async fn held_from_the_pause_line_to_the_resume_line() {
+    async fn low_from_the_pause_line_to_the_resume_line() {
         let m = DiskFreeMonitor::default();
         let floor = DiskFloor::default();
         let at = |s: u64| format!("2026-10-10T10:00:{s:02}-07:00");

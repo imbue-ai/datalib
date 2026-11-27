@@ -331,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_entry_outranks_whatever_the_record_remembers() {
+    fn a_dropped_entry_outranks_whatever_its_steps_row_says() {
         let rec = at(StateKind::Running, None);
         let v = step_status(Some(&rec), None, Some(&diag(Severity::Rejected)));
         assert_eq!(v.key, "config_rejected");

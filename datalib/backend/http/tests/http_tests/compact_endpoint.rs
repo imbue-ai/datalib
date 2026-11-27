@@ -47,16 +47,16 @@ const CONFIG: &str = "[[programs]]\ncommand = \"datalib-step\"\n\
     command = \"true\"\ninputs = [\"enterprise/render_markdown\"]\nreads = \"pinned\"\n";
 
 /// The steps invoked with `verb`, sorted.
-fn asked(root: &Path, verb: &str) -> Vec<String> {
+fn invoked_with(root: &Path, verb: &str) -> Vec<String> {
     let prefix = format!("{verb} ");
-    let mut asked: Vec<String> = std::fs::read_to_string(root.join("invoked"))
+    let mut invoked: Vec<String> = std::fs::read_to_string(root.join("invoked"))
         .unwrap_or_default()
         .lines()
         .filter_map(|l| l.strip_prefix(prefix.as_str()))
         .map(str::to_string)
         .collect();
-    asked.sort();
-    asked
+    invoked.sort();
+    invoked
 }
 
 async fn boot(root: &Path, bin: &Path) -> AppState {
@@ -97,13 +97,13 @@ async fn post(state: &AppState, route: &str, body: serde_json::Value) -> (Status
     (status, String::from_utf8_lossy(&bytes).into_owned())
 }
 
-async fn until_asked(root: &Path, verb: &str, want: &[&str]) {
+async fn until_invoked_with(root: &Path, verb: &str, want: &[&str]) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while asked(root, verb) != want {
+    while invoked_with(root, verb) != want {
         assert!(
             Instant::now() < deadline,
             "asked to {verb} {:?}, not {want:?}",
-            asked(root, verb)
+            invoked_with(root, verb)
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
@@ -112,7 +112,7 @@ async fn until_asked(root: &Path, verb: &str, want: &[&str]) {
 /// With no targets, every built-in step is run with the verb, and not a
 /// step with a command of its own, which has never heard of the verb.
 #[tokio::test]
-async fn compact_with_no_targets_asks_every_step_that_takes_the_verb() {
+async fn compact_with_no_targets_runs_every_step_that_takes_the_verb() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -124,7 +124,7 @@ async fn compact_with_no_targets_asks_every_step_that_takes_the_verb() {
         status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
         "{status}: {body}"
     );
-    until_asked(
+    until_invoked_with(
         &root,
         "compact",
         &["enterprise/ingest", "enterprise/render_markdown"],
@@ -136,7 +136,7 @@ async fn compact_with_no_targets_asks_every_step_that_takes_the_verb() {
 /// Only a named step is run; one the config lacks, or one that does not
 /// take the verb, is refused with the reason.
 #[tokio::test]
-async fn compact_asks_the_named_step_and_refuses_one_it_cannot() {
+async fn compact_runs_the_named_step_and_refuses_one_it_cannot() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -153,7 +153,7 @@ async fn compact_asks_the_named_step_and_refuses_one_it_cannot() {
         status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
         "{status}: {body}"
     );
-    until_asked(&root, "compact", &["enterprise/render_markdown"]).await;
+    until_invoked_with(&root, "compact", &["enterprise/render_markdown"]).await;
 
     let (status, body) = post(
         &state,
@@ -190,13 +190,16 @@ async fn free_disk_space_collects_every_step_that_takes_the_verb() {
         status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
         "{status}: {body}"
     );
-    until_asked(
+    until_invoked_with(
         &root,
         "collect",
         &["enterprise/ingest", "enterprise/render_markdown"],
     )
     .await;
-    assert!(asked(&root, "compact").is_empty(), "nothing is folded");
+    assert!(
+        invoked_with(&root, "compact").is_empty(),
+        "nothing is folded"
+    );
 
     let (status, body) = post(
         &state,
@@ -228,9 +231,9 @@ async fn free_disk_space_dropping_old_versions_compacts() {
         status == StatusCode::NO_CONTENT || status == StatusCode::ACCEPTED,
         "{status}: {body}"
     );
-    until_asked(&root, "compact", &["enterprise/render_markdown"]).await;
+    until_invoked_with(&root, "compact", &["enterprise/render_markdown"]).await;
     assert!(
-        asked(&root, "collect").is_empty(),
+        invoked_with(&root, "collect").is_empty(),
         "nothing is only collected"
     );
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
