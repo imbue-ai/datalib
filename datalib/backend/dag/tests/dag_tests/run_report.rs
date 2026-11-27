@@ -1,5 +1,5 @@
 //! The report `datalib-pipeline` prints on stdout at the end of a sync: one
-//! line per step, saying how the run went for it — not how its last
+//! line per step, saying how the sync went for it — not how its last
 //! process went. A consumer of a streaming producer runs once per seal,
 //! so the two differ.
 
@@ -69,7 +69,7 @@ fn line_of<'a>(stdout: &'a str, step: &str) -> &'a str {
 }
 
 /// The consumer's first process wrote `c1` and its second wrote `c1`
-/// again. The run changed its output; the line said `changed: 0`, which
+/// again. The sync changed its output; the line said `changed: 0`, which
 /// is what the last process alone did.
 #[test]
 fn a_step_whose_first_invocation_changed_its_output_reads_changed() {
@@ -77,7 +77,7 @@ fn a_step_whose_first_invocation_changed_its_output_reads_changed() {
     let (code, stdout) = sync(td.path());
     assert_eq!(code, Some(0), "{stdout}");
     let c = line_of(&stdout, "c/idx");
-    assert!(c.contains("Succeeded { changed: 1 }"), "{c}");
+    assert!(c.contains("succeeded, changed its output"), "{c}");
 }
 
 /// A first process that failed, then a second that succeeded: the line
@@ -88,9 +88,9 @@ fn a_failed_invocation_that_ran_again_is_on_the_steps_line() {
     let (code, stdout) = sync(td.path());
     assert_eq!(code, Some(0), "{stdout}");
     let c = line_of(&stdout, "c/idx");
-    assert!(c.contains("Succeeded"), "{c}");
+    assert!(c.contains("succeeded"), "{c}");
     assert!(
-        c.contains("1 pass failed and was run again; its error is in the step's log"),
+        c.contains("1 invocation failed before the last, and its error is in the step's log"),
         "{c}"
     );
 }

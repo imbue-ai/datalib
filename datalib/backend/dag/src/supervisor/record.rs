@@ -10,8 +10,11 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result};
 use sqlx::Row;
 
-use super::store::Store;
+use serde::{Deserialize, Serialize};
+
+use super::store::{RequestOutcome, Store};
 use super::tick::{StateKind, WaitKind};
+use crate::run_state::RunState;
 use crate::step::{FailureKind, StepId};
 use datalib_sql::{sql, Sql};
 
@@ -140,7 +143,7 @@ pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
         last_requests TEXT
     )";
 
-pub(super) const DDL: [&str; 3] = [
+pub(super) const DDL: [&str; 4] = [
     STEPS,
     // The version each tree was last published at, by its path (a
     // step's tree is its id).
@@ -162,6 +165,19 @@ pub(super) const DDL: [&str; 3] = [
         attempts INTEGER,
         exit_code INTEGER,
         signal INTEGER
+    )",
+    // How each step a request reached ended for it, written as the loop
+    // closes the request. `outcome` is a `RunState` word.
+    "CREATE TABLE IF NOT EXISTS request_steps (
+        request_id TEXT NOT NULL,
+        step TEXT NOT NULL,
+        outcome TEXT NOT NULL,
+        failure_kind TEXT,
+        error TEXT,
+        attempts INTEGER NOT NULL,
+        failed_before INTEGER NOT NULL,
+        changed INTEGER NOT NULL,
+        PRIMARY KEY (request_id, step)
     )",
 ];
 
@@ -202,7 +218,153 @@ pub struct InvocationEnd {
     pub signal: Option<i32>,
 }
 
+/// How one step's part in one request ended: its `request_steps` row, and
+/// a line of `datalib-pipeline sync`'s report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RequestStep {
+    pub step: StepId,
+    pub outcome: RunState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<FailureKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Of its last invocation for the request; 0 when none ran for it.
+    pub attempts: u32,
+    /// Its invocations for the request that failed before the last one.
+    pub failed_before: u32,
+    /// An invocation for the request moved the version of what it writes.
+    pub changed: bool,
+}
+
+impl RequestStep {
+    /// A step the request reached and ran nothing of.
+    pub fn unrun(step: &str, outcome: RunState) -> RequestStep {
+        RequestStep {
+            step: step.to_string(),
+            outcome,
+            failure: None,
+            error: None,
+            attempts: 0,
+            failed_before: 0,
+            changed: false,
+        }
+    }
+
+    /// Its line in `datalib-pipeline sync`'s report: the step, the
+    /// [`RunState`] word, then what else there is to say.
+    pub fn line(&self) -> String {
+        let mut said = self.outcome.as_str().to_string();
+        match self.outcome {
+            RunState::Succeeded if self.changed => said.push_str(", changed its output"),
+            RunState::Succeeded => said.push_str(", output unchanged"),
+            RunState::Blocked => said.push_str(": a step it reads has published nothing"),
+            _ => {}
+        }
+        if let Some(kind) = self.failure.filter(|_| self.outcome == RunState::Failed) {
+            said.push_str(&format!(" ({}", kind.as_str()));
+            if self.attempts > 1 {
+                said.push_str(&format!(", {} attempts", self.attempts));
+            }
+            said.push(')');
+        }
+        if let Some(error) = &self.error {
+            said.push_str(&format!(": {error}"));
+        }
+        match self.failed_before {
+            0 => {}
+            1 => said.push_str(
+                "; 1 invocation failed before the last, and its error is in the step's log",
+            ),
+            n => said.push_str(&format!(
+                "; {n} invocations failed before the last, and their errors are in the step's log"
+            )),
+        }
+        format!("{:<32} {said}", self.step)
+    }
+}
+
 impl Store {
+    /// Close a request with how each step it reached ended for it, in one
+    /// transaction, so a reader that sees it closed finds them too. The
+    /// loop's to call, and only the loop's.
+    pub async fn close_request_with_steps(
+        &self,
+        id: &str,
+        outcome: RequestOutcome,
+        failed_step: Option<&str>,
+        steps: &[RequestStep],
+    ) -> Result<()> {
+        let (now, _) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
+        let mut tx = self.pool().begin().await?;
+        for s in steps {
+            sql!(
+                "dag.supervisor.insert_request_step",
+                "INSERT OR REPLACE INTO request_steps (request_id, step, outcome, failure_kind, \
+                 error, attempts, failed_before, changed) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            )
+            .query()
+            .bind(id)
+            .bind(&s.step)
+            .bind(s.outcome.as_str())
+            .bind(s.failure.map(FailureKind::as_str))
+            .bind(&s.error)
+            .bind(i64::from(s.attempts))
+            .bind(i64::from(s.failed_before))
+            .bind(s.changed)
+            .execute(&mut *tx)
+            .await?;
+        }
+        sql!(
+            "dag.supervisor.close_request_with_steps",
+            "UPDATE requests SET closed_at_utc = ?, outcome = ?, failed_step = ? \
+             WHERE id = ? AND closed_at_utc IS NULL"
+        )
+        .query()
+        .bind(now)
+        .bind(outcome.as_str())
+        .bind(failed_step)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.announce(&format!("request closed {id}"));
+        Ok(())
+    }
+
+    /// How each step a closed request reached ended for it.
+    pub async fn request_steps(&self, request: &str) -> Result<Vec<RequestStep>> {
+        sql!(
+            "dag.supervisor.list_request_steps",
+            "SELECT step, outcome, failure_kind, error, attempts, failed_before, changed \
+             FROM request_steps WHERE request_id = ? ORDER BY step"
+        )
+        .query()
+        .bind(request)
+        .fetch_all(self.pool())
+        .await?
+        .iter()
+        .map(|r| {
+            let outcome: String = r.try_get("outcome")?;
+            Ok(RequestStep {
+                step: r.try_get("step")?,
+                outcome: RunState::parse(&outcome)
+                    .with_context(|| format!("a request's step ended {outcome:?}"))?,
+                failure: r
+                    .try_get::<Option<String>, _>("failure_kind")?
+                    .as_deref()
+                    .and_then(FailureKind::parse),
+                error: r.try_get("error")?,
+                attempts: r.try_get::<i64, _>("attempts")?.try_into().unwrap_or(0),
+                failed_before: r
+                    .try_get::<i64, _>("failed_before")?
+                    .try_into()
+                    .unwrap_or(0),
+                changed: r.try_get::<i64, _>("changed")? != 0,
+            })
+        })
+        .collect()
+    }
+
     /// The loop's tables as the last save left them.
     pub async fn load_state(&self) -> Result<LoopState> {
         let mut versions: BTreeMap<String, String> = BTreeMap::new();

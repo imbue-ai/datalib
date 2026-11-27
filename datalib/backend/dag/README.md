@@ -196,8 +196,10 @@ reads that is still running or waiting, or is itself in this state below
 one that is (`waiting for garmin/ingest`), and the Manage row reads
 Waiting rather than Queued, since it has already started. So the index
 behind a render waits for as long as the download runs. Each invocation
-ends with an `invocation_end` event as its process exits; the
-`StepFinish` comes once its producers are done.
+ends with an `invocation_end` event as its process exits, and its
+`steps` row says how it ended (`last_status`) at once; there is no
+separate "the step finished" for a step that may run again on the next
+seal.
 
 **A failed invocation is reported even when the next one succeeds.** A
 consumer invocation that fails while what it reads is still moving runs
@@ -205,13 +207,29 @@ again once it moves (rule 4), and the request then reports the
 invocation that ran last: a consumer whose first invocation crashed and
 whose second worked has succeeded. The failed one stays failed in the
 run store, with its error as the last `error` line of its log (the exit
-status and the end of its stderr). The loop counts the invocations that
-failed and were run again, and reports the count as the step's
-`failed_passes` metric when the step finishes, zero included, so each
-sync that invokes the step replaces the last one's: the Manage row adds
-it to the step's warnings, and `run_summary` and `datalib-pipeline`'s
-report on stdout say it too. An invocation that fails and is not run
+status and the end of its stderr). Each invocation, as it ends, reports
+how many invocations of the step failed before it for the requests it
+served as the step's `failed_passes` metric (a name older builds' rows
+hold), zero included, so each replaces the last one's: the Manage row
+adds it to the step's warnings. The request's row for the step says it
+too (`failed_before`, below). An invocation that fails and is not run
 again is the step's last, and its failure is the step's.
+
+**A request closes with a row for each step it reached**, in
+`system/supervisor.sqlite`'s `request_steps`, written in the same
+transaction: how the step ended for it (`outcome`, a `RunState` word:
+`succeeded`, `skipped_up_to_date`, `blocked`, `failed` or `stopped`),
+why it failed, its last invocation's attempts, how many of its
+invocations for the request failed before the last (`failed_before`),
+and whether one of them moved what it writes (`changed`). A step that ran
+nothing for the request is `skipped_up_to_date` when up to date,
+`blocked` when blocked, and `stopped` when the request was stopped
+before it ran; a step turned off has no row. The loop sends the same
+rows as a `request_end` event, and `datalib-pipeline sync` prints them
+as its report, one line a step: the step's id, the `RunState` word,
+then what else there is to say (`slack/ingest  succeeded, changed its
+output`, `slack/render_markdown  skipped_up_to_date`, `mail/ingest
+failed (transient, 3 attempts): connection reset`).
 
 A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in
@@ -917,6 +935,7 @@ header says rollback-journal:
 | `steps` | step | its state now (`state`, `waiting_for`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a request reached it (`last_*`: its last invocation's id, the requests that invocation served in `last_requests`, how and when it ended) |
 | `sinks` | tree a step writes | the version it last published |
 | `invocations` | process the loop started | its step, when, and how it ended (`outcome` is NULL while it runs); the run store's `invocations` has the same id and what it did |
+| `request_steps` | step a closed request reached | how the step ended for that request, written as the request closes (§"What the loop runs, and what makes a step stale") |
 
 The store's shape moves by the rungs of
 `supervisor/store.rs`'s `LADDER`: an open runs the rungs from the

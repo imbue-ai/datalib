@@ -58,13 +58,13 @@ pub const CHECKPOINTS: &str = "checkpoints_total";
 /// column reads the pace off.
 pub const DEQUEUED: &str = "dequeued_total";
 
-/// How many times, in a step's last run, the step's process failed and
-/// the runner started it again because what the step reads moved: a
-/// gauge the runner reports as the step ends, zero included, so the next
-/// run that invokes the step replaces it. The run reports only the last
-/// process's outcome, so this is
-/// where an earlier failure stays visible; the Manage screen counts each
-/// one as a warning on the step's row.
+/// How many invocations of a step failed, for the requests its latest
+/// invocation served, before that one: a gauge the runner reports as each
+/// invocation ends, zero included, so the next replaces it. A request
+/// reports only the last invocation's outcome, so this is where an
+/// earlier failure stays visible; the Manage screen counts each one as a
+/// warning on the step's row. The value is what older builds' rows hold,
+/// so it stays.
 pub const FAILED_PROCESSES: &str = "failed_passes";
 
 /// What an `embed` step's Modal Sandboxes have cost this run, in

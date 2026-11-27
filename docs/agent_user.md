@@ -214,14 +214,16 @@ downloaded, reset its render step first:
 `datalib-step help <function>` gives the commands for each kind of step.
 
 **The stderr stream is NDJSON and made for you**: `run_plan` (every step's
-id and group, in topo order), then `step_start` / `progress_*` / `log` / `hint` /
-`step_finish` per step, closed by one `run_summary` — parse it instead
-of scraping human output. A step that reads one that streams its
-output runs once per seal it reads (unless it says `start =
-"after_inputs_settle"`), each pass but the last closed by a `pass_end`
-whose `status` says how it went; one that failed and was run again is
-an `error` line in the step's log even when the step ends `succeeded`,
-and `run_summary` counts them in the step's `failed_passes`. Failures carry a kind
+id and group, in topo order), then `invocation_start` / `step_start` /
+`progress_*` / `log` / `hint` / `invocation_end` per invocation (one
+process of one step), and one `request_end` as your request closes,
+with a row for each step it reached — parse it instead of scraping
+human output. A step that reads one that streams its output runs once
+per seal it reads (unless it says `start = "after_inputs_settle"`), so
+it may have several `invocation_end`s, each with the `status` of that
+process; one that failed and was run again is an `error` line in the
+step's log even when the step ends `succeeded`, and its `request_end`
+row counts them in `failed_before`. Failures carry a kind
 (`transient` / `rate_limited` / `auth` / `permission` / `data` /
 `cancelled` / `incomplete`); the
 runner already retries transient/rate-limited ones with backoff, and
@@ -717,7 +719,7 @@ what exists and misbehaves (a one-line "this doc is wrong", a full
 bug), and what would make Datalib easier to wield for whatever you and
 the user are trying to do with it — a surface that fought you, a query
 you had to work around, a use case it doesn't serve yet. Paste the
-`datalib-pipeline check` output or the failing step's `step_finish` event
+`datalib-pipeline check` output or the failing step's `invocation_end` event
 where you have one; it saves a round-trip. If you cannot reach GitHub,
 write the report out for the user to file. **The tracker is public:
 keep the user's private data out of it.** Log lines and events can

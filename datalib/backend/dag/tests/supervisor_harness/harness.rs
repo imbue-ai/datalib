@@ -830,16 +830,18 @@ fn ids(steps: &[Step]) -> Vec<&str> {
 fn describe(e: &Event) -> String {
     match e {
         Event::StepStart { step, attempt, .. } => format!("start {step} attempt {attempt}"),
-        Event::PassEnd { step, status, .. } => format!("pass-end {step} {status:?}"),
-        Event::StepFinish {
+        Event::InvocationEnd {
             step,
             status,
             error,
             ..
         } => format!(
-            "finish {step} {status:?} {}",
+            "invocation-end {step} {status:?} {}",
             error.as_deref().unwrap_or("")
         ),
+        Event::RequestEnd {
+            request, outcome, ..
+        } => format!("request-end {request} {outcome:?}"),
         Event::Checkpoint { step, version, .. } => format!("checkpoint {step} {version}"),
         Event::Metric {
             step,

@@ -27,40 +27,23 @@ use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::scheduler::{
     apply_verb_outcome, fresh_version, invocation_env, invoke_with_retry, mark_running,
-    new_invocation_id, now_stamp, reported_version, step_summary, ConsumerQueues, InvokeError,
-    PrepareError, RunReport, Runner, Serves, StepReport, StepStatus, REFUSED_PREPARE,
+    new_invocation_id, now_stamp, record_end, record_unrun, reported_version, ConsumerQueues,
+    Ended, InvokeError, PrepareError, Runner, Serves, REFUSED_PREPARE,
 };
-use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
+use crate::step::{FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::subprocess::Shrink;
-use crate::supervisor::record::LoopState;
+use crate::supervisor::record::{LoopState, RequestStep};
 use crate::version::UNKNOWN;
 
 /// How often an open round looks at the disk while the config sets a
 /// floor. Nothing announces a disk filling or being freed.
 const DISK_LOOK_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// How an invocation ended, kept until the step runs again (that process
-/// was one of several) or no step it reads is running or waiting any more
-/// (it is done for now). Until then its row reads `waiting` on that
-/// producer: the step is not finished, it is waiting for the next seal.
-struct Ended {
-    status: StepStatus,
-    error: Option<String>,
-    exit: Option<Exit>,
-    attempts: u32,
-    /// Whether its process has been closed with a `PassEnd` already.
-    pass_end_sent: bool,
-}
-
 impl Ended {
     fn as_end(&self) -> InvocationEnd {
-        let failure_kind = match &self.status {
-            StepStatus::Failed { kind } => Some(<&str>::from(*kind).to_string()),
-            _ => None,
-        };
         InvocationEnd {
-            outcome: self.status.state().as_str().to_string(),
-            failure_kind,
+            outcome: self.outcome.as_str().to_string(),
+            failure_kind: self.failure.map(|k| k.as_str().to_string()),
             error: self.error.clone(),
             attempts: self.attempts,
             exit_code: self.exit.and_then(|x| x.code),
@@ -80,19 +63,13 @@ struct Slot {
     /// What the step said of its output at its last start, over what its
     /// config entry says.
     streams_output: Option<bool>,
-    /// Whether an open request has wanted it this round.
-    ever_in_scope: bool,
-    last_wanted: LastWanted,
     live: Option<Live>,
-    ended: Option<Ended>,
+    /// Its last invocation ended while a producer it reads may still seal
+    /// more, so it is not done: its row reads `waiting` on that producer
+    /// until it runs again or the producer is done.
+    between_invocations: bool,
     warned_not_streaming: bool,
     said_waiting_for_disk: bool,
-    /// What the round's report says of it.
-    status: Option<StepStatus>,
-    attempts: u32,
-    error: Option<String>,
-    /// Processes of it that failed and were run again this round.
-    failed_passes: u32,
 }
 
 type Slots = BTreeMap<String, Slot>;
@@ -148,49 +125,15 @@ struct Tried {
     read: Read,
 }
 
-/// A step's state the last time a request wanted it, as far as it decides
-/// the status its row ends with once none does. A step it was blocked on is named, so
-/// no index goes stale when the config is swapped.
-#[derive(Default)]
-enum LastWanted {
-    #[default]
-    Unwanted,
-    Off,
-    Waiting,
-    Blocked(String),
-    Other,
-}
-
-impl LastWanted {
-    fn of(graph: &Graph, state: Row) -> LastWanted {
-        match state {
-            Row::Idle | Row::Stale => LastWanted::Unwanted,
-            Row::Off => LastWanted::Off,
-            Row::Waiting(_) => LastWanted::Waiting,
-            Row::Blocked(on) => LastWanted::Blocked(graph.steps[on].id.clone()),
-            _ => LastWanted::Other,
-        }
-    }
-
-    /// A step turned off took no part: none.
-    fn final_status(&self, cancelled: bool) -> Option<StepStatus> {
-        Some(match self {
-            LastWanted::Off => return None,
-            LastWanted::Waiting if cancelled => StepStatus::Failed {
-                kind: FailureKind::Cancelled,
-            },
-            LastWanted::Blocked(on) => StepStatus::Blocked { on: on.clone() },
-            _ => StepStatus::SkippedUpToDate,
-        })
-    }
-}
-
 /// An invocation in flight.
 struct Live {
     invocation: String,
     consumed: Read,
     /// Taken when the loop sends it SIGINT: what ends then was told to stop.
     stop: Option<watch::Sender<bool>>,
+    /// The version of what it writes as it started: whether it moved it,
+    /// by a seal or as it ended.
+    version_at_start: Option<String>,
 }
 
 /// Who opens the jobs the loop opens for itself.
@@ -314,7 +257,7 @@ struct IntentReader<'a> {
     /// the roots this graph lacks.
     deferred: BTreeMap<String, Vec<String>>,
     /// Requests asked to stop, closed only once a save has let go of them.
-    stopped: Vec<String>,
+    stopped: Vec<Open>,
     /// A request named a step the config file has and this graph does
     /// not: the loop re-reads the file before it waits again, rather than
     /// waiting for the server's watch to say it moved.
@@ -322,12 +265,14 @@ struct IntentReader<'a> {
 }
 
 /// An open request as the loop holds it: its row's id, its roots by id,
-/// when the loop took it on, and when it was opened.
+/// when the loop took it on, when it was opened, and how each step it
+/// reached has ended for it so far.
 struct Open {
     id: String,
     roots: Vec<String>,
     opened: Seq,
     opened_at: String,
+    parts: BTreeMap<String, RequestStep>,
 }
 
 impl Open {
@@ -343,83 +288,178 @@ impl Open {
             opened: self.opened,
         }
     }
-}
 
-/// One busy period: from the first request or wipe the loop takes on with
-/// none open, to the moment none is left and nothing runs. Recorded
-/// nowhere: only what the end-of-period report compares against.
-struct BusyPeriod {
-    /// Each step's version as the period began: the report says whether
-    /// the period as a whole moved a step's output.
-    at_start: HashMap<String, Option<String>>,
+    /// Whether step `i` is in its scope: a root, or downstream of one.
+    fn reaches(&self, graph: &Graph, i: usize) -> bool {
+        graph.downstream_of(&self.request(graph).roots)[i]
+    }
+
+    /// Its part in step `i`'s invocation that just ended, whatever served
+    /// the invocation when it started: a request opened while the step ran
+    /// waited for that run's output.
+    fn ended(&mut self, step: &str, e: &Ended, moved: bool) {
+        let before = self.parts.get(step);
+        let failed_before = before.map_or(0, |p| {
+            p.failed_before + u32::from(p.outcome == RunState::Failed)
+        });
+        let changed = moved || before.is_some_and(|p| p.changed);
+        self.parts.insert(
+            step.to_string(),
+            RequestStep {
+                step: step.to_string(),
+                outcome: e.outcome,
+                failure: e.failure,
+                error: e.error.clone(),
+                attempts: e.attempts,
+                failed_before,
+                changed,
+            },
+        );
+    }
+
+    /// Its rows as it closes, in graph order: each step it reached with a
+    /// part of its own, and each with none as `state` says it is now. A
+    /// step turned off took no part.
+    fn closing_rows(
+        &mut self,
+        graph: &Graph,
+        states: &[Row],
+        state: &mut LoopState,
+        queue: &mut ConsumerQueues,
+        sink: &dyn crate::events::EventSink,
+    ) -> Vec<RequestStep> {
+        let scope = graph.downstream_of(&self.request(graph).roots);
+        let mut rows = Vec::new();
+        for &i in &graph.topo {
+            let id = &graph.steps[i].id;
+            if let Some(part) = self.parts.remove(id) {
+                rows.push(part);
+                continue;
+            }
+            if !scope[i] {
+                continue;
+            }
+            let outcome = match states[i] {
+                Row::Off => continue,
+                Row::Fresh | Row::Idle => RunState::SkippedUpToDate,
+                Row::Blocked(_) => RunState::Blocked,
+                Row::Failed => RunState::Failed,
+                Row::Running | Row::Waiting(_) | Row::Stale => RunState::Stopped,
+            };
+            // A step stopped before it ran keeps the outcome it had; one
+            // that failed already said how.
+            match outcome {
+                RunState::SkippedUpToDate => {
+                    queue.cleared(graph, i, sink);
+                    record_unrun(state, id, outcome, vec![self.id.clone()]);
+                }
+                RunState::Blocked => record_unrun(state, id, outcome, vec![self.id.clone()]),
+                _ => {}
+            }
+            let mut row = RequestStep::unrun(id, outcome);
+            if let Some(last) = state
+                .steps
+                .get(id)
+                .and_then(|s| s.last_invocation.as_ref())
+                .filter(|_| outcome == RunState::Failed)
+            {
+                row.failure = last.failure;
+                row.error = last.error.clone();
+                row.attempts = last.attempts;
+            }
+            rows.push(row);
+        }
+        // A step the graph no longer has, which ran for it.
+        rows.extend(std::mem::take(&mut self.parts).into_values());
+        rows
+    }
 }
 
 /// A request for every source, served until it closes: what a test that
-/// is not about requests wants of the loop.
+/// is not about requests wants of the loop, and how each step ended for
+/// that request.
+#[cfg(test)]
+#[derive(Debug)]
+pub(crate) struct Report {
+    pub steps: Vec<RequestStep>,
+}
+
+#[cfg(test)]
+impl Report {
+    pub fn step(&self, id: &str) -> &RequestStep {
+        self.steps
+            .iter()
+            .find(|s| s.step == id)
+            .unwrap_or_else(|| panic!("no step {id:?} in {:#?}", self.steps))
+    }
+    pub fn all_ok(&self) -> bool {
+        self.steps.iter().all(|s| s.outcome.is_ok())
+    }
+    pub fn is_absent(&self, id: &str) -> bool {
+        self.steps.iter().all(|s| s.step != id)
+    }
+}
+
 #[cfg(test)]
 impl Runner {
-    pub(crate) async fn run(&self, graph: &Graph) -> Result<RunReport> {
+    pub(crate) async fn run(&self, graph: &Graph) -> Result<Report> {
         let sources: Vec<&str> = graph.ids_without_inputs();
         self.run_roots(graph, &sources).await
     }
 
-    pub(crate) async fn run_roots(&self, graph: &Graph, roots: &[&str]) -> Result<RunReport> {
+    pub(crate) async fn run_roots(&self, graph: &Graph, roots: &[&str]) -> Result<Report> {
         let store = Store::open(&self.data_root).await?;
         let roots: Vec<String> = roots.iter().map(|r| r.to_string()).collect();
-        store.open_request(&roots, "test").await?;
-        let report = self.serve(graph, &store).await;
+        let id = store.open_request(&roots, "test").await?;
+        let served = self.serve(graph, &store).await;
+        let steps = store.request_steps(&id).await;
         store.close().await;
-        report
+        served?;
+        Ok(Report { steps: steps? })
     }
 }
 
 impl Runner {
     /// Every request open in the store, and any opened while this runs,
-    /// until none is left: one run, its steps given the runner's
-    /// own environment and its events its own sink. The caller holds
-    /// `runner-lock`.
-    pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<RunReport> {
-        let report = self.drive(graph, store, None, true).await?;
-        Ok(report.expect("a loop that serves until idle ends the period it opened"))
+    /// until none is left, its steps given the runner's own environment
+    /// and its events its own sink. The caller holds `runner-lock`.
+    pub async fn serve(&self, graph: &Graph, store: &Store) -> Result<()> {
+        self.drive(graph, store, None, true).await
     }
 
     /// The loop for a host holding `runner-lock` until `stop`: every
     /// request and job served as it comes, and the `steps` table brought
-    /// to the switches and the config while nothing runs. Each stretch
-    /// with work open is a run, which `host` records.
+    /// to the switches and the config while nothing runs. `host` is told
+    /// when the loop takes work on and when it has none left.
     pub async fn run_forever(
         &self,
         graph: &Graph,
         store: &Store,
         host: &dyn LoopHost,
     ) -> Result<()> {
-        self.drive(graph, store, Some(host), false)
-            .await
-            .map(|_| ())
+        self.drive(graph, store, Some(host), false).await
     }
 
     /// [`Runner::run_forever`] until nothing is open and nothing runs: what
     /// a `datalib-pipeline` verb runs when no other process holds the lock.
-    /// The last run's report.
     pub async fn run_until_idle(
         &self,
         graph: &Graph,
         store: &Store,
         host: &dyn LoopHost,
-    ) -> Result<Option<RunReport>> {
+    ) -> Result<()> {
         self.drive(graph, store, Some(host), true).await
     }
 
-    /// `host` is `None` for [`Runner::serve`], which opens one run
-    /// at once and returns its report when it ends. `until_idle` returns
-    /// once nothing is open and nothing runs.
+    /// `host` is `None` for [`Runner::serve`], which takes work on at once.
+    /// `until_idle` returns once nothing is open and nothing runs.
     async fn drive(
         &self,
         graph: &Graph,
         store: &Store,
         host: Option<&dyn LoopHost>,
         until_idle: bool,
-    ) -> Result<Option<RunReport>> {
+    ) -> Result<()> {
         let mut intent_reader = IntentReader {
             store,
             seen: None,
@@ -430,11 +470,15 @@ impl Runner {
         };
         let mut saver = Saver::load(store).await?;
         let mut state = saver.last.clone();
-        let mut busy_period = match host {
-            None => Some(self.open_busy_period(graph, &mut saver, &mut state).await?),
-            Some(_) => None,
+        // From taking work on with none open, to having none left and
+        // nothing running.
+        let mut busy = match host {
+            None => {
+                self.take_work_on(graph, &mut saver, &state).await?;
+                true
+            }
+            Some(_) => false,
         };
-        let mut report = None;
 
         // Made before the store's requests, switches and jobs are first
         // read, so a row written after that read is heard.
@@ -468,12 +512,11 @@ impl Runner {
         self.refresh(
             graph,
             &mut intent_reader,
-            busy_period.is_some(),
+            busy,
             &mut open,
             &mut turned_off,
             &mut wipes,
             &mut seq,
-            &mut slots,
         )
         .await?;
 
@@ -521,36 +564,21 @@ impl Runner {
                     said_waiting_to_swap = false;
                     let old = std::mem::replace(&mut current, next);
                     let graph = &current;
-                    // A step the new graph lacks, done but for producers it
-                    // reads still running or waiting, is done now, under the
-                    // graph it ran in.
-                    for (i, spec) in old.steps.iter().enumerate() {
+                    // A step the new graph lacks waits on no producer.
+                    for spec in &old.steps {
                         if graph.by_id.contains_key(&spec.id) {
                             continue;
                         }
                         if let Some(s) = slots.get_mut(&spec.id) {
-                            if let Some(e) = s.ended.take() {
-                                self.finish_ended(&old, &mut state, s, i, e);
-                            }
+                            s.between_invocations = false;
                         }
                     }
                     shape = shape_of(graph, &self.lock_slots);
-                    for o in &open {
-                        let reached = graph.downstream_of(&o.request(graph).roots);
-                        for (i, _) in reached.iter().enumerate().filter(|(_, &r)| r) {
-                            slot_of(&mut slots, graph, i).ever_in_scope = true;
-                        }
-                    }
                     // Read the requests again: one set aside for want of a
                     // step this graph has is served now.
                     intent_reader.seen = None;
                     let mut added = Vec::new();
-                    for (i, spec) in graph
-                        .steps
-                        .iter()
-                        .enumerate()
-                        .filter(|_| busy_period.is_some())
-                    {
+                    for (i, spec) in graph.steps.iter().enumerate().filter(|_| busy) {
                         match old.by_id.get(&spec.id) {
                             None => {
                                 added.push(PlannedStep::of(spec));
@@ -572,27 +600,25 @@ impl Runner {
                 self.refresh(
                     graph,
                     &mut intent_reader,
-                    busy_period.is_some(),
+                    busy,
                     &mut open,
                     &mut turned_off,
                     &mut wipes,
                     &mut seq,
-                    &mut slots,
                 )
                 .await?;
                 if std::mem::take(&mut intent_reader.reload) {
                     config_moved = true;
                     continue;
                 }
-                if let Some(host) = host.filter(|_| busy_period.is_none()) {
+                if let Some(host) = host.filter(|_| !busy) {
                     if !open.is_empty() || !wipes.is_empty() || prepare.is_some() {
                         match host.step_env() {
                             Ok(env) => {
                                 self.set_steps_env(env.into());
                                 host.busy(true);
-                                busy_period = Some(
-                                    self.open_busy_period(graph, &mut saver, &mut state).await?,
-                                );
+                                self.take_work_on(graph, &mut saver, &state).await?;
+                                busy = true;
                                 // What it starts serving was read with
                                 // nothing open, as strictly as a first read
                                 // after taking work on.
@@ -631,17 +657,16 @@ impl Runner {
                     self.refresh(
                         graph,
                         &mut intent_reader,
-                        busy_period.is_some(),
+                        busy,
                         &mut open,
                         &mut turned_off,
                         &mut wipes,
                         &mut seq,
-                        &mut slots,
                     )
                     .await?;
                 }
             }
-            if busy_period.is_some() {
+            if busy {
                 if let Some(pass) = prepare.as_mut() {
                     self.env_from(host);
                     for task in self.start_what_it_can(graph, store, pass).await? {
@@ -664,14 +689,15 @@ impl Runner {
             // does not refill a download, and the config that drops a
             // purged group is not waited on. A request left with nothing is
             // stopped.
-            open.retain_mut(|o| {
+            for o in &mut open {
                 o.roots
                     .retain(|r| graph.by_id.get(r).is_none_or(|i| !wiping.contains_key(i)));
-                if o.roots.is_empty() {
-                    intent_reader.stopped.push(o.id.clone());
-                }
-                !o.roots.is_empty()
-            });
+            }
+            let (kept, emptied) = std::mem::take(&mut open)
+                .into_iter()
+                .partition(|o| !o.roots.is_empty());
+            open = kept;
+            intent_reader.stopped.extend(emptied);
             let off = turned_off_of(graph, &turned_off);
             let intent = Intent {
                 requests: open.iter().map(|o| o.request(graph)).collect(),
@@ -686,21 +712,10 @@ impl Runner {
                 }
             }
             let t = tick(&shape, &intent, &facts);
-            for scope in &t.scopes {
-                for (i, _) in scope.iter().enumerate().filter(|(_, &w)| w) {
-                    slot_of(&mut slots, graph, i).ever_in_scope = true;
-                }
-            }
-            for (i, &st) in t.states.iter().enumerate() {
-                match LastWanted::of(graph, st) {
-                    LastWanted::Unwanted => {}
-                    wanted => slot_of(&mut slots, graph, i).last_wanted = wanted,
-                }
-            }
             let starting: BTreeSet<usize> = t.starts.iter().map(|s| s.step).collect();
             let n = graph.steps.len();
             let between_processes = |slots: &Slots, i: usize| {
-                slot_at(slots, graph, i).is_some_and(|s| s.ended.is_some())
+                slot_at(slots, graph, i).is_some_and(|s| s.between_invocations)
             };
 
             // A step between processes whose own producer is still running
@@ -718,58 +733,39 @@ impl Runner {
                 let Some(s) = slots.get_mut(&graph.steps[i].id) else {
                     continue;
                 };
-                let Some(e) = s.ended.as_mut() else { continue };
-                let again = starting.contains(&i);
                 let upstream_busy = graph.deps_in_order(i).any(|p| moving[p]);
-                if (again || upstream_busy) && !e.pass_end_sent {
-                    e.pass_end_sent = true;
-                    self.sink.emit(&Event::PassEnd {
-                        step: graph.steps[i].id.clone(),
-                        status: e.status.state(),
-                        error: e.error.clone(),
-                        exit_code: e.exit.and_then(|x| x.code),
-                        signal: e.exit.and_then(|x| x.signal),
-                    });
-                }
-                if again {
-                    // Its run reports the process that starts now, so a
-                    // failure here would be lost but for this count.
-                    if e.status.state() == RunState::Failed {
-                        s.failed_passes += 1;
-                    }
-                    s.ended = None;
-                } else if !upstream_busy {
-                    let e = s.ended.take().expect("checked above");
-                    self.finish_ended(graph, &mut state, s, i, e);
+                if starting.contains(&i) || !upstream_busy {
+                    s.between_invocations = false;
                 }
             }
 
-            // A step with nothing of its own left to finish says so now
-            // rather than when the loop ends, which may be a long sync of
-            // some other source away: one no open request wants any more,
-            // and one up to date with nothing above it that could still
-            // change what it reads.
+            // A step a request finds up to date, with nothing above it that
+            // could still change what it reads, says so now rather than when
+            // the request closes, which may be a long sync of some other
+            // source away.
             let mut moving_above = vec![false; n];
             for &i in &graph.topo {
                 moving_above[i] = graph.deps_in_order(i).any(|p| moving[p] || moving_above[p]);
             }
             for (i, &above) in moving_above.iter().enumerate() {
-                let done = match t.states[i] {
-                    Row::Idle | Row::Stale => true,
-                    Row::Fresh => !above,
-                    _ => false,
-                };
-                let Some(s) = slots.get_mut(&graph.steps[i].id) else {
+                if t.states[i] != Row::Fresh || above || between_processes(&slots, i) {
                     continue;
-                };
-                if s.ended.is_none() && done {
-                    let reached = open
-                        .iter()
-                        .enumerate()
-                        .filter(|(r, _)| t.scopes[*r][i])
-                        .map(|(_, o)| o.id.clone())
-                        .collect();
-                    self.give_final_status(graph, &mut state, &mut queue, s, i, cancelled, reached);
+                }
+                let id = &graph.steps[i].id;
+                let unreported: Vec<usize> = (0..open.len())
+                    .filter(|&r| t.scopes[r][i] && !open[r].parts.contains_key(id))
+                    .collect();
+                if unreported.is_empty() {
+                    continue;
+                }
+                queue.cleared(graph, i, &*self.sink);
+                let requests = unreported.iter().map(|&r| open[r].id.clone()).collect();
+                record_unrun(&mut state, id, RunState::SkippedUpToDate, requests);
+                for r in unreported {
+                    open[r].parts.insert(
+                        id.clone(),
+                        RequestStep::unrun(id, RunState::SkippedUpToDate),
+                    );
                 }
             }
 
@@ -862,6 +858,10 @@ impl Runner {
                     invocation: invocation.id,
                     consumed: Read::of(graph, &start.consumed),
                     stop: Some(stop),
+                    version_at_start: state
+                        .steps
+                        .get(&graph.steps[i].id)
+                        .and_then(|s| s.version.clone()),
                 });
                 let run = graph.steps[i].run.clone();
                 let retry = self.retry.clone();
@@ -902,22 +902,35 @@ impl Runner {
                 }
                 slot_of(&mut slots, graph, i).said_waiting_for_disk = waiting;
             }
-            saver.save(&state).await?;
-
-            for id in std::mem::take(&mut intent_reader.stopped) {
-                store
-                    .close_request(&id, RequestOutcome::Stopped, None)
-                    .await?;
+            // What the requests closing now leave in the record is saved with
+            // the rest, before they close.
+            let mut closing = Vec::new();
+            for mut o in std::mem::take(&mut intent_reader.stopped) {
+                let rows = o.closing_rows(graph, &t.states, &mut state, &mut queue, &*self.sink);
+                closing.push((o.id, RequestOutcome::Stopped, None, rows));
             }
             for &(r, outcome) in t.closed.iter().rev() {
-                let closed = open.remove(r);
+                let mut o = open.remove(r);
                 let (outcome, step) = match outcome {
                     Outcome::Done => (RequestOutcome::Done, None),
                     Outcome::Failed { step } => {
-                        (RequestOutcome::Failed, Some(graph.steps[step].id.as_str()))
+                        (RequestOutcome::Failed, Some(graph.steps[step].id.clone()))
                     }
                 };
-                store.close_request(&closed.id, outcome, step).await?;
+                let rows = o.closing_rows(graph, &t.states, &mut state, &mut queue, &*self.sink);
+                closing.push((o.id, outcome, step, rows));
+            }
+            saver.save(&state).await?;
+            for (id, outcome, step, rows) in closing {
+                store
+                    .close_request_with_steps(&id, outcome, step.as_deref(), &rows)
+                    .await?;
+                self.sink.emit(&Event::RequestEnd {
+                    request: id,
+                    outcome,
+                    failed_step: step,
+                    steps: rows,
+                });
             }
             if open.is_empty() && set.is_empty() {
                 // A config waiting on what just ended may bring requests
@@ -927,14 +940,14 @@ impl Runner {
                     continue;
                 }
                 if wipes.is_empty() && prepare.is_none() {
-                    if let Some(p) = busy_period.take() {
-                        report = Some(
-                            self.end_busy_period(
-                                graph, &mut saver, &mut state, &mut slots, &mut queue, cancelled,
-                                p, host,
-                            )
-                            .await?,
-                        );
+                    if std::mem::take(&mut busy) {
+                        // Nothing runs: what the slots keep of the facts the
+                        // `LoopState` does not, a step's last attempt among
+                        // them, ends here.
+                        slots.clear();
+                        if let Some(host) = host {
+                            host.busy(false);
+                        }
                         intent_reader.started = false;
                         taking &= !until_idle;
                         // The next tick, with nothing open, writes the
@@ -979,7 +992,7 @@ impl Runner {
                     config_moved |= heard.iter().any(|line| line == CONFIG_CHANGED);
                 }
                 _ = tokio::time::sleep(DISK_LOOK_EVERY),
-                    if listening && busy_period.is_some() && graph.disk_floor.is_some() => {}
+                    if listening && busy && graph.disk_floor.is_some() => {}
                 // Empty while the disk is under the floor and no step runs.
                 joined = set.join_next(), if !set.is_empty() => {
                     // Seals before joins: a step sends its seal before its
@@ -1014,35 +1027,47 @@ impl Runner {
                     let started = s.running.take().map(|r| r.started).unwrap_or(Seq(0));
                     let e = self.on_ended(graph, i, attempts, res, &live, &slots,
                         &mut state, &mut queue);
+                    let moved = state.steps.get(&id).and_then(|s| s.version.clone()) != live.version_at_start;
                     let s = slots.get_mut(&id).expect("a joined step was started");
                     s.last_attempt = Some(Tried {
                         started,
-                        failed: !matches!(e.status, StepStatus::Succeeded { .. }),
+                        failed: e.outcome != RunState::Succeeded,
                         // Sent SIGINT, and it stopped: one that says it
                         // failed has failed, whatever it was sent.
-                        stopped: live.stop.is_none()
-                            && e.status.state() == crate::run_state::RunState::Stopped,
+                        stopped: live.stop.is_none() && e.outcome == RunState::Stopped,
                         read: live.consumed,
                     });
+                    s.between_invocations = true;
                     self.sink.emit(&Event::InvocationEnd {
                         step: id.clone(),
                         invocation: live.invocation.clone(),
-                        status: e.status.state(),
+                        status: e.outcome,
                         error: e.error.clone(),
                         exit_code: e.exit.and_then(|x| x.code),
                         signal: e.exit.and_then(|x| x.signal),
                         attempts: e.attempts,
                     });
                     store.close_invocation(&live.invocation, &e.as_end()).await?;
-                    s.attempts = e.attempts;
-                    s.error = e.error.clone();
-                    s.ended = Some(e);
+                    record_end(&mut state, &id, &e);
+                    let mut failed_before = 0;
+                    for o in open.iter_mut().filter(|o| o.reaches(graph, i)) {
+                        o.ended(&id, &e, moved);
+                        failed_before = failed_before.max(o.parts[&id].failed_before);
+                    }
+                    // Zero included, so each invocation's replaces the last's:
+                    // what the Manage row counts beside the step's warnings.
+                    self.sink.emit(&Event::Metric {
+                        step: id.clone(),
+                        name: datalib_metrics::FAILED_PROCESSES.to_string(),
+                        labels: BTreeMap::new(),
+                        value: i64::from(failed_before),
+                    });
                     saver.save(&state).await?;
                 }
             }
         }
 
-        Ok(report)
+        Ok(())
     }
 
     /// The pass a host's loop runs as it starts: every step whose program
@@ -1225,27 +1250,21 @@ impl Runner {
         Ok(true)
     }
 
-    /// A busy period begins: its plan sent, and each step's version kept
-    /// for the report at its end.
-    async fn open_busy_period(
+    /// The loop takes work on with none open: every step, in the order it
+    /// would run them, on the event stream.
+    async fn take_work_on(
         &self,
         graph: &Graph,
         saver: &mut Saver<'_>,
-        state: &mut LoopState,
-    ) -> Result<BusyPeriod> {
+        state: &LoopState,
+    ) -> Result<()> {
         let plan: Vec<PlannedStep> = graph
             .topo
             .iter()
             .map(|&i| PlannedStep::of(&graph.steps[i]))
             .collect();
         self.sink.emit(&Event::RunPlan { steps: plan });
-        saver.save(state).await?;
-        let at_start = state
-            .steps
-            .iter()
-            .map(|(id, s)| (id.clone(), s.version.clone()))
-            .collect();
-        Ok(BusyPeriod { at_start })
+        saver.save(state).await
     }
 
     /// The environment the host builds from the config as it is now, for
@@ -1259,78 +1278,6 @@ impl Runner {
                 tracing::warn!("supervisor: the steps' environment stays as it was, since {why}")
             }
         }
-    }
-
-    /// Nothing is open and nothing runs: each step the busy period reached
-    /// finished, and the summary sent. A step no request reached took no
-    /// part, and has no line.
-    #[allow(clippy::too_many_arguments)]
-    async fn end_busy_period(
-        &self,
-        graph: &Graph,
-        saver: &mut Saver<'_>,
-        state: &mut LoopState,
-        slots: &mut Slots,
-        queue: &mut ConsumerQueues,
-        cancelled: bool,
-        busy_period: BusyPeriod,
-        host: Option<&dyn LoopHost>,
-    ) -> Result<RunReport> {
-        for i in 0..graph.steps.len() {
-            let Some(s) = slots.get_mut(&graph.steps[i].id) else {
-                continue;
-            };
-            if let Some(e) = s.ended.take() {
-                self.finish_ended(graph, state, s, i, e);
-            }
-            self.give_final_status(graph, state, queue, s, i, cancelled, Vec::new());
-        }
-        saver.save(state).await?;
-        let facts = facts_of(graph, state, slots);
-        let steps = graph
-            .topo
-            .iter()
-            .filter_map(|&i| {
-                let s = slot_at(slots, graph, i)?;
-                let path = graph.steps[i].output().as_str().to_string();
-                let now = facts.sinks[i]
-                    .clone()
-                    .unwrap_or_else(|| UNKNOWN.to_string());
-                let before = busy_period
-                    .at_start
-                    .get(&graph.steps[i].id)
-                    .cloned()
-                    .flatten();
-                let changed = facts.sinks[i].is_some() && facts.sinks[i] != before;
-                // One process's own `changed` is against the seal before
-                // it; the run's is against where the run started.
-                let status = match s.status.clone()? {
-                    StepStatus::Succeeded { .. } => StepStatus::Succeeded {
-                        changed: changed as usize,
-                    },
-                    other => other,
-                };
-                Some(StepReport {
-                    id: graph.steps[i].id.clone(),
-                    status,
-                    attempts: s.attempts,
-                    error: s.error.clone(),
-                    failed_passes: s.failed_passes,
-                    outputs: vec![(path, now, changed)],
-                })
-            })
-            .collect();
-        let report = RunReport { steps };
-        self.sink.emit(&Event::RunSummary {
-            steps: report.steps.iter().map(step_summary).collect(),
-        });
-        if let Some(host) = host {
-            host.busy(false);
-        }
-        // Nothing runs: what the slots keep of the facts the `LoopState` does
-        // not, a step's last attempt among them, ends with the run.
-        slots.clear();
-        Ok(report)
     }
 
     /// Bring `open`, `turned_off` and `wipes` up to what the store's
@@ -1347,25 +1294,16 @@ impl Runner {
         turned_off: &mut BTreeMap<String, String>,
         wipes: &mut Vec<JobRow>,
         seq: &mut u64,
-        slots: &mut Slots,
     ) -> Result<()> {
         let mut admit =
             |id: String, roots: Vec<String>, opened_at: String, open: &mut Vec<Open>| {
-                let at: Vec<usize> = roots.iter().map(|r| graph.by_id[r]).collect();
-                for (i, _) in graph
-                    .downstream_of(&at)
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, &r)| r)
-                {
-                    slot_of(slots, graph, i).ever_in_scope = true;
-                }
                 *seq += 1;
                 open.push(Open {
                     id,
                     roots,
                     opened: Seq(*seq),
                     opened_at,
+                    parts: BTreeMap::new(),
                 });
             };
         let on_disk = |roots: &[String]| {
@@ -1404,11 +1342,16 @@ impl Runner {
                 for row in rows {
                     let known = open.iter().position(|o| o.id == row.id);
                     if row.stop_requested_by.is_some() {
-                        if let Some(k) = known {
-                            open.remove(k);
-                        }
-                        if !stopped.contains(&row.id) {
-                            stopped.push(row.id);
+                        let was_open = known.map(|k| open.remove(k));
+                        if !stopped.iter().any(|o| o.id == row.id) {
+                            // One the loop never took on reached no step.
+                            stopped.push(was_open.unwrap_or(Open {
+                                id: row.id,
+                                roots: Vec::new(),
+                                opened: Seq(0),
+                                opened_at: row.opened_at,
+                                parts: BTreeMap::new(),
+                            }));
                         }
                         continue;
                     }
@@ -1531,11 +1474,8 @@ impl Runner {
                 continue;
             }
             for &i in &kept {
-                let Some(s) = slots.get_mut(&graph.steps[i].id) else {
-                    continue;
-                };
-                if let Some(e) = s.ended.take() {
-                    self.finish_ended(graph, state, s, i, e);
+                if let Some(s) = slots.get_mut(&graph.steps[i].id) {
+                    s.between_invocations = false;
                 }
             }
             self.env_from(host);
@@ -1717,65 +1657,6 @@ impl Runner {
         }
     }
 
-    /// A step done with its last invocation: its finish, after the count
-    /// of its processes before that one that failed, which replaces the
-    /// count its last run left.
-    fn finish_ended(&self, graph: &Graph, state: &mut LoopState, s: &mut Slot, i: usize, e: Ended) {
-        self.sink.emit(&Event::Metric {
-            step: graph.steps[i].id.clone(),
-            name: datalib_metrics::FAILED_PROCESSES.to_string(),
-            labels: BTreeMap::new(),
-            value: i64::from(s.failed_passes),
-        });
-        self.finish(
-            graph,
-            state,
-            &mut s.status,
-            i,
-            e.status,
-            e.error,
-            e.exit,
-            e.attempts,
-            None,
-        );
-    }
-
-    /// A step a request wanted, with no status of its own yet and nothing
-    /// left to finish, is given the one [`LastWanted::final_status`] maps its
-    /// last state to; `reached` are the open requests that wanted it.
-    #[allow(clippy::too_many_arguments)]
-    fn give_final_status(
-        &self,
-        graph: &Graph,
-        state: &mut LoopState,
-        queue: &mut ConsumerQueues,
-        s: &mut Slot,
-        i: usize,
-        cancelled: bool,
-        reached: Vec<String>,
-    ) {
-        if !s.ever_in_scope || s.status.is_some() {
-            return;
-        }
-        let Some(st) = s.last_wanted.final_status(cancelled) else {
-            return;
-        };
-        if st == StepStatus::SkippedUpToDate {
-            queue.cleared(graph, i, &*self.sink);
-        }
-        self.finish(
-            graph,
-            state,
-            &mut s.status,
-            i,
-            st,
-            None,
-            None,
-            0,
-            Some(reached),
-        );
-    }
-
     /// Once per invocation that reported no version: what that costs its
     /// consumers, where a person reading the run's log will see it.
     fn say_unversioned(&self, spec: &crate::step::StepSpec) {
@@ -1877,18 +1758,11 @@ impl Runner {
         let spec = &graph.steps[i];
         let consumed = &live.consumed.in_graph(graph);
         let fingerprint = &consumed.fingerprint;
-        let prior = state.steps.get(&spec.id).and_then(|s| s.version.clone());
         let exit = match &res {
             Ok(o) => o.exit,
             Err(e) => e.exit,
         };
-        let failed = |kind, error: String| Ended {
-            status: StepStatus::Failed { kind },
-            error: Some(error),
-            exit,
-            attempts,
-            pass_end_sent: false,
-        };
+        let failed = |kind, error: String| Ended::failed(kind, error, exit, attempts);
         match res {
             Ok(outcome) => {
                 let v = match reported_version(spec, fingerprint, &outcome.outputs) {
@@ -1899,7 +1773,6 @@ impl Runner {
                     }
                     Err(e) => return failed(FailureKind::Data, format!("{e:#}")),
                 };
-                let moved = prior.as_ref() != Some(&v);
                 let rows = outcome.outputs.first().and_then(|o| o.rows);
                 queue.sealed(graph, i, &v, rows, &*self.sink);
                 let consumed_paths = paths_of(graph, consumed);
@@ -1917,13 +1790,11 @@ impl Runner {
                 entry.fingerprint = fingerprint.clone();
                 entry.needs_rerun = false;
                 Ended {
-                    status: StepStatus::Succeeded {
-                        changed: moved as usize,
-                    },
+                    outcome: RunState::Succeeded,
+                    failure: None,
                     error: None,
                     exit,
                     attempts,
-                    pass_end_sent: false,
                 }
             }
             Err(step_err) => {
@@ -2523,7 +2394,7 @@ mod tests {
         }
     }
 
-    fn serve(f: &Fixture) -> tokio::task::JoinHandle<Result<RunReport>> {
+    fn serve(f: &Fixture) -> tokio::task::JoinHandle<Result<()>> {
         let (root, graph) = (f.root.path().to_path_buf(), f.graph.clone());
         tokio::spawn(async move {
             let store = Store::open(&root).await?;
@@ -2579,22 +2450,23 @@ mod tests {
         .await;
         f.go.store(true, Ordering::SeqCst);
 
-        let report = running.await.unwrap().unwrap();
+        running.await.unwrap().unwrap();
         assert_eq!(
             outcome(&other, &a).await,
             Some(Some(RequestOutcome::Stopped))
         );
         assert_eq!(outcome(&other, &b).await, Some(Some(RequestOutcome::Done)));
+        let outcomes = |rows: Vec<RequestStep>| -> Vec<(String, RunState)> {
+            rows.into_iter().map(|s| (s.step, s.outcome)).collect()
+        };
         assert_eq!(
-            report.step("a/raw").status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
+            outcomes(other.request_steps(&a).await.unwrap()),
+            [("a/raw".to_string(), RunState::Stopped)]
         );
-        assert!(matches!(
-            report.step("b/raw").status,
-            StepStatus::Succeeded { .. }
-        ));
+        assert_eq!(
+            outcomes(other.request_steps(&b).await.unwrap()),
+            [("b/raw".to_string(), RunState::Succeeded)]
+        );
     }
 
     #[tokio::test]
@@ -2708,7 +2580,7 @@ mod tests {
             &self,
             graph: Graph,
             config: Arc<Swappable>,
-        ) -> tokio::task::JoinHandle<Result<RunReport>> {
+        ) -> tokio::task::JoinHandle<Result<()>> {
             let root = self.root.path().to_path_buf();
             let events = self.events.clone();
             tokio::spawn(async move {
@@ -3471,8 +3343,8 @@ mod tests {
     }
 
     /// A step a stopped request wanted, and nothing else does, gets its
-    /// status for the run (`skipped_up_to_date`) while the loop goes on
-    /// with another source's sync, not once the whole loop has ended.
+    /// row in that request (`stopped`, as it never ran) while the loop goes
+    /// on with another source's sync, not once the whole loop has ended.
     #[tokio::test]
     async fn a_step_no_request_wants_any_more_gets_its_status_while_the_loop_goes_on() {
         let f = fixture();
@@ -3523,13 +3395,16 @@ mod tests {
             }
         };
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while step_of("a/rendered")
-            .await
-            .last_invocation
-            .map(|l| l.status)
-            .as_deref()
-            != Some("skipped_up_to_date")
-        {
+        let render_of_a = || async {
+            other
+                .request_steps(&a)
+                .await
+                .unwrap()
+                .into_iter()
+                .find(|s| s.step == "a/rendered")
+                .map(|s| s.outcome)
+        };
+        while render_of_a().await != Some(RunState::Stopped) {
             assert!(
                 std::time::Instant::now() < deadline,
                 "timed out waiting for a's render to settle while b still runs"
@@ -3537,6 +3412,11 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         assert_eq!(step_of("b/raw").await.state, Some(StateKind::Running));
+        assert_eq!(
+            step_of("a/rendered").await.last_invocation,
+            None,
+            "a render that never ran keeps no outcome"
+        );
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();

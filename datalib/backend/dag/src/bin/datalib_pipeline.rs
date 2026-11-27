@@ -336,8 +336,8 @@ async fn main() -> Result<()> {
         });
     }
 
-    let report = match follow_or_lock(&data_root, &store, &own).await? {
-        Taken::Closed => None,
+    match follow_or_lock(&data_root, &store, &own).await? {
+        Taken::Closed => {}
         Taken::Lock(_lock) => {
             let opts = datalib_dag::supervisor::serve::ServeOptions {
                 root: data_root.clone(),
@@ -358,7 +358,17 @@ async fn main() -> Result<()> {
     #[allow(clippy::disallowed_macros)]
     let code = match own {
         Own::Request(own) => {
-            for s in report.iter().flat_map(|r| &r.steps) {
+            // What the request did, as the loop that served it recorded it,
+            // in the order the steps run.
+            let order: std::collections::HashMap<&str, usize> = graph
+                .topo
+                .iter()
+                .enumerate()
+                .map(|(at, &i)| (graph.steps[i].id.as_str(), at))
+                .collect();
+            let mut steps = store.request_steps(&own).await?;
+            steps.sort_by_key(|s| order.get(s.step.as_str()).copied().unwrap_or(usize::MAX));
+            for s in &steps {
                 println!("{}", s.line());
             }
             // A dropped config entry is reported here as well as before
@@ -474,9 +484,10 @@ async fn follow_or_lock(data_root: &Path, store: &Store, own: &Own) -> Result<Ta
                         .map(|e| e.map_or("done".to_string(), |why| format!("not done: {why}"))),
                 };
                 if let Some(said) = closed {
+                    // On stderr: stdout is the report, one line a step.
                     #[allow(clippy::disallowed_macros)]
                     {
-                        println!("{what} {id}: {said}");
+                        eprintln!("datalib-pipeline: {what} {id}: {said}");
                     }
                     return Ok(Taken::Closed);
                 }

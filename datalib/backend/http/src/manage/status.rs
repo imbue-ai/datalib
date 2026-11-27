@@ -141,16 +141,16 @@ pub fn step_status(
     // still open reached it, and otherwise waiting, since what it reads
     // may still move. With none open, the request that wanted it has just
     // closed and the loop's next tick has not yet said Idle: it is done.
-    let ran_this_run = last.is_some_and(|l| {
-        l.finished_at.is_some() && (open.is_empty() || l.requests.iter().any(|r| open.contains(r)))
-    });
-    // Waiting with an invocation open is a streaming consumer between two
-    // of its processes: it has done the work it had and waits for what it
-    // reads to move again.
-    let invocation_open = last.is_some_and(|l| l.finished_at.is_none());
+    let ran_for_open = last
+        .is_some_and(|l| l.finished_at.is_some() && l.requests.iter().any(|r| open.contains(r)));
+    let ran_this_run =
+        ran_for_open || (open.is_empty() && last.is_some_and(|l| l.finished_at.is_some()));
+    // Waiting having run for a request still open is a streaming consumer
+    // between two of its processes: it has done the work it had and waits
+    // for what it reads to move again.
     let now = match step.and_then(|s| s.state) {
         Some(StateKind::Running) => view("running", last.map(|l| l.started_at.clone()), detail),
-        Some(StateKind::Waiting) if invocation_open => view("waiting", ended, detail),
+        Some(StateKind::Waiting) if ran_for_open => view("waiting", ended, detail),
         Some(StateKind::Waiting) => view("queued", ended, detail),
         Some(StateKind::Fresh) if !ran_this_run => view(
             "queued",
@@ -285,19 +285,19 @@ mod tests {
     }
 
     /// A streaming consumer that has read every seal so far waits for the
-    /// next one with its invocation still open. It reads Waiting, not
-    /// Running (no process is working) and not Queued (it has started).
+    /// next one, its last invocation for the open request ended. It reads
+    /// Waiting, not Running (no process is working) and not Queued (it has
+    /// started).
     #[test]
-    fn a_caught_up_consumer_with_its_invocation_open_reads_waiting() {
+    fn a_caught_up_consumer_that_ran_for_an_open_request_reads_waiting() {
         let mut rec = at(StateKind::Waiting, Some("waiting for a/ingest"));
         let last = rec.last_invocation.as_mut().unwrap();
         last.started_at = STARTED.into();
-        last.finished_at = None;
-        last.status = String::new();
+        last.finished_at = Some(ENDED.into());
         let v = step_status(Some(&rec), &open("r0"), None);
         assert_eq!(
             (v.key.as_str(), v.label.as_str(), v.at.as_deref()),
-            ("waiting", "Waiting", Some(STARTED))
+            ("waiting", "Waiting", Some(ENDED))
         );
         assert_eq!(v.detail.as_deref(), Some("waiting for a/ingest"));
     }

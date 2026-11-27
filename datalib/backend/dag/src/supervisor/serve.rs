@@ -95,13 +95,13 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
 
 /// The loop for as long as anything is open, for a `datalib-pipeline`
 /// verb that wrote its request or job and found no other process running
-/// the loop. The caller holds `runner-lock`. The last busy period's
-/// report, or why the loop could not go on.
+/// the loop. The caller holds `runner-lock`. Why the loop could not go
+/// on, if it could not.
 pub async fn run_until_idle(
     opts: &ServeOptions,
     store: &Store,
     mut stop: watch::Receiver<bool>,
-) -> Result<Option<crate::scheduler::RunReport>, String> {
+) -> Result<(), String> {
     let mut listener = Listener::new(store, "the loop");
     let emit: Emit = Arc::new(|_| {});
     hold(opts, emit, store, &mut listener, &mut stop, Until::Idle).await
@@ -124,7 +124,7 @@ async fn hold(
     listener: &mut Listener,
     stop: &mut watch::Receiver<bool>,
     until: Until,
-) -> Result<Option<crate::scheduler::RunReport>, String> {
+) -> Result<(), String> {
     let root = opts.root.as_path();
     match host::take_over(store, root).await {
         Ok(taken) if taken != host::TakenOver::default() => tracing::warn!(
@@ -164,7 +164,7 @@ async fn hold(
             }
         };
         let why = match ran {
-            Ok(report) => return Ok(report),
+            Ok(()) => return Ok(()),
             Err(why) => why,
         };
         // Its requests would otherwise be taken on at once, and fail the
@@ -183,7 +183,7 @@ async fn hold(
             _ = stop.changed() => {}
         }
         if *stop.borrow() {
-            return Ok(None);
+            return Ok(());
         }
     }
 }
@@ -228,7 +228,7 @@ async fn run_the_loop(
     record: Option<Arc<crate::runs_sink::RunStoreSink>>,
     stop: &watch::Receiver<bool>,
     until: Until,
-) -> Result<Option<crate::scheduler::RunReport>, String> {
+) -> Result<(), String> {
     let root = opts.root.as_path();
     let sinks: Vec<Arc<dyn crate::events::EventSink>> = opts
         .events
@@ -245,10 +245,7 @@ async fn run_the_loop(
         runner = runner.parallelism(n);
     }
     let ran = match until {
-        Until::Stopped => runner
-            .run_forever(&checked.graph, store, host)
-            .await
-            .map(|()| None),
+        Until::Stopped => runner.run_forever(&checked.graph, store, host).await,
         Until::Idle => runner.run_until_idle(&checked.graph, store, host).await,
     };
     ran.map_err(|e| {

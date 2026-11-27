@@ -571,16 +571,16 @@ fn manual_e2e_live_sync_golden() {
         run1.stderr_tail(40)
     );
 
-    // The `run_summary` event is the machine-readable run record — one
+    // The `request_end` event is the machine-readable record of the sync — one
     // NDJSON line on stderr, emitted exactly once, last. It replaces the
     // old `sync_summary_<now>.json` file (see the module header).
-    let summary1 = run1.run_summary().expect(
-        "no run_summary event on stderr — the runner must emit one per run; \
+    let summary1 = run1.request_end().expect(
+        "no request_end event on stderr — the loop emits one as it closes the request; \
          did it die before the scheduler finished?",
     );
 
     // The old aggregate summary snapshot pinned every source's shape in one
-    // file. `run_summary` is far thinner, so snapshotting it wholesale would
+    // file. `request_end` is far thinner, so snapshotting it wholesale would
     // buy little; assert the two things it CAN still tell us instead, both of
     // which fail loudly rather than silently.
     assert_step_statuses_ok(&summary1);
@@ -775,7 +775,7 @@ fn manual_e2e_live_sync_golden() {
         run2.status.code(),
         run2.stderr_tail(40)
     );
-    let summary2 = run2.run_summary().expect("run 2 run_summary");
+    let summary2 = run2.request_end().expect("run 2 request_end");
     assert_step_statuses_ok(&summary2);
 
     // Run 1's problems are all still standing minutes later, and a problem
@@ -838,7 +838,7 @@ fn manual_e2e_live_sync_golden() {
         run3.status.code(),
         run3.stderr_tail(40)
     );
-    assert_step_statuses_ok(&run3.run_summary().expect("run 3 run_summary"));
+    assert_step_statuses_ok(&run3.request_end().expect("run 3 request_end"));
 
     assert!(
         datalib_curated_overlay::dumps(&data_root) == curated_before,
@@ -1203,12 +1203,12 @@ struct PipelineRun {
 }
 
 impl PipelineRun {
-    fn run_summary(&self) -> Option<Value> {
+    fn request_end(&self) -> Option<Value> {
         self.stderr
             .lines()
             .rev() // emitted last; scan from the end
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .find(|v| v.get("event").and_then(Value::as_str) == Some("run_summary"))
+            .find(|v| v.get("event").and_then(Value::as_str) == Some("request_end"))
     }
 
     fn stderr_tail(&self, n: usize) -> String {
@@ -1267,8 +1267,8 @@ fn assert_step_statuses_ok(summary: &Value) {
     let steps = summary
         .get("steps")
         .and_then(Value::as_array)
-        .expect("run_summary.steps");
-    assert!(!steps.is_empty(), "run_summary carried zero steps");
+        .expect("request_end.steps");
+    assert!(!steps.is_empty(), "request_end carried zero steps");
     // The runner's own definition of "finished without failing", so a
     // state it adds is judged here the way it judges it: run 2 is full of
     // `skipped_up_to_date` (that is what incrementality looks like), and
@@ -1277,7 +1277,7 @@ fn assert_step_statuses_ok(summary: &Value) {
     let bad: Vec<String> = steps
         .iter()
         .filter(|s| {
-            !s.get("status")
+            !s.get("outcome")
                 .and_then(Value::as_str)
                 .and_then(RunState::parse)
                 .is_some_and(RunState::is_ok)
@@ -1286,7 +1286,7 @@ fn assert_step_statuses_ok(summary: &Value) {
             format!(
                 "  {} → {} {}",
                 s.get("step").and_then(Value::as_str).unwrap_or("?"),
-                s.get("status").and_then(Value::as_str).unwrap_or("?"),
+                s.get("outcome").and_then(Value::as_str).unwrap_or("?"),
                 s.get("error").and_then(Value::as_str).unwrap_or(""),
             )
         })
@@ -1412,7 +1412,7 @@ fn step_id_list(summary: &Value) -> String {
     let mut ids: Vec<&str> = summary
         .get("steps")
         .and_then(Value::as_array)
-        .expect("run_summary.steps")
+        .expect("request_end.steps")
         .iter()
         .filter_map(|s| s.get("step").and_then(Value::as_str))
         .collect();

@@ -578,7 +578,7 @@ pub enum FailureKind {
 
 impl FailureKind {
     /// The wire spelling a step writes on its `outcome` line, and the
-    /// one `RunSummary` reports.
+    /// one a request's `request_steps` rows keep.
     pub fn as_str(self) -> &'static str {
         self.into()
     }

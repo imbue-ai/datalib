@@ -35,5 +35,5 @@ pub use diagnostics::{Diagnostic, EntryKind, EntryRef, Severity};
 pub use events::{Event, EventSink, NdjsonSink, StepProgress};
 pub use graph::Graph;
 pub use run_state::RunState;
-pub use scheduler::{RunReport, Runner, StepReport, StepStatus};
+pub use scheduler::Runner;
 pub use step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome, StepRun, StepSpec};

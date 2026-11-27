@@ -671,8 +671,8 @@ faster.
 > would otherwise say they are still there.
 > [Backing up a library](backing_up.md) says what to keep and why.
 
-A per-step report prints when the run finishes, and a machine-readable
-`run_summary` event lands on `datalib-pipeline`'s stderr (NDJSON — tee
+A per-step report prints when the sync finishes, and a machine-readable
+`request_end` event lands on `datalib-pipeline`'s stderr (NDJSON — tee
 stderr if you want to keep it). The exit code is non-zero if any step
 failed.
 

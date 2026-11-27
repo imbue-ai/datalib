@@ -115,7 +115,7 @@ fn synced_demo() -> Demo {
     };
     let first = demo.sync(&demo.library);
     assert!(
-        first.values().all(|s| s.starts_with("Succeeded")),
+        first.values().all(|s| s.starts_with("succeeded")),
         "the first sync: {first:#?}"
     );
     demo
@@ -362,8 +362,8 @@ fn assert_nothing_redone(outcomes: &BTreeMap<String, String>) {
         .iter()
         .filter(|(step, outcome)| {
             let source =
-                step.ends_with("/ingest") && outcome.as_str() == "Succeeded { changed: 0 }";
-            !(source || outcome.as_str() == "SkippedUpToDate")
+                step.ends_with("/ingest") && outcome.as_str() == "succeeded, output unchanged";
+            !(source || outcome.as_str() == "skipped_up_to_date")
         })
         .collect();
     assert!(!outcomes.is_empty(), "the sync named no steps");
@@ -474,7 +474,7 @@ fn the_config_raw_and_curated_stores_are_the_backup() {
     let (_done, outcomes) = demo.sync_as_it_ends(&kept);
     let failed: Vec<&String> = outcomes
         .iter()
-        .filter(|(_, o)| o.starts_with("Failed"))
+        .filter(|(_, o)| o.starts_with("failed"))
         .map(|(s, _)| s)
         .collect();
     let gone: Vec<String> = reading
@@ -613,7 +613,7 @@ fn a_source_that_no_longer_downloads_keeps_what_it_has() {
             !step.ends_with("/ingest")
                 && !matches!(
                     outcome.as_str(),
-                    "SkippedUpToDate" | "Succeeded { changed: 0 }"
+                    "skipped_up_to_date" | "succeeded, output unchanged"
                 )
         })
         .collect();

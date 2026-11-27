@@ -1,17 +1,19 @@
-//! What a step is doing in a run, as one named vocabulary.
+//! How a step ended, as one named vocabulary: an invocation's outcome,
+//! or what a request that reached the step and ran nothing of it made of
+//! it.
 //!
-//! These values travel on four surfaces — `Event::StepFinish.status`,
-//! `Event::RunSummary`'s per-step `status`, `run_steps.state` and
-//! `steps.last_status` in `system/supervisor.sqlite`
-//! (`supervisor/record.rs`), and the HTTP API's
-//! `current_state` — and every producer and consumer has to agree on
-//! the spelling. Naming them once is what keeps those copies from
-//! drifting apart.
+//! These values travel on several surfaces — `Event::InvocationEnd`,
+//! `Event::RequestEnd`'s steps, `steps.last_status`, `invocations.outcome`
+//! and `request_steps.outcome` in `system/supervisor.sqlite`
+//! (`supervisor/record.rs`), an older build's `run_steps.state`, and the
+//! HTTP API — and every producer and consumer has to agree on the
+//! spelling. Naming them once is what keeps those copies from drifting
+//! apart. What a step is doing now is the tick's `StateKind`.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-/// What one step is doing, or did, in one run.
+/// How a step ended: `running` while its invocation is live.
 #[derive(
     Debug,
     Clone,
@@ -27,14 +29,14 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum RunState {
-    /// Invoked, and the scheduler is waiting on it.
+    /// Invoked, and the loop is waiting on it.
     Running,
     /// Ran to completion.
     Succeeded,
     /// Wanted, but up to date: same inputs, same fingerprint as at its
     /// last success. Checked, and current.
     SkippedUpToDate,
-    /// An upstream step failed (or was itself blocked); not invoked.
+    /// A step it reads has never published anything; not invoked.
     Blocked,
     Failed,
     /// Told to stop from outside, and stopped: it checkpointed what it
