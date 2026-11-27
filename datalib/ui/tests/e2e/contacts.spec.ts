@@ -304,7 +304,7 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   await card.getByLabel("Filter contacts").fill(name);
   const row = (id: string) => card.locator(`.slick-row[data-key="${id}"]`);
   await expect(row(dup).locator(`a.chip[data-contact="${dup}"]`)).toContainText(name);
-  await expect(row(keep).locator("a.chip[data-handle]")).toContainText(name);
+  await expect(row(keep).locator(`a.chip[data-contact="${keep}"]`)).toContainText(name);
 
   await row(dup).locator('[col-id="kind"]').click();
   await row(keep).locator('[col-id="kind"]').click({ button: "right" });
@@ -329,6 +329,69 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   await expect(row(keep)).toHaveCount(0);
   const gone = await request.get(`/applet/datalib_contacts/contact/${keep}`);
   expect(gone.status()).toBe(404);
+});
+
+/// The contacts list says how much each contact wrote, which is what
+/// `from:` finds, and sorts by it; Unfiled lists who wrote and is on no
+/// contact, and adding one from it makes them a contact and takes them
+/// off the list.
+test("the contacts list sorts by what each wrote, and Unfiled adds whom it lists", async ({
+  page,
+  request,
+}) => {
+  const boothby = "discord:170100000000000016";
+  await page.goto("/contactsView()");
+  const card = page.locator(".contacts-card");
+  await expect(card.locator(".slick-header-column", { hasText: "Items" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await card.getByLabel("Sort contacts").selectOption("most");
+  const counts = card.locator('.slick-row [col-id="items"]');
+  await expect(counts.first()).not.toBeEmpty();
+  const items = (await counts.allInnerTexts()).map((t) => Number(t.trim() || "0"));
+  expect(items.length, "contacts to sort").toBeGreaterThan(1);
+  expect(items).toEqual([...items].sort((a, b) => b - a));
+
+  await card.getByRole("tab", { name: "Unfiled" }).click();
+  const row = card.locator(`.slick-row[data-key="${boothby}"]`);
+  await expect(row).toHaveCount(1, { timeout: 15_000 });
+  await row.locator('[col-id="items"]').click({ button: "right" });
+  await menuEntry(page, "Add to contacts").click();
+  await expect(row).toHaveCount(0);
+  const held = await heldWith(request, [boothby]);
+  expect(held[boothby]?.name).toBe("Boothby");
+  await deleteContacts(request, [held[boothby]!.id]);
+});
+
+/// What an agent suggests is nobody's until the person says Yes: no chip
+/// resolves to it, a banner above the list opens it, and Yes makes it a
+/// contact the list shows.
+test("an agent's suggestion is no one's until the person says Yes", async ({ page, request }) => {
+  const stamp = Date.now();
+  const handle = `email:keiko.${stamp}@enterprise.test`;
+  const name = `Keiko O'Brien ${stamp}`;
+  const sent = await request.post("/applet/datalib_contacts/proposals", {
+    data: {
+      agent: "e2e-agent",
+      run: `run-${stamp}`,
+      contacts: [{ name, handles: [handle], reason: "she signs as Keiko" }],
+    },
+  });
+  expect(sent.ok(), await sent.text()).toBeTruthy();
+  expect(await holdersOf(request, [handle])).toEqual({});
+
+  await page.goto("/contactsView()");
+  const card = page.locator(".contacts-card");
+  await card.getByRole("button", { name: /^See (it|them)$/ }).click({ timeout: 15_000 });
+  const suggestion = card.locator(".suggestion", { hasText: name });
+  await expect(suggestion).toContainText("she signs as Keiko");
+  await suggestion.getByRole("button", { name: "Yes" }).click();
+  await expect(suggestion).toHaveCount(0);
+  await expect.poll(async () => (await heldWith(request, [handle]))[handle]?.name).toBe(name);
+  await card.getByRole("tab", { name: "Contacts" }).click();
+  await card.getByLabel("Filter contacts").fill(name);
+  await expect(card.locator(".slick-row")).toHaveCount(1);
+  await deleteContacts(request, [(await heldWith(request, [handle]))[handle]!.id]);
 });
 
 /// Editing your contact on its person card: the edit is a draft nobody

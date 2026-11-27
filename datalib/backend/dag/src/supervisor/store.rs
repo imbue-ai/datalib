@@ -1048,8 +1048,8 @@ impl Store {
 }
 
 /// What the store announces when a job's steps move, ahead of the job's
-/// id: how a listener tells a job's progress from every other commit.
-pub const JOB_MOVED: &str = "job moved";
+/// id.
+const JOB_MOVED: &str = "job moved";
 
 /// The clock the store stamps with, as UTC text: what
 /// [`Store::latest_shrink_since`] compares against.
