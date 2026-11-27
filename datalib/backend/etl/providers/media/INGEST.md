@@ -336,7 +336,8 @@ scan walks the whole tree and `stat`s every entry it would index; what it
 skips for a file whose stat is unchanged is the `read`. Content already
 in `media_items` is not identified again, so the container parse, the
 payload hash and the metadata extraction — all of the expensive work —
-run once per distinct content. A settled tree reports `hashed=0`.
+run once per distinct content. A rescan of a tree where nothing
+changed reports `hashed=0`.
 
 There is no directory-level short-circuit; that is `file_inventory`'s Merkle
 tree, and a document provider hashes leaves and stops. So a million-file
@@ -389,7 +390,7 @@ The scan goes on, and what it could not do is a `problems` row:
 
 - **An entry the walk could not read** is a `listing:files` row, and
   **that scan deletes nothing**; **a file the walk could not open** is
-  `record:files:<path>`, and holds back no other deletion. Why, for
+  `record:files:<path>`, and stops no other deletion. Why, for
   every file-backed source:
   [`etl/files/README.md`](../../files/README.md#answering-did-it-change-for-a-file-backed-source).
   The next clean walk deletes what is really gone and clears the

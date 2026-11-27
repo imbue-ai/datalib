@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor` for the `media` source.
+//! The download `DataProcessor` for the `media` source.
 
 use std::path::PathBuf;
 

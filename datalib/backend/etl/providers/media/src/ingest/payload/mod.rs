@@ -51,7 +51,7 @@ impl Plan {
     /// A plan that would hash nothing is not a plan. An empty result
     /// means the parse found no payload — a zero-length `data` chunk, a
     /// BMFF with no tracks and no items — and the honest record of that
-    /// is NULL, per rule 1 in the module docs.
+    /// is NULL, per rule 1 of INGEST.md §"It is a hint, never a key".
     pub fn non_empty(self) -> Option<Self> {
         if self.total_bytes() == 0 {
             None

@@ -59,8 +59,8 @@ pub struct VisualMeta {
     /// `width`/`height`, so a consumer can tell "portrait" from
     /// "landscape shot with the camera turned".
     pub orientation: Option<i64>,
-    /// See the module docs: offset-bearing when the file said so,
-    /// naive when it did not.
+    /// Offset-bearing when the file said so, naive when it did not
+    /// (INGEST.md §"Capture times are stored as the file wrote them").
     pub captured_at: Option<String>,
     pub camera_make: Option<String>,
     pub camera_model: Option<String>,
