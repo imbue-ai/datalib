@@ -103,7 +103,7 @@ written whole. Two reasons this works:
 folder that will not list, a child that will not `stat`, a file that
 will not hash or a link that will not read is a `record:` problem
 row, and its row and every row beneath it stay as the last scan wrote
-them (`WalkerError::holds`). Without that, a folder that failed to
+them (`WalkerError::keeps_rows`). Without that, a folder that failed to
 list would read as a folder emptied. The folder's own row stays too;
 the rolled-up `size`, `entries` and tree-hash of the folders above it
 are this scan's, computed without it.

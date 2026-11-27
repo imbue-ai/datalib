@@ -59,7 +59,7 @@ pub struct WalkerError {
     pub message: String,
     /// The entry is there and could not be read, so its row and every
     /// row beneath it keep what the last scan wrote.
-    pub holds: bool,
+    pub keeps_rows: bool,
 }
 
 /// A directory's children as `(name, root-relative id)`.
@@ -263,7 +263,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                         table: "dirs",
                         id: dir_rel.to_string(),
                         message: format!("readdir: {e}"),
-                        holds: true,
+                        keeps_rows: true,
                     });
                     rescan = true;
                     listed = false;
@@ -291,7 +291,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                             table: "files",
                             id: child_rel.clone(),
                             message: format!("stat: {e}"),
-                            holds: true,
+                            keeps_rows: true,
                         });
                         rescan = true;
                     }
@@ -364,7 +364,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                                     table: "files",
                                     id: child_rel.clone(),
                                     message: format!("hash: {e:#}"),
-                                    holds: true,
+                                    keeps_rows: true,
                                 });
                                 rescan = true;
                                 continue;
@@ -384,7 +384,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                                 table: "files",
                                 id: child_rel.clone(),
                                 message: format!("read_link: {e}"),
-                                holds: true,
+                                keeps_rows: true,
                             });
                             rescan = true;
                             continue;
@@ -509,7 +509,7 @@ impl<'a, F: FnMut(Vec<ScanResult>) -> Result<()>> Dfs<'a, F> {
                     table: "files",
                     id: rel_of(&name_os.to_string_lossy()),
                     message: "the name is not UTF-8, so it cannot be indexed".to_string(),
-                    holds: false,
+                    keeps_rows: false,
                 });
                 continue;
             };
@@ -549,7 +549,7 @@ fn cascade_for_dir(
                         message: format!(
                             "{OPTIONS_FILENAME} did not parse, so it was not applied: {err:#}"
                         ),
-                        holds: false,
+                        keeps_rows: false,
                     });
                     None
                 }

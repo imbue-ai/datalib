@@ -505,7 +505,7 @@ async fn the_summary_accounts_for_the_cache() {
         .unwrap();
     assert_eq!(cold.cache_entries_loaded, 0);
     assert_eq!(cold.cache_entries_written, 6);
-    assert_eq!(cold.cache_entries_forgotten, 0);
+    assert_eq!(cold.cache_entries_deleted, 0);
     assert_eq!(
         cold.cache_path,
         cache_path.canonicalize().unwrap(),
@@ -518,7 +518,7 @@ async fn the_summary_accounts_for_the_cache() {
         .unwrap();
     assert_eq!(warm.cache_entries_loaded, 6);
     assert_eq!(warm.cache_entries_written, 6);
-    assert_eq!(warm.cache_entries_forgotten, 0);
+    assert_eq!(warm.cache_entries_deleted, 0);
 
     // Delete two: read the old six, write the surviving four, drop two.
     std::fs::remove_file(root.join("f0.txt")).unwrap();
@@ -529,7 +529,7 @@ async fn the_summary_accounts_for_the_cache() {
     assert_eq!(after.cache_entries_loaded, 6);
     assert_eq!(after.cache_entries_written, 4);
     assert_eq!(
-        after.cache_entries_forgotten, 2,
+        after.cache_entries_deleted, 2,
         "the two deleted paths should have been forgotten"
     );
 }

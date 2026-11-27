@@ -93,7 +93,7 @@ impl DataProcessor for FileInventoryIngest {
                 s.errors,
                 s.cache_entries_loaded,
                 s.cache_entries_written,
-                s.cache_entries_forgotten,
+                s.cache_entries_deleted,
                 ingest::human_growth(s.cache_bytes_before, s.cache_bytes_after),
             ))
         })
