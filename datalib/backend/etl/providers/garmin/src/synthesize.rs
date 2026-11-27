@@ -1,8 +1,8 @@
 //! Garmin HTTP fixture synthesizer: one JSON spec (the TNG account) →
 //! every playback response the ingest walk asks for between the spec's
 //! `since` and `today`. The walk's request shapes are imported from the
-//! ingest module rather than copied, so a path change there cannot
-//! strand the fixtures.
+//! ingest module rather than copied, so a path change there changes
+//! the paths the fixtures are written under too.
 
 use std::collections::BTreeMap;
 use std::fs;

@@ -45,7 +45,8 @@ pub struct StepSpec {
     pub code_version: Option<String>,
     /// The verbs its program takes, from the program's `[[programs]]`
     /// entry (`docs/dev/step_protocol.md` § Verbs). Not in the
-    /// fingerprint: it says what the step can be asked, not what it makes.
+    /// fingerprint: it says which verbs the runner may append to the
+    /// step's command, not what the step makes.
     pub verbs: std::collections::BTreeSet<Verb>,
     /// Whether a consumer may read this step's output *while it is still
     /// being written* — P2 in
@@ -239,7 +240,7 @@ impl CheckpointSink {
         Self(Some(tx))
     }
 
-    /// Announces nothing. Not an error: a step run outside a scheduler --
+    /// Sends nothing. Not an error: a step run outside a scheduler --
     /// a test, a one-shot CLI invocation -- has nobody to tell.
     pub fn disconnected() -> Self {
         Self(None)
@@ -297,12 +298,12 @@ pub struct StepCtx {
     pub reads: BTreeMap<String, String>,
     /// Progress/log emitter, already tagged with this step's id.
     pub progress: StepProgress,
-    /// Where to announce a seal. See [`StepCtx::checkpoint`].
+    /// Where to report a seal. See [`StepCtx::checkpoint`].
     pub checkpoint: CheckpointSink,
     pub stop: StopSignal,
 }
 
-/// How the host asks one invocation to stop at its next consistent
+/// How the host tells one invocation to stop at its next consistent
 /// point. A subprocess step gets SIGINT on its own process group, and
 /// SIGKILL on it if it is still there after `grace`; an in-process step
 /// may await [`StopSignal::requested`].
@@ -385,7 +386,7 @@ impl StepCtx {
         self.checkpoint.send(&self.step_id, version, Some(rows));
     }
 
-    /// Announce whether this step's output may be read while it is being
+    /// Report whether this step's output may be read while it is being
     /// written. Subprocess steps say it on the wire; the scheduler forwards
     /// it here. See [`StepSpec::streams_output`].
     pub fn declare_streams_output(&self, streams: bool) {
@@ -434,17 +435,17 @@ impl ArtifactState {
 pub struct StepOutcome {
     #[serde(default)]
     pub outputs: Vec<ArtifactState>,
-    /// Its answer to `--migrate`: what it wrote is in a shape it cannot
-    /// reach in place, so it has to run again (`step_protocol.md`
-    /// § Migrate). Always false for a run.
+    /// What it reports from `--prepare`: what it wrote is in a shape it
+    /// cannot reach in place, so it has to run again (`step_protocol.md`
+    /// § Prepare). Always false for a run.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub needs_rerun: bool,
-    /// Its answer to `--collect` or `--compact`: how big its store was
+    /// What it reports from `--collect` or `--compact`: how big its store was
     /// before and after (`step_protocol.md` § Compact and collect). `None`
     /// for a run, and for a step with no store to shrink.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store_bytes: Option<StoreBytes>,
-    /// Its answer to `--check`: what it would run as written but is
+    /// What it reports from `--check`: what it would run as written but is
     /// probably a mistake, such as a param that does nothing
     /// (`step_protocol.md` § Check). Empty for a run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -457,7 +458,7 @@ pub struct StepOutcome {
 
 /// How a subprocess ended: an exit code when it exited, the signal
 /// when one ended it. What the runner saw in `wait(2)`, kept apart from
-/// the failure's classification so the record says both.
+/// the failure's classification so the `invocations` row says both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Exit {
     pub code: Option<i32>,

@@ -81,7 +81,7 @@ impl Fetcher<PageUpsert> for Objects<'_> {
                         // Its body and comments join the queue before
                         // this object is counted done, so the queue
                         // never reads empty with them still to come.
-                        self.ctx.foresee_pages(1);
+                        self.ctx.expect_bodies_and_comments(1);
                         Outcome::Got(row)
                     }
                     None => Outcome::Failed("the page object has no id".into()),
@@ -498,7 +498,7 @@ impl Fetcher<Blob> for Attachments<'_> {
                     };
                     self.0.db.store_blob(tx, &f.listed.key, blake3).await?;
                 }
-                Outcome::Gone => self.0.db.forget_attachment(tx, &f.listed.key).await?,
+                Outcome::Gone => self.0.db.delete_attachment_edge(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }

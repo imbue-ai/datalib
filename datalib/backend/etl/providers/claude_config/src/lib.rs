@@ -1,6 +1,6 @@
-//! Provider-owned config schema for the `claude` source (Program A goal
-//! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can
-//! name `ClaudeConfig` without linking the provider.
+//! Provider-owned config schema for the `claude` source. Schema-only
+//! (serde + anyhow), so the orchestrator and `http` can name
+//! `ClaudeConfig` without linking the provider.
 
 pub use datalib_source_common::WhenDeletedUpstream;
 use datalib_source_common::{

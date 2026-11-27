@@ -101,7 +101,10 @@ Two things follow from sharing a process:
 * **Anything process-global is shared.** An environment variable
   one test sets is every test's ([`AGENTS.md`](/AGENTS.md) §"Tests wait
   on the observable, never on the clock" says what to do instead).
-  Playback is not one: a test points the future it
+  Playback is not one. A **tape** is a test's recorded HTTP
+  responses, one file per request at `<dir>/<service>/<key>.json`,
+  which `datalib_etl_web::playback` replays in place of the network.
+  A test points the future it
   runs at its own tape with `datalib_etl_web::playback::scope`, which is
   task-local, and `DATALIB_HTTP_PLAYBACK` is for a step run as a
   process. A tracing subscriber is the same story from the other side:
@@ -163,8 +166,8 @@ bazel run //datalib/backend/etl/providers/claude:claude_live
 its `--skip`, and because these tests need the invoking shell's
 environment — the host keyring, and `LATCHKEY_CURL` pointed at the
 router curl. The gain is that the live code compiles with the rest of
-the package's tests instead of in a link of its own, and still cannot
-rot.
+the package's tests instead of in a link of its own, and still breaks
+the build when it stops compiling.
 
 **Not `#[ignore]`.** That is one flag for the whole binary and
 `insta_update`'s `test_args = ["--ignored"]` already spends it on tests
@@ -289,7 +292,8 @@ which is why it is three tests.
 ### Writing a spec that does not flake
 
 The page under test keeps changing on its own. The Manage grid is drawn
-again after every remount, whenever the loop's record moves, and on a
+again after every remount, whenever `system/supervisor.sqlite`
+changes, and on a
 clock, and a real `datalib-pipeline` runs the syncs. A month of CI
 (September 2026) had about a hundred flaky e2e failures, and nearly all
 of them were one of two mistakes: the test looked at the page between
@@ -338,8 +342,8 @@ states the page passes through, and a fast step on a fast runner can
 finish between two samples. CI failed about two dozen times on "expected
 Running, got Succeeded". Either hold the step in that state until the
 test lets go — the taped sources replay recorded HTTP, and `hold()` /
-`release()` in the `data-sources-*` specs park every replayed request
-behind a file — or assert the end state instead. A banner is a passing
+`release()` in the `data-sources-*` specs make every replayed request
+wait while a file exists — or assert the end state instead. A banner is a passing
 state too: "Queued a sync for …" comes down when its request closes, and
 a sync nothing holds (the local PDF folder) can close before the check
 for the banner first looks. When a banner only stands for something
@@ -453,7 +457,7 @@ is the one spec that watches a sync *while it runs*, and the place to
 look when the question is "does streaming actually reach the screen".
 Two API-backed sources (`chatgpt`, `claude`) replay playback tapes
 behind an after-seal hold: each download runs to its first checkpoint
-and parks there until the spec releases it. While they are parked the
+and waits there until the spec releases it. While they wait the
 spec waits for the Explore grid — opened before the sync and never
 touched again — to show rows, and for the Pipeline table to show every
 download, the render behind it and the index behind both reading Running
@@ -480,7 +484,7 @@ Three pieces make that possible, and each is small:
   a delay is a window that a slow runner can miss.
   `DATALIB_HTTP_PLAYBACK_HOLD_SEALED` is the same, except a request waits
   only once its process has sealed a checkpoint, so a download publishes
-  something before it parks; the streaming spec uses it.
+  something before it waits; the streaming spec uses it.
   `DATALIB_HTTP_PLAYBACK_OFFLINE` names a file too: while it exists every
   replayed request fails as an offline machine's does (curl exit 6), so
   a test can take the network away mid-run
@@ -572,8 +576,8 @@ report a diff that was always going to be accepted. The test refuses to
 start without `INSTA_UPDATE` set to a writing mode, before it fetches
 anything, so the waste can't happen by accident.
 
-The snapshots are the eyeball half. The other half does fail the run,
-and is why the exit code still means something: every step must succeed,
+The snapshots are for a person to read. The other checks do fail the
+run, and are why the exit code still means something: every step must succeed,
 the `data_root` layout is asserted, and run 3's content-stability check
 is a plain `assert!`. Those hold in update mode exactly as they would in
 compare mode.
@@ -796,7 +800,7 @@ when they walked rows as they ran, and the list says `judged_by: ran`.
 
 The test also fails on an allowlist entry nothing needs: one whose
 statement the sync no longer runs, or whose plan no longer scans. Left
-in, such an entry would wave through the scan if the statement grew
+in, such an entry would let the scan through if the statement grew
 it back. The one exception is a `judged_by: ran` statement that walked
 no rows this run, which is a note. Two entries for one statement fail
 too: only one reason can be the one that holds.
@@ -888,7 +892,7 @@ what grants access, and what has been measured:
 buys us in macOS permissions".
 
 1. **Build and launch through `./run-app.sh`** at the repo root, which starts
-   the `.app` with `open`. Launched that way the app answers for its
+   the `.app` with `open`. Launched that way macOS checks the app's
    own permissions. Run the binary from a terminal instead and macOS
    applies the terminal's permissions — if the terminal has Full Disk
    Access, every read succeeds and the check proves nothing.
@@ -896,7 +900,7 @@ buys us in macOS permissions".
    picker in an earlier run, or Full Disk Access), it keeps it. Clear
    it either by switching Datalib off under System Settings → Privacy &
    Security → Full Disk Access, or with the command below, which
-   forgets everything macOS recorded for the app's id — the installed
+   deletes every grant macOS recorded for the app's id — the installed
    `/Applications/Datalib.app` included, since it shares that id:
 
    ```bash

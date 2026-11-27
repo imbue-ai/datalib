@@ -7,7 +7,7 @@
 #   ./manual_e2e_run.sh --config   # validate the config only (offline, no creds)
 #
 # There is no compare mode, and the test itself refuses to run without
-# INSTA_UPDATE — a comparison costs three pipeline passes against real
+# INSTA_UPDATE — a comparison costs three pipeline runs against real
 # APIs to report a diff that was always going to be accepted, because
 # upstream moves whether or not our code does. Bake, then read the diff
 # with `git diff` in $DATALIB_MANUAL_E2E_DIR.

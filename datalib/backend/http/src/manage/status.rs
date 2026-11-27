@@ -1,7 +1,8 @@
 //! What a Manage row's Status column says: the loop's `state` for the
-//! step, read from its record, while the step is doing something, and its
-//! last outcome while it is at rest. Nothing here works out what the loop
-//! is doing; the loop writes it (`datalib_dag::supervisor::record`).
+//! step, read from its row in the loop's `steps` table, while the step is
+//! doing something, and its last outcome while it is at rest. Nothing
+//! here works out what the loop is doing; the loop writes it
+//! (`datalib_dag::supervisor::record`).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -115,7 +116,7 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
 /// What a step is doing now, or did last, and when it last succeeded.
 /// A step the loader dropped says so and nothing else: a row still
 /// reading "Up to date" from last week, for an entry no longer in the
-/// graph, is what #209 was about. `run` is the busy period in flight.
+/// graph, is what #209 was about. `run` is the id of the run in flight.
 pub fn step_status(
     step: Option<&StepRecord>,
     run: Option<&str>,
@@ -140,12 +141,13 @@ pub fn step_status(
     // it, and otherwise waiting, since what it reads may still move.
     let ran_this_run =
         last.is_some_and(|l| l.finished_at.is_some() && Some(l.run_id.as_str()) == run);
-    // Waiting with an invocation open is between passes: it has done the
-    // work it had and waits for what it reads to move again.
-    let between_passes = last.is_some_and(|l| l.finished_at.is_none());
+    // Waiting with an invocation open is a streaming consumer between two
+    // of its processes: it has done the work it had and waits for what it
+    // reads to move again.
+    let invocation_open = last.is_some_and(|l| l.finished_at.is_none());
     let now = match step.and_then(|s| s.state) {
         Some(StateKind::Running) => view("running", last.map(|l| l.started_at.clone()), detail),
-        Some(StateKind::Waiting) if between_passes => view("waiting", ended, detail),
+        Some(StateKind::Waiting) if invocation_open => view("waiting", ended, detail),
         Some(StateKind::Waiting) => view("queued", ended, detail),
         Some(StateKind::Fresh) if !ran_this_run => view(
             "queued",
@@ -268,7 +270,7 @@ mod tests {
     /// next one with its invocation still open. It reads Waiting, not
     /// Running (no process is working) and not Queued (it has started).
     #[test]
-    fn a_step_between_passes_reads_waiting() {
+    fn a_caught_up_consumer_with_its_invocation_open_reads_waiting() {
         let mut rec = at(StateKind::Waiting, Some("waiting for a/ingest"));
         let last = rec.last_run.as_mut().unwrap();
         last.started_at = STARTED.into();
@@ -305,8 +307,8 @@ mod tests {
     }
 
     /// A step started by a loop that then died has an outcome nobody
-    /// wrote. Once another loop has settled the record it is at rest, and
-    /// says it was interrupted.
+    /// wrote. Once another loop has given the step a state at rest, the
+    /// row says it was interrupted.
     #[test]
     fn a_step_a_dead_loop_left_reads_interrupted() {
         let mut rec = at(StateKind::Stale, None);
@@ -329,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn a_dropped_entry_outranks_whatever_the_record_remembers() {
+    fn a_dropped_entry_outranks_whatever_its_steps_row_says() {
         let rec = at(StateKind::Running, None);
         let v = step_status(Some(&rec), None, Some(&diag(Severity::Rejected)));
         assert_eq!(v.key, "config_rejected");

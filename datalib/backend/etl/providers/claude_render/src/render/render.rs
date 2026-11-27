@@ -502,8 +502,8 @@ fn build_chat(
                 .cloned()
                 .unwrap_or_else(|| uuid.clone())
         }),
-        // Anthropic's own conversation UUID — the only remaining route
-        // back to claude.ai now that `uuid` is a minted v5, and what
+        // Anthropic's own conversation UUID — the only way back to
+        // claude.ai, since `uuid` is minted here, and what
         // the grid's "Copy source ID(s)" action reads.
         external_id: Some(conv_uuid.clone()),
         source_url: Some(source_url(&conv.raw_json, &conv_uuid)),

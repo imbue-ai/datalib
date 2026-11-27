@@ -3,8 +3,8 @@
 //! under it — plus one for `system/`, which no config names but which
 //! is on disk like the rest; with the status, timestamps, sizes and
 //! actions the screen draws, joined here from the config, the loop's
-//! record and requests, the run store, the usage sampler and the applet
-//! supervisor, and typed by the columns the response declares.
+//! `steps` and `requests` tables, the run store, the usage sampler and
+//! the applet supervisor, and typed by the columns the response declares.
 //! What stays in the browser is what needs the wizard's descriptors:
 //! whether the form can edit a row, what Browse opens, and an ingest
 //! step's Download/Import label.
@@ -37,7 +37,7 @@ use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
-use crate::{usage, AppState, DagRecord, DagRunInfo, RecordTimings};
+use crate::{usage, AppState, DagRunInfo, DagSnapshot, SnapshotTimings};
 use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
@@ -261,9 +261,8 @@ pub struct ManageResponse {
     pub storage: RootStorage,
     pub rows: Vec<ManageRow>,
     /// Why no sync can be opened from this screen right now, when one
-    /// cannot: the launch is updating the stores for this build, or the
-    /// runner is missing or keeps stopping. Every row's Sync says the
-    /// same.
+    /// cannot: the runner is missing or keeps stopping. Every row's Sync
+    /// says the same.
     pub sync_paused: Option<String>,
 }
 
@@ -275,7 +274,7 @@ const SLOW_ANSWER: Duration = Duration::from_secs(1);
 /// Where one Manage answer spent its time, besides the walk.
 #[derive(Debug, Default)]
 struct Took {
-    record: RecordTimings,
+    record: SnapshotTimings,
     requests: Duration,
     /// Everything after the run and request reads: the sampler's last
     /// numbers, the config's check, the join.
@@ -334,7 +333,7 @@ async fn answer(
             ms = ms(total),
             refresh,
             walk_ms = ms(walk),
-            loop_record_ms = ms(took.record.loop_record),
+            loop_record_ms = ms(took.record.loop_store),
             run_progress_ms = ms(took.record.run_progress),
             run_metrics_ms = ms(took.record.run_metrics),
             requests_ms = ms(took.requests),
@@ -348,15 +347,15 @@ async fn answer(
 }
 
 /// Every row of the Manage table as it stands: the config as written,
-/// the loop's record, the disk. What the table and a chip both read.
+/// the loop's store, the disk. What the table and a chip both read.
 async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refusal> {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let record = crate::dag_record(&s.root, &s.sync)
+    let record = crate::dag_snapshot(&s.root, &s.sync)
         .await
         .map_err(crate::unread)?;
-    // After the record: a request it names was opened before the record
-    // was saved, so it is there to read, open or not.
+    // After `record`: a request its steps name was opened before the loop
+    // saved those rows, so it is there to read, open or not.
     let requests_started = Instant::now();
     let requests = requests_named(s, &record).await;
     let assembly_started = Instant::now();
@@ -512,9 +511,9 @@ fn raw_stores(outputs: &[OutputStorage]) -> HashMap<String, String> {
         .collect()
 }
 
-/// The requests the record's steps are being run for, by id.
-async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, RequestRow> {
-    let Ok(store) = s.sync.mailbox().await else {
+/// The requests `record`'s steps are being run for, by id.
+async fn requests_named(s: &AppState, record: &DagSnapshot) -> HashMap<String, RequestRow> {
+    let Ok(store) = s.sync.supervisor_store().await else {
         return HashMap::new();
     };
     let mut out = HashMap::new();
@@ -533,7 +532,7 @@ async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, Req
 struct Snapshot<'a> {
     written: &'a WrittenEntries,
     diagnostics: &'a [Diagnostic],
-    record: &'a DagRecord,
+    record: &'a DagSnapshot,
     requests: &'a HashMap<String, RequestRow>,
     outputs: &'a [OutputStorage],
     /// Each tree holding a raw store, by step id, to the store's path.
@@ -1200,7 +1199,7 @@ impl RowCtx<'_> {
             }
             Entry::Applet(_) => {
                 // An applet's health is its own thing: it isn't
-                // scheduled, so the runner's record says nothing about
+                // scheduled, so the loop's store says nothing about
                 // it. The supervisor does. There is no history to show,
                 // which is why the timestamp stays null.
                 let status = if let Some(d) = dropped {
@@ -1304,7 +1303,7 @@ impl RowCtx<'_> {
 
         let activity = match status.key.as_str() {
             "running" => queue::Activity::Running,
-            "waiting" => queue::Activity::BetweenPasses,
+            "waiting" => queue::Activity::CaughtUp,
             _ => queue::Activity::Idle,
         };
         let cells = match e {

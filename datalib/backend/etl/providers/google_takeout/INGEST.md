@@ -6,6 +6,12 @@ the `.zip` or `.tgz` parts of one export as Google sent them. The feed
 switches sit beside it in the same table. There is no API and no
 network: the download step walks files the user exported themselves.
 
+A feed **stamps** a file once it has read it: it writes the file's path
+under `Takeout/` and the hash of its bytes to the `ingested_files`
+table, under the feed's scope `google_takeout/<feed>`
+(`datalib_etl_files::file_checkpoint`). A file whose hash matches its
+stamp is not read again.
+
 ## Zipped exports
 
 `src/ingest/unpack.rs`, over the parts and entries
@@ -24,8 +30,8 @@ feed that is on finished reading these very parts, the run reads
 nothing. Otherwise the files those feeds read, and nothing else (no
 Drive, no Photos, no YouTube uploads, no `Voice/Spam/` unless asked
 for), are unpacked into a temporary directory, which is walked like an
-unpacked export and deleted at the end of the run, its paths forgotten
-by the fingerprint cache. The feeds' own cursors are keyed by the path
+unpacked export and deleted at the end of the run, its paths deleted
+from the fingerprint cache. The feeds' own cursors are keyed by the path
 under `Takeout/`, so a feed whose file is unchanged reads nothing, and
 switching between a zipped and an unpacked copy of one export changes
 nothing.
@@ -215,7 +221,7 @@ or stamped with its problem. Each kind is a `problems` row:
   them.
 - **A file that will not open** is `record:files:<path>`. It is there,
   so a Maps photo whose sidecar will not open keeps its row.
-- **Deletions are held back** when a walk had errors (`listing:files`)
+- **Nothing is deleted** when a walk had errors (`listing:files`)
   or, for Voice, when files were removed or rewritten but one could not
   be read or would not open (`listing:removed_records`). A rewritten Voice file keeps its
   old stamp on such a run, so the next one still reads every file and
@@ -262,9 +268,9 @@ follows Google:
 
 A feed reads only the files that changed since it stamped them, so a
 fix to what a reader makes of an unchanged file reaches nobody's store
-on its own. It needs a rung on `schema_raw::LADDER` that forgets that
-feed's stamps (`read_again`); the next sync then reads those files
-whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
+on its own. It needs a rung on `schema_raw::LADDER` that deletes that
+feed's stamps from `ingested_files` (`read_again`); the next sync then
+reads those files whole. `tests/fixture_walk.rs`'s `rung_1_…` is the test to copy.
 
 ## What renders
 
@@ -290,8 +296,9 @@ nothing to show is a note. Gemini, YouTube history and Google Maps are each one 
 feed (`google_takeout_render/src/feeds.rs`), one page each, oldest
 first, and YouTube subscriptions, which have no dates, one page. A Gemini entry is two
 items, the prompt by the account and the response by Gemini, its HTML
-turned to markdown; attached files ride on the prompt and generated
-images on the response. Voice bills and greetings are not rendered.
+turned to markdown; the files the prompt attached are the prompt
+item's attachments, and the images Gemini generated are the response
+item's. Voice bills and greetings are not rendered.
 
 ## Tests
 

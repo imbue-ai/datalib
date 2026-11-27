@@ -23,7 +23,7 @@ command = "datalib-step run ingest pdf"
 "#;
 
 /// Writes `<tree>/blobs.sqlite` the way the contract says a step does,
-/// and answers each row's hash.
+/// and returns each row's hash.
 pub(crate) async fn blob_store(tree: &Path, rows: &[(Option<&str>, &[u8])]) -> Vec<String> {
     std::fs::create_dir_all(tree).unwrap();
     let pool = SqlitePoolOptions::new()
@@ -266,7 +266,7 @@ fn hash_of(bytes: &[u8]) -> String {
 }
 
 /// A part of a stored email comes back by the hash of its decoded bytes,
-/// typed as the email says, with the answer headers a row gets.
+/// typed as the email says, with the response headers a row gets.
 #[tokio::test]
 async fn a_part_of_a_stored_email_comes_back_with_its_type() {
     let td = tempfile::tempdir().unwrap();

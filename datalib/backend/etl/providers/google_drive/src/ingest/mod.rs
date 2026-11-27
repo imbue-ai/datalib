@@ -13,9 +13,10 @@
 //! owed its export in each `revision_exports` format, fetched once
 //! through the revision's export link (`revision_exports`).
 //!
-//! Each kind drains on its own, side by side, because each kind's native
-//! API is signed by its own latchkey service: a missing `google-sheets`
-//! sign-in ends the Sheets and leaves the Docs and Slides to finish.
+//! Each kind's owed files are fetched by an `owed::drain` loop of their
+//! own, all kinds at once, because each kind's native API is signed by its
+//! own latchkey service: a missing `google-sheets` sign-in ends the Sheets
+//! and leaves the Docs and Slides to finish.
 
 pub mod api;
 pub mod db;
@@ -199,8 +200,8 @@ async fn walk_files(
     }
     opts.progress.set_length(Some(summary.owed as u64));
 
-    // The kinds drain side by side, so the slowest file of one kind holds
-    // up no file of another.
+    // One `owed::drain` loop per kind, run at the same time, so the slowest
+    // file of one kind holds up no file of another.
     let drains = kinds.iter().map(|(captures, owed)| async move {
         let l = Loop {
             pool: opts.db.pool(),

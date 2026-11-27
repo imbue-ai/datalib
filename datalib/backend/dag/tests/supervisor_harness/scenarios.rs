@@ -268,11 +268,11 @@ async fn a_failed_step_is_not_retried_for_its_request_after_a_config_edit() {
     h.finish().await;
 }
 
-/// A step the config drops between passes, while what it reads is still
-/// being written, is finished there and then under the graph it ran in:
-/// its run log closes, and the edit waits for nothing.
+/// A step the config drops between two of its processes, while what it
+/// reads is still being written, is finished there and then under the
+/// graph it ran in: its run log closes, and the edit waits for nothing.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_step_dropped_between_passes_finishes_when_the_config_drops_it() {
+async fn a_step_dropped_between_invocations_finishes_when_the_config_drops_it() {
     let mut h = Harness::new(&[source("a"), reads("c", &["a"])]).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
@@ -298,10 +298,10 @@ async fn a_step_dropped_between_passes_finishes_when_the_config_drops_it() {
 }
 
 /// A consumer that has read every seal so far, with its producer still
-/// writing, has no process working: its record says it waits for that
+/// writing, has no process working: its `steps` row says it waits for that
 /// producer, not that it runs, until the next seal starts it again.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_step_between_passes_is_recorded_waiting_for_its_producer() {
+async fn a_step_between_invocations_is_recorded_waiting_for_its_producer() {
     let mut h = Harness::new(&chain()).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
@@ -325,8 +325,9 @@ async fn a_step_between_passes_is_recorded_waiting_for_its_producer() {
     h.finish().await;
 }
 
-/// How each process ended is what the record says: an exit code, an
-/// abort, a SIGKILL. None of them wrote an outcome, so none is retried.
+/// How each process ended is what its `invocations` row says: an exit
+/// code, an abort, a SIGKILL. None of them wrote an outcome, so none is
+/// retried.
 #[tokio::test(flavor = "multi_thread")]
 async fn each_way_a_process_ends_is_recorded() {
     let mut h = Harness::new(&[source("a"), source("b"), source("c")]).await;
@@ -438,7 +439,7 @@ async fn a_step_that_waits_for_settled_inputs_runs_once_after_its_producer_ends(
 }
 
 /// A first run is told every input changed; a later one only what moved.
-/// It used to be told nothing on a first run, and a step that took an
+/// Guards against a first run being told nothing: a step that took the
 /// empty list for "nothing to do" did nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_first_run_is_told_every_input_changed() {
@@ -465,8 +466,8 @@ async fn a_first_run_is_told_every_input_changed() {
 }
 
 /// A consumer still runs on what a failed input committed, and is told
-/// which input that is: in the busy period the input failed in, and in a
-/// later one, from the record.
+/// which input that is: in the run the input failed in, and in a later
+/// run, from the loop's store.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_consumer_is_told_which_inputs_failed() {
     let steps = [source("a"), source("b"), reads("c", &["a", "b"])];
@@ -480,7 +481,7 @@ async fn a_consumer_is_told_which_inputs_failed() {
     assert_eq!(h.env("c", "DATALIB_DAG_FAILED_INPUTS").await, "");
     h.run("c", "ok c1").await;
     assert_eq!(h.closed(&first).await, RequestOutcome::Done);
-    h.period_over().await;
+    h.run_over().await;
 
     let failing = h.sync(&["b"]).await;
     h.started("b").await;
@@ -491,7 +492,7 @@ async fn a_consumer_is_told_which_inputs_failed() {
     assert_eq!(h.env("c", "DATALIB_DAG_CHANGED_INPUTS").await, "b");
     h.run("c", "ok c2").await;
     assert_eq!(h.closed(&failing).await, RequestOutcome::Failed);
-    h.period_over().await;
+    h.run_over().await;
 
     let other = h.sync(&["a"]).await;
     h.started("a").await;
@@ -504,7 +505,7 @@ async fn a_consumer_is_told_which_inputs_failed() {
     h.finish().await;
 }
 
-/// A consumer runs on each seal of a streaming producer, one pass at a
+/// A consumer runs on each seal of a streaming producer, one process at a
 /// time, and its queue rises on seals and drains on reads.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_consumer_runs_on_each_seal_of_a_streaming_producer() {
@@ -534,12 +535,13 @@ async fn a_consumer_runs_on_each_seal_of_a_streaming_producer() {
     h.finish().await;
 }
 
-/// A consumer whose first pass crashed and whose next, on the producer's
-/// next seal, succeeded was recorded as succeeded with no error: the crash
-/// was only its own stderr, at info. The failed pass is an error line in
-/// the run store, and a count of failed passes the Manage row reads.
+/// A consumer whose first process crashed and whose next, on the
+/// producer's next seal, succeeded was recorded as succeeded with no
+/// error: the crash was only its own stderr, at info. The failed process
+/// is an error line in the run store, and a count (`failed_passes`) the
+/// Manage row reads.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_failed_pass_that_runs_again_is_an_error_and_a_count() {
+async fn a_failed_invocation_that_runs_again_is_an_error_and_a_count() {
     let mut h = Harness::recording(&chain()).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
@@ -599,7 +601,7 @@ async fn a_failed_pass_that_runs_again_is_an_error_and_a_count() {
 /// A producer that does not stream holds its consumer back even when it
 /// seals: what it wrote may be half-done.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_producer_that_does_not_stream_holds_its_consumer_until_it_ends() {
+async fn a_producer_that_does_not_stream_keeps_its_consumer_waiting_until_it_ends() {
     let mut h = Harness::new(&chain()).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
@@ -635,7 +637,8 @@ async fn stopping_a_streaming_producers_request_stops_its_consumer() {
     h.finish().await;
 }
 
-/// Turning off the producer stops it; the consumer mid-pass finishes.
+/// Turning off the producer stops it; the consumer's running process
+/// finishes.
 #[tokio::test(flavor = "multi_thread")]
 async fn turning_off_a_streaming_producer_lets_its_consumer_finish() {
     let mut h = Harness::new(&chain()).await;
@@ -807,9 +810,9 @@ fn fan_in(sources: &[&str]) -> Vec<Step> {
 }
 
 /// Seals from three sources arriving while the fan-in runs, in a burst,
-/// cost it exactly one more pass, which reads the newest of each.
+/// cost it exactly one more process, which reads the newest of each.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_pass_on_the_newest() {
+async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_invocation_on_the_newest() {
     let mut h = Harness::new(&fan_in(&["a", "b", "c"])).await;
     let sync = h.sync(&["a", "b", "c"]).await;
     for s in ["a", "b", "c"] {
@@ -837,7 +840,7 @@ async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_pass_on_the_ne
     h.finish().await;
 }
 
-/// The requests a step's record says it still has work in.
+/// The requests a step's `Record` entry says it still has work in.
 fn served(s: &State, step: &str) -> Vec<String> {
     s.record
         .steps
@@ -850,9 +853,9 @@ fn served(s: &State, step: &str) -> Vec<String> {
 /// fan-in. A source done with its download serves none of them — its row
 /// offers Sync — while the fan-in, waiting on the sources still running,
 /// serves every sync. It runs once, after the last, and every sync stays
-/// open until that pass has ended.
+/// open until that process has ended.
 #[tokio::test(flavor = "multi_thread")]
-async fn syncs_of_every_source_share_the_fan_in_and_close_with_its_pass() {
+async fn syncs_of_every_source_share_the_fan_in_and_close_with_its_last_invocation() {
     let mut h = Harness::new(&fan_in(&["a", "b", "c"])).await;
     let syncs = [
         h.sync(&["a"]).await,
@@ -963,10 +966,11 @@ async fn stop_to_close(h: &mut Harness, id: &str) -> Vec<String> {
     heard[from..=to].to_vec()
 }
 
-/// A stopped sync closes only after the loop has saved a record in which
-/// no step names it, so a reader that sees it closed never finds a step
-/// still serving it. The loop used to close it the moment it read the
-/// stop, and let go of it on the save after.
+/// A stopped sync closes only after the loop has saved `steps` rows in
+/// which no step names it, so a reader that sees it closed never finds a
+/// step still serving it. Guards against the loop closing it the moment it
+/// read the stop and removing it from the steps' `requests` on the save
+/// after.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stopped_sync_is_let_go_of_before_it_closes() {
     let mut h = Harness::new(&[source("a")]).await;
@@ -992,7 +996,7 @@ async fn a_stopped_sync_is_let_go_of_before_it_closes() {
 }
 
 /// The same for a sync the loop set aside, whose step its config lacks:
-/// the record names it on that step until a save lets go of it.
+/// that step's `requests` names it until a save removes it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stopped_sync_set_aside_is_let_go_of_before_it_closes() {
     let mut h = Harness::new(&[source("a")]).await;
@@ -1113,7 +1117,7 @@ async fn a_reset_mid_sync_stops_only_its_step_and_is_done_at_once() {
     h.finish().await;
 }
 
-/// A reset with nothing running starts a busy period of its own.
+/// A reset with nothing running starts a run of its own.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reset_while_idle_empties_the_step_and_runs_what_reads_it() {
     let mut h = Harness::new(&[source("a"), reads("c", &["a"])]).await;

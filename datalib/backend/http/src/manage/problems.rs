@@ -4,8 +4,9 @@
 //! (`problem_mutes/README.md`), counted by the one function that also
 //! writes the grid's query, so a double-click opens exactly what was
 //! counted. A grey number beside them is what is in the step's log
-//! rather than in that grid: the passes of its last run that failed and
-//! were run again, and what a step that writes no problem rows counted.
+//! rather than in that grid: the processes of a streaming step's last
+//! run that failed and were started again, and what a step that writes no
+//! problem rows counted.
 //! A group's is the sum of its steps'. The System row's count is the
 //! config's own warnings.
 
@@ -25,11 +26,12 @@ pub struct ProblemCounts {
     pub warnings: i64,
     /// The run that count comes from; empty when it never counted.
     pub run_id: String,
-    /// Passes that failed and were run again in the last run that invoked
-    /// the step, which reports only its last pass.
-    pub failed_passes: i64,
+    /// A streaming step's processes that failed and were started again in
+    /// the last run that invoked the step, which reports only its last
+    /// process.
+    pub failed_processes: i64,
     /// The run that count comes from.
-    pub failed_passes_run_id: String,
+    pub failed_processes_run_id: String,
 }
 
 /// `step id → counts`, from the newest [`METRIC`] samples per step and
@@ -39,16 +41,16 @@ pub struct ProblemCounts {
 /// than guessed at.
 pub fn counts_by_step(
     problems: &[MetricRow],
-    failed_passes: &[MetricRow],
+    failed_processes: &[MetricRow],
 ) -> HashMap<String, ProblemCounts> {
     let mut out: HashMap<String, ProblemCounts> = HashMap::new();
-    for m in failed_passes
+    for m in failed_processes
         .iter()
         .filter(|m| m.name == datalib_metrics::FAILED_PASSES)
     {
         let entry = out.entry(m.step.clone()).or_default();
-        entry.failed_passes = m.value;
-        entry.failed_passes_run_id = m.run_id.clone();
+        entry.failed_processes = m.value;
+        entry.failed_processes_run_id = m.run_id.clone();
     }
     for m in problems.iter().filter(|m| m.name == METRIC) {
         let Some(severity) = severity_in_metric_labels(&m.labels) else {
@@ -97,8 +99,8 @@ pub struct StepProblems {
     /// A step that writes no rows: what it last counted itself, and the
     /// run it is from. Only its log says what they are.
     pub unlisted: Option<(Tally, String)>,
-    pub failed_passes: i64,
-    pub failed_passes_run_id: String,
+    pub failed_processes: i64,
+    pub failed_processes_run_id: String,
 }
 
 impl StepProblems {
@@ -122,9 +124,9 @@ impl StepProblems {
             rows,
             counter,
             unlisted,
-            failed_passes: reported.map_or(0, |r| r.failed_passes),
-            failed_passes_run_id: reported
-                .map(|r| r.failed_passes_run_id.clone())
+            failed_processes: reported.map_or(0, |r| r.failed_processes),
+            failed_processes_run_id: reported
+                .map(|r| r.failed_processes_run_id.clone())
                 .unwrap_or_default(),
         }
     }
@@ -161,8 +163,8 @@ pub fn chips(step: &StepProblems) -> Vec<Chip> {
             .as_ref()
             .map(|(_, run)| format!("as of run {run}"))
             .unwrap_or_default(),
-        failed_passes: step.failed_passes,
-        ran: format!("as of run {}", step.failed_passes_run_id),
+        failed_processes: step.failed_processes,
+        ran: format!("as of run {}", step.failed_processes_run_id),
     })
 }
 
@@ -179,7 +181,7 @@ pub fn group_chips(steps: &[StepProblems]) -> Vec<Chip> {
         muted: sum(|s| s.rows.map(|r| r.muted).unwrap_or_default()),
         unlisted: sum(|s| s.unlisted.as_ref().map(|(t, _)| *t).unwrap_or_default()),
         unlisted_from: "as of each step's last run".into(),
-        failed_passes: steps.iter().map(|s| s.failed_passes).sum(),
+        failed_processes: steps.iter().map(|s| s.failed_processes).sum(),
         ran: "as of each step's last run".into(),
     })
 }
@@ -189,7 +191,7 @@ struct Drawn {
     muted: Tally,
     unlisted: Tally,
     unlisted_from: String,
-    failed_passes: i64,
+    failed_processes: i64,
     ran: String,
 }
 
@@ -235,7 +237,7 @@ fn draw(d: &Drawn) -> Vec<Chip> {
             from = d.unlisted_from
         ));
     }
-    match d.failed_passes {
+    match d.failed_processes {
         0 => {}
         1 => said.push(format!("1 pass failed and was run again, {}", d.ran)),
         n => said.push(format!("{n} passes failed and were run again, {}", d.ran)),
@@ -244,7 +246,7 @@ fn draw(d: &Drawn) -> Vec<Chip> {
         said.push("Each is in the log, a double-click on the status away.".into());
         out.push(Chip {
             kind: ChipKind::Metric,
-            text: (unlisted + d.failed_passes).to_string(),
+            text: (unlisted + d.failed_processes).to_string(),
             title: said.join("\n"),
         });
     }
@@ -375,8 +377,8 @@ mod tests {
 
     /// A step that writes no rows (a package's own program) keeps its
     /// own count, grey, since a double-click on it could list nothing;
-    /// and so does a pass that failed and was run again. Neither is in the
-    /// yellow number.
+    /// and so does a streaming process that failed and was started again.
+    /// Neither is in the yellow number.
     #[test]
     fn what_only_the_log_holds_is_grey_and_apart_from_the_rows() {
         let failed = |step: &str, value: i64, run: &str| MetricRow {

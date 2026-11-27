@@ -1,6 +1,6 @@
 //! Where a running loop re-reads its graph, so a source added to the
-//! config, or a step edited in it, is taken on by the busy period already
-//! running rather than the next one. How the loop carries its state from
+//! config, or a step edited in it, is used by the run already going
+//! rather than the next one. How the loop carries its state from
 //! one graph to the next is in `round.rs`.
 
 use std::path::PathBuf;
@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use crate::config;
 use crate::graph::Graph;
 
-/// Asked when a busy period starts and whenever the config is announced
-/// as changed; the loop compares what it gets with the graph it has.
+/// Called when a run starts and whenever the config is announced as
+/// changed; the loop compares what it gets with the graph it has.
 pub trait GraphSource: Send + Sync {
     fn load(&self) -> Result<Graph>;
 }

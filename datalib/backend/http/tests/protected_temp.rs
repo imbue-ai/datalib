@@ -1,6 +1,6 @@
 //! A protected library's temp files stay in its folder, where macOS guards
 //! them: the desktop app points `TMPDIR` at `system/tmp`, a step inherits it,
-//! and the server clears what a crash left, since macOS no longer does.
+//! and the server clears what a crash left, since macOS does not.
 
 mod server;
 

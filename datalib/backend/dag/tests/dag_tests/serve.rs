@@ -1,6 +1,7 @@
-//! `datalib-pipeline serve` holds the loop until it is told to stop: syncs
-//! asked for from other shells are served by it one after another, it
-//! says on stderr what no store holds, and SIGTERM lets the root go.
+//! `datalib-pipeline serve` holds `runner-lock` and runs the loop until it
+//! is told to stop: syncs asked for from other shells are served by it one
+//! after another, it says on stderr what no store holds, and on SIGTERM it
+//! exits and releases the lock.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
