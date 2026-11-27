@@ -129,13 +129,29 @@ fn probe_command(
 ) -> Result<Command, (StatusCode, Json<Value>)> {
     let text =
         std::fs::read_to_string(datalib_dag::config::root_config_path(root)).unwrap_or_default();
-    let installed: Vec<(String, datalib_packages::Manifest)> =
-        datalib_dag::config::check_text(&text)
-            .cfg
-            .packages
-            .iter()
-            .filter_map(|p| Some((p.dir_rel(), datalib_packages::installed(root, &p.sha256)?)))
-            .collect();
+    let cfg = datalib_dag::config::check_text(&text).cfg;
+    let mut cmd = program_command(root, &cfg, source_type)?;
+    // The `PATH` a step gets, so a probe finds the programs its steps do.
+    let path = datalib_dag::supervisor::host::step_path(
+        &cfg,
+        crate::binaries::resolve_binary_dir().as_deref(),
+        root,
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, &format!("{e:#}")))?;
+    cmd.env("PATH", path);
+    Ok(cmd)
+}
+
+fn program_command(
+    root: &std::path::Path,
+    cfg: &datalib_dag::config::DagConfig,
+    source_type: &str,
+) -> Result<Command, (StatusCode, Json<Value>)> {
+    let installed: Vec<(String, datalib_packages::Manifest)> = cfg
+        .packages
+        .iter()
+        .filter_map(|p| Some((p.dir_rel(), datalib_packages::installed(root, &p.sha256)?)))
+        .collect();
     if let Some(command) = package_probe(&installed, source_type)? {
         let argv = shlex::split(&command)
             .filter(|a| !a.is_empty())

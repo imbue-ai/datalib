@@ -313,20 +313,7 @@ fn steps_env(
     now: &str,
     run_id: &str,
 ) -> anyhow::Result<host::StepEnv> {
-    host::step_env(
-        cfg,
-        opts.binary_dir.as_deref(),
-        &extra_path(&opts.root),
-        now,
-        run_id,
-    )
-}
-
-/// Where the loop's steps find the library's own programs, whether or not
-/// the directory exists yet: an agent may make it between runs, and a
-/// missing entry costs nothing.
-fn extra_path(root: &Path) -> Vec<PathBuf> {
-    vec![root.join(datalib_runtime::layout::BIN_DIR_REL)]
+    host::step_env(cfg, opts.binary_dir.as_deref(), &opts.root, now, run_id)
 }
 
 fn now(opts: &ServeOptions) -> String {

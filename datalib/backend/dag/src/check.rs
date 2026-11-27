@@ -55,16 +55,17 @@ pub async fn check_params(
         return Vec::new();
     }
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_string();
-    let env = match crate::supervisor::host::step_env(&checked.cfg, binary_dir, &[], &now, "check")
-    {
-        Ok(env) => env,
-        Err(e) => {
-            return vec![Diagnostic::new(
-                Severity::Warning,
-                format!("no step's params were checked: {e:#}"),
-            )]
-        }
-    };
+    let env =
+        match crate::supervisor::host::step_env(&checked.cfg, binary_dir, data_root, &now, "check")
+        {
+            Ok(env) => env,
+            Err(e) => {
+                return vec![Diagnostic::new(
+                    Severity::Warning,
+                    format!("no step's params were checked: {e:#}"),
+                )]
+            }
+        };
     let runner = Runner::new(data_root).child_env(env.vars);
     // Collected first: a stream over a closure that borrows is not one an
     // axum handler's future can hold.
@@ -231,6 +232,32 @@ mod tests {
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].severity, Severity::Warning, "{found:?}");
         assert!(found[0].message.contains("not checked"), "{found:?}");
+    }
+
+    /// A program only in the library's `system/bin/` is found by the
+    /// check as it is by a run, so its params are checked rather than
+    /// reported as unchecked.
+    #[tokio::test]
+    async fn a_program_in_the_librarys_own_bin_is_asked() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let root = tempfile::tempdir().unwrap();
+        let bin = root.path().join(datalib_runtime::layout::BIN_DIR_REL);
+        std::fs::create_dir_all(&bin).unwrap();
+        let program = bin.join("count-words");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\n[ \"$1\" = --check ] || exit 9\n\
+             echo '{\"event\":\"outcome\",\"warnings\":[\"checked\"]}'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let text = "[[programs]]\ncommand = \"count-words\"\nverbs = [\"check\"]\n\n\
+                    [[steps]]\nid = \"words/count\"\ncommand = \"count-words\"\n";
+        let checked = crate::config::check_text(text);
+        assert!(checked.is_clean(), "{:?}", checked.diagnostics);
+        let found = check_params(&checked, root.path(), None).await;
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].message, "checked", "{found:?}");
     }
 
     #[tokio::test]

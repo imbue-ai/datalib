@@ -132,3 +132,41 @@ async fn a_packages_type_with_no_probe_is_refused_by_name() {
     assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
     assert!(body.to_string().contains("Weather"), "{body}");
 }
+
+/// A probe runs with the `PATH` a step gets, so a program in the
+/// library's own `system/bin/` is found by its bare name.
+#[tokio::test]
+async fn a_probe_finds_a_program_in_the_librarys_own_bin() {
+    let tmp = tempfile::tempdir().unwrap();
+    install_weather(tmp.path(), true);
+    let probe = tmp
+        .path()
+        .join(package_dir_rel(SHA))
+        .join("bin/probe-weather");
+    std::fs::write(&probe, "#!/bin/sh\nexec weather-lookup \"$@\"\n").unwrap();
+    let bin = tmp.path().join(datalib_core::layout::BIN_DIR_REL);
+    std::fs::create_dir_all(&bin).unwrap();
+    let helper = bin.join("weather-lookup");
+    std::fs::write(&helper, PROBE).unwrap();
+    std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let app = datalib_http::router(state(tmp.path()).await);
+
+    let (status, started) = post_probe(
+        &app,
+        serde_json::json!({ "type": "weather", "params": { "station": "KSFO" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let id = started["id"].as_str().unwrap().to_string();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let done = loop {
+        let (_, s) = get_json(&app, &format!("/api/probe/{id}")).await;
+        if s["status"] != "running" {
+            break s;
+        }
+        assert!(Instant::now() < deadline, "the probe never finished: {s}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert_eq!(done["status"], "ok", "{done}");
+    assert_eq!(done["report"]["account"]["id"], "KSFO", "{done}");
+}
