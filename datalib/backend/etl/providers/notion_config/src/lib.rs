@@ -114,11 +114,8 @@ mod tests {
         assert!(NotionConfig::default().validate().is_ok());
     }
 
-    /// The rule this replaces: the old schema *rejected* an api block
-    /// that named neither an inbox nor a subtree page, because there
-    /// was no way to discover pages without a seed. Search removed that
-    /// constraint, so an empty api block is now the whole-workspace
-    /// mirror and must validate.
+    /// Search finds pages without a configured starting point, so an
+    /// empty api block is the whole-workspace mirror and must validate.
     #[test]
     fn empty_api_means_whole_workspace_and_validates() {
         let cfg = NotionConfig {

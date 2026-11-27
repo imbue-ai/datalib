@@ -1,6 +1,6 @@
-//! The Manage screen's ETA is a step's queue (the total it announced
+//! The Manage screen's ETA is a step's queue (the total it reported
 //! less what it counted done) over the pace it counts things done.
-//! Notion announced no total, so a sync showed a count and no ETA.
+//! Notion reported no total, so a sync showed a count and no ETA.
 //! These tests replay the runner's arithmetic over a run's events.
 
 use std::sync::{Arc, Mutex};
@@ -34,7 +34,7 @@ impl ProgressSink for Recorder {
 
 impl Recorder {
     /// The `queued` the runner would publish after each event: `done`
-    /// sums every increment, `total` is the last announced, and nothing
+    /// sums every increment, `total` is the last reported, and nothing
     /// is published while no total has been.
     fn queued_series(&self) -> Vec<u64> {
         let (mut done, mut total) = (0u64, None);
@@ -72,9 +72,9 @@ impl Recorder {
     }
 }
 
-/// With everything announced counted done, a queue that stays at zero
+/// With everything reported counted done, a queue that stays at zero
 /// once it gets there never read zero while work was left. The empty
-/// loops at the end re-announce the same total, hence several zeros.
+/// loops at the end report the same total again, hence several zeros.
 fn assert_zero_only_once_done(series: &[u64]) {
     let first_zero = series.iter().position(|q| *q == 0);
     assert!(

@@ -1,7 +1,7 @@
 //! Notion entity ids. Notion's page, discussion and comment ids are
 //! UUIDs it mints, unique across the service, so the scope is
-//! provider-global. They used to pass straight through as
-//! `grid_rows.uuid`; now they are the backpointer.
+//! provider-global. Each is a row's backpointer; `grid_rows.uuid` is
+//! minted from it through `datalib_id`.
 
 use datalib_id::{IdNamespace, Identity, Minter};
 use datalib_time::{record_stamp_ms, RecordStampPrecision};

@@ -243,8 +243,8 @@ pub(crate) struct Ctx<'a> {
     /// anchor, a user. A page of search results is not one, since it is
     /// known only as it comes.
     pub bar: RunBar,
-    /// Per loop table, the ticks the listing announced for it ahead of
-    /// the loop, which the loop's owed list counts again.
+    /// Per loop table, the ticks the listing added to the bar's total for
+    /// it ahead of the loop, which the loop's owed list counts again.
     foreseen: Mutex<HashMap<&'static str, u64>>,
 }
 
@@ -276,8 +276,9 @@ impl Ctx<'_> {
     }
 
     /// A page stored at a new stamp owes a body, and a comment listing
-    /// when comments are mirrored. Announcing them as the listing goes
-    /// puts a search walk's work in the queue before its loops start.
+    /// when comments are mirrored. Adding them to the bar's total as the
+    /// listing goes puts a search walk's work in the queue before its
+    /// loops start.
     pub fn foresee_pages(&self, pages: u64) {
         let tables: &[&'static str] = if self.opts.comments {
             &[PAGE_MARKDOWN, PAGE_COMMENTS]
@@ -657,8 +658,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     // misconfigured credential fails identically on all of them, and
     // without this the run reports success having stored nothing: the
     // DAG step goes green, render finds an empty raw store, and the
-    // provider looks healthy while being completely dead. That is how
-    // a missing `Notion-Version` header hid for two months.
+    // provider looks healthy while being completely dead.
     if result.is_ok() && all_pages_failed(&s) {
         result = Err(anyhow::anyhow!(
             "every page fetch failed ({} attempted, 0 succeeded) — the raw store \
@@ -791,8 +791,8 @@ mod tests {
         }));
     }
 
-    /// The regression this guards: a systemic credential failure fails on
-    /// every page, and used to be reported as a successful run.
+    /// The regression this guards: a credential that fails on every page
+    /// was reported as a successful run.
     #[test]
     fn all_pages_failed_is_true_when_every_page_failed() {
         assert!(all_pages_failed(&FetchSummary {

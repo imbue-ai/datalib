@@ -209,7 +209,7 @@ async fn roots_mirror_what_hangs_under_them_and_what_a_root_links() {
 
 /// A truncated body whose hole is an inline database asked Notion for
 /// the database as a page of markdown, got a 400, and so was owed
-/// forever and never stored. The hole is now the database's link.
+/// forever and never stored. The hole is the database's link.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_database_in_a_truncated_body_is_linked_not_fetched() {
     let d = tempdir().unwrap();

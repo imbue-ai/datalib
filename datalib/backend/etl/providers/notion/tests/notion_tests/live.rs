@@ -77,8 +77,8 @@ async fn notion_live_single_page_snapshot() {
 
 /// A roots source's first sync listed the whole workspace to find what
 /// sat under its roots: ~530 requests and ten minutes for one page on a
-/// large workspace. It walks down from the root now, so its cost is
-/// what is under the root.
+/// large workspace. It walks down from the root, so its cost is what
+/// is under the root.
 #[tokio::test(flavor = "multi_thread")]
 async fn notion_live_a_first_roots_sync_walks_down_from_the_root() {
     let root = std::env::var("NOTION_TEST_PAGE")
