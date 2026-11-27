@@ -33,7 +33,11 @@
 #   REPO          owner/name on GitHub (default imbue-ai/datalib)
 #   IMAGE_NAME    registry image ref (default ghcr.io/imbue-ai/datalib)
 #
-# Requires: docker (with buildx), gh, tar. The tarballs come via
+# The demo library is this checkout's TNG library, built with
+# `bazelisk build //tests/fixtures:ingested_tng`, which runs every
+# source's sync over the fixtures and so takes a few minutes cold.
+#
+# Requires: docker (with buildx), bazelisk, gh, tar. The tarballs come via
 # `gh release download`, so `gh auth login` must have been run; the
 # `--tarball-dir` mode skips both gh and auth.
 
@@ -75,12 +79,13 @@ fi
 ctx="$(mktemp -d -t datalib-docker-XXXXXX)"
 trap 'rm -rf "${ctx}"' EXIT INT TERM
 
-# Stage the build context: Dockerfile + entrypoint + the demo library's
-# inputs + per-arch tarballs at the layout the Dockerfile expects
+# Stage the build context: Dockerfile + entrypoint + the demo library +
+# per-arch tarballs at the layout the Dockerfile expects
 # (`dist/<arch>/...tar.gz`).
 cp datalib/docker/Dockerfile "${ctx}/Dockerfile"
 cp datalib/docker/entrypoint.sh "${ctx}/entrypoint.sh"
-datalib/docker/stage_demo.sh "${ctx}"
+bazelisk build //tests/fixtures:ingested_tng
+datalib/docker/stage_demo.sh "${ctx}" bazel-bin/tests/fixtures/ingested
 mkdir -p "${ctx}/dist/amd64" "${ctx}/dist/arm64"
 
 # The binaries tarball, and the CPU runtime asset the Dockerfile unpacks

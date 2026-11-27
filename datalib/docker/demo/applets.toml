@@ -1,0 +1,19 @@
+# The demo's applets, which datalib/docker/stage_demo.sh appends to the
+# library's config. In the image, `datalib-applet` is on PATH.
+
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "unified_grid_and_search_index"
+command = "datalib-applet unified_grid_and_search_index"
+
+[[applets]]
+group = "unified_time_series_index"
+id = "unified_time_series_index"
+command = "datalib-applet unified_time_series_index"
+
+# The contacts app, over Picard's curated contacts, which stage_demo.sh
+# lays into `datalib_curated/`.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"

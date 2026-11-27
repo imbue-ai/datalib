@@ -44,7 +44,9 @@ every source's raw stores, in two kinds:
   does in a person's library.
 
 The library has no record of having run anything, so the first sync
-runs every step, and each finds nothing new.
+runs every step, and each finds nothing new. The Docker image's demo is
+the same library, synced at image build
+([`docs/dev/docker.md`](../../docs/dev/docker.md) §"The demo library").
 
 ## Conventions
 
