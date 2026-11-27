@@ -159,7 +159,7 @@ async fn mark_read(db: &RawDb, scan: &Scan, changes: &Changes) -> Result<()> {
         file_checkpoint::record_file(&mut tx, EXPORT_SCOPE, f).await?;
     }
     for rel in changes.gone() {
-        file_checkpoint::forget_file(&mut tx, EXPORT_SCOPE, rel).await?;
+        file_checkpoint::delete_file_stamp(&mut tx, EXPORT_SCOPE, rel).await?;
     }
     tx.commit().await.context("commit export stamp tx")?;
     Ok(())

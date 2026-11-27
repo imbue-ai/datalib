@@ -54,7 +54,7 @@ impl Sweeps {
         crate::doltlite_raw::upsert_scope_state(db, &self.scope(key), &now.to_rfc3339()).await
     }
 
-    pub async fn forget<'e>(&self, db: impl SqliteExecutor<'e>, key: &str) -> Result<()> {
+    pub async fn delete_marker<'e>(&self, db: impl SqliteExecutor<'e>, key: &str) -> Result<()> {
         sql!(
             "etl.sweep.delete_marker",
             "DELETE FROM sync_scope_state WHERE scope = ?"

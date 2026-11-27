@@ -139,7 +139,7 @@ The wizard keeps the pick and says under the field that a sync would
 fail on it. What is still missing is checking the *contents*: the
 descriptor knows what the folder should contain
 (`Databases/msgstore.db.crypt15` for WhatsApp) and nothing checks it.
-That is where the design's `inspect` probe goes.
+A probe that checks it is not built.
 
 ## What the picker buys us in macOS permissions
 
@@ -220,7 +220,7 @@ the durable fallback, and a lapse is recovered where it is seen:
   `io::ErrorKind::PermissionDenied` anywhere in a failure's cause chain
   as `FailureKind::Permission` (`datalib_step/src/hints.rs`), which is
   not retried, and emits a hint naming the fix.
-- **The loop keeps the kind** on the step's record
+- **The loop keeps the kind** in the step's row
   (`steps.last_failure_kind` in `system/supervisor.sqlite`).
 - **The Manage row offers the picker.** While a step's last run failed
   that way, its row and its group's carry a **Choose folder again**

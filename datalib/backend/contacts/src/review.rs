@@ -18,7 +18,7 @@ use crate::labels::{normalize_label, person_label, plan_agent_label, Held, Label
 use crate::schema::labels::LabelRow;
 use crate::schema::not_linked::NotLinkedRow;
 use crate::{
-    contact_subject, holders, insert_contact, insert_handle, plan_link, DecidedHow, HandleFrom,
+    any_holders, contact_subject, insert_contact, insert_handle, plan_link, DecidedHow, HandleFrom,
     LinkPlan, Maker, Store, WhenHeld,
 };
 use datalib_sql::sql;
@@ -291,6 +291,60 @@ pub(crate) async fn unlink_in(
     .await
     .context("unlink a handle")?;
     Ok(true)
+}
+
+/// Drop a contact an agent made that holds no handle any more, since it
+/// was only the agent's idea; `rejected` when a person turned it down
+/// whole, so its handles together are not proposed again. A contact a
+/// field, or a contact merged into it, keeps is left.
+pub(crate) async fn drop_if_emptied(
+    tx: &mut sqlx::SqliteConnection,
+    contact_id: &str,
+    rejected: bool,
+) -> Result<()> {
+    let emptied: Option<i64> = sql!(
+        "contacts_app.review.is_agent_contact_empty",
+        "SELECT 1 FROM contacts WHERE contact_id = ?1 AND agent IS NOT NULL \
+          AND NOT EXISTS (SELECT 1 FROM handles WHERE contact_id = ?1) \
+          AND NOT EXISTS (SELECT 1 FROM fields WHERE contact_id = ?1) \
+          AND NOT EXISTS (SELECT 1 FROM contacts WHERE merged_into = ?1)"
+    )
+    .query_scalar()
+    .bind(contact_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("read whether an agent's contact is empty")?;
+    if emptied.is_none() {
+        return Ok(());
+    }
+    if rejected {
+        sql!(
+            "contacts_app.review.mark_contact_rejected",
+            "UPDATE not_linked SET contact_rejected = 1 WHERE contact_id = ?1"
+        )
+        .query()
+        .bind(contact_id)
+        .execute(&mut *tx)
+        .await
+        .context("mark an agent's contact rejected")?;
+    }
+    for sql in [
+        sql!(
+            "contacts_app.review.delete_emptied_contact_labels",
+            "DELETE FROM labels WHERE subject = 'contact:' || ?1"
+        ),
+        sql!(
+            "contacts_app.review.delete_emptied_contact",
+            "DELETE FROM contacts WHERE contact_id = ?1"
+        ),
+    ] {
+        sql.query()
+            .bind(contact_id)
+            .execute(&mut *tx)
+            .await
+            .context("drop an emptied agent contact")?;
+    }
+    Ok(())
 }
 
 /// `labels` has a two-column key, which `PortableTable` derives no
@@ -572,6 +626,82 @@ impl ReviewItem {
     }
 }
 
+/// What an agent suggested about one subject and nobody has said Yes or
+/// No to: a new contact, handles for one of yours, or labels. Each
+/// handle and label here waits; what the contact already has is `held`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Suggestion {
+    /// What Yes and No are sent for (`POST /review/confirm`, `/reject`).
+    pub subject: String,
+    pub contact_id: Option<String>,
+    pub name: Option<String>,
+    /// The agent made the contact and none of it is the person's yet:
+    /// Yes adds them to the contacts.
+    pub new_contact: bool,
+    /// The handle the labels are about, for a handle's own labels.
+    pub handle: Option<String>,
+    /// The handles the agent says are this contact's.
+    pub handles: Vec<String>,
+    /// The handles the contact has already.
+    pub held: Vec<String>,
+    pub labels: Vec<ReviewLabel>,
+    /// The agents and runs that suggested it, and their reasons, each once.
+    pub agents: Vec<String>,
+    pub runs: Vec<String>,
+    pub reasons: Vec<String>,
+    /// How sure the least sure of it is, 0 to 1.
+    pub confidence: Option<f64>,
+}
+
+impl Suggestion {
+    /// What `item` waits on, or `None` when nothing does.
+    pub fn of(item: &ReviewItem) -> Option<Self> {
+        if !item.awaiting() {
+            return None;
+        }
+        let (waiting, held): (Vec<&ReviewLink>, Vec<&ReviewLink>) =
+            item.links.iter().partition(|l| l.awaiting());
+        let labels: Vec<ReviewLabel> = item
+            .labels
+            .iter()
+            .filter(|l| l.awaiting())
+            .cloned()
+            .collect();
+        let mut agents = Vec::new();
+        let mut runs = Vec::new();
+        let mut reasons = Vec::new();
+        let said = waiting
+            .iter()
+            .map(|l| (&l.agent, &l.run, &l.reason))
+            .chain(labels.iter().map(|l| (&l.agent, &l.run, &l.reason)));
+        for (agent, run, reason) in said {
+            for (v, into) in [
+                (agent, &mut agents),
+                (run, &mut runs),
+                (reason, &mut reasons),
+            ] {
+                if let Some(v) = v.as_ref().filter(|v| !into.contains(*v)) {
+                    into.push(v.clone());
+                }
+            }
+        }
+        Some(Self {
+            subject: item.subject.clone(),
+            contact_id: item.contact_id.clone(),
+            name: item.name.clone(),
+            new_contact: item.contact_agent.is_some() && held.is_empty() && !waiting.is_empty(),
+            handle: item.handle.clone(),
+            handles: waiting.iter().map(|l| l.handle.clone()).collect(),
+            held: held.iter().map(|l| l.handle.clone()).collect(),
+            labels,
+            agents,
+            runs,
+            reasons,
+            confidence: item.least_sure(),
+        })
+    }
+}
+
 /// A link a person turned down, as agents read it before proposing.
 /// `contact_rejected`: the person rejected the agent's whole contact,
 /// so its handles together are a grouping not to propose again.
@@ -650,7 +780,7 @@ impl Store {
             };
             let mut plans = Vec::new();
             for h in &handles {
-                let held = holders(&mut *tx, h).await?;
+                let held = any_holders(&mut *tx, h).await?;
                 let plan = match &target {
                     Some(id) => {
                         let refused = turned_down(&mut tx, h.as_str(), id).await?;
@@ -818,40 +948,7 @@ impl Store {
                 }
             }
             if let Some(id) = subject.strip_prefix("contact:").filter(|_| !agree) {
-                let emptied: Option<i64> = sql!(
-                    "contacts_app.review.is_agent_contact_empty",
-                    "SELECT 1 FROM contacts WHERE contact_id = ?1 AND agent IS NOT NULL \
-                      AND NOT EXISTS (SELECT 1 FROM handles WHERE contact_id = ?1) \
-                      AND NOT EXISTS (SELECT 1 FROM fields WHERE contact_id = ?1) \
-                      AND NOT EXISTS (SELECT 1 FROM contacts WHERE merged_into = ?1)"
-                )
-                .query_scalar()
-                .bind(id)
-                .fetch_optional(&mut *tx)
-                .await
-                .context("read whether an agent's contact is empty")?;
-                if emptied.is_some() {
-                    for sql in [
-                        sql!(
-                            "contacts_app.review_with.update_not_linked",
-                            "UPDATE not_linked SET contact_rejected = 1 WHERE contact_id = ?1"
-                        ),
-                        sql!(
-                            "contacts_app.review_with.delete_labels",
-                            "DELETE FROM labels WHERE subject = 'contact:' || ?1"
-                        ),
-                        sql!(
-                            "contacts_app.review_with.delete_contacts",
-                            "DELETE FROM contacts WHERE contact_id = ?1"
-                        ),
-                    ] {
-                        sql.query()
-                            .bind(id)
-                            .execute(&mut *tx)
-                            .await
-                            .context("drop an emptied agent contact")?;
-                    }
-                }
+                drop_if_emptied(&mut tx, id, true).await?;
             }
         }
         tx.commit().await?;
@@ -987,6 +1084,24 @@ impl Store {
         Ok(out)
     }
 
+    /// Everything an agent suggested that waits for a person, least sure
+    /// first, then as the review lists them.
+    pub async fn suggestions(&self) -> Result<Vec<Suggestion>> {
+        let mut out: Vec<Suggestion> = self
+            .review()
+            .await?
+            .iter()
+            .filter_map(Suggestion::of)
+            .collect();
+        out.sort_by(|a, b| match (a.confidence, b.confidence) {
+            (Some(a), Some(b)) => a.total_cmp(&b),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        });
+        Ok(out)
+    }
+
     /// Every link a person turned down, newest first: what an agent
     /// reads before it proposes.
     pub async fn turned_down(&self) -> Result<Vec<TurnedDown>> {
@@ -1035,7 +1150,7 @@ async fn turned_down(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store_path;
+    use crate::{store_path, WhenHeld};
 
     fn email(s: &str) -> String {
         Handle::email(s).unwrap().as_str().to_string()
@@ -1442,6 +1557,132 @@ mod tests {
             1,
             "the record stays"
         );
+        store.close().await;
+    }
+
+    /// What an agent suggests is no one's until a person says Yes: not in
+    /// the list or the search's `contact:`, on no chip, and holding no
+    /// handle a person adds elsewhere. A person adding a handle withdraws
+    /// it from everyone else's suggestion, and confirms it where it was
+    /// suggested for the very contact.
+    #[tokio::test]
+    async fn a_suggestion_is_no_ones_until_yes_and_holds_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let riker = Handle::email("riker@enterprise.org").unwrap();
+        let slack = Handle::slack("T1", "U1RIKER").unwrap();
+        let number = Handle::tel("+12025550101").unwrap();
+        let troi = store
+            .create("Deanna Troi", ContactKind::Person, &[])
+            .await
+            .unwrap();
+        store
+            .propose(&Proposals {
+                agent: "claude-test".into(),
+                run: Some("run-1".into()),
+                contacts: vec![
+                    ProposedContact {
+                        name: Some("Will Riker".into()),
+                        handles: vec![riker.to_string(), slack.to_string()],
+                        reason: Some("signs as Will".into()),
+                        confidence: Some(0.6),
+                        ..Default::default()
+                    },
+                    ProposedContact {
+                        contact_id: Some(troi.clone()),
+                        handles: vec![number.to_string()],
+                        reason: Some("her number".into()),
+                        confidence: Some(0.9),
+                        ..Default::default()
+                    },
+                ],
+                handles: vec![],
+            })
+            .await
+            .unwrap();
+
+        let listed: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .filter_map(|c| c.name().map(String::from))
+            .collect();
+        assert_eq!(listed, ["Deanna Troi"], "Will Riker is only suggested");
+        let both = [riker.clone(), slack.clone(), number.clone()];
+        assert!(
+            store.resolve(&both).await.unwrap().is_empty(),
+            "no chip is anyone's"
+        );
+        assert!(store
+            .contact(&troi)
+            .await
+            .unwrap()
+            .unwrap()
+            .handles
+            .is_empty());
+
+        let waiting = store.suggestions().await.unwrap();
+        let shown: Vec<String> = waiting
+            .iter()
+            .map(|s| {
+                let name = s.name.as_deref().unwrap_or("");
+                let new = if s.new_contact { "new" } else { "add to" };
+                format!(
+                    "{new} {name}: {} ({})",
+                    s.handles.join(", "),
+                    s.reasons.join("; ")
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                format!("new Will Riker: {riker}, {slack} (signs as Will)"),
+                format!("add to Deanna Troi: {number} (her number)"),
+            ],
+            "the least sure first"
+        );
+        let will = waiting[0].contact_id.clone().unwrap();
+        let reader = crate::read::ContactsReader::open(dir.path())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reader.handles(&will).await.unwrap(), Some(BTreeSet::new()));
+        reader.close().await;
+
+        store
+            .link(&slack, &troi, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .expect("a suggestion holds nothing, so nothing is asked");
+        store
+            .link(&number, &troi, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
+        let troi_now = store.contact(&troi).await.unwrap().unwrap();
+        let held: Vec<&str> = troi_now
+            .handles
+            .iter()
+            .filter_map(|h| h.handle.as_ref().map(Handle::as_str))
+            .collect();
+        assert_eq!(held, [slack.as_str(), number.as_str()]);
+        let waiting = store.suggestions().await.unwrap();
+        assert_eq!(waiting.len(), 1, "linking her number said Yes to it");
+        assert_eq!(
+            waiting[0].handles,
+            [riker.to_string()],
+            "Slack left Riker's"
+        );
+        let down = store.turned_down().await.unwrap();
+        assert!(down
+            .iter()
+            .any(|d| d.handle == slack.as_str() && d.contact_id == will));
+
+        store.confirm(&[contact_subject(&will)]).await.unwrap();
+        let listed = store.list().await.unwrap().len();
+        assert_eq!(listed, 2, "Yes makes him a contact");
+        assert_eq!(store.resolve(&[riker]).await.unwrap().len(), 1);
+        assert!(store.suggestions().await.unwrap().is_empty());
         store.close().await;
     }
 }

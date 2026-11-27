@@ -312,9 +312,10 @@ pub const REREAD_V3: &[&str] = &["google_takeout/google_chat"];
 /// were marked read, so only this brings it back.
 pub const REREAD_V4: &[&str] = &["google_takeout/google_voice"];
 
-/// Forget what these feeds' files hashed to, so the next sync reads
-/// them whole, as if new. Which archive parts were read goes too, or an
-/// export kept zipped would never be unpacked for that read.
+/// Delete these feeds' stamps from `ingested_files`, so the next sync
+/// reads their files whole, as if new. The `google_takeout/archives`
+/// rows, which archive parts were read, are deleted too, or an export
+/// kept zipped would never be unpacked for that read.
 async fn read_again(conn: &mut sqlx::SqliteConnection, scopes: &[&str]) -> anyhow::Result<()> {
     let has_cursor: bool = sql!("google_takeout.rung_read_again.find_ingested_files", "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ingested_files')").query_scalar()
     .fetch_one(&mut *conn)

@@ -38,7 +38,7 @@ pub struct AccountRow {
 #[derive(Debug, Clone)]
 pub struct ProjectRow {
     /// Whoever made the project — in a Team workspace routinely not the
-    /// account that downloaded it. The name rides in the payload beside
+    /// account that downloaded it. The name is in the payload beside
     /// the UUID, which is the only place it is available: an org
     /// colleague has no `users` row here to look up.
     pub creator_uuid: String,
@@ -66,7 +66,7 @@ pub struct ProjectRow {
     pub inputs: Inputs,
 }
 
-/// One knowledge document attached to a project. The text rides inline
+/// One knowledge document attached to a project. The text is inline
 /// in `content` — there is no separate fetch and nothing in the CAS.
 #[derive(Debug, Clone)]
 pub struct ProjectDocRow {
@@ -284,12 +284,11 @@ async fn parse_open(
     // No commit means the store cannot be read, which is *not* the same as
     // the source holding nothing; reading the working set instead would be
     // worse than either. An empty parse declares no render unit, so it deletes
-    // nothing. See the plan's "The sink contract".
+    // nothing.
 
-    // These three all read tables the download side also reads; the
-    // single copy of each lives in `ingest::db` (users/orgs go
-    // through the shared `doltlite_raw` helper). See "One reader per
-    // table" there.
+    // These read tables the download side also reads, through the one
+    // reader of each in `ingest::db` (`users` through the shared
+    // `doltlite_raw` helper).
     let users = datalib_etl::doltlite_raw::load_payloads(&pool, "users").await?;
     let first_user_uuid = db::first_user_uuid_from(&pool).await?;
     let all_convs = db::load_conversations_from(&pool).await?;
@@ -337,7 +336,8 @@ async fn parse_open(
     parse_cowork(&mut parsed, cowork);
     parsed.docs_skipped = docs_skipped;
 
-    // Projects ride the same changed-render unit filter as conversations.
+    // Projects go through the same changed-render-unit filter as
+    // conversations.
     // `project_name_by_uuid` is loaded unfiltered, though — an unchanged
     // conversation that *is* being re-rendered (because something else
     // in its render unit moved) still has to resolve its project's name.

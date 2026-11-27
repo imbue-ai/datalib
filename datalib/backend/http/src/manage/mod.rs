@@ -12,6 +12,7 @@
 mod buttons;
 mod dashboard;
 mod group;
+mod ingest_word;
 mod items;
 mod problems;
 mod queue;
@@ -29,7 +30,7 @@ use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
 };
-use datalib_dag::supervisor::record::StepRecord;
+use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::store::RequestRow;
 use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
@@ -169,9 +170,7 @@ pub struct ManageRow {
     pub params: serde_json::Value,
     /// The Name column: the label the config gives it, led by a group's
     /// mark or followed by a step's role glyph. Under a group a step is
-    /// labelled by what it does there ("Render markdown"); the browser
-    /// reads an ingest step's "Download" / "Import" off `params` against
-    /// what its provider declares, and overrides that one label.
+    /// labelled by what it does there ("Render markdown", "Download").
     pub name: Identity,
     /// The source type, resolved. None for a group that mirrors nothing
     /// and the steps under it.
@@ -622,9 +621,9 @@ fn group_name(g: &WrittenGroup, r#type: Option<&Identity>) -> Identity {
 /// What a step under a group is called in the Name column. Derived
 /// from the function, never written: the group owns the name, and a
 /// step's label says what it does with that group's data.
-fn child_label(step: &WrittenStep) -> String {
+fn child_label(step: &WrittenStep, group_type: Option<&str>) -> String {
     match step.function.as_deref() {
-        Some("ingest") => "Ingest",
+        Some("ingest") => ingest_word::ingest_word(group_type, &step.params),
         Some("render_markdown") => "Render markdown",
         Some("render_time_series") => "Render time series",
         Some("render_occurrences") => "Render occurrences",
@@ -1037,7 +1036,7 @@ impl RowCtx<'_> {
             .then(|| g.to_string())
     }
 
-    fn step(&self, id: &str) -> Option<&StepRecord> {
+    fn step(&self, id: &str) -> Option<&StepRow> {
         self.snap.record.steps.get(id)
     }
 
@@ -1249,17 +1248,17 @@ impl RowCtx<'_> {
                 // label says what it does there. At the top level the
                 // step is its own thing and keeps the name the config
                 // gave it.
-                let label = if group.is_some() {
-                    child_label(s)
-                } else {
-                    s.name.clone().unwrap_or_else(|| default_name(&id))
-                };
-                let r#type = s
+                let group_type = s
                     .group
                     .as_deref()
                     .and_then(|g| self.snap.written.groups.iter().find(|x| x.id == g))
-                    .and_then(|g| g.r#type.as_deref())
-                    .map(|t| source_catalog::source_type(t, &s.params));
+                    .and_then(|g| g.r#type.as_deref());
+                let label = if group.is_some() {
+                    child_label(s, group_type)
+                } else {
+                    s.name.clone().unwrap_or_else(|| default_name(&id))
+                };
+                let r#type = group_type.map(|t| source_catalog::source_type(t, &s.params));
                 let name = Identity {
                     id: id.clone(),
                     label,
@@ -1486,6 +1485,31 @@ impl RowCtx<'_> {
                 None,
             )
         };
+        let record = self.snap.record;
+        let run_under_way = record.run.as_ref().is_some_and(|r| r.finished_at.is_none());
+        let progress = group::sync_progress(
+            &steps
+                .iter()
+                .map(|c| {
+                    let id = c.id();
+                    group::InSync::of(
+                        row_of(id).status.key != "off",
+                        record.steps.get(id).is_some_and(|r| !r.requests.is_empty()),
+                        record
+                            .states
+                            .get(id)
+                            .filter(|_| run_under_way)
+                            .and_then(|s| datalib_dag::RunState::parse(s)),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
+        if let Some(label) = status_from
+            .as_deref()
+            .and_then(|from| group::busy_label(&status, &row_of(from).name.label, progress))
+        {
+            status.label = label;
+        }
 
         // The folder the group's steps write into, measured as a tree
         // of its own by the usage walker — not the sum of two series

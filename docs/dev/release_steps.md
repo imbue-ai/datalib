@@ -128,7 +128,8 @@ rewrites all four from what GitHub reports, which needs `gh` to hold
 successful `release.yml` run on its tag's commit. It then downloads the five
 tarballs, about 450 MB, and refuses any of them, and the image, that
 `gh attestation verify` does not pass for `release.yml` at that tag and
-commit, so a hash it writes always names attested bytes. Until that PR lands, people
+commit, so a hash it writes always names attested bytes. Until a PR with those
+rewrites lands, people
 get the previous release, which still works, and CI stays on the previous image.
 
 ### What one failed job costs
@@ -288,7 +289,7 @@ files.
 | `reader-wheels.yml`'s `publish` | `pypa/gh-action-pypi-publish`, no checkout | `id-token: write`, which only PyPI takes |
 
 A build job hands what it made to the next through an artifact.
-`scripts/lint_repo.py` check 21 holds each grant to its job, in `release.yml`
+`scripts/lint_repo.py` check 21 refuses a write grant on any job but the one allowed it, in `release.yml`
 and `reader-wheels.yml` both, refuses a
 build command in a job that holds one, and requires every
 `actions/checkout` to say `persist-credentials: false` so the token is
@@ -376,7 +377,7 @@ on its own runner before anything is published:
   `_bash32` twin) runs it against stand-ins.
 - The musl binaries are fully static: inline in the workflow.
 - **`scripts/release/check_glibc_floor.sh <dir-or-.tar.gz>...`** and
-  **`scripts/release/smoke_linux_assets.sh`** hold every Linux asset to
+  **`scripts/release/smoke_linux_assets.sh`** check every Linux asset against
   the glibc floor; the next section says how.
   `//tools:check_glibc_floor_test` (and its `_bash32` twin) runs the
   first against stand-ins. The second runs only in the workflow, inside
@@ -398,7 +399,7 @@ LLVM toolchain `MODULE.bazel` registers, which compiles against its own
 glibc 2.28 headers and links against 2.28 stubs, so **datalib's own
 binaries ask for glibc 2.28 at most, whatever the runner**, and link no
 `libgcc_s` or `libstdc++`. The declared floor stays 2.39, and the
-checks below still hold every Linux file to it, Node and the npm
+checks below still check every Linux file against it, Node and the npm
 prebuilds in the runtime included, which someone else built. Lowering
 it is a decision of its own: `install.sh` would then hand hosts between
 the two the gnu build rather than the musl one.
@@ -428,7 +429,7 @@ What holds it:
   its runtime, so a missing shared library fails as well as a missing
   version, then `--version` from the binaries and from Node. The musl
   prebuilds npm ships beside the glibc ones are left to musl hosts.
-- **`scripts/install.sh`** asks `getconf GNU_LIBC_VERSION` and, on a
+- **`scripts/install.sh`** runs `getconf GNU_LIBC_VERSION` and, on a
   glibc older than the floor, says so and installs the musl build; when
   it cannot tell, it installs the gnu build and names
   `DATALIB_LIBC=musl` as the way out. `DATALIB_LIBC` set by hand is

@@ -45,7 +45,7 @@ drift from it — build the key once, use it twice.
 
 **The configured source is a component of every id.** Two sources
 therefore cannot share an id whatever they hold: each has its own name,
-and that is the whole collision story. The trade is deliberate. An id
+and that alone keeps their ids apart. The trade is deliberate. An id
 is a function of the configuration as well as of the data, so a fresh
 data root that names its sources differently mints different ids, and
 renaming a source's group id (already a migration) re-keys everything
@@ -124,7 +124,7 @@ provider has one:
   taken](#where-an-account-was-wanted-and-not-taken).
 
 `None` therefore means one thing: the upstream names no account on the
-record. Nothing about uniqueness rides on it — the source component
+record. Uniqueness does not depend on it — the source component
 already keeps two sources apart, and within a source a provider's keys
 are unique by construction. The test for a candidate is "will this
 value be identical on every future ingest, including the ones
@@ -224,10 +224,10 @@ moved, and the incoming document takes it over.)
    from its backpointer, its source and its stamp and compares
    (`_roundtrip_failures`), asserts `grid_rows.uuid` is unique, and
    that the set of providers minting non-UUID primary keys equals
-   `NON_UUID_PK_PROVIDERS` exactly — in both directions, so the
-   allowlist cannot rot into a permanent exemption.
-2. **`//datalib/ui:e2e_test`** (`grid-copy-ids.spec.ts`) pins that the
-   two copy actions land in two different id spaces.
+   `NON_UUID_PK_PROVIDERS` exactly — in both directions, so a provider
+   that starts minting UUIDs fails until it is taken off the allowlist.
+2. **`//datalib/ui:e2e_test`** (`grid-copy-ids.spec.ts`) checks that the
+   two copy actions copy different ids: the `uuid` and the `upstream_id`.
 
 ## Known instabilities
 

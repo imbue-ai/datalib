@@ -1,7 +1,7 @@
 //! Seven processes on one `system/supervisor.sqlite` at once — people
-//! opening requests, the loop saving its record, the server reading both
-//! — and every write lands, every write is announced, and the file is in
-//! the rollback-journal mode the docs say it is.
+//! opening requests, the loop saving its `steps` rows, the server reading
+//! both — and every write lands, every write is announced, and the file is
+//! in the rollback-journal mode the docs say it is.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -98,7 +98,7 @@ async fn seven_processes_share_the_store_and_every_write_lands() {
     }
 
     assert_eq!(store.open_requests().await.unwrap().len(), 3 * N);
-    assert_eq!(store.load_record().await.unwrap().steps.len(), 2 * N);
+    assert_eq!(store.load_state().await.unwrap().steps.len(), 2 * N);
     assert!(store.turned_off().await.unwrap().is_empty());
     let db = datalib_runtime::layout::supervisor_db(root);
     assert_eq!(journal_mode_bytes(&db), [1, 1], "not rollback-journal");
@@ -172,7 +172,7 @@ async fn seven_at_once(root: &Path, naming: impl Fn(usize) -> Naming) {
     }
     let store = Store::open(root).await.unwrap();
     assert_eq!(store.open_requests().await.unwrap().len(), 3 * N);
-    assert_eq!(store.load_record().await.unwrap().steps.len(), 2 * N);
+    assert_eq!(store.load_state().await.unwrap().steps.len(), 2 * N);
     store.close().await;
 }
 

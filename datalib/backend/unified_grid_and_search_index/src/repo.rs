@@ -224,6 +224,12 @@ pub trait IndexRepo: Send + Sync {
         Ok(Default::default())
     }
 
+    /// Every handle the grid's rows were written by, with how much it
+    /// wrote and the name it wrote the most under.
+    async fn authors(&self) -> Result<Vec<crate::authors::Author>, RepoError> {
+        Ok(Vec::new())
+    }
+
     /// List rendered documents (the `markdowns` table), newest first,
     /// for the document-picker card. Returns an empty Vec for an empty
     /// or missing store — like [`grid_row_refs_for_documents`](Self::grid_row_refs_for_documents),

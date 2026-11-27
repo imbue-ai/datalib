@@ -18,7 +18,7 @@ use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor, RenderUni
 use datalib_etl_render::section::Section;
 use datalib_schema::render_cursor::RenderCursorRow;
 
-use crate::dispatch::{PlannedSource, Wave};
+use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
 use crate::render::{
     declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
@@ -142,7 +142,7 @@ pub async fn run(
         source_type,
         ..
     } = planned;
-    let Wave::Render(processors) = processors else {
+    let Processors::Render(processors) = processors else {
         anyhow::bail!("the diff driver was handed source {name:?}'s ingest wave");
     };
     anyhow::ensure!(

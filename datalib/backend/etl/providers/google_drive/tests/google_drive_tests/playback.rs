@@ -666,8 +666,8 @@ async fn an_unchanged_account_costs_the_listing_and_changes_nothing() {
     );
     let db = open(&store).await;
     assert_eq!(dump_tables(db.pool(), TABLES).await.unwrap(), before);
-    // Each run leaves its record, and the second one says it owed
-    // nothing: that is what the manual e2e reads incrementality from.
+    // Each run leaves its row in `sync_runs`, and the second one says it
+    // owed nothing: that is what the manual e2e reads incrementality from.
     let runs: Vec<(String, i64, i64)> = test_sql!(
         "SELECT status, json_extract(summary, '$.owed'), json_extract(summary, '$.listed') \
          FROM sync_runs ORDER BY run_id"

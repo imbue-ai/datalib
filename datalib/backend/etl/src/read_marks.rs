@@ -85,7 +85,7 @@ pub async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[ReadMarkRow]) -> Re
 
 /// Delete the marks on `ids`: what they were on is gone, or upstream no
 /// longer says.
-pub async fn forget(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
+pub async fn delete(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
     if ids.is_empty() {
         return Ok(());
     }
@@ -246,7 +246,7 @@ mod tests {
         )
         .await
         .unwrap();
-        forget(&mut tx, &["m2".to_string()]).await.unwrap();
+        delete(&mut tx, &["m2".to_string()]).await.unwrap();
         tx.commit().await.unwrap();
         commit_run(&pool, "read").await.unwrap();
         let after = head_commit(&pool).await.unwrap().unwrap();

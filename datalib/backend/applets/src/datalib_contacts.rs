@@ -354,24 +354,25 @@ async fn list(State(store): AppState) -> Result<Json<serde_json::Value>, ApiErro
 }
 
 /// Every contact as a typed table (docs/dev/cards.md § "Typed tables"),
-/// in the address book's columns: the person as a chip, the first
-/// address and number, how many handles, the note, the kind and when it
-/// last changed. A contact is keyed by its id, and the chip by the
-/// handle the grid's Contact column would draw it by: its first working
-/// address, else number, else any handle; one with none is a chip for
-/// the contact itself.
+/// in the address book's columns: the contact as a chip, the first
+/// working address and number, how many handles, the note, the kind and
+/// when it last changed. The chip is the contact itself, not one of its
+/// handles: a handle may be shared, and its chip then names everyone
+/// who has it.
 fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
     let columns = vec![
-        ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity),
-        ColumnSpec::new("me", "Me", ColumnType::Chips).describe(
-            "Whether you said the contact is you: `from:me` finds what its handles wrote.",
-        ),
+        ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity).width(200),
+        ColumnSpec::new("me", "Me", ColumnType::Chips)
+            .describe(
+                "Whether you said the contact is you: `from:me` finds what its handles wrote.",
+            )
+            .width(56),
         ColumnSpec::new("email", "Email", ColumnType::Text),
         ColumnSpec::new("phone", "Phone", ColumnType::Text),
         ColumnSpec::new("handles", "Handles", ColumnType::Count)
             .describe("How many handles are linked to the contact."),
         ColumnSpec::new("note", "Note", ColumnType::Text),
-        ColumnSpec::new("kind", "Type", ColumnType::Text),
+        ColumnSpec::new("kind", "Type", ColumnType::Text).width(110),
         ColumnSpec::new("updated_at", "Changed", ColumnType::Timestamp),
     ];
     let rows: Vec<serde_json::Value> = contacts
@@ -384,17 +385,11 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
                     .find(|h| h.medium == m && h.stopped_working_by.is_none())
                     .or_else(|| c.handles.iter().find(|h| h.medium == m))
             };
-            let chip = working(Medium::Email)
-                .or_else(|| working(Medium::Phone))
-                .or_else(|| c.handles.first())
-                .and_then(|h| h.handle.as_ref());
             let contact_ref = Identity {
-                id: chip.map_or_else(|| datalib_contacts::contact_uri(&c.key), Handle::to_uri),
+                id: datalib_contacts::contact_uri(&c.key),
                 label: name.to_string(),
-                icon: chip.map(|h| {
-                    crate::unified_grid_and_search_index::columns::handle_mark(h.kind()).to_string()
-                }),
-                detail: chip.map(|h| h.describe(name)),
+                icon: None,
+                detail: None,
                 entity: None,
             };
             json!({
@@ -1028,11 +1023,10 @@ mod tests {
     }
 
     /// Browse on the contacts app: every contact as a row keyed by its id,
-    /// drawn as the chip of its first working address (a stopped one is
-    /// still listed beside it), a group as a group, and a contact with no
-    /// handle as its name alone.
+    /// drawn as the contact's own chip, with its first working address (a
+    /// stopped one is still listed beside it), and a group as a group.
     #[tokio::test]
-    async fn every_contact_is_a_row_drawn_by_its_working_address() {
+    async fn every_contact_is_a_row_drawn_as_itself_with_its_working_address() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&datalib_contacts::store_path(dir.path()))
             .await
@@ -1070,17 +1064,14 @@ mod tests {
         assert_eq!(names, ["Away team", "Q", "Will Riker"]);
         let riker = &rows[2];
         assert_eq!(riker["key"], will.as_str());
-        assert_eq!(riker["contact_ref"]["id"], "mailto:riker@enterprise.org");
-        assert_eq!(riker["contact_ref"]["icon"], "email");
+        assert_eq!(
+            riker["contact_ref"]["id"],
+            datalib_contacts::contact_uri(&will),
+            "the contact, not a handle another contact may share"
+        );
         assert_eq!(riker["email"], "riker@enterprise.org");
         assert_eq!(riker["phone"], "+15550123456");
         assert_eq!(riker["handles"], 3);
-        let q = rows[1]["key"].as_str().unwrap();
-        assert_eq!(
-            rows[1]["contact_ref"]["id"],
-            datalib_contacts::contact_uri(q),
-            "no handle, so a chip for the contact itself"
-        );
         assert_eq!(rows[0]["kind"], "Contact group");
         let fields: Vec<&str> = body["columns"]
             .as_array()

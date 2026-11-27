@@ -76,7 +76,7 @@ pub async fn record_file(
 /// record that would not parse, one with no key. The file is stamped, so
 /// nothing reads it again until it changes; its problem is a row keyed
 /// `file:<scope>:<rel>` that only the next stamp of it rewrites and only
-/// [`forget_file`] drops. `None` is a clean read and clears the row.
+/// [`delete_file_stamp`] drops. `None` is a clean read and clears the row.
 pub async fn record_file_with_problem(
     tx: &mut Transaction<'_, Sqlite>,
     scope: &str,
@@ -114,7 +114,11 @@ pub async fn record_file_with_problem(
 /// Drop one path's stamp, inside the transaction that deleted the rows it
 /// produced — so a crash between the two leaves the path still stamped,
 /// and the next run sees it removed again and retries.
-pub async fn forget_file(tx: &mut Transaction<'_, Sqlite>, scope: &str, rel: &str) -> Result<()> {
+pub async fn delete_file_stamp(
+    tx: &mut Transaction<'_, Sqlite>,
+    scope: &str,
+    rel: &str,
+) -> Result<()> {
     replace_file_problem(tx, scope, rel, None).await?;
     sql!(
         "etl.files.checkpoint.delete_ingested_file",
@@ -200,16 +204,16 @@ async fn replace_file_problem(
     Ok(())
 }
 
-/// [`forget_file`] for several paths, in a transaction of its own: for a
+/// [`delete_file_stamp`] for several paths, in a transaction of its own: for a
 /// caller whose deletion already committed, where a crash in between only
 /// means the next run finds the same paths gone and deletes nothing more.
-pub async fn forget_files(pool: &SqlitePool, scope: &str, rels: &[&str]) -> Result<()> {
+pub async fn delete_file_stamps(pool: &SqlitePool, scope: &str, rels: &[&str]) -> Result<()> {
     if rels.is_empty() {
         return Ok(());
     }
     let mut tx = pool.begin().await.context("begin forget_files tx")?;
     for rel in rels {
-        forget_file(&mut tx, scope, rel).await?;
+        delete_file_stamp(&mut tx, scope, rel).await?;
     }
     tx.commit().await.context("commit forget_files tx")?;
     Ok(())
@@ -505,7 +509,9 @@ mod tests {
 
         stamp(&e, "p/feed", a, None).await;
         let mut tx = e.pool.begin().await.unwrap();
-        forget_file(&mut tx, "p/feed", "b.mbox").await.unwrap();
+        delete_file_stamp(&mut tx, "p/feed", "b.mbox")
+            .await
+            .unwrap();
         tx.commit().await.unwrap();
         assert!(file_problems(&e.pool).await.is_empty());
 

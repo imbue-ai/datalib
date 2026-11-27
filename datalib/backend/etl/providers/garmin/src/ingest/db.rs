@@ -200,9 +200,9 @@ impl RawDb {
 
     /// Mend the file edges an earlier build wrote: it keyed every file of
     /// a batch under one ref, so each edge of the batch got the last
-    /// file's hash, and a hash several records' edges share is the mark it
-    /// left. Those edges lose the hash and hold nothing, which is what
-    /// makes the walks fetch them again.
+    /// file's hash, so a hash several records' edges share is how such an
+    /// edge is found. Those edges lose the hash and hold nothing, which
+    /// is what makes the walks fetch them again.
     ///
     /// Once per table, recorded under [`REPAIRED_PREFIX`], and only while
     /// the walk that would refetch it is on: two activities may share a
@@ -260,7 +260,7 @@ impl RawDb {
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
-                owed::forget(&mut tx, table, id).await?;
+                owed::delete_gone(&mut tx, table, id).await?;
                 dr::record_object_error(&mut tx, table, id, &err).await?;
             }
             tx.commit().await?;
@@ -272,7 +272,7 @@ impl RawDb {
     /// Drop the fetch problems of days outside `[since, end]`: the window
     /// no longer asks for them, so no run will fetch them and clear the
     /// row. Returns how many went.
-    pub async fn forget_daily_problems_outside(&self, since: &str, end: &str) -> Result<u64> {
+    pub async fn delete_daily_problems_outside(&self, since: &str, end: &str) -> Result<u64> {
         let done = sql!(
             "garmin.delete_daily_problems_outside_range",
             "DELETE FROM problems WHERE scope_kind = ? AND stage = ? \

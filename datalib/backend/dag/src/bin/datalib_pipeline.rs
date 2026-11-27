@@ -156,9 +156,9 @@ async fn main() -> Result<()> {
         );
     }
     if check_only {
-        // Each step whose program takes `--check` is asked about its params,
-        // as the app's save asks; a refusal fails the check like a dropped
-        // entry does.
+        // Each step whose program takes `--check` is run with `--check`
+        // appended, as the app's save does; a refusal fails the check like
+        // a dropped entry does.
         let asked = datalib_dag::check::check_params(&checked, &data_root, None).await;
         let refused = asked.iter().any(|d| d.severity.drops_the_entry());
         if !asked.is_empty() {
@@ -223,7 +223,7 @@ async fn main() -> Result<()> {
     // would wait forever — the runner escalates on its own timer, the
     // same one it uses when its parent dies. It has to: a step is in a
     // process group of its own, so the kernel's SIGHUP to the
-    // foreground group no longer reaches it.
+    // foreground group does not reach it.
     let (ask_tx, ask_rx) = tokio::sync::watch::channel(false);
     {
         let stop_tx = stop_tx.clone();
@@ -285,7 +285,11 @@ async fn main() -> Result<()> {
         Own::Job(store.open_job(JobKind::Reset, &reset, CLI_OPENER).await?)
     } else {
         let roots: Vec<String> = if sync_only.is_empty() {
-            graph.fringe_ids().into_iter().map(str::to_string).collect()
+            graph
+                .ids_without_inputs()
+                .into_iter()
+                .map(str::to_string)
+                .collect()
         } else {
             sync_only.clone()
         };
@@ -476,7 +480,7 @@ async fn say_how_the_prepare_pass_went(store: &Store) -> Result<()> {
                 }
             }
         }
-        for (step, rec) in store.load_record().await?.steps {
+        for (step, rec) in store.load_state().await?.steps {
             if rec.needs_rerun {
                 eprintln!(
                     "datalib-pipeline: {step} needs to run again before it is up to date; sync it"

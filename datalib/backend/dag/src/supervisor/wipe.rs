@@ -1,32 +1,32 @@
 //! What a wipe — a reset, a purge, a compaction or a collection (`store::JobKind`) — touches, when
-//! the loop may carry it out, and what it leaves in the record. Pure; the
+//! the loop may carry it out, and what it leaves in the loop's `LoopState`. Pure; the
 //! loop (`round.rs`) stops the steps, runs the reset and deletes the trees.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::Graph;
-use crate::supervisor::record::{Record, StepRecord};
+use crate::supervisor::record::{LoopState, StepRow};
 use crate::supervisor::store::JobKind;
 
-/// The steps of `graph` a wipe holds: none of them may run until it is
-/// done. A reset holds its targets; a purge, every step still writing
-/// under one of its groups, which is any the config has not yet let go;
-/// a compaction, the steps it asks and every step that reads one, since a
-/// reader on a commit the fold drops would be left reading nothing. A
-/// collection holds the same: it drops no commit, but it rewrites the
-/// file under a reader.
-pub fn held(graph: &Graph, kind: JobKind, targets: &[String]) -> Vec<usize> {
+/// The steps of `graph` a wipe keeps from running: none of them may run
+/// until it is done. For a reset, its targets; for a purge, every step
+/// still writing under one of its groups, which is any the config still
+/// names; for a compaction, the steps it runs with `--compact` and every
+/// step that reads one, since a reader on a commit the fold drops would
+/// be left reading nothing. A collection keeps the same steps from
+/// running: it drops no commit, but it rewrites the file under a reader.
+pub fn kept_from_running(graph: &Graph, kind: JobKind, targets: &[String]) -> Vec<usize> {
     match kind {
         JobKind::Compact | JobKind::Collect => {
             let Some(how) = kind.shrink() else {
                 return Vec::new();
             };
-            let asked = compact_targets(graph, targets, how);
-            let readers = asked
+            let to_shrink = compact_targets(graph, targets, how);
+            let readers = to_shrink
                 .iter()
                 .flat_map(|&i| graph.dependents[i].iter().copied());
-            let held: BTreeSet<usize> = asked.iter().copied().chain(readers).collect();
-            held.into_iter().collect()
+            let kept: BTreeSet<usize> = to_shrink.iter().copied().chain(readers).collect();
+            kept.into_iter().collect()
         }
         JobKind::Reset => targets
             .iter()
@@ -35,14 +35,14 @@ pub fn held(graph: &Graph, kind: JobKind, targets: &[String]) -> Vec<usize> {
         JobKind::Purge => (0..graph.steps.len())
             .filter(|&i| targets.iter().any(|g| g == tree_group(&graph.steps[i].id)))
             .collect(),
-        // The loop's own pass holds what it has not reached itself
-        // (`round.rs`'s `PreparePass`).
+        // The prepare pass keeps from running the steps whose
+        // `--prepare` has not exited itself (`round.rs`'s `PreparePass`).
         JobKind::Prepare => Vec::new(),
     }
 }
 
 /// Why the wipe cannot be done at all, or `None`. `latest` is the newest
-/// graph the loop has heard of, taken on or not.
+/// graph the loop has read, whether it runs it yet or not.
 pub fn refusal(latest: &Graph, kind: JobKind, targets: &[String]) -> Option<String> {
     if targets.is_empty() && kind.shrink().is_none() {
         return Some("nothing to wipe".into());
@@ -82,8 +82,8 @@ pub fn refusal(latest: &Graph, kind: JobKind, targets: &[String]) -> Option<Stri
     }
 }
 
-/// The steps a compaction or a collection asks, in graph order: its targets, or with none
-/// named, every step that takes the verb.
+/// The steps a compaction or a collection runs with its verb, in graph
+/// order: its targets, or with none named, every step that takes the verb.
 pub fn compact_targets(
     graph: &Graph,
     targets: &[String],
@@ -150,16 +150,16 @@ pub fn after_reset(graph: &Graph, targets: &[String]) -> Vec<String> {
 /// A step just reset: at `version`, so what reads it sees something new,
 /// and with no history, so its next run starts from nothing. Whether it is
 /// turned off is a person's setting, and stays.
-pub fn emptied(was: Option<&StepRecord>, version: String) -> StepRecord {
-    StepRecord {
+pub fn emptied(was: Option<&StepRow>, version: String) -> StepRow {
+    StepRow {
         version: Some(version),
         turned_off_by: was.and_then(|w| w.turned_off_by.clone()),
         ..Default::default()
     }
 }
 
-/// The record without the steps that write under `groups`.
-pub fn forget_groups(record: &mut Record, groups: &[String]) {
+/// Deletes from `record` the steps that write under `groups`.
+pub fn remove_group_steps(record: &mut LoopState, groups: &[String]) {
     record
         .steps
         .retain(|step, _| !groups.iter().any(|g| g == tree_group(step)));
@@ -213,7 +213,7 @@ mod tests {
     /// A reset holds only its targets; a purge, every step still writing
     /// under its groups — none once the config has let them go.
     #[test]
-    fn a_wipe_holds_the_steps_that_write_what_it_wipes() {
+    fn a_wipe_keeps_from_running_the_steps_that_write_what_it_wipes() {
         let g = graph(&[
             ("a/ingest", &[]),
             ("a/render", &["a/ingest"]),
@@ -224,20 +224,24 @@ mod tests {
             ix.into_iter().map(|i| g.steps[i].id.as_str()).collect()
         };
         assert_eq!(
-            names(held(&g, JobKind::Reset, &strings(&["a/ingest"]))),
+            names(kept_from_running(
+                &g,
+                JobKind::Reset,
+                &strings(&["a/ingest"])
+            )),
             ["a/ingest"]
         );
-        let mut purged = names(held(&g, JobKind::Purge, &strings(&["a"])));
+        let mut purged = names(kept_from_running(&g, JobKind::Purge, &strings(&["a"])));
         purged.sort();
         assert_eq!(purged, ["a/ingest", "a/render"]);
-        assert!(held(&g, JobKind::Purge, &strings(&["gone"])).is_empty());
+        assert!(kept_from_running(&g, JobKind::Purge, &strings(&["gone"])).is_empty());
     }
 
-    /// A compaction holds the steps it asks and every step reading one; with
-    /// no targets it asks every step that takes the verb — that verb, not
-    /// the other one.
+    /// A compaction keeps from running the steps it runs with `--compact`
+    /// and every step reading one; with no targets it runs every step that
+    /// takes the verb — that verb, not the other one.
     #[test]
-    fn a_compaction_holds_what_it_asks_and_what_reads_it() {
+    fn a_compaction_keeps_from_running_what_it_runs_and_what_reads_it() {
         let mut g = graph(&[
             ("a/ingest", &[]),
             ("a/render", &["a/ingest"]),
@@ -258,7 +262,11 @@ mod tests {
             out
         };
         assert_eq!(
-            names(held(&g, JobKind::Compact, &strings(&["a/render"]))),
+            names(kept_from_running(
+                &g,
+                JobKind::Compact,
+                &strings(&["a/render"])
+            )),
             ["a/render", "idx/grid"]
         );
         assert_eq!(
@@ -270,7 +278,7 @@ mod tests {
             ["a/ingest", "a/render", "idx/grid"]
         );
         assert_eq!(
-            names(held(&g, JobKind::Compact, &[])),
+            names(kept_from_running(&g, JobKind::Compact, &[])),
             ["a/ingest", "a/render", "b/render", "idx/grid", "idx/qmd"]
         );
         assert_eq!(refusal(&g, JobKind::Compact, &[]), None);
@@ -281,9 +289,9 @@ mod tests {
             .unwrap()
             .contains("no step"));
 
-        // A collection holds what it asks and what reads that.
+        // A collection keeps from running what it runs and what reads that.
         assert_eq!(
-            names(held(&g, JobKind::Collect, &[])),
+            names(kept_from_running(&g, JobKind::Collect, &[])),
             ["a/ingest", "a/render", "idx/grid", "idx/qmd"]
         );
         assert!(refusal(&g, JobKind::Collect, &strings(&["b/render"]))
@@ -334,8 +342,8 @@ mod tests {
 
     /// A reset step keeps no history, but a person's switch stays.
     #[test]
-    fn a_reset_step_forgets_its_runs_but_not_its_switch() {
-        let was = StepRecord {
+    fn a_reset_step_loses_its_runs_but_not_its_switch() {
+        let was = StepRow {
             version: Some("v1".into()),
             succeeded: true,
             fingerprint: "fp".into(),
@@ -350,15 +358,15 @@ mod tests {
     }
 
     /// Guards the trap a bare `rm -r` sets: a group re-added under the
-    /// same id read as up to date because the record still said its step
-    /// had succeeded.
+    /// same id read as up to date because its `steps` row still said its
+    /// step had succeeded.
     #[test]
-    fn a_purge_forgets_every_step_of_its_groups() {
-        let mut record = Record::default();
+    fn a_purge_removes_every_step_of_its_groups() {
+        let mut record = LoopState::default();
         for id in ["gone/raw", "gone/render", "keep/raw", "gonelike/raw"] {
-            record.steps.insert(id.into(), StepRecord::default());
+            record.steps.insert(id.into(), StepRow::default());
         }
-        forget_groups(&mut record, &strings(&["gone"]));
+        remove_group_steps(&mut record, &strings(&["gone"]));
         let left: Vec<&String> = record.steps.keys().collect();
         assert_eq!(left, ["gonelike/raw", "keep/raw"]);
     }

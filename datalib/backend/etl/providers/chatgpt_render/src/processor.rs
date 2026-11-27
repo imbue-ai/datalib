@@ -1,4 +1,4 @@
-//! The render wave for the chatgpt source: its planner and the
+//! The render step of the chatgpt source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -10,7 +10,8 @@ use datalib_etl_render::processor::{
 };
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// The render step's one processor, always planned: it renders whatever
+/// is in the raw store.
 pub fn plan_render(
     ctx: PlanContext,
     config: ChatgptRenderConfig,

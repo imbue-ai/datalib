@@ -62,7 +62,7 @@ to act inside the card. Text from an argument that goes into HTML (help,
 a title drawn as markup) is escaped (`escapeHtml` in
 `datalib/ui/src/cards/help.ts`). An argument that becomes part of a
 request path is checked to be what the view takes (a number, a
-component's name, an applet's id), so it cannot climb to another route
+component's name, an applet's id), so it cannot reach another route
 with `..`. The cards a URL opens get a tab that the layout kept in the
 library leaves out (`kept` in `views/containerTree.ts`) until the person
 names or pins it, so a link cannot put a card back at every launch.
@@ -189,7 +189,7 @@ short description:
    instructions) and repoints the card at it.
 
 The first three kinds are listed together, not kind by kind: the views
-of the data, then the developer tools (next section), each group in
+of the data, then the developer tools (above), each group in
 alphabetical order by title (`byAudience` in `cards/catalog.ts`). The
 agent entry is last among the developer tools.
 
@@ -700,8 +700,8 @@ besides components:
 - `historyView({ trees, title, source, compare })` — the commit
   history of every doltlite store under some trees
   (`cards/HistoryCard.ce.vue`, over `/api/pipeline/history`): store,
-  commit and table as a tree, re-read whenever the runner's record
-  moves; a commit's run opens its `logView`. With `source`, two
+  commit and table as a tree, read again whenever
+  `system/supervisor.sqlite` changes (the live stream's `dag` frame); a commit's run opens its `logView`. With `source`, two
   commits of that source's download store can be selected and
   compared, which adds a diff group to the config and syncs it;
   `compare: true` opens with the newest two set up. The compare bar
@@ -902,8 +902,8 @@ in its Enterprise modules, which need a licence, and this repo is
 public.
 
 The choice is meant to stay reversible, so the grid is kept behind a
-few seams; these are the files that would change if it were swapped
-again, and the only ones that should know the grid's DOM or options:
+few seams; these are the files that would change if it were swapped,
+and the only ones that should know the grid's DOM or options:
 
 - `cards/typedColumns.ts` — `ColumnSpec` → column definitions.
   `cards/cellRenderers.ts` beneath it is plain DOM and would not change.
@@ -960,7 +960,7 @@ own layout shape and decodes to nothing when it cannot be read.
 | `identities` | `[identity, …]` | each drawn as `identity` draws one, side by side: their labels cut in the middle so each gets an even share of the cell (a short one leaves its room to the long ones), and those that would fall below a few characters folded into a "+N" whose tooltip names them (`chipFit.ts`). One plain identity alone reads as `identity` does |
 | `chips` | `[{kind, text, title}]` | a row of chips |
 | `actions` | `[{id, label, enabled, hint, disabled_reason, danger, on}]` | buttons, or a switch when `on` is set; the card supplies the handler for each id, and an id with no handler draws nothing |
-| `membership` | `{applies, proposed, title}`: `applies` is `true`, `false` or `null` | whether the row is in the set the column names, as one three-position switch — knob left for out, centred for not known, right for in — filled when settled, only outlined when `proposed` (an agent's answer no person has reviewed); `title` on hover. A press on a third of it hands the host (`TableGrid`'s `membership`) the row, the field and that answer; a press where the knob already is does nothing, unless the answer is only proposed, which it confirms. Without a host handler it only shows. Sorts in, proposed in, not known, proposed out, out |
+| `membership` | `{applies, proposed, title}`: `applies` is `true`, `false` or `null` | whether the row is in the set the column names, as one three-position switch — knob left for out, centred for not known, right for in — filled when not `proposed`, only outlined when `proposed` (an agent's answer no person has reviewed); `title` on hover. A press on a third of it hands the host (`TableGrid`'s `membership`) the row, the field and that answer; a press where the knob already is does nothing, unless the answer is only proposed, which it confirms. Without a host handler it only shows. Sorts in, proposed in, not known, proposed out, out |
 
 Beside its type a column can say how it is laid out: `width`, the
 pixels it starts at where its type's usual width is wrong for what it

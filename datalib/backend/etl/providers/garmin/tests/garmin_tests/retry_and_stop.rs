@@ -157,7 +157,8 @@ async fn a_failed_activity_detail_is_fetched_again_though_the_listing_did_not_ch
     );
 }
 
-/// Asks the step to stop the moment the walk announces one unit of work.
+/// Requests a stop on `stop` when the walk sets its progress message to
+/// `message`.
 pub(crate) struct StopAt {
     pub(crate) message: &'static str,
     pub(crate) stop: StopFlag,
@@ -171,9 +172,9 @@ impl ProgressSink for StopAt {
     }
 }
 
-/// A stop mid-walk makes every request after it fail at once. Those
-/// failures used to be recorded as fetch failures of ten days of every
-/// remaining metric.
+/// A stop mid-walk makes every request after it fail at once. Guards
+/// against recording those failures as fetch failures of ten days of
+/// every remaining metric.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_stop_is_no_problem_and_the_days_after_it_are_fetched_next_run() {
     let a = Account::tng();

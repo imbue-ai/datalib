@@ -74,8 +74,9 @@ pub const WEIGHT_CHUNK_DAYS: i64 = 90;
 pub const ACTIVITY_PAGE: usize = 100;
 /// `start`/`limit` page of the workout and goal listings.
 pub const ITEM_PAGE: usize = 100;
-/// Pages of a listing before the walk is declared runaway — and, since
-/// it never reached a short page, not an enumeration.
+/// The most pages one listing walk requests. A walk still on full pages
+/// after this many stops, and since it never reached a short page, the
+/// listing is not an enumeration.
 const MAX_LISTING_PAGES: usize = 2000;
 
 /// The whole-account listings, in the order they are walked. A paged
@@ -726,7 +727,7 @@ impl Walk<'_> {
     async fn daily(&self, s: &mut FetchSummary) -> Result<()> {
         let forgotten = self
             .db
-            .forget_daily_problems_outside(&ymd(self.since), &ymd(self.end))
+            .delete_daily_problems_outside(&ymd(self.since), &ymd(self.end))
             .await?;
         if forgotten > 0 {
             info!(event = "garmin_failed_days_forgotten", forgotten, since = %ymd(self.since), end = %ymd(self.end), "failed days outside the window no longer count as problems");

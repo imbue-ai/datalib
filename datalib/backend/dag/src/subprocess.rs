@@ -68,14 +68,16 @@ impl Shrink {
 struct WireOutcome {
     #[serde(default)]
     outputs: Vec<WireArtifactState>,
-    /// A `--migrate` answer: what this step wrote is in a shape it cannot
-    /// reach in place, so it has to run again.
+    /// Reported by a `--prepare` run: what this step wrote is in a shape
+    /// it cannot reach in place, so it has to run again.
     #[serde(default)]
     needs_rerun: bool,
-    /// A `--collect` or `--compact` answer: the store's size before and after.
+    /// Reported by a `--collect` or `--compact` run: the store's size
+    /// before and after.
     #[serde(default)]
     store_bytes: Option<crate::step::StoreBytes>,
-    /// A `--check` answer: what the step would run but warns about.
+    /// Reported by a `--check` run: what the step would run but warns
+    /// about.
     #[serde(default)]
     warnings: Vec<String>,
     /// Set (with a non-zero exit) to classify the failure.
@@ -253,9 +255,9 @@ pub(crate) async fn run_subprocess(
     // the step spawned. A step is often a wrapper around something else
     // — a download runs `latchkey curl` under node — and a `kill(pid)` the step
     // does not forward leaves that grandchild running after the runner
-    // is gone. The cost is that a terminal's Ctrl-C no longer reaches
+    // is gone. The cost is that a terminal's Ctrl-C does not reach
     // steps directly, which changes nothing: `interrupt_children` is
-    // how the runner forwards it, and always was.
+    // how the runner forwards it.
     //
     // `ProcessGroup::leader()` makes the step its group's leader, so the
     // group's id *is* the step's pid — which is what lets
@@ -274,7 +276,7 @@ pub(crate) async fn run_subprocess(
     // Aborted once the step has exited and its pipes have closed. Not at
     // the exit alone: a child the step left behind is still in the group,
     // holding stderr, and the drain below waits on it. While any member is
-    // alive the group's id cannot be reused, so a rung reaches only them.
+    // alive the group's id cannot be reused, so a signal reaches only them.
     let stop_task = child.id().map(|pid| {
         let mut stop = ctx.stop.clone();
         tokio::spawn(async move {
@@ -367,11 +369,11 @@ pub(crate) async fn run_subprocess(
                         // what the runner does next, and the scheduler
                         // emits it once it has recorded it -- the same
                         // path an in-process step's seal takes, so a seal
-                        // is announced once whichever kind of step made
-                        // it. Forwarding it here as well put every
-                        // subprocess seal on the stream twice, and the
-                        // Manage screen counted four for a download that
-                        // made two.
+                        // reaches the stream once whichever kind of step
+                        // made it. Forwarding it here as well would put
+                        // every subprocess seal on the stream twice, and
+                        // the Manage screen would count four for a
+                        // download that made two.
                         Event::Checkpoint { version, rows, .. } => {
                             match rows {
                                 Some(n) => ctx.checkpoint_rows(version, *n),
@@ -436,7 +438,7 @@ pub(crate) async fn run_subprocess(
     } else {
         let w = outcome.unwrap_or_default();
         // One that ignored its SIGINT and was killed says nothing, but it
-        // still ended because it was asked to.
+        // still ended because the runner stopped it.
         let asked = if ctx.stop.is_requested() {
             FailureKind::Cancelled
         } else {
@@ -812,7 +814,7 @@ fn signal_children(signal: libc::c_int) {
     }
 }
 
-/// What a stopped step is sent, and how long after the previous rung:
+/// What a stopped step is sent, and how long after the previous signal:
 /// SIGINT at once, so it stops at its next consistent point
 /// (`step_protocol.md` § Signals), and SIGKILL once `grace` has passed,
 /// for one that ignored it. Both to the group, so what the step spawned
@@ -1098,8 +1100,9 @@ mod tests {
 
     /// A stopped step that ignores its SIGINT is killed once the grace is
     /// up, with what it spawned, and recorded as stopped. Without the
-    /// second rung a step like this held its store, and the loop waited
-    /// on it, for as long as it cared to run.
+    /// SIGKILL after the grace a step like this would keep its store
+    /// open, and the loop would wait on it, for as long as it cared to
+    /// run.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_step_deaf_to_its_stop_is_killed_after_the_grace() {
@@ -1318,8 +1321,9 @@ mod tests {
 
         // A real child process: the capability and the checkpoints cross
         // stdout as NDJSON, which is the path a `datalib-step` render takes.
-        // It re-announces until the consumer has run, because a checkpoint
-        // arriving while the consumer is busy is dropped by design.
+        // It prints the checkpoint again until the consumer has run,
+        // because a checkpoint arriving while the consumer is busy is
+        // dropped by design.
         let producer = StepSpec::new(
             "slack/rendered_md",
             sh(r#"
@@ -1351,7 +1355,7 @@ mod tests {
                         std::fs::create_dir_all(&dir).unwrap();
                         std::fs::write(dir.join("index.txt"), "x").unwrap();
                         passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        // Tells the producer it may stop re-announcing.
+                        // Tells the producer it may stop printing checkpoints.
                         std::fs::write(ctx.data_root.join("consumed"), "1").unwrap();
                         Ok(crate::step::StepOutcome::default())
                     }
@@ -1371,8 +1375,8 @@ mod tests {
         .unwrap();
 
         assert!(rep.all_ok(), "{rep:#?}");
-        // One early pass driven by the wire checkpoint, plus the final
-        // pass for the version no checkpoint reported.
+        // One early run of the consumer driven by the wire checkpoint,
+        // plus the last run for the version no checkpoint reported.
         assert!(
             passes.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "the consumer never ran early: the capability or the checkpoint \
@@ -1394,16 +1398,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Exact, because the producer waits for the early pass before it
-        // finishes: the seal's 7, drained by that pass; the outcome's 3,
-        // drained by the final one. The re-announced seal counts once.
+        // Exact, because the producer waits for the consumer's early run
+        // before it finishes: the seal's 7, drained by that run; the
+        // outcome's 3, drained by the last one. The seal printed again
+        // counts once.
         assert_eq!(queued, vec![7, 0, 3, 0]);
     }
 
     /// A step that seals and then finishes on the commit it sealed moved
-    /// its output this run. The summary used to keep only the last thing
-    /// it heard, the finish, which matched the seal, and so said
-    /// "unchanged" for an output the round had moved.
+    /// its output this run. Guards against a summary that keeps only the
+    /// last thing it heard, the finish, which matched the seal, and so
+    /// says "unchanged" for an output the run had moved.
     #[tokio::test]
     async fn the_summary_says_changed_for_an_output_moved_by_a_seal() {
         let root = tempfile::tempdir().unwrap();
@@ -1425,11 +1430,11 @@ mod tests {
         assert!(!second.step("src/raw").outputs[0].2, "{second:#?}");
     }
 
-    /// A seal a child announces on stdout reaches the event stream once.
-    /// It used to arrive twice -- forwarded from the wire, and again from
-    /// the scheduler when the signal reached it -- so every subprocess
-    /// step's `checkpoints_total` metric read double, and the Manage screen
-    /// counted four seals for a download that made two.
+    /// A seal a child prints on stdout reaches the event stream once.
+    /// Guards against it arriving twice -- forwarded from the wire, and
+    /// again from the scheduler when the signal reached it -- which makes
+    /// every subprocess step's `checkpoints_total` metric read double, and
+    /// the Manage screen count four seals for a download that made two.
     #[tokio::test]
     async fn a_subprocess_checkpoint_reaches_the_event_stream_once() {
         let root = tempfile::tempdir().unwrap();
@@ -1801,93 +1806,64 @@ mod tests {
         assert_eq!(read("cache/on"), "1\n", "a step's own env wins");
     }
 
-    /// A step whose program takes `--reset` is invoked once with it (and
-    /// nothing after it), and its last success is forgotten, so the next
-    /// run runs it again with nothing marked as changed.
-    #[tokio::test]
-    async fn a_reset_invokes_a_step_that_takes_it_and_forgets_its_success() {
-        let root = tempfile::tempdir().unwrap();
-        let mut spec = StepSpec::new(
-            "src/raw",
-            sh(r#"
-                mkdir -p src/raw
-                if [ "$0" = --reset ]; then echo "reset $#"; else echo run; fi >> src/raw/log.txt
-            "#),
-        );
-        spec.verbs.insert(Verb::Reset);
-        let g = Graph::build(vec![spec]).unwrap();
-        let log = root.path().join("src/raw/log.txt");
-        let r = Runner::new(root.path());
-        assert!(r.run(&g).await.unwrap().all_ok());
-        assert!(crate::supervisor::record::recorded(root.path()).await.steps["src/raw"].succeeded);
+    /// A host's loop on `g`, started once: it runs its prepare pass, and
+    /// it is stopped once that pass's job has closed and no request is
+    /// open, so a re-run the pass opened has finished too.
+    async fn launch_once(root: &std::path::Path, g: &Graph) {
+        use crate::supervisor::loop_host::LoopHost;
+        use crate::supervisor::store::Store;
 
-        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
-        assert_eq!(
-            std::fs::read_to_string(&log).unwrap(),
-            "run\nreset 0\n",
-            "the reset invocation is the verb alone, and does nothing else"
-        );
-        let after = crate::supervisor::record::recorded(root.path())
-            .await
-            .steps
-            .remove("src/raw")
-            .unwrap_or_default();
-        assert_eq!(
-            (after.succeeded, after.last_run, after.last_success_at),
-            (false, None, None),
-            "a reset step has never succeeded"
-        );
-        let err = r.reset(&g, &["nope/raw".to_string()]).await.unwrap_err();
-        assert!(err.to_string().contains("no such step"), "{err:#}");
+        struct Quiet;
+        impl LoopHost for Quiet {
+            fn open(
+                &self,
+                _start: datalib_runs::RunStart,
+            ) -> std::result::Result<BTreeMap<String, String>, String> {
+                Ok(BTreeMap::new())
+            }
+            fn close(&self, _run_id: &str) {}
+        }
+
+        let store = Store::open(root).await.unwrap();
+        let before = store.latest_prepare_since("").await.unwrap().map(|j| j.id);
+        let (stop, rx) = tokio::sync::watch::channel(false);
+        let runner = Runner::new(root).stop_on(rx);
+        let (graph, loop_root) = (g.clone(), root.to_path_buf());
+        let task = tokio::spawn(async move {
+            let store = Store::open(&loop_root).await?;
+            let ran = runner.run_forever(&graph, &store, &Quiet).await;
+            store.close().await;
+            ran
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let job = store.latest_prepare_since("").await.unwrap();
+            let this_launch = job.filter(|j| Some(&j.id) != before.as_ref());
+            let pass_over = this_launch.is_some_and(|j| j.closed.is_some());
+            if pass_over && store.open_requests().await.unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the launch's prepare pass, and what it re-ran, never finished"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
+        store.close().await;
     }
 
-    /// A step whose program does not take `--reset` is never sent it: the
-    /// runner deletes its tree, forgets its success, and moves the version
-    /// what reads it sees, so the emptiness reaches them.
+    /// The loop's start runs each step's command with `--prepare` appended.
+    /// A step that brought its output up to date in place reports its new
+    /// version, which the loop's store takes while keeping the step's last
+    /// success. One that reports `needs_rerun` is run again by the request
+    /// the loop opens once the pass is over, and only it: nothing upstream
+    /// of it runs.
     #[tokio::test]
-    async fn a_reset_deletes_the_tree_of_a_step_that_does_not_take_it() {
+    async fn a_launch_records_each_prepare_outcome_and_reruns_what_needs_it() {
         let root = tempfile::tempdir().unwrap();
-        let spec = StepSpec::new(
-            "src/raw",
-            sh(r#"
-                mkdir -p src/raw
-                echo "$0" >> src/raw/log.txt
-                echo '{"event":"outcome","outputs":[{"path":"src/raw","version":"v1"}]}'
-            "#),
-        );
-        let g = Graph::build(vec![spec]).unwrap();
-        let r = Runner::new(root.path());
-        assert!(r.run(&g).await.unwrap().all_ok());
-        let before = crate::supervisor::record::recorded(root.path()).await.steps["src/raw"]
-            .version
-            .clone();
-        assert!(root.path().join("src/raw/log.txt").exists());
-
-        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
-        assert!(
-            !root.path().join("src/raw").exists(),
-            "the tree is deleted, and the step was not invoked to recreate it"
-        );
-        let after = crate::supervisor::record::recorded(root.path())
-            .await
-            .steps
-            .remove("src/raw")
-            .unwrap_or_default();
-        assert!(!after.succeeded);
-        assert!(after.version.is_some(), "{after:?}");
-        assert_ne!(after.version, before, "what reads it sees a new version");
-        // A tree already gone is not an error.
-        r.reset(&g, &["src/raw".to_string()]).await.unwrap();
-    }
-
-    /// `--prepare` is appended to argv. A step that prepared in place
-    /// reports its new version, which the record takes and keeps its last
-    /// success; one that cannot answers `needs_rerun`, which the record
-    /// keeps and the rerun offer names until the step next succeeds.
-    #[tokio::test]
-    async fn a_prepare_records_each_steps_answer_and_keeps_its_success() {
-        let root = tempfile::tempdir().unwrap();
-        let answering = |id: &'static str, answer: &'static str| {
+        let reporting = |id: &'static str, input: Option<&str>, outcome: &'static str| {
             let mut spec = StepSpec::new(
                 id,
                 sh(&format!(
@@ -1895,7 +1871,7 @@ mod tests {
                     mkdir -p {id}
                     if [ "$0" = --prepare ]; then
                         echo prepare >> {id}/log.txt
-                        echo '{answer}'
+                        echo '{outcome}'
                     else
                         echo run >> {id}/log.txt
                         echo '{{"event":"outcome","outputs":[{{"path":"{id}","version":"v1"}}]}}'
@@ -1903,59 +1879,64 @@ mod tests {
                 "#
                 )),
             );
+            if let Some(i) = input {
+                spec = spec.input(i);
+            }
             spec.verbs.insert(Verb::Prepare);
             spec
         };
         let g = Graph::build(vec![
-            answering(
+            reporting(
                 "raw/ingest",
+                None,
                 r#"{"event":"outcome","outputs":[{"path":"raw/ingest","version":"v2"}]}"#,
             ),
-            answering(
+            reporting(
                 "doc/render",
+                Some("raw/ingest"),
                 r#"{"event":"outcome","needs_rerun":true,"outputs":[]}"#,
             ),
         ])
         .unwrap();
-        let r = Runner::new(root.path());
-        assert!(r.run(&g).await.unwrap().all_ok());
-        let before = crate::supervisor::record::recorded(root.path()).await;
+        assert!(Runner::new(root.path()).run(&g).await.unwrap().all_ok());
+        let before = crate::supervisor::record::saved_state(root.path()).await;
 
-        let asked: Vec<String> = vec!["raw/ingest".into(), "doc/render".into()];
-        let answers = r.prepare(&g, &asked).await.unwrap();
+        launch_once(root.path(), &g).await;
+        let log = |id: &str| std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap();
         assert_eq!(
-            answers.iter().map(|m| m.answer.clone()).collect::<Vec<_>>(),
-            [Ok(false), Ok(true)]
+            log("raw/ingest"),
+            "run\nprepare\n",
+            "prepared, not run again"
         );
-        for id in ["raw/ingest", "doc/render"] {
-            assert_eq!(
-                std::fs::read_to_string(root.path().join(id).join("log.txt")).unwrap(),
-                "run\nprepare\n"
-            );
-        }
-        let after = crate::supervisor::record::recorded(root.path()).await;
-        let (raw, doc) = (&after.steps["raw/ingest"], &after.steps["doc/render"]);
-        assert!(raw.version.as_deref().is_some_and(|v| v.ends_with(":v2")));
-        assert!(!raw.needs_rerun);
+        assert_eq!(
+            log("doc/render"),
+            "run\nprepare\nrun\n",
+            "re-run after the pass"
+        );
+        let after = crate::supervisor::record::saved_state(root.path()).await;
+        let raw = &after.steps["raw/ingest"];
+        assert!(
+            raw.version.as_deref().is_some_and(|v| v.ends_with(":v2")),
+            "{raw:?}"
+        );
         assert_eq!(
             (raw.succeeded, &raw.last_success_at),
             (true, &before.steps["raw/ingest"].last_success_at),
             "a prepare is not a run"
         );
-        assert!(doc.needs_rerun);
-        assert_eq!(doc.version, before.steps["doc/render"].version);
-        assert_eq!(
-            crate::supervisor::round::rerun_offer(&g, &after),
-            ["doc/render"]
+        assert!(
+            !after.steps["doc/render"].needs_rerun,
+            "its re-run succeeded"
         );
     }
 
     /// A step that refuses `--prepare` (failure kind `incompatible`) is
-    /// turned off by the runner; a later prepare it does not refuse turns
-    /// it back on. A step a person turned off stays off either way.
+    /// turned off by the runner; a later launch whose `--prepare` does not
+    /// refuse turns it back on. A step a person turned off stays off
+    /// either way.
     #[tokio::test]
-    async fn a_refused_prepare_turns_the_step_off_until_it_no_longer_refuses() {
-        use crate::scheduler::{PrepareError, REFUSED_PREPARE};
+    async fn a_refused_prepare_turns_the_step_off_until_a_launch_no_longer_refuses() {
+        use crate::scheduler::REFUSED_PREPARE;
         let root = tempfile::tempdir().unwrap();
         let refusing = |id: &'static str| {
             let mut spec = StepSpec::new(
@@ -1975,25 +1956,27 @@ mod tests {
             spec
         };
         let g = Graph::build(vec![refusing("a/out"), refusing("b/out")]).unwrap();
-        let r = Runner::new(root.path());
         let store = crate::supervisor::store::Store::open(root.path())
             .await
             .unwrap();
         store.turn_off("b/out", "a person").await.unwrap();
-        let asked: Vec<String> = vec!["a/out".into(), "b/out".into()];
 
         std::fs::write(root.path().join("refuse"), "").unwrap();
-        let answers = r.prepare(&g, &asked).await.unwrap();
+        launch_once(root.path(), &g).await;
+        let job = store.latest_prepare_since("").await.unwrap().unwrap();
+        let rows = store.job_steps(&job.id).await.unwrap();
+        let a = rows.iter().find(|r| r.step == "a/out").unwrap();
         assert!(
-            matches!(&answers[0].answer, Err(PrepareError::Refused(why)) if why.contains("newer build")),
-            "{answers:?}"
+            a.error
+                .as_deref()
+                .is_some_and(|e| e.contains("newer build")),
+            "{rows:?}"
         );
         let off = store.turned_off().await.unwrap();
         assert!(off["a/out"].starts_with(REFUSED_PREPARE), "{off:?}");
 
         std::fs::remove_file(root.path().join("refuse")).unwrap();
-        let answers = r.prepare(&g, &asked).await.unwrap();
-        assert_eq!(answers[0].answer, Ok(false), "{answers:?}");
+        launch_once(root.path(), &g).await;
         let off = store.turned_off().await.unwrap();
         assert!(!off.contains_key("a/out"), "turned back on: {off:?}");
         assert_eq!(
@@ -2001,6 +1984,7 @@ mod tests {
             Some("a person"),
             "a person's turning off is not the runner's to undo"
         );
+        store.close().await;
     }
 
     /// The error message a stopped or failed step leaves behind is what
@@ -2141,7 +2125,7 @@ mod tests {
         );
     }
 
-    /// A step that answers SIGINT with a `cancelled` outcome is told
+    /// A step that exits on SIGINT with a `cancelled` outcome is told
     /// apart from one that fell over: its message says it stopped, not
     /// that it exited with 130.
     #[tokio::test]

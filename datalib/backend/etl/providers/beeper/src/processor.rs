@@ -1,5 +1,5 @@
-//! Program-A `DataProcessor` for the `beeper` source: present when `texts`
-//! is configured. The render processor lives in `datalib_etl_beeper_render`.
+//! The download `DataProcessor` for the `beeper` source: present when
+//! `texts` is configured. The render processor lives in `datalib_etl_beeper_render`.
 
 use std::path::PathBuf;
 
@@ -51,8 +51,8 @@ impl DataProcessor for BeeperIngest {
             .sync
             .path()
             .unwrap_or_else(ingest::default_beeper_data_dir);
-        // Before the store: a store that exists reads as published to the
-        // render and the migrate pass.
+        // Checked before the store is opened: opening creates it, and the
+        // render step and the `--prepare` run then read it as published.
         let index_db = beeper_dir.join("index.db");
         if !index_db.is_file() {
             anyhow::bail!(

@@ -1,9 +1,9 @@
-//! The loop's record: what each step last read and published, what
-//! happened the last time a run reached it, the run in flight, and one row
-//! per process the loop started. The loop holds it in memory as a
-//! [`Record`] and saves what [`changes`] finds into
-//! `system/supervisor.sqlite`. Only the process holding `runner-lock`
-//! writes it; anyone may read it, with any `sqlite3`.
+//! The tables of `system/supervisor.sqlite` only the loop writes: what
+//! each step last read and published, what happened the last time a run
+//! reached it, the run in flight, and one row per process the loop
+//! started. The loop keeps a copy in memory as a [`LoopState`] and saves what
+//! [`changes`] finds into the file. Only the process holding `runner-lock`
+//! writes them; anyone may read them, with any `sqlite3`.
 
 use std::collections::BTreeMap;
 
@@ -16,14 +16,14 @@ use crate::step::{FailureKind, StepId};
 use datalib_sql::{sql, Sql};
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Record {
-    pub steps: BTreeMap<StepId, StepRecord>,
+pub struct LoopState {
+    pub steps: BTreeMap<StepId, StepRow>,
     /// The run in flight, or the one that finished last.
     pub current_run: Option<CurrentRun>,
 }
 
-/// One busy period of the loop: the stretch from taking a request on to
-/// having none left.
+/// One run of the loop: from when it starts serving a request or a job
+/// to when it has none left.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CurrentRun {
     pub run_id: String,
@@ -36,7 +36,7 @@ pub struct CurrentRun {
 }
 
 /// What a step did the last time a run reached it: "what happened, and
-/// when", beside [`StepRecord`]'s "is it up to date".
+/// when", beside [`StepRow`]'s "is it up to date".
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LastRun {
     /// The run this happened in — the key into `system/runs/runs.sqlite`,
@@ -55,7 +55,7 @@ pub struct LastRun {
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct StepRecord {
+pub struct StepRow {
     /// Each input's path → the version this step read at its last
     /// success. A failure never updates it, so the step stays out of date
     /// until it succeeds.
@@ -70,9 +70,10 @@ pub struct StepRecord {
     /// however unchanged its inputs: that is how a config edit takes
     /// effect.
     pub fingerprint: String,
-    /// It answered a launch's `--migrate` with `needs_rerun`: what it wrote
-    /// is in a shape this build cannot reach in place. The tick holds it
-    /// due, and the loop runs it after the pass, until it next succeeds.
+    /// Its `--prepare` run at the loop's start reported `needs_rerun`:
+    /// what it wrote is in a shape this build cannot reach in place. The
+    /// tick treats it as due, and the loop runs it after the pass, until
+    /// it next succeeds.
     pub needs_rerun: bool,
     /// What happened the last time a run reached it, whatever the
     /// outcome: what "last synced" says.
@@ -101,14 +102,15 @@ pub struct StepRecord {
 pub enum Change<'a> {
     /// The run, and every step's state in it.
     Run(&'a CurrentRun),
-    Step(&'a str, &'a StepRecord),
-    /// A step whose record was dropped, by a reset.
-    Forget(&'a str),
+    Step(&'a str, &'a StepRow),
+    /// A step whose entry was removed, by a purge: its `steps` and
+    /// `sinks` rows are deleted.
+    Remove(&'a str),
 }
 
-/// What changed between two records, so a save writes that and nothing
+/// What changed between two [`LoopState`]s, so a save writes that and nothing
 /// else: the loop saves after every event, and most change one step.
-pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
+pub fn changes<'a>(prev: &'a LoopState, next: &'a LoopState) -> Vec<Change<'a>> {
     let mut out = Vec::new();
     if let Some(run) = next.current_run.as_ref() {
         if prev.current_run.as_ref() != Some(run) {
@@ -122,7 +124,7 @@ pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     }
     for id in prev.steps.keys() {
         if !next.steps.contains_key(id) {
-            out.push(Change::Forget(id));
+            out.push(Change::Remove(id));
         }
     }
     out
@@ -154,7 +156,7 @@ pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
     )";
 
 pub(super) const DDL: [&str; 5] = [
-    // One per busy period of the loop; the newest is the run in flight,
+    // One per run of the loop; the newest is the run in flight,
     // or the one that finished last.
     "CREATE TABLE IF NOT EXISTS runs (
         run_id TEXT PRIMARY KEY,
@@ -233,8 +235,8 @@ pub struct InvocationEnd {
 }
 
 impl Store {
-    /// The record as the last save left it.
-    pub async fn load_record(&self) -> Result<Record> {
+    /// The loop's tables as the last save left them.
+    pub async fn load_state(&self) -> Result<LoopState> {
         let run = sql!(
             "dag.supervisor.read_latest_run",
             "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs \
@@ -316,7 +318,7 @@ impl Store {
                         .and_then(FailureKind::parse),
                 }),
             };
-            let state = StepRecord {
+            let state = StepRow {
                 reads: serde_json::from_str(&reads).context("a step's reads")?,
                 version: versions.remove(&id),
                 succeeded: r.try_get::<i64, _>("succeeded")? != 0,
@@ -341,12 +343,12 @@ impl Store {
             };
             steps.insert(id, state);
         }
-        Ok(Record { steps, current_run })
+        Ok(LoopState { steps, current_run })
     }
 
     /// Write what changed from `prev` to `next`, in one transaction. The
     /// loop's to call, and only the loop's.
-    pub async fn save_record(&self, prev: &Record, next: &Record) -> Result<()> {
+    pub async fn save_state(&self, prev: &LoopState, next: &LoopState) -> Result<()> {
         let changes = changes(prev, next);
         if changes.is_empty() {
             return Ok(());
@@ -462,7 +464,7 @@ impl Store {
                         }
                     }
                 }
-                Change::Forget(id) => {
+                Change::Remove(id) => {
                     for stmt in [
                         sql!(
                             "dag.save_record.delete_steps",
@@ -483,9 +485,9 @@ impl Store {
         Ok(())
     }
 
-    /// Whether a loop has taken the request on: a step's record names
-    /// it, or it has already closed.
-    pub async fn taken_on(&self, request: &str) -> Result<bool> {
+    /// Whether a loop has started serving the request: some step's
+    /// `requests` column names it, or it has already closed.
+    pub async fn serving_started(&self, request: &str) -> Result<bool> {
         Ok(sql!("dag.supervisor.is_request_taken_on", "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
              OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)").query_scalar()
         .bind(request)
@@ -602,21 +604,21 @@ impl Store {
     }
 }
 
-/// The record at `root`, as a test reads it back.
+/// The loop's tables at `root`, as a test reads them back.
 #[cfg(test)]
-pub(crate) async fn recorded(root: &std::path::Path) -> Record {
+pub(crate) async fn saved_state(root: &std::path::Path) -> LoopState {
     let store = Store::open(root).await.unwrap();
-    let record = store.load_record().await.unwrap();
+    let record = store.load_state().await.unwrap();
     store.close().await;
     record
 }
 
-/// Write `next` over the record at `root`, as a test sets one up.
+/// Write `next` over the loop's tables at `root`, as a test sets them up.
 #[cfg(test)]
-pub(crate) async fn record(root: &std::path::Path, next: &Record) {
+pub(crate) async fn record(root: &std::path::Path, next: &LoopState) {
     let store = Store::open(root).await.unwrap();
-    let prev = store.load_record().await.unwrap();
-    store.save_record(&prev, next).await.unwrap();
+    let prev = store.load_state().await.unwrap();
+    store.save_state(&prev, next).await.unwrap();
     store.close().await;
 }
 
@@ -625,8 +627,8 @@ mod tests {
     use super::*;
 
     use datalib_sql::test_sql;
-    fn step(fingerprint: &str) -> StepRecord {
-        StepRecord {
+    fn step(fingerprint: &str) -> StepRow {
+        StepRow {
             succeeded: true,
             fingerprint: fingerprint.into(),
             version: Some("v1".into()),
@@ -634,11 +636,11 @@ mod tests {
         }
     }
 
-    fn stepped() -> Record {
-        Record {
+    fn stepped() -> LoopState {
+        LoopState {
             steps: BTreeMap::from([(
                 "slack/raw".into(),
-                StepRecord {
+                StepRow {
                     reads: BTreeMap::from([("x/raw".into(), "v0".into())]),
                     version: Some("abc".into()),
                     succeeded: true,
@@ -670,11 +672,11 @@ mod tests {
         }
     }
 
-    /// The loop saves after every event; a save that rewrote the whole
-    /// record each time would write every step on every tick.
+    /// The loop saves after every event; a save that rewrote every table
+    /// each time would write every step on every tick.
     #[test]
     fn a_save_writes_what_changed_and_nothing_else() {
-        let prev = Record {
+        let prev = LoopState {
             steps: BTreeMap::from([
                 ("a/raw".into(), step("fp-a")),
                 ("b/raw".into(), step("fp-b")),
@@ -697,7 +699,7 @@ mod tests {
             [
                 Change::Run(next.current_run.as_ref().unwrap()),
                 Change::Step("b/raw", &next.steps["b/raw"]),
-                Change::Forget("c/raw"),
+                Change::Remove("c/raw"),
             ]
         );
     }
@@ -709,22 +711,23 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();
-        store.save_record(&Record::default(), &st).await.unwrap();
-        assert_eq!(store.load_record().await.unwrap(), st);
+        store.save_state(&LoopState::default(), &st).await.unwrap();
+        assert_eq!(store.load_state().await.unwrap(), st);
     }
 
-    /// A reset forgets a step: its row and its tree's version go, so the
-    /// next run does its work from the start.
+    /// A purge removes a step: its `steps` row and its tree's `sinks` row
+    /// are deleted, so a step of that id later does its work from the
+    /// start.
     #[tokio::test]
-    async fn a_forgotten_step_leaves_nothing_behind() {
+    async fn a_removed_step_leaves_nothing_behind() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();
-        store.save_record(&Record::default(), &st).await.unwrap();
+        store.save_state(&LoopState::default(), &st).await.unwrap();
         let mut reset = st.clone();
         reset.steps.remove("slack/raw");
-        store.save_record(&st, &reset).await.unwrap();
-        assert!(store.load_record().await.unwrap().steps.is_empty());
+        store.save_state(&st, &reset).await.unwrap();
+        assert!(store.load_state().await.unwrap().steps.is_empty());
         let sinks: i64 = test_sql!("SELECT COUNT(*) FROM sinks")
             .query_scalar()
             .fetch_one(store.pool())

@@ -1,4 +1,4 @@
-//! Provider-owned config schema for the `beeper` source (Program A goal #1).
+//! Provider-owned config schema for the `beeper` source.
 //! Schema-only (serde + anyhow), so the orchestrator can name `BeeperConfig`
 //! without linking the provider.
 

@@ -14,9 +14,10 @@ import { filterToken } from "@/grid/query";
 import { handleNamedBy, uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
-import { UNIFIED_GRID_AND_SEARCH_INDEX, appletAbsent } from "@/api";
+import { UNIFIED_GRID_AND_SEARCH_INDEX, appletAbsent, type ColumnSpec } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
 import type { ContactEdit, DraftView, Saved } from "./contactEdit";
+import type { UnfiledRow, Wrote } from "./contactsTable";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
@@ -492,6 +493,26 @@ export async function peopleFor(handles: string[], pages: string[] = []): Promis
   return (await r.json()) as PeopleAnswer;
 }
 
+/** How much each contact's handles wrote, by contact id, from the
+ *  grid's rows: what `from:contact:` finds. */
+export async function contactCounts(): Promise<Record<string, Wrote>> {
+  const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/people/contacts`);
+  if (!r.ok) throw new Error(`counts → ${r.status}: ${await r.text()}`);
+  return ((await r.json()) as { counts: Record<string, Wrote> }).counts;
+}
+
+/** Everyone who wrote and is on no contact, most first, as a typed table;
+ *  with `notReal`, the senders marked not real too. */
+export async function unfiledPeople(
+  notReal: boolean,
+): Promise<{ columns: ColumnSpec[]; rows: UnfiledRow[] }> {
+  const r = await fetch(
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/people/unfiled${notReal ? "?not_real=true" : ""}`,
+  );
+  if (!r.ok) throw new Error(`unfiled → ${r.status}: ${await r.text()}`);
+  return (await r.json()) as { columns: ColumnSpec[]; rows: UnfiledRow[] };
+}
+
 export async function searchContacts(q: string): Promise<ContactSummary[]> {
   const r = await call<{ contacts: ContactSummary[] }>(`/search?q=${encodeURIComponent(q)}`);
   return r.contacts;
@@ -645,13 +666,14 @@ export async function deleteContact(contactId: string): Promise<void> {
   contactsById.revalidate();
 }
 
-// ── Reviewing what agents proposed ────────────────────────────────────
-// A subject is a handle or `contact:<id>`; `contactsReview.ts` has the rules.
+// ── Yes and No to what agents suggested ─────────────────────────────────
+// A subject is a handle or `contact:<id>`; `suggestions.ts` says what each is.
 
 /** Agree with every link and label an agent proposed for each subject. */
 export async function confirmReview(subjects: string[]): Promise<number> {
   const r = await post<{ confirmed: number }>("/review/confirm", { subjects });
   people.revalidate();
+  contactsById.revalidate();
   return r.confirmed;
 }
 
@@ -1062,12 +1084,42 @@ export function peopleTitle(named: { handle: string; shownAs: string }[]): HTMLE
   return group;
 }
 
-/** A chip that shows the identifier rather than the person, for a list of
- *  one person's handles, where the name would repeat on every line. Its
- *  colour, tooltip and menu are the person chip's; its lead is always the
- *  kind's mark. `shown` is the identifier as the source wrote it. */
+/** Kinds whose identifier a service minted and no person reads: a Slack
+ *  user's `T…/U…`, a Discord or WhatsApp number, a Signal or Notion id,
+ *  and Facebook's and Google's `name/…` and `deleted/…`. */
+const MINTED: ReadonlySet<HandleKind> = new Set<HandleKind>([
+  "slack",
+  "discord",
+  "signal_aci",
+  "notion",
+  "whatsapp",
+  "facebook",
+  "google",
+]);
+
+export function isMinted(handle: string): boolean {
+  const kind = handleKind(handle);
+  return kind !== null && MINTED.has(kind);
+}
+
+/** What a chip in a list of one person's handles says: an address, a
+ *  number or a login as written; for an id a service minted, the name
+ *  that service gives them, which its kind's mark beside it places. The
+ *  id stays in the tooltip and the copied text. */
+export function identifierText(handle: string, shown: string, who: Who): string {
+  const written = shown.trim() || handleValue(handle);
+  if (!isMinted(handle)) return written;
+  const record = who.sourceContacts.find((c) => c.handles.some((h) => h.handle === handle));
+  if (record?.names.length) return sourceName(record, handle, who);
+  return handleValue(handle).match(/^name\/(.+)$/)?.[1] ?? written;
+}
+
+/** A chip that shows the handle rather than the person, for a list of
+ *  one person's handles (`identifierText`). Its colour, tooltip and menu
+ *  are the person chip's; its lead is always the kind's mark. `shown` is
+ *  the identifier as the source wrote it. */
 export function identifierLook(handle: string, shown: string, who: Who): ChipLook {
-  const text = shown.trim() || handleValue(handle);
+  const text = identifierText(handle, shown, who);
   return {
     ...chipLook(handle, text, who),
     text,

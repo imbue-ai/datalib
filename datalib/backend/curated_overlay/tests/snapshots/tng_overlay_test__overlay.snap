@@ -22,7 +22,6 @@ expression: overlay
     },
     "Data (person)": {
       "contact:Data": [
-        "beeper",
         "discord",
         "github",
         "google-takeout",

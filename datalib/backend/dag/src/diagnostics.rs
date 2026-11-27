@@ -2,8 +2,8 @@
 //!
 //! A list rather than an `Err`, because first-problem-wins meant one stray
 //! key in one step took down the grid, search, the document view and every
-//! applet — they are all declared in the same file. Severity is blast
-//! radius, not mood; the crate README has the table.
+//! applet — they are all declared in the same file. A severity says how
+//! much of the config a problem drops; the crate README has the table.
 //!
 //! Locations are byte spans, because the terminal wants `file:line:col` and
 //! an excerpt while the UI editor wants a selection range. A span yields

@@ -1,8 +1,8 @@
-//! `system/supervisor.sqlite`: the mailbox, and the loop's record. Anyone
-//! writes intent into it — open a request, ask for one to stop, turn a
-//! step off or on — and the one process running the loop reads it and
-//! writes back how each request ended, and what each step did
-//! (`record.rs`). Plain SQLite in rollback-journal mode, several writing
+//! `system/supervisor.sqlite`: the tables anyone writes, and the tables
+//! only the loop writes. Anyone writes intent into it — open a request,
+//! ask for one to stop, turn a step off or on, open a job — and the one
+//! process running the loop reads it and writes back how each request
+//! ended, and what each step did (`record.rs`). Plain SQLite in rollback-journal mode, several writing
 //! processes at once. Its shape moves by the rungs of [`LADDER`]: a build
 //! older than the store's refuses it. Every commit is announced (`announce.rs`), which is how the loop
 //! and the server hear of it. `dag/README.md` §"The record".
@@ -23,8 +23,8 @@ use datalib_sql::{sql, sql_id, Sql};
 
 /// How a store's tables reach this build's shape, after what
 /// `CREATE TABLE IF NOT EXISTS` makes on its own. Every store from before
-/// the ladder records version 5, with whichever of the record's later
-/// columns its release had.
+/// the ladder records version 5, with whichever of the `steps` table's
+/// later columns its release had.
 const LADDER: &[datalib_store_meta::Migration] = &[
     datalib_store_meta::Migration {
         version: 6,
@@ -92,9 +92,9 @@ const LADDER: &[datalib_store_meta::Migration] = &[
 /// written by a newer build, whose columns this one would not fill.
 const SCHEMA_VERSION: u32 = LADDER[LADDER.len() - 1].version;
 
-/// Each step's record, from the columns every release since 0.38 had.
-/// What it leaves behind a release may not have had, and the loop
-/// writes again: `needs_rerun` at the launch's prepare pass,
+/// Each step's `steps` row, from the columns every release since 0.38
+/// had. What it leaves behind a release may not have had, and the loop
+/// writes again: `needs_rerun` at the prepare pass,
 /// `waiting_for` on its next tick, `last_failure_kind` at the step's next
 /// run. `launch_passes` goes with it: nothing reads it.
 const STEPS_FROM_V5: Sql = sql!(
@@ -143,8 +143,8 @@ const DDL: [&str; 4] = [
         error TEXT
     )",
     // How a compaction, a collection or the prepare pass stands with each
-    // step it asks, in the order it asks them: what the app's pill and its
-    // upgrade screen count. `state` is a `PassState` word.
+    // step it runs its verb for, in the order it runs them: what the app's
+    // pill and its upgrade screen count. `state` is a `PassState` word.
     "CREATE TABLE IF NOT EXISTS job_steps (
         job_id TEXT NOT NULL,
         ord INTEGER NOT NULL,
@@ -218,8 +218,8 @@ impl RequestOutcome {
 /// the trees of groups the config no longer names, a compaction folds
 /// away history nothing reads and collects the rest, a collection deletes
 /// only what no commit reaches (`step_protocol.md` § Compact and collect).
-/// A prepare is the pass the loop opens for itself each time it starts,
-/// and records its progress in (`dag/README.md` §"Upgrading a root").
+/// A prepare is the prepare pass, which the loop opens for itself each
+/// time it starts and records its progress in (`dag/README.md` §"Upgrading a root").
 #[derive(
     Debug,
     Clone,
@@ -247,7 +247,8 @@ impl JobKind {
         self.into()
     }
 
-    /// How the steps a compaction or a collection asks give back disk.
+    /// The verb a compaction or a collection runs its steps with to give
+    /// back disk.
     pub fn shrink(self) -> Option<crate::subprocess::Shrink> {
         match self {
             JobKind::Compact => Some(crate::subprocess::Shrink::Compact),
@@ -262,8 +263,8 @@ impl JobKind {
     }
 }
 
-/// A reset or purge someone asked for. The loop carries it out as soon as
-/// the steps it touches have stopped, and closes it.
+/// One row of `jobs`. The loop carries a wipe out as soon as the steps
+/// it touches have stopped, and closes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobRow {
     pub id: String,
@@ -326,7 +327,7 @@ impl Store {
                 NEXT_STORE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ),
         };
-        store.climb(&path).await?;
+        store.run_ladder(&path).await?;
         let ddl = || {
             DDL.into_iter()
                 .chain(super::record::DDL)
@@ -359,9 +360,9 @@ impl Store {
     /// Run the rungs above the store's version, before the DDL, so
     /// `CREATE TABLE IF NOT EXISTS` finds each table in its new shape. One
     /// transaction, taken for writing first, so two processes opening at
-    /// once climb once. A new store has nothing to climb: the DDL makes it
-    /// at the top.
-    async fn climb(&self, path: &Path) -> Result<()> {
+    /// once run them once. A new store has no rung to run: the DDL makes
+    /// it in this build's shape.
+    async fn run_ladder(&self, path: &Path) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let Some(meta) = datalib_store_meta::read_in(&mut tx).await? else {
             return Ok(());
@@ -505,7 +506,9 @@ impl Store {
     /// as one commit left them. Read apart, a stop and then a turn-on
     /// landing between the two reads looked like a request still open for
     /// a step turned back on, and the loop ran a stopped sync's step again.
-    pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
+    pub async fn requests_and_turned_off(
+        &self,
+    ) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
         let mut tx = self.pool.begin().await?;
         let rows = OPEN_REQUESTS.query().fetch_all(&mut *tx).await?;
         let turned_off = sql!(
@@ -606,7 +609,7 @@ impl Store {
     /// Carry what the loop keeps per step over to the step's new id, for
     /// the one step `old` now called `new`: whether it is turned off, its
     /// last success and what it read then, its tree's version, and every
-    /// other step's record of having read that version. The run history
+    /// other step's `reads` entry for that version. The run history
     /// keeps the id it ran under. A row the new id already has is left as
     /// it is. Returns how many rows moved.
     pub async fn rename_step(&self, old: &str, new: &str) -> Result<u64> {
@@ -778,8 +781,8 @@ impl Store {
 }
 
 impl Store {
-    /// The loop's to call, before it asks the first step: every step the
-    /// wipe asks, waiting.
+    /// The loop's to call, before it runs the first step: every step the
+    /// job runs its verb for, waiting.
     pub async fn begin_job_steps(&self, wipe: &str, steps: &[&str]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         sql!(
@@ -808,7 +811,7 @@ impl Store {
         Ok(())
     }
 
-    /// The loop's to call, as each step it asked moves.
+    /// The loop's to call, as each step it runs moves.
     pub async fn set_job_step(
         &self,
         wipe: &str,
@@ -835,7 +838,7 @@ impl Store {
         Ok(())
     }
 
-    /// In the order the wipe asks them. A state this build does not know
+    /// In the order the job runs them. A state this build does not know
     /// reads as waiting.
     pub async fn job_steps(&self, wipe: &str) -> Result<Vec<PassRow>> {
         let rows = sql!(
@@ -895,9 +898,9 @@ impl Store {
     }
 }
 
-/// What the store announces when a wipe's steps move, ahead of the wipe's
-/// id: how a listener tells progress from the rest of the record.
-pub const JOB_MOVED: &str = "job moved";
+/// What the store announces when a job's steps move, ahead of the job's
+/// id.
+const JOB_MOVED: &str = "job moved";
 
 /// The clock the store stamps with, as UTC text: what
 /// [`Store::latest_shrink_since`] compares against.
@@ -983,7 +986,7 @@ mod tests {
         finished_at_utc TEXT NOT NULL, tz_offset TEXT NOT NULL)";
 
     /// A store as a release before the ladder left it reaches this
-    /// build's shape at its first open: every step's record and every
+    /// build's shape at its first open: every step's `steps` row and every
     /// switch a person set carry over, `steps` has exactly the columns a
     /// new store's has, and `launch_passes` is gone.
     #[tokio::test]
@@ -1044,7 +1047,7 @@ mod tests {
             for _ in 0..2 {
                 let store = Store::open(root.path()).await.unwrap();
                 assert_eq!(columns(&store, "steps").await, want);
-                let record = store.load_record().await.unwrap();
+                let record = store.load_state().await.unwrap();
                 assert!(record.steps["a/ingest"].succeeded, "{record:?}");
                 assert_eq!(
                     store
@@ -1073,7 +1076,7 @@ mod tests {
         }
     }
 
-    /// A store at version 6 kept its resets, purges and free-disk passes
+    /// A store at version 6 kept its resets, purges and free-disk jobs
     /// in `wipes` and `wipe_steps`. At its first open they are `jobs` and
     /// `job_steps`, every row with them, and an open one is still read as
     /// open: a reset asked for just before the upgrade is still carried
@@ -1148,7 +1151,7 @@ mod tests {
     /// `requests`, `jobs` and `invocations` keep every row they were
     /// given, and the loop reads only the open ones. A store from before
     /// their indexes gets them at its next open, and each read seeks the
-    /// open rows: before, each one read the whole table.
+    /// open rows rather than reading the whole table.
     #[tokio::test]
     async fn the_open_rows_are_read_by_an_index_an_old_store_gains() {
         use crate::supervisor::record::{CLOSE_ABANDONED_INVOCATIONS, RUNNING_INVOCATIONS};
@@ -1267,7 +1270,7 @@ mod tests {
     }
 
     /// A renamed step keeps its switch, its last success and its tree's
-    /// version, a reader's record of that version follows it, and a step
+    /// version, a reader's `reads` entry for that version follows it, and a step
     /// whose id merely starts with the old one is not moved.
     #[tokio::test]
     async fn renaming_a_step_carries_its_rows_over() {

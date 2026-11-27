@@ -17,7 +17,7 @@ const QUOTED_CHARS: usize = 120;
 
 /// An attempt that spent less than this in slow statements says so at
 /// `debug`: a second or two here and there is no one's question, and a
-/// fan-in that spent them would say so on every pass.
+/// fan-in that spent them would say so on every invocation.
 const WORTH_A_LINE_SECS: f64 = 5.0;
 
 /// sqlx logs a statement above `debug` only when it was slow.
@@ -169,7 +169,7 @@ mod tests {
     }
 
     /// Guards `1 slow statements took 1.7s in all; 1 of them, 1.7s, were:`,
-    /// which a fan-in wrote on most of its passes at `info`.
+    /// which a fan-in wrote on most of its invocations at `info`.
     #[test]
     fn a_second_or_two_is_a_quiet_singular_line() {
         let mut slow = SlowStatements::default();

@@ -6,6 +6,7 @@ import PersonCard from "../PersonCard.ce.vue";
 import ChipMenu from "../ChipMenu.ce.vue";
 import ContactEditor from "../ContactEditor.ce.vue";
 import EntityChip from "../EntityChip.ce.vue";
+import SuggestionItem from "../SuggestionItem.ce.vue";
 import chipCss from "../chip.css?inline";
 import { vueCard } from "../vueCard";
 import type { CardRender } from "../types";
@@ -14,6 +15,6 @@ export function personView(subject: string, opts: { seenIn?: string | null } = {
   return vueCard(
     PersonCard,
     { subject, seenIn: opts.seenIn ?? null },
-    { styleSources: [ChipMenu, ContactEditor, EntityChip, chipCss] },
+    { styleSources: [ChipMenu, ContactEditor, EntityChip, SuggestionItem, chipCss] },
   );
 }

@@ -7,9 +7,9 @@
 //!
 //! Not run by `bazel test`: every test here is named `live::<fn>`, and
 //! the target skips that prefix. `bazel run //datalib/backend/etl/providers/chatgpt:chatgpt_live` runs
-//! exactly these. Deliberately not `#[ignore]` — that flag is one bit
-//! for the whole binary, and the snapshot `.update` targets already
-//! spend it.
+//! exactly these. Deliberately not `#[ignore]`: that is one flag for the
+//! whole binary, and `insta_update`'s `test_args` already use it for
+//! the snapshot tests that are ignored (`tools/live.bzl`).
 
 use std::time::Duration;
 

@@ -472,7 +472,7 @@ impl RawDb {
     /// What asking for `ids` as pages left behind, once the tree shows
     /// they are not pages: the empty `pages` row a failed fetch seeds,
     /// its sidecar and its problem. A row with an object stays.
-    pub async fn forget_failed_pages(&self, ids: &[&str]) -> Result<()> {
+    pub async fn delete_page_stubs(&self, ids: &[&str]) -> Result<()> {
         let mut tx = self.pool().begin().await?;
         for id in ids {
             sql!(
@@ -484,7 +484,7 @@ impl RawDb {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("forget the page stub {id}"))?;
-            owed::forget(&mut tx, PAGES, id).await?;
+            owed::delete_gone(&mut tx, PAGES, id).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -865,7 +865,7 @@ impl RawDb {
     }
 
     /// Upstream no longer serves the file: the edge goes.
-    pub async fn forget_attachment(
+    pub async fn delete_attachment_edge(
         &self,
         tx: &mut Transaction<'_, Sqlite>,
         edge_id: &str,
