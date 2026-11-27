@@ -129,7 +129,8 @@ fn api() -> Api {
             "/contacts/add",
             Person,
             "`{people: [{name, handles, held?}]}`: each a contact, in one commit; one whose \
-             handle is on a contact is that contact, which gets the rest. `held`, `{<handle>: \
+             handle is on a contact of the same name is that contact, which gets the rest, and \
+             one on a contact of another name is skipped. `held`, `{<handle>: \
              \"share\" | \"move\"}`, names handles other contacts have that are theirs too or \
              theirs alone. Answers `{created, added_to, already, skipped: [{what, why}]}`",
             add_people,

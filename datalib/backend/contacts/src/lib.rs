@@ -1379,7 +1379,7 @@ fn merged_note(into: Option<String>, from: Option<String>) -> Option<String> {
     }
 }
 
-async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
+pub(crate) async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -> Result<String> {
     let name: Option<String> = sql!(
         "contacts_app.read_name_for_message",
         "SELECT name FROM contacts WHERE contact_id = ?"

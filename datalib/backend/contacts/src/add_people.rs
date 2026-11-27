@@ -11,7 +11,8 @@ use serde::Serialize;
 
 use crate::review::Skipped;
 use crate::{
-    holders, insert_contact, insert_handle, link_in, names_of, ContactKind, Maker, Store, WhenHeld,
+    holders, insert_contact, insert_handle, link_in, name_of, names_of, ContactKind, Maker, Store,
+    WhenHeld,
 };
 use datalib_sql::sql;
 
@@ -46,6 +47,12 @@ enum Plan {
     OnSeveral(Vec<String>),
 }
 
+/// Whether a card's name and a contact's are one name, as a person would
+/// read them: case and the spaces around it aside.
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
 fn plan(holders: BTreeSet<String>) -> Plan {
     let mut holders: Vec<String> = holders.into_iter().collect();
     match holders.len() {
@@ -57,9 +64,11 @@ fn plan(holders: BTreeSet<String>) -> Plan {
 
 impl Store {
     /// Each of `people` a contact, with the handles nobody has. One whose
-    /// handle a contact has is that contact, and gets the rest of their
-    /// handles, less any taken off it as not theirs. One with no handle
-    /// is told apart by name alone.
+    /// handle a contact of the same name has is that contact, and gets the
+    /// rest of their handles, less any taken off it as not theirs. One
+    /// whose handle is on a contact of another name is skipped: it may be
+    /// an address two people share, which only the person can say. One
+    /// with no handle is told apart by name alone.
     pub async fn add_people(&self, people: &[NewPerson]) -> Result<AddedPeople> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut out = AddedPeople::default();
@@ -93,6 +102,17 @@ impl Store {
                     free = theirs;
                     if free.is_empty() && person.held.is_empty() {
                         out.already += 1;
+                        continue;
+                    }
+                    let holder = name_of(&mut tx, &id).await?;
+                    if !name.is_empty() && !same_name(name, &holder) {
+                        out.skipped.push(Skipped {
+                            what: name.to_string(),
+                            why: format!(
+                                "a handle of theirs is on {holder}; add them from their page \
+                                 to say whether they share it"
+                            ),
+                        });
                         continue;
                     }
                     out.added_to += 1;
@@ -184,8 +204,9 @@ mod tests {
     }
 
     /// Many people in one go, and in one commit: a new one is a contact
-    /// with every handle given; one a contact already has gives it the
-    /// rest; adding the same people again changes nothing.
+    /// with every handle given; one a contact of their name already has
+    /// gives it the rest, and one a contact of another name has is left
+    /// out and named; adding the same people again changes nothing.
     #[tokio::test]
     async fn adding_many_people_adds_each_once() {
         let dir = tempfile::tempdir().unwrap();
@@ -204,7 +225,7 @@ mod tests {
 
         let people = [
             person(
-                "William T. Riker",
+                "will riker",
                 &[
                     "email:riker@enterprise.org",
                     "tel:+12025550102",
@@ -217,8 +238,14 @@ mod tests {
             ),
             // The second address book's card for him.
             person(
-                "Captain Picard",
+                "Jean-Luc Picard",
                 &["tel:+12025550101", "email:jean-luc@labarre.test"],
+            ),
+            // His number under another name: whether it is him is the
+            // person's to say.
+            person(
+                "Captain Picard",
+                &["tel:+12025550101", "email:captain@enterprise.test"],
             ),
             person("Kalita", &[]),
             person("", &["email:drone@borg.test"]),
@@ -234,13 +261,15 @@ mod tests {
             .iter()
             .map(|s| (s.what.as_str(), s.why.as_str()))
             .collect();
+        assert_eq!(skipped[0].0, "Captain Picard");
+        assert!(skipped[0].1.contains("on Jean-Luc Picard"), "{skipped:?}");
         assert_eq!(
-            skipped[0],
+            skipped[1],
             ("email:drone@borg.test", "a contact needs a name")
         );
-        assert_eq!(skipped[1].0, "The Captains");
+        assert_eq!(skipped[2].0, "The Captains");
         assert!(
-            skipped[1].1.contains("Will Riker") && skipped[1].1.contains("Jean-Luc Picard"),
+            skipped[2].1.contains("Will Riker") && skipped[2].1.contains("Jean-Luc Picard"),
             "{skipped:?}"
         );
 
@@ -278,9 +307,10 @@ mod tests {
         store.close().await;
     }
 
-    /// Adding someone from their page with an address another contact has,
-    /// which the person said they share: a new contact beside the other,
-    /// not more handles for it.
+    /// Marie's card has the address Robert has. Added with an address
+    /// book's rows, it is left out rather than put on Robert; added from
+    /// her page, where the person said they share it, she is a new contact
+    /// beside him.
     #[tokio::test]
     async fn a_shared_handle_adds_a_new_person_beside_its_holder() {
         let dir = tempfile::tempdir().unwrap();
@@ -294,6 +324,16 @@ mod tests {
             )
             .await
             .unwrap();
+        let card = person(
+            "Marie Picard",
+            &["email:vineyard@labarre.earth", "email:marie@labarre.earth"],
+        );
+        let got = store.add_people(&[card]).await.unwrap();
+        assert_eq!(
+            (got.created, got.added_to, got.skipped.len()),
+            (0, 0, 1),
+            "her card, added with the address book's rows, is not taken for Robert: {got:?}"
+        );
         let mut marie = person("Marie Picard", &["email:marie@labarre.earth"]);
         marie.held = vec![(vineyard.clone(), WhenHeld::Share)];
         let got = store.add_people(&[marie]).await.unwrap();
