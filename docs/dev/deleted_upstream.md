@@ -65,8 +65,8 @@ would be silently ignored.
    config struct, and carry it to the download.
 2. Where the download deletes what upstream stopped listing, call
    `datalib_etl::prune::follow_deletions_in_tx` instead of
-   `prune_scope_in_tx`. It answers what it `deleted` (delete those
-   records' edges, as before) and what it `kept` (count them in the run
+   `prune_scope_in_tx`. It returns what it `deleted` (delete those
+   records' edges, as after `prune_scope_in_tx`) and what it `kept` (count them in the run
    summary and pass the count to `prune::record_kept`).
 3. Add a test that a record upstream drops is kept, and that switching
    back deletes it.

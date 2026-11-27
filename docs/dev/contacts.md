@@ -12,7 +12,7 @@ Three things to know before the rest:
   `NormalizedContact`. Nothing is stored in that shape on the download
   side.
 - **Your own contacts use the same shape.** A contact you curate in the
-  contacts app is answered as a `NormalizedContact` too, so everything
+  contacts app is served as a `NormalizedContact` too, so everything
   that reads a source's record of a person reads yours the same way.
 - **Linking is after the fact, optional, and sits over the view.** No
   source and no render knows about your contacts. A document names a
@@ -63,7 +63,7 @@ What is still to build is §"Not built" at the end.
 | **draw** | what the UI does with a chip when it is shown: it asks who the handle is and paints the name, photo and mark. Nothing is stored. |
 | **chip link** | how a document names a person: a markdown link whose href is the handle as a URI, `[Will Riker](mailto:riker@enterprise.org "Will Riker <riker@enterprise.org>")`. The viewer draws it as a chip. |
 | **source contact** | a `NormalizedContact` a source wrote: that source's attempt at a neutral, unified record of what it knows about one person, keyed by `source_id` and the source's own `key`. The index stores them in `source_contacts`; the UI holds them as `Who.sourceContacts`. |
-| **contact** | a person's own record in the contacts app, also answered as a `NormalizedContact`, with `source_id = "datalib_contacts"`. |
+| **contact** | a person's own record in the contacts app, also served as a `NormalizedContact`, with `source_id = "datalib_contacts"`. |
 | **link** | a row in the contacts app saying a handle belongs to a contact. Made by a person, or proposed by an agent for a person to confirm; no source or step makes one. |
 | **label** | a word on a handle or a contact (`real`, `family`), in or out, with who said so. §"Agents propose, a person decides". |
 | **the contacts app** | the `datalib_contacts` applet and its store under `datalib_curated/`. Optional: without it, chips still say what the individual sources know, and offer nothing to link. |
@@ -229,7 +229,7 @@ A provider's render decides, at normalize time, which identifier it
 has for a person; `NormalizedChatItem::author_handle`,
 `Recipient::handle`, `NormalizedChatItem::mentions` and
 `NormalizedReaction::reactor_handle` carry it.
-What each source has today:
+What each source writes:
 
 | source | author | more |
 |---|---|---|
@@ -348,12 +348,15 @@ with no country code in `contact_record_numbers` (`record_id`,
 (`markdown_uuid`, `record_id`, and `page`: whether the document is a
 contact's own page, such as an address book's card). In a library of 309,481 rows there were 2,081 distinct
 records. A re-render replaces its document's `document_contacts` rows,
-and a record no document carries goes at the end of the pass.
+and a record no document carries is deleted once at the end of each
+run of `unified_grid_and_search_index` that committed anything, in a
+commit of its own (`refresh_people` in `etl/render/src/grid_index.rs`,
+which calls `contact_records::sweep`).
 
 These tables are a part of the grid index's file of their own
 (`grid_index::Part::Contacts`), with a cursor per source
 (`contact_cursors`, written beside the grid's). A build that changes
-them empties only them, and the step's next pass fills them from each
+them empties only them, and the step's next run fills them from each
 source's `source_contacts` alone, a page of documents at a time, without
 reading or writing the rest of the grid. A build that changes the grid's
 own tables empties these with it.
@@ -489,8 +492,8 @@ list below as JSON, each with its `kind`, and `datalib-applet
 datalib_contacts --help` prints it: `read` changes nothing, `propose` is
 an agent's way to write, and `person` is the rest, recorded as the
 person's own decision whoever called it, since the store cannot tell who
-is on the other end of the token. A test holds this table to the
-router. [`contacts_app.md`](../user/contacts_app.md) is the same ground
+is on the other end of the token. A test checks this table against
+the router. [`contacts_app.md`](../user/contacts_app.md) is the same ground
 for an agent, as steps:
 
 | route | does |
@@ -638,8 +641,8 @@ things the same way.
   said the opposite. A contact an agent made that is left holding no
   handle goes with its links. Taking a handle off a contact anywhere else
   (*Not theirs*, on the person card) is written down the same way,
-  whoever put it there, so no agent puts it back; the person adding it
-  again takes the record back.
+  whoever put it there, so no agent puts it back; the person linking it
+  again deletes that `not_linked` row.
 - **A person's word stands.** An agent's batch skips, and names in its
   answer, a handle someone else holds, a pair in `not_linked`, a label
   a person answered the other way; an
@@ -688,12 +691,13 @@ Everything is in `datalib/ui/src/cards/`:
   everyone who used it. `people` is who each handle
   is, for the whole app: the resolver ([`chips.md`](chips.md)
   §"Resolving") over `/people` and the contacts app's `/resolve`; an
-  edit made in the page forgets the handles it touched. An edit made
+  edit made in the page drops the resolver's answers for the handles it
+  touched (`forget`). An edit made
   anywhere else (another window, an agent) reaches every page as the
-  live stream's `curated` frame, on which `people` asks again. The
-  gateway nudges `datalib-http`'s watch after every write it forwards
-  to an applet, and the watch sends the frame when a `datalib_curated/`
-  store's head moved (`http/src/watch.rs`); a draft's autosave is no
+  live stream's `curated` frame, on which `people` asks again. After
+  every write it forwards to an applet, the gateway sends
+  `datalib-http`'s watch a message on its channel (`watch::Nudge`), and
+  the watch sends the frame when a `datalib_curated/` store's head moved (`http/src/watch.rs`); a draft's autosave is no
   commit, so it sends none. `decorateHandles` draws a document's chips
   and `chipCell` a grid cell's.
 - `ChatBody.ce.vue` runs the decorate pass over a document's frame and
@@ -762,7 +766,7 @@ Everything is in `datalib/ui/src/cards/`:
   on Subject (the contact's chip), Phone, Email, Contents (the note
   first), Touched, Type and Channel (`config/browsePresets.ts`).
 
-A chip ranks what it hears: your contact first, then the source
+A chip ranks what the resolver returns: your contact first, then the source
 contacts as `/people` ranked them, then the text the source showed. A
 message's own header is the exception: it shows the name that message
 gave ([`chips.md`](chips.md) §"Trust").
@@ -901,14 +905,19 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-Merging or deleting from the person card, groups and members, undo, the triage grid of
-unresolved handles, labels in search (`label:` and its negation) and on a chip, a
-handle for a text thread known only by a number without its country
-code, a handle that stopped
-working in some apps but not others, mentions in Google Chat,
-WhatsApp and Messages (each marks them up, in a shape not yet checked
-on real data), in Facebook (a tag is `@[<id>:2048:<Name>]` in a post,
-not yet written as a handle) and in Beeper (no handle kind for its
-users), and a handle for a Beeper (Matrix) user. The plans for them
-are `docs/dev/plans/contact_linking.md` and `contact_editing.md` in the
-repo.
+- merging or deleting from the person card;
+- groups and members;
+- undo;
+- the triage grid of unresolved handles;
+- labels in search (`label:` and its negation) and on a chip;
+- a handle for a text thread known only by a number without its
+  country code;
+- a handle that stopped working in some apps but not others;
+- mentions in Google Chat, WhatsApp and Messages (each marks them up,
+  in a shape not yet checked on real data), in Facebook (a tag is
+  `@[<id>:2048:<Name>]` in a post, not yet written as a handle) and in
+  Beeper (no handle kind for its users);
+- a handle for a Beeper (Matrix) user.
+
+The plans for them are `docs/dev/plans/contact_linking.md` and
+`contact_editing.md` in the repo.

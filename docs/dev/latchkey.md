@@ -225,8 +225,9 @@ to sign in instead, and no plugin is installed.
 
 Whether a forwarded `auth browser` works is up to the gateway, so
 nothing Datalib says may assume either way. What is printed at run time
-asks: a step's hint and a provider's error
-(`datalib_etl_web::latchkey::sign_in_advice`) read `LATCHKEY_GATEWAY`.
+checks: a step's hint and a provider's error
+(`datalib_etl_web::latchkey::sign_in_advice`) read `LATCHKEY_GATEWAY`
+and give the advice for whichever case applies.
 What is written down once for everyone says both: a source's help page
 and `getting_your_data.md` give the local commands and what to do
 instead with that variable set, and a stanza's comment, which ends up in
@@ -235,8 +236,9 @@ someone's config with no room for that, names no command at all.
 ## The browser
 
 `auth browser` needs a browser configured. The wizard first runs
-`ensure-browser` with only the sources that find one already on the
-machine. If none turns up, it downloads Playwright's Chromium, once, and says
+`ensure-browser --source
+existing-config,system-browser,existing-playwright-browser`, which looks
+only for a browser already on the machine. If none turns up, it downloads Playwright's Chromium, once, and says
 so on screen while it runs.
 
 latchkey keeps **one saved browser session** (`browser_state.json.enc`)

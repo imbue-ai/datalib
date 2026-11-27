@@ -201,7 +201,7 @@ The two instances:
 | keyed by | handle (`email:…`) | entity URI (`datalib:group/…`) |
 | asks | the unified grid and search index's `POST /people` and the contacts app's `POST /resolve` | datalib-http's `POST /api/entities` (`manage::post_entities`, from the rows the Manage table reads) |
 | answer | each source's record of the person, and the contact a person made | label, icon token, detail, status, and its row of the Sources table (`row`), whose actions are its menu |
-| goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call forgets the handles it changed; from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
+| goes stale when | a person edits a contact (create, link, unlink, no longer works): in this page the call drops the answers for the handles it changed (`forget`); from anywhere else — another window, an agent — the contacts app's commit reaches every page as a `curated` frame, on which `people` and `contactsById` revalidate (`movesPeople`), as on a resync | a sync moves a status, or the config changes: `entities` follows the live connection and revalidates on every frame `movesEntities` names, and on a resync |
 
 Why the viewer joins this itself rather than the producer sending
 finished chips: a contact a person linked and a step's status are live
@@ -311,7 +311,8 @@ document does:
   each source's record; the time-series card's heading for each
   source; the log-line card's group and step.
 - **The app's chrome:** each row of the toolbar's "what is syncing"
-  menu, the pass pills' lists (upgrading, freeing disk space) and the
+  menu, the lists in the toolbar's pills for an upgrade and for freeing
+  disk space, and the
   re-render dialog's list.
   The index group, `unified_grid_and_search_index`, is called "Search
   index" there.
@@ -337,8 +338,8 @@ rows, inside `<vs-tree>`'s shadow root through the tree's `renderLabel`
 and `extraCss`, a source as its group's chip and every other node as its
 node's; and its pane's title as the shown node's. The tree's `menu`
 event and the title's `contextmenu` show `ChipMenu`, and a double-click
-on a chip opens its card. `ChipMenu` hears Escape on its
-way down, since the tree takes the key for itself.
+on a chip opens its card. `ChipMenu` listens for Escape on the window
+in the capture phase, since the tree takes the key for itself.
 
 ## In the search field
 
