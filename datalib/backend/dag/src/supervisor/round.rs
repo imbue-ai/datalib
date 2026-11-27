@@ -16,8 +16,8 @@ use super::pass::PassState;
 use super::record::{InvocationEnd, InvocationRow};
 use super::store::{JobKind, JobRow, RequestOutcome, Store};
 use super::tick::{
-    tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, Running, Seq, Shape,
-    StepFacts, StepShape, StepState as Row, Tick, Wait,
+    tick, Attempt, Consumed, Facts, Intent, LockShape, Outcome, Request, RetryPolicy, Running, Seq,
+    Shape, StepFacts, StepShape, StepState as Row, Tick, Wait,
 };
 use super::wipe;
 use crate::artifact::ArtifactPath;
@@ -26,9 +26,9 @@ use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::scheduler::{
-    apply_verb_outcome, fresh_version, invocation_env, invoke_with_retry, mark_running,
-    new_invocation_id, now_stamp, record_end, record_unrun, reported_version, ConsumerQueues,
-    Ended, InvokeError, PrepareError, Runner, Serves, REFUSED_PREPARE,
+    apply_verb_outcome, fresh_version, invocation_env, invoke, mark_running, new_invocation_id,
+    now_stamp, record_end, record_unrun, reported_version, ConsumerQueues, Ended, InvokeError,
+    PrepareError, Runner, Serves, REFUSED_PREPARE,
 };
 use crate::step::{FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::subprocess::Shrink;
@@ -123,6 +123,8 @@ struct Tried {
     failed: bool,
     stopped: bool,
     read: Read,
+    number: u32,
+    failure: Option<(FailureKind, std::time::Instant)>,
 }
 
 /// An invocation in flight.
@@ -299,8 +301,10 @@ impl Open {
     /// waited for that run's output.
     fn ended(&mut self, step: &str, e: &Ended, moved: bool) {
         let before = self.parts.get(step);
+        // A failure this invocation retries is one attempt of the same
+        // run, not one that a later run hid.
         let failed_before = before.map_or(0, |p| {
-            p.failed_before + u32::from(p.outcome == RunState::Failed)
+            p.failed_before + u32::from(p.outcome == RunState::Failed && e.attempts == 1)
         });
         let changed = moved || before.is_some_and(|p| p.changed);
         self.parts.insert(
@@ -489,7 +493,7 @@ impl Runner {
         let mut config_moved = true;
         let mut next_graph: Option<Graph> = None;
         let mut said_waiting_to_swap = false;
-        let mut shape = shape_of(graph, &self.lock_slots);
+        let mut shape = shape_of(graph, &self.lock_slots, &self.retry);
         let mut slots: Slots = BTreeMap::new();
         let mut open: Vec<Open> = Vec::new();
         // Step id → who turned it off, whether or not the graph has it.
@@ -573,7 +577,7 @@ impl Runner {
                             s.between_invocations = false;
                         }
                     }
-                    shape = shape_of(graph, &self.lock_slots);
+                    shape = shape_of(graph, &self.lock_slots, &self.retry);
                     // Read the requests again: one set aside for want of a
                     // step this graph has is served now.
                     intent_reader.seen = None;
@@ -794,16 +798,27 @@ impl Runner {
                         }
                 })
                 .collect();
-            record_states(graph, &shape, &mut state, &t, &waiting_on, &off, low, |i| {
-                if !working[i] {
-                    return Vec::new();
-                }
-                open.iter()
-                    .enumerate()
-                    .filter(|(r, _)| !closing.contains(r) && t.scopes[*r][i])
-                    .map(|(_, o)| o.id.clone())
-                    .collect()
-            });
+            let retrying = retries_of(graph, &shape, &slots, &t, facts.now);
+            record_states(
+                graph,
+                &shape,
+                &mut state,
+                &t,
+                &waiting_on,
+                &off,
+                low,
+                &retrying,
+                |i| {
+                    if !working[i] {
+                        return Vec::new();
+                    }
+                    open.iter()
+                        .enumerate()
+                        .filter(|(r, _)| !closing.contains(r) && t.scopes[*r][i])
+                        .map(|(_, o)| o.id.clone())
+                        .collect()
+                },
+            );
             say_wiping(graph, &mut state, &t, &wiping);
             record_deferred(graph, &mut state, &intent_reader.deferred);
 
@@ -867,10 +882,10 @@ impl Runner {
                 let retry = self.retry.clone();
                 let sink = self.sink.clone();
                 let id = graph.steps[i].id.clone();
+                let attempt = start.attempt;
                 set.spawn(async move {
-                    let (attempts, res) =
-                        invoke_with_retry(&run, ctx, &retry, &sink, &child_env).await;
-                    Done::Step(id, attempts, res)
+                    let res = invoke(&run, ctx, attempt, &retry, &sink, &child_env).await;
+                    Done::Step(id, attempt, res)
                 });
             }
             for &i in &t.stops {
@@ -993,6 +1008,10 @@ impl Runner {
                 }
                 _ = tokio::time::sleep(DISK_LOOK_EVERY),
                     if listening && busy && graph.disk_floor.is_some() => {}
+                // A backoff ran out: the next tick retries the step.
+                _ = tokio::time::sleep_until(tokio::time::Instant::from_std(
+                        t.wake_at.unwrap_or_else(std::time::Instant::now))),
+                    if t.wake_at.is_some() => {}
                 // Empty while the disk is under the floor and no step runs.
                 joined = set.join_next(), if !set.is_empty() => {
                     // Seals before joins: a step sends its seal before its
@@ -1036,6 +1055,10 @@ impl Runner {
                         // failed has failed, whatever it was sent.
                         stopped: live.stop.is_none() && e.outcome == RunState::Stopped,
                         read: live.consumed,
+                        number: attempts,
+                        failure: e.failure
+                            .filter(|_| e.outcome == RunState::Failed)
+                            .map(|k| (k, std::time::Instant::now())),
                     });
                     s.between_invocations = true;
                     self.sink.emit(&Event::InvocationEnd {
@@ -1886,6 +1909,37 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 /// between processes (`waiting_on`: its invocation ended, and a producer it
 /// reads is still running or waiting) waits for the producer named there. `serving` names the open requests a step
 /// has work left in, oldest first.
+/// What a step waiting out a backoff says on its row: why, which attempt
+/// is next, and when it starts, on the wall clock.
+fn retries_of(
+    graph: &Graph,
+    shape: &Shape,
+    slots: &Slots,
+    t: &Tick,
+    now: std::time::Instant,
+) -> BTreeMap<usize, String> {
+    (0..t.states.len())
+        .filter(|&i| t.states[i] == Row::Waiting(Wait::Backoff))
+        .filter_map(|i| {
+            let a = slot_at(slots, graph, i)?.last_attempt.as_ref()?;
+            let (kind, ended) = a.failure?;
+            let at = shape.retry.retry_at(a.number, kind, ended)?;
+            let wait = i64::try_from(at.saturating_duration_since(now).as_micros()).ok()?;
+            let when = datalib_time::IsoOffsetTimestamp::now_local().bump_micros(wait);
+            Some((
+                i,
+                format!(
+                    "waiting to retry after a {} failure: attempt {} of {} starts at {}",
+                    kind.as_str(),
+                    a.number + 1,
+                    shape.retry.max_attempts(kind),
+                    when.to_rfc3339()
+                ),
+            ))
+        })
+        .collect()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn record_states(
     graph: &Graph,
@@ -1895,6 +1949,7 @@ fn record_states(
     waiting_on: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
     low: Option<LowDisk>,
+    retrying: &BTreeMap<usize, String>,
     serving: impl Fn(usize) -> Vec<String>,
 ) {
     let id = |j: usize| graph.steps[j].id.as_str();
@@ -1922,6 +1977,7 @@ fn record_states(
                 "waiting for {}, which reads what this writes",
                 id(r)
             )),
+            Row::Waiting(Wait::Backoff) => retrying.get(&i).cloned(),
             Row::Waiting(Wait::Prepare) => Some(
                 "waiting for the upgrade: this build has not yet run its command, or that of a step \
                  it reads, with --prepare to bring what it stored to this build's shape"
@@ -2080,7 +2136,7 @@ fn same_graph(a: &Graph, b: &Graph) -> bool {
 /// index names, reads the sinks of the steps it names as inputs, and holds
 /// its named locks, sized as the config declares them unless `slots` (the
 /// host's `--parallelism`) says otherwise.
-fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
+fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>, retry: &RetryPolicy) -> Shape {
     let locks: Vec<LockShape> = graph
         .locks
         .iter()
@@ -2115,6 +2171,7 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
         steps,
         topo: graph.topo.clone(),
         locks,
+        retry: retry.clone(),
     }
 }
 
@@ -2152,6 +2209,8 @@ fn facts_of(graph: &Graph, state: &LoopState, slots: &Slots) -> Facts {
                     failed: a.failed,
                     stopped: a.stopped,
                     consumed: a.read.in_graph(graph),
+                    number: a.number,
+                    failure: a.failure,
                 }),
             running: slot_at(slots, graph, i).and_then(|s| s.running.clone()),
             streams_output: slot_at(slots, graph, i)
@@ -2165,6 +2224,7 @@ fn facts_of(graph: &Graph, state: &LoopState, slots: &Slots) -> Facts {
         sinks,
         steps,
         low_disk: false,
+        now: std::time::Instant::now(),
     }
 }
 

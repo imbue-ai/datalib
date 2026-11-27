@@ -311,7 +311,14 @@ impl Walk {
             }
         }
         for (step, allowed) in &self.allowed {
-            let ran = state.started(step);
+            // A retry is the same run tried again, not a run of its own.
+            let ran = state
+                .invocations
+                .iter()
+                .filter(|(row, end)| {
+                    row.step == *step && end.as_ref().is_none_or(|e| e.attempts <= 1)
+                })
+                .count();
             if ran > *allowed {
                 let runs: Vec<String> = state
                     .invocations

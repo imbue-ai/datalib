@@ -55,43 +55,7 @@ pub fn new_invocation_id() -> String {
     uuid::Uuid::now_v7().to_string()
 }
 
-#[derive(Debug, Clone)]
-pub struct RetryPolicy {
-    /// Max invocations (first try + retries) per failure kind.
-    pub transient_attempts: u32,
-    pub rate_limited_attempts: u32,
-    /// Sleep before the first retry, doubled each further retry.
-    pub backoff: Duration,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            transient_attempts: 3,
-            rate_limited_attempts: 3,
-            backoff: Duration::from_secs(1),
-        }
-    }
-}
-
-impl RetryPolicy {
-    fn max_attempts(&self, kind: FailureKind) -> u32 {
-        match kind {
-            FailureKind::Transient => self.transient_attempts,
-            FailureKind::RateLimited => self.rate_limited_attempts,
-            // Auth: a human has to act. Data: retrying won't help.
-            // Cancelled: the user asked us to stop. Incomplete: the
-            // step's own retries already ran out. Incompatible: what it
-            // wrote will not change by asking again.
-            FailureKind::Auth
-            | FailureKind::Permission
-            | FailureKind::Data
-            | FailureKind::Cancelled
-            | FailureKind::Incomplete
-            | FailureKind::Incompatible => 1,
-        }
-    }
-}
+use crate::supervisor::tick::RetryPolicy;
 
 pub struct Runner {
     pub data_root: PathBuf,
@@ -747,59 +711,43 @@ fn rows_of(seals: impl Iterator<Item = Seal>) -> u64 {
     seals.map(|(_, n)| n.unwrap_or(0)).sum()
 }
 
-pub(crate) async fn invoke_with_retry(
+/// One attempt at a step: one process, or one call of an in-process step.
+/// Whether it is tried again is the tick's to say.
+pub(crate) async fn invoke(
     run: &StepRun,
     ctx: StepCtx,
+    attempt: u32,
     retry: &RetryPolicy,
     sink: &Arc<dyn EventSink>,
     child_env: &BTreeMap<String, String>,
-) -> (u32, Result<StepOutcome, StepError>) {
-    let mut attempt = 1u32;
-    loop {
-        sink.emit(&Event::StepStart {
-            step: ctx.step_id.clone(),
-            attempt,
-        });
-        let res = match run {
-            StepRun::InProcess(f) => f(ctx.clone()).await,
-            StepRun::Subprocess { argv, env, params } => {
-                crate::subprocess::run_subprocess(
-                    argv,
-                    env,
-                    params.as_deref(),
-                    child_env,
-                    attempt,
-                    &ctx,
-                    sink,
-                )
-                .await
-            }
-        };
-        match res {
-            Ok(outcome) => return (attempt, Ok(outcome)),
-            Err(e) => {
-                if attempt >= retry.max_attempts(e.kind) {
-                    return (attempt, Err(e));
-                }
-                // A step interrupted mid-request can come back `transient`;
-                // retrying it would start it again after the stop.
-                let stopped = |mut e: StepError| {
-                    e.kind = FailureKind::Cancelled;
-                    (attempt, Err(e))
-                };
-                if ctx.stop.is_requested() {
-                    return stopped(e);
-                }
-                let backoff = retry.backoff * 2u32.saturating_pow(attempt - 1);
-                let mut stop = ctx.stop.clone();
-                tokio::select! {
-                    _ = tokio::time::sleep(backoff) => {}
-                    _ = stop.requested() => return stopped(e),
-                }
-                attempt += 1;
-            }
+) -> Result<StepOutcome, StepError> {
+    sink.emit(&Event::StepStart {
+        step: ctx.step_id.clone(),
+        attempt,
+    });
+    let res = match run {
+        StepRun::InProcess(f) => f(ctx.clone()).await,
+        StepRun::Subprocess { argv, env, params } => {
+            crate::subprocess::run_subprocess(
+                argv,
+                env,
+                params.as_deref(),
+                child_env,
+                attempt,
+                &ctx,
+                sink,
+            )
+            .await
         }
-    }
+    };
+    // A step interrupted mid-request can come back `transient`; trying it
+    // again would start it after the stop.
+    res.map_err(|mut e| {
+        if ctx.stop.is_requested() && retry.max_attempts(e.kind) > 1 {
+            e.kind = FailureKind::Cancelled;
+        }
+        e
+    })
 }
 
 #[cfg(test)]
@@ -3790,6 +3738,11 @@ mod tests {
         let rep = runner(root.path()).run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
         assert_eq!(rep.step("flaky/raw").attempts, 3);
+        assert_eq!(
+            rep.step("flaky/raw").failed_before,
+            0,
+            "a retried failure is an attempt of the same run, not one a later run hid"
+        );
     }
 
     #[tokio::test]

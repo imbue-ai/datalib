@@ -82,6 +82,8 @@ mod tests {
             failed,
             stopped,
             consumed: consumed("fp", &[]),
+            number: 1,
+            failure: None,
         }
     }
 

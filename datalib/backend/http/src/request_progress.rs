@@ -48,7 +48,7 @@ pub struct RequestStep {
     pub state: Option<&'static str>,
     pub state_detail: Option<String>,
     /// What a `waiting` step waits for (`WaitKind`): `upstream`, `reader`,
-    /// `lock`, `disk_space`, `config` or `prepare`; null in any other
+    /// `lock`, `disk_space`, `config`, `prepare` or `backoff`; null in any other
     /// state.
     pub waiting_for: Option<&'static str>,
     /// Its newest run. A step done without running for this request keeps
