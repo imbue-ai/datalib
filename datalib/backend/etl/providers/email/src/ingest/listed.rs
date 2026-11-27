@@ -501,7 +501,7 @@ pub async fn delete_gone_messages_in_tx(
 ) -> Result<usize> {
     let gone = write_batch_in_tx(tx, now, Vec::new(), ids, email_id_of).await?;
     for id in ids {
-        owed::forget(tx, LISTED, id).await?;
+        owed::delete_gone(tx, LISTED, id).await?;
     }
     Ok(gone)
 }

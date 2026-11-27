@@ -168,7 +168,7 @@ pub async fn set_held_version(
 
 /// Upstream no longer has `key`: delete its sidecar row and its fetch
 /// problem, in the transaction that removes its content.
-pub async fn forget(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &str) -> Result<()> {
+pub async fn delete_gone(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &str) -> Result<()> {
     // Audited: `table` is a provider's `&'static str`; the key is bound.
     let sql = Sql::dynamic(
         sql_id!("etl.web.owed.delete_bookkeeping_of_key"),
@@ -179,7 +179,7 @@ pub async fn forget(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &str) ->
         .execute(&mut **tx)
         .await
         .with_context(|| format!("forget {table}={key}"))?;
-    datalib_etl::prune::forget_record_problems_in_tx(tx, table, key).await
+    datalib_etl::prune::delete_record_problems_in_tx(tx, table, key).await
 }
 
 /// What one fetch of one owed record came to.
@@ -568,7 +568,7 @@ async fn write_in<T: Send, F: Fetcher<T>>(
                 done.got += 1;
             }
             Outcome::Gone => {
-                forget(tx, l.table, key).await?;
+                delete_gone(tx, l.table, key).await?;
                 done.gone += 1;
             }
             Outcome::Failed(said) => {

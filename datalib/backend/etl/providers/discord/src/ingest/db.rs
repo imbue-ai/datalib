@@ -289,7 +289,7 @@ pub async fn prune_messages(
             .context("delete what was deleted upstream")?;
     }
     for key in &gone {
-        datalib_etl::prune::forget_record_problems_in_tx(tx, MESSAGES, key).await?;
+        datalib_etl::prune::delete_record_problems_in_tx(tx, MESSAGES, key).await?;
     }
     Ok(gone.len())
 }

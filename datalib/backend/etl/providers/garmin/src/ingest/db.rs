@@ -260,7 +260,7 @@ impl RawDb {
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
-                owed::forget(&mut tx, table, id).await?;
+                owed::delete_gone(&mut tx, table, id).await?;
                 dr::record_object_error(&mut tx, table, id, &err).await?;
             }
             tx.commit().await?;
