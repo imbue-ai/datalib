@@ -1155,7 +1155,7 @@ mod tests {
     /// of the ones it lacks, so the sweep keeps their vectors, and deletes
     /// them only once a pass has finished without them.
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_unfinished_keyword_pass_forgets_no_ones_chunks() {
+    async fn an_unfinished_keyword_pass_deletes_no_ones_chunks() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");
