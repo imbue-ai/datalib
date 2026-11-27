@@ -241,7 +241,7 @@ impl ProgressSink for Counts {
 /// done, over the pace it was counted. The download reported no total,
 /// so a Claude Code sync showed no ETA however long it ran.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_sync_announces_the_files_it_reads_and_counts_them_done() {
+async fn a_sync_reports_the_files_it_reads_and_counts_them_done() {
     let td = tempfile::tempdir().unwrap();
     let raw_path = td.path().join(STANZA).join("raw");
     std::fs::create_dir_all(&raw_path).unwrap();
