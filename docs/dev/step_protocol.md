@@ -82,9 +82,9 @@ the directory `datalib-pipeline` itself lives in; also settable as
 library's own `<data_root>/system/bin/` second, both ahead of the
 inherited `PATH`. The first is how a program shipped beside the runner
 is found without an absolute path; the second is where a library's own programs go, so
-they travel with it. (They used to go in `~/.datalib/bin`, shared by
-every library; a launch copies any program the config still runs from
-there into `system/bin/`, `http/src/library_bin.rs`.) A first word
+they travel with it. (At boot the server copies into `system/bin/` any
+program the config runs that only `~/.datalib/bin`, a directory shared
+by every library, has: `http/src/library_bin.rs`.) A first word
 that is a relative path with a `/` in it is relative to the data root,
 the step's working directory; that is how a step runs a package's
 program, `system/packages/<pin>/bin/…` (`packages.md`).
@@ -102,7 +102,7 @@ cd <data_root> && <command…> [--<verb>]
 ```
 
 A verb is appended only when the invocation is one, and only one your
-program declares (§ "Verbs"). It rides on the command line rather than
+program declares (§ "Verbs"). It is on the command line rather than
 in the environment so that nothing the step starts inherits it.
 
 **Params** — the entry's `params` subtree, converted TOML → JSON (TOML
@@ -386,7 +386,7 @@ kinds of line and lets the runner write it:
 - **`covered`** says what this run checked again, so that a problem it
   covered and did not find again goes: `all`, `listings` (every
   `listing:` and `phase:` scope), `records` of one `table`, or `files`
-  `under` a folder. A `records` line with `only` vouches for exactly
+  `under` a folder. A `records` line with `only` covers exactly
   those records; one with `all_but`, and a `files` line with it, for
   every one but those. Both count even when your run fails. Without
   either, and for `all` and `listings`, only a run that succeeds clears
@@ -545,14 +545,6 @@ runner its progress in 4 KB lumps, long after the stderr it belonged
 beside. The runner sets `PYTHONUNBUFFERED=1`; Rust's stdout is
 line-buffered and `sh` writes through.
 
-A tracing-JSON line (with a `level` field, as `tracing-subscriber`'s
-JSON format writes) is unwrapped: its `fields.message` becomes the
-line's text, its `timestamp`, `level`, `target` and thread become
-columns, and the rest rides along as `fields`. Its own timestamp wins
-over the arrival time, so write it with the local offset
-(`…T10:00:00+01:00`); a `Z` stamp is filed as `+00:00`. Every level is
-kept, `debug` and `trace` included.
-
 A structured tracing-JSON line (with a `level` field, as
 tracing-subscriber's JSON format writes) is unwrapped rather than
 quoted: its `fields.message` becomes the log's `msg`; its `timestamp`,
@@ -561,7 +553,7 @@ columns — the line's own timestamp wins over the runner's arrival time,
 offset included, so write it in the local offset
 (`…T10:00:00+01:00`): a `Z` stamp is filed as `+00:00` beside the
 runner's lines in the real one — and everything else it carried
-(`filename`, `line_number`, the remaining `fields`) rides along as
+(`filename`, `line_number`, the remaining `fields`) is kept as
 `fields`. The Manage screen shows
 the sentence, not the envelope, and can still sort by thread.
 
@@ -616,27 +608,17 @@ holds the version the reset reports, or a new one if it reports none,
 so everything reading the tree runs again. Given the verb, empty your
 tree, keep whatever history you keep, commit if you commit, exit 0,
 and do nothing else; no sync follows.
-`datalib-step` deletes every row of the tree's store in one
-commit, keeping the tables, plus a render tree's documents; the run log
-and the rest are still in the history. Keeping the tables is what lets
-a reader take the emptiness in as ordinary deletions: the app's Reset
-then syncs what reads the step, so its documents leave the grid. The app
-does not wait for a sync to end: the loop stops the step if it runs and
-resets it there and then ([the runner's
-README](../../datalib/backend/dag/README.md#resets-and-purges)). A reset
-also reports the metrics a run would (`problems`, and `documents` for a
-render step), counted off the emptied store: the Manage row shows a
-step's newest sample, and the reset step itself does not run again
-until the next sync.
 
 `datalib-step` resets `ingest`, `render_markdown` and `embedding_map`
 and refuses the rest. For a download or a render it deletes every row of
-the step's store in one commit and keeps the tables, so the history
-still has the rows and a reader takes the emptiness
+the step's store in one commit and keeps the tables, plus a render
+tree's documents, so the history still has the rows, the run log
+included, and a reader takes the emptiness
 in as ordinary deletions: the app's Reset then syncs what reads the
 step, and its documents leave the grid. A reset also reports the
 `problems` (and for a render, `documents`) counts of the emptied store,
-since the Manage row shows a step's newest sample. The app does not wait
+since the Manage row shows a step's newest sample and the reset step
+itself does not run again until the next sync. The app does not wait
 for a sync to end: the loop stops the step if it runs and resets it
 there and then ([the runner's
 README](../../datalib/backend/dag/README.md#resets-and-purges)).

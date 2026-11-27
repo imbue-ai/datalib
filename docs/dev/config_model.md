@@ -435,9 +435,14 @@ A refusal of a retired shape names the rewrite: the app makes it when
 it next reads the file, and `datalib-migrate-config` from a terminal
 (§"The retired shapes").
 
-Warnings: a group with nothing filed under it; an applet filed under an
-undeclared group; and a verb a `[[programs]]` entry lists that the
-runner does not know, which is ignored. The Manage screen's System row
+Warnings:
+
+- a group with nothing filed under it;
+- an applet filed under an undeclared group;
+- a verb a `[[programs]]` entry lists that the runner does not know,
+  which is ignored.
+
+The Manage screen's System row
 counts the config's warnings and names them on hover; a double-click
 opens the config.
 
@@ -533,10 +538,8 @@ A source's `embed` (input:
 documents into chunks with the model's tokenizer, files them in the
 inference cache and fills their vectors; it fetches the model when it
 is missing, and only once it has a document to cut or a chunk to
-embed. After the keyword passes `unified_grid_and_search_index` sweeps the vectors no
-chunk names from the inference cache, and reports each searched
-source's documents and how many of them are not embedded yet; each
-`embed` reports what it left of its own. Nothing of a source's reads a step that reads
+embed. Each `embed` reports what of its own source it left without
+vectors. Nothing of a source's reads a step that reads
 every source, and that is what lets each source's `embed` finish on its
 own: the runner does not count a step as finished while anything
 upstream of it is still running, so a step downstream of a fan-in would finish only
@@ -572,16 +575,22 @@ reads.
 
 ## What the Manage screen and the wizard make of it
 
-One row per group, its steps and applets under a chevron. A group row's
-status is running if any child is, else waiting, else failed, else
-queued, else stopped, else the last step's, passing over a child turned
-off (the group reads off only when every child is) and one that has
-never run while a sibling has (it reads never run only when nothing
-under it has run); last synced and last
-success are the ingest step's instants, else the newest child's; bytes
-are the group directory's own measured series, never a sum across
-children; a sync of the group starts at its steps with no inputs (for
-a diff group, at what its step reads). A child step is labelled by the
+One row per group, its steps and applets under a chevron. Of a group
+row:
+
+- its status is running if any child is, else waiting, else failed,
+  else queued, else stopped, else the last step's, passing over a child
+  turned off (the group reads off only when every child is) and one
+  that has never run while a sibling has (it reads never run only when
+  nothing under it has run);
+- last synced and last success are the ingest step's instants, else
+  the newest child's;
+- bytes are the group directory's own measured series, never a sum
+  across children;
+- a sync of the group starts at its steps with no inputs (for a diff
+  group, at what its step reads).
+
+A child step is labelled by the
 rest of its id after the group (its function, for a step of
 `datalib-step`), with the whole id muted beside it. The grid's Source
 column joins `source_id` to a group's `name`.
@@ -788,8 +797,8 @@ the next would put the first back:
     to add the line.
 17. The `check` verb (`upgrade_check_verb`, `check_verb.rs`): a
     `[[programs]]` entry for `datalib-step` whose `verbs` leave out
-    `check` gets it, so a save and `datalib-pipeline check` ask each of
-    its steps about its params. An entry with no `verbs` is left alone;
+    `check` gets it, so a save and `datalib-pipeline check` run each of
+    its steps' commands with `--check` appended to check its params. An entry with no `verbs` is left alone;
     one whose `verbs` spans lines is refused, naming it.
 
 `datalib-migrate-config` is Datalib's own migration tool, and it may

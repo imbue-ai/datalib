@@ -141,24 +141,28 @@ keep a directory of its own here too, so a store found here need not be
 ours.
 
 One writer per file ([`etl/README.md`](../../datalib/backend/etl/README.md)
-§ "Connection pools" has the rule and why). The `ingest` step owns its group's
-two stores; `render_markdown` owns its render store; `unified_grid_and_search_index` owns
-the grid index's tables and the search index's `search_*` tables in the
-same file; `datalib-http` owns disk stats and remote media;
-the applet only reads, each request inside one read transaction on a
+§ "Connection pools" has the rule and why):
+
+- the `ingest` step owns its group's two stores;
+- `render_markdown` owns its render store;
+- `unified_grid_and_search_index` owns the grid index's tables and the
+  search index's `search_*` tables in the same file;
+- `datalib-http` owns disk stats and remote media.
+
+The `unified_grid_and_search_index` applet only reads, each request inside one read transaction on a
 read-only connection (`DoltRepo::pinned` in
 `unified_grid_and_search_index/src/dolt_repo.rs`). The grid index is plain
 SQLite in WAL mode, and its step writes one source per transaction, so
-that transaction reads one state of it and a `unified_grid_and_search_index` pass in
-flight is never served; a request also reopens the file when a reset
+that transaction reads one state of it and a source the step is
+still writing is never served; a request also reopens the file when a reset
 has replaced it. The `-wal` can keep the size a large transaction
 gave it ([`doltlite.md`](doltlite.md) §
 "Plain SQLite files and SQLite compatibility"), so the step truncates
-it at the end of every pass (`grid_index::close_index`). The grid's
+it at the end of every run (`grid_index::close_index`). The grid's
 load and the search index's writes are two parts of the one step, each
 with its own connection; each write transaction starts with `BEGIN
 IMMEDIATE`, and the search index writes in batches of a few hundred
-documents, so a reader is never held long. When either part's shape
+documents, so a reader never waits long. When either part's shape
 changes it drops only its own tables. Deleting the file by hand deletes
 the search index's rows with it; `unified_grid_and_search_index` puts them back on its
 next run. `runs.sqlite` is the other exception to doltlite: plain
@@ -180,7 +184,7 @@ reads and writes.
 
 **Disk stats** is plain SQLite, because nothing ever committed it: it
 is a timeseries — `datalib-http` walks the root every five seconds
-*while a run holds it*, or once when asked (`POST
+*while a run is open*, or once when asked (`POST
 /api/pipeline/storage/refresh` or `/api/manage/rows/refresh`; a GET
 never walks), and appends a row per tree whose size moved, one
 transaction per walk — so the rows *are* the history. Between runs nothing writes the root, so the series
@@ -204,7 +208,7 @@ SQLite reuses the freed pages, so the file stops growing once the
 window is full.
 
 **Remote media.** A rendered document's images on remote
-hosts are held back by the UI until a person lets them load, because
+hosts are not loaded by the UI until a person lets them load, because
 loading one tells its host who opened the document and when. A
 decision is a row in `remote_media_allow` — its `scope` is `url`,
 `document`, `host` or `source` and its `key` the thing named. The
