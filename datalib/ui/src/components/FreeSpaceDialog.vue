@@ -2,7 +2,7 @@
 // What "Free up disk space…" asks: collecting loses nothing, dropping old
 // versions loses the history of what can be rebuilt. Dropping old versions
 // collects too (`step_protocol.md` § Compact and collect), so ticking it
-// ticks the first and holds it.
+// ticks the first and keeps it ticked.
 import { onMounted, ref, watch } from "vue";
 
 const emit = defineEmits<{

@@ -220,7 +220,7 @@ describe("a date cell", () => {
 });
 
 /// A membership cell is in, not known or out, and a press hands the host
-/// the row, the column and the answer — never what is already settled.
+/// the row, the column and the answer — never the answer it already has.
 describe("a membership cell", () => {
   const spec: ColumnSpec = {
     field: "label:spam",

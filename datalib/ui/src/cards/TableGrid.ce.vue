@@ -186,7 +186,7 @@ function syncRows(rows: T[]) {
     if (busy != null && dataView.getRowById(key) === busy) continue;
     painted.set(key, json);
     // The grid's own bookkeeping on the row — its level, its parent,
-    // whether it is folded — rides along.
+    // whether it is folded — is kept: the new row is merged over it.
     dataView.updateItem(key, { ...dataView.getItemById(key), ...r });
   }
   dataView.endUpdate();

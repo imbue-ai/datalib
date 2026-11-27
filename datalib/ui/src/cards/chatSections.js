@@ -29,9 +29,8 @@ function scrollPane(el) {
  * Scroll `el` to the top of its scrollport.
  *
  * Sets scrollTop directly rather than calling `scrollIntoView`, which
- * silently no-ops in Chromium when the pane is re-rendering — that bug
- * is why "nothing happens when I click around inside one thread" was
- * reported once already.
+ * silently does nothing in Chromium while the pane is re-rendering, so
+ * a click inside a thread would move nothing.
  * @param {HTMLElement} el
  */
 export function scrollSectionToTop(el) {
@@ -225,7 +224,7 @@ function foldRecipients(line) {
  */
 export function decorateLongMessages(root, opts = {}) {
   const clampPx = opts.clampPx ?? LONG_MESSAGE_PX;
-  // v-html replaces the body wholesale, so observers from the previous
+  // A new body replaces the old one's nodes, so observers from the previous
   // render are watching detached nodes. `root` survives; hang them off
   // it and drop them here rather than leaking one set per document.
   for (const io of root.__chatStickyObservers ?? []) io.disconnect();

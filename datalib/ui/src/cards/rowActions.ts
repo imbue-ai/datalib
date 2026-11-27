@@ -303,8 +303,8 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
         `Queued a sync for ${names}.`,
         requests.map((r) => r.id),
       );
-      // The loop's record moving refetches too; this is for a page whose
-      // stream is down.
+      // A change to the loop's store refetches too; this is for a page
+      // whose stream is down.
       await h.reload();
     });
   }

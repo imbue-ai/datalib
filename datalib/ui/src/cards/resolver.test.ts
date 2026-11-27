@@ -1,6 +1,6 @@
 // The one resolver's rules: a draw pass is one request, an answer is
-// kept, an edit drops the answer and redraws, and an answer from before an edit
-// is dropped.
+// kept, an edit drops the answer and redraws, and an answer from before
+// an edit is dropped.
 
 import { describe, expect, it } from "vitest";
 

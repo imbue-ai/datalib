@@ -435,8 +435,8 @@ async function askIndexState(uuids: string[]) {
   }
 }
 
-// The grid calls this as it scrolls, many times a second; ask once it
-// settles.
+// The grid calls this as it scrolls, many times a second; ask once the
+// viewport has stayed put for 150 ms.
 let indexStateScrollTimer: ReturnType<typeof setTimeout> | null = null;
 function onViewportChanged() {
   loadWanted();
@@ -1483,8 +1483,9 @@ onMounted(() => runSearch(query.value));
 
 const hint = computed(() => props.placeholder ?? "search…");
 
-// The index moved under us — a `unified_grid_and_search_index` pass committed, which under
-// streaming happens many times per sync, as each source's rows arrive.
+// The index moved under us — the `unified_grid_and_search_index` step
+// committed, which under streaming happens many times per sync, as each
+// source's rows arrive.
 // Ask the shown search again; the rows update in place while the
 // download is still going.
 const cardEl = ref<HTMLElement | null>(null);
@@ -1797,7 +1798,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
       }
     : null;
   // A row's outbound linkout is source_url (Slack permalink, LinkedIn
-  // post, …). Local files (today: the `pdf` source) carry a `file://` URL, which
+  // post, …). Local files (the `pdf` source, for one) carry a `file://` URL, which
   // `window.open` cannot usefully follow from an http origin — a
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.
@@ -1976,7 +1977,7 @@ const menuItems: (MenuCommandItem | "divider")[] = [
       for (const r of m.links.web) {
         // `openExternal`, not `window.open`: the desktop app has no
         // tabs and does not implement `window.open`, so the bare
-        // call was a silent no-op there.
+        // call does nothing there.
         void openExternal(linkOf(r));
       }
     },
@@ -2091,7 +2092,7 @@ function gridOptions(): GridOption {
       onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds
       // the top row in place, a selection is scrolled back to — and a menu
-      // that closed on every scroll closed under the person reading it.
+      // that closed on every scroll would close under the person reading it.
       // Its entries stay with the row it opened on (`perOpening`).
       hideMenuOnScroll: false,
     },

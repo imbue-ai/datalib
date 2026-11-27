@@ -1,5 +1,5 @@
-// What a chip naming a group or a step of the config is (docs/dev/plans/
-// chips.md): `entities`, the resolver behind datalib-http's
+// What a chip naming a group or a step of the config is
+// (docs/dev/chips.md): `entities`, the resolver behind datalib-http's
 // `/api/entities`, and the rules for how such a chip looks, copies and
 // opens. The rules are pure and unit-tested; `entityCell` is the one
 // function that makes DOM, through the same `drawChip` a person's chip

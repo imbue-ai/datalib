@@ -1121,12 +1121,13 @@ export function useSourcesCard(ctx: CardCtx) {
             // cadence; this just reads what it found.
             refreshRows();
           }
-          // The loop's record moving is the nearest thing to "a step
-          // committed" — nothing watches the stores themselves — and its
-          // requests live beside it.
+          // A change to the loop's store is the nearest thing to "a step
+          // committed" — nothing watches the stores themselves — and the
+          // requests are a table in it.
           if (changed(e, "dag")) void retireBanner();
           if (e.kind === "config_changed") {
-            // Config and record together, for the "Never run" reason above.
+            // Config and the loop's store together, for the "Never run"
+            // reason above.
             void reloadAll();
           }
         },

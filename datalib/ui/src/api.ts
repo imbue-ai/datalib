@@ -26,9 +26,9 @@ export type DiffStatus = "added" | "removed" | "modified" | "unchanged";
 export type SearchRow = {
   uuid: string;
   conversation_uuid: string;
-  // FK into the markdowns table — every grid row knows which rendered
-  // .md it lives inside. Drives `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{markdown_uuid}` lookups
-  // when the user clicks a row in the preview pane.
+  // FK into the markdowns table: the rendered document the row is part
+  // of. What `{UNIFIED_GRID_AND_SEARCH_INDEX}/chat/{markdown_uuid}` is
+  // asked for when the user clicks a row in the preview pane.
   markdown_uuid: string | null;
   message_index: number | null;
   snippet: string;
@@ -973,7 +973,7 @@ export type NewerRoot = {
 
 export type SaveConfigResponse = {
   // Whether the text is acceptable — and, for a save, whether it was
-  // written. True only when every entry loads: the PUT door is stricter
+  // written. True only when every entry loads: the PUT route is stricter
   // than the loader on purpose, so that "saved" keeps meaning "saved
   // with nothing dropped". A warning leaves it true.
   ok: boolean;
@@ -1061,7 +1061,8 @@ export type DagStep = {
 // A step's live numbers and words. `metrics` is the current value per
 // series, keyed `name` or `name{labels}`; `done_total` and `queued` are the
 // two the runner derives for a step reporting a plain count, and the
-// pair a bar can be drawn from. Empty means the step has only spoken.
+// pair a bar can be drawn from. Empty means the step has reported only
+// `msg`, no numbers.
 export type DagStepProgress = {
   msg: string | null;
   metrics: Record<string, number>;
