@@ -68,14 +68,16 @@ impl Shrink {
 struct WireOutcome {
     #[serde(default)]
     outputs: Vec<WireArtifactState>,
-    /// A `--migrate` answer: what this step wrote is in a shape it cannot
-    /// reach in place, so it has to run again.
+    /// Reported by a `--prepare` run: what this step wrote is in a shape
+    /// it cannot reach in place, so it has to run again.
     #[serde(default)]
     needs_rerun: bool,
-    /// A `--collect` or `--compact` answer: the store's size before and after.
+    /// Reported by a `--collect` or `--compact` run: the store's size
+    /// before and after.
     #[serde(default)]
     store_bytes: Option<crate::step::StoreBytes>,
-    /// A `--check` answer: what the step would run but warns about.
+    /// Reported by a `--check` run: what the step would run but warns
+    /// about.
     #[serde(default)]
     warnings: Vec<String>,
     /// Set (with a non-zero exit) to classify the failure.
@@ -253,9 +255,9 @@ pub(crate) async fn run_subprocess(
     // the step spawned. A step is often a wrapper around something else
     // — a download runs `latchkey curl` under node — and a `kill(pid)` the step
     // does not forward leaves that grandchild running after the runner
-    // is gone. The cost is that a terminal's Ctrl-C no longer reaches
+    // is gone. The cost is that a terminal's Ctrl-C does not reach
     // steps directly, which changes nothing: `interrupt_children` is
-    // how the runner forwards it, and always was.
+    // how the runner forwards it.
     //
     // `ProcessGroup::leader()` makes the step its group's leader, so the
     // group's id *is* the step's pid — which is what lets
@@ -274,7 +276,7 @@ pub(crate) async fn run_subprocess(
     // Aborted once the step has exited and its pipes have closed. Not at
     // the exit alone: a child the step left behind is still in the group,
     // holding stderr, and the drain below waits on it. While any member is
-    // alive the group's id cannot be reused, so a rung reaches only them.
+    // alive the group's id cannot be reused, so a signal reaches only them.
     let stop_task = child.id().map(|pid| {
         let mut stop = ctx.stop.clone();
         tokio::spawn(async move {
@@ -367,11 +369,11 @@ pub(crate) async fn run_subprocess(
                         // what the runner does next, and the scheduler
                         // emits it once it has recorded it -- the same
                         // path an in-process step's seal takes, so a seal
-                        // is announced once whichever kind of step made
-                        // it. Forwarding it here as well put every
-                        // subprocess seal on the stream twice, and the
-                        // Manage screen counted four for a download that
-                        // made two.
+                        // reaches the stream once whichever kind of step
+                        // made it. Forwarding it here as well would put
+                        // every subprocess seal on the stream twice, and
+                        // the Manage screen would count four for a
+                        // download that made two.
                         Event::Checkpoint { version, rows, .. } => {
                             match rows {
                                 Some(n) => ctx.checkpoint_rows(version, *n),
@@ -436,7 +438,7 @@ pub(crate) async fn run_subprocess(
     } else {
         let w = outcome.unwrap_or_default();
         // One that ignored its SIGINT and was killed says nothing, but it
-        // still ended because it was asked to.
+        // still ended because the runner stopped it.
         let asked = if ctx.stop.is_requested() {
             FailureKind::Cancelled
         } else {
@@ -812,7 +814,7 @@ fn signal_children(signal: libc::c_int) {
     }
 }
 
-/// What a stopped step is sent, and how long after the previous rung:
+/// What a stopped step is sent, and how long after the previous signal:
 /// SIGINT at once, so it stops at its next consistent point
 /// (`step_protocol.md` § Signals), and SIGKILL once `grace` has passed,
 /// for one that ignored it. Both to the group, so what the step spawned
@@ -1098,8 +1100,9 @@ mod tests {
 
     /// A stopped step that ignores its SIGINT is killed once the grace is
     /// up, with what it spawned, and recorded as stopped. Without the
-    /// second rung a step like this held its store, and the loop waited
-    /// on it, for as long as it cared to run.
+    /// SIGKILL after the grace a step like this would keep its store
+    /// open, and the loop would wait on it, for as long as it cared to
+    /// run.
     #[cfg(unix)]
     #[tokio::test]
     async fn a_step_deaf_to_its_stop_is_killed_after_the_grace() {
@@ -1318,8 +1321,9 @@ mod tests {
 
         // A real child process: the capability and the checkpoints cross
         // stdout as NDJSON, which is the path a `datalib-step` render takes.
-        // It re-announces until the consumer has run, because a checkpoint
-        // arriving while the consumer is busy is dropped by design.
+        // It prints the checkpoint again until the consumer has run,
+        // because a checkpoint arriving while the consumer is busy is
+        // dropped by design.
         let producer = StepSpec::new(
             "slack/rendered_md",
             sh(r#"
@@ -1351,7 +1355,7 @@ mod tests {
                         std::fs::create_dir_all(&dir).unwrap();
                         std::fs::write(dir.join("index.txt"), "x").unwrap();
                         passes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                        // Tells the producer it may stop re-announcing.
+                        // Tells the producer it may stop printing checkpoints.
                         std::fs::write(ctx.data_root.join("consumed"), "1").unwrap();
                         Ok(crate::step::StepOutcome::default())
                     }
@@ -1371,8 +1375,8 @@ mod tests {
         .unwrap();
 
         assert!(rep.all_ok(), "{rep:#?}");
-        // One early pass driven by the wire checkpoint, plus the final
-        // pass for the version no checkpoint reported.
+        // One early run of the consumer driven by the wire checkpoint,
+        // plus the last run for the version no checkpoint reported.
         assert!(
             passes.load(std::sync::atomic::Ordering::SeqCst) >= 2,
             "the consumer never ran early: the capability or the checkpoint \
@@ -1394,16 +1398,17 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // Exact, because the producer waits for the early pass before it
-        // finishes: the seal's 7, drained by that pass; the outcome's 3,
-        // drained by the final one. The re-announced seal counts once.
+        // Exact, because the producer waits for the consumer's early run
+        // before it finishes: the seal's 7, drained by that run; the
+        // outcome's 3, drained by the last one. The seal printed again
+        // counts once.
         assert_eq!(queued, vec![7, 0, 3, 0]);
     }
 
     /// A step that seals and then finishes on the commit it sealed moved
-    /// its output this run. The summary used to keep only the last thing
-    /// it heard, the finish, which matched the seal, and so said
-    /// "unchanged" for an output the round had moved.
+    /// its output this run. Guards against a summary that keeps only the
+    /// last thing it heard, the finish, which matched the seal, and so
+    /// says "unchanged" for an output the run had moved.
     #[tokio::test]
     async fn the_summary_says_changed_for_an_output_moved_by_a_seal() {
         let root = tempfile::tempdir().unwrap();
@@ -1425,11 +1430,11 @@ mod tests {
         assert!(!second.step("src/raw").outputs[0].2, "{second:#?}");
     }
 
-    /// A seal a child announces on stdout reaches the event stream once.
-    /// It used to arrive twice -- forwarded from the wire, and again from
-    /// the scheduler when the signal reached it -- so every subprocess
-    /// step's `checkpoints_total` metric read double, and the Manage screen
-    /// counted four seals for a download that made two.
+    /// A seal a child prints on stdout reaches the event stream once.
+    /// Guards against it arriving twice -- forwarded from the wire, and
+    /// again from the scheduler when the signal reached it -- which makes
+    /// every subprocess step's `checkpoints_total` metric read double, and
+    /// the Manage screen count four seals for a download that made two.
     #[tokio::test]
     async fn a_subprocess_checkpoint_reaches_the_event_stream_once() {
         let root = tempfile::tempdir().unwrap();
@@ -1802,8 +1807,9 @@ mod tests {
     }
 
     /// A step whose program takes `--reset` is invoked once with it (and
-    /// nothing after it), and its last success is forgotten, so the next
-    /// run runs it again with nothing marked as changed.
+    /// nothing after it), and its last success is cleared from the loop's
+    /// store, so the next run runs it again with nothing marked as
+    /// changed.
     #[tokio::test]
     async fn a_reset_invokes_a_step_that_takes_it_and_forgets_its_success() {
         let root = tempfile::tempdir().unwrap();
@@ -1842,8 +1848,8 @@ mod tests {
     }
 
     /// A step whose program does not take `--reset` is never sent it: the
-    /// runner deletes its tree, forgets its success, and moves the version
-    /// what reads it sees, so the emptiness reaches them.
+    /// runner deletes its tree, clears its last success, and moves the
+    /// version what reads it sees, so the emptiness reaches them.
     #[tokio::test]
     async fn a_reset_deletes_the_tree_of_a_step_that_does_not_take_it() {
         let root = tempfile::tempdir().unwrap();
@@ -1881,9 +1887,10 @@ mod tests {
     }
 
     /// `--prepare` is appended to argv. A step that prepared in place
-    /// reports its new version, which the record takes and keeps its last
-    /// success; one that cannot answers `needs_rerun`, which the record
-    /// keeps and the rerun offer names until the step next succeeds.
+    /// reports its new version, which the loop's store records while
+    /// keeping its last success; one that cannot reports `needs_rerun`,
+    /// which the store keeps and the rerun offer names until the step
+    /// next succeeds.
     #[tokio::test]
     async fn a_prepare_records_each_steps_answer_and_keeps_its_success() {
         let root = tempfile::tempdir().unwrap();
@@ -2141,7 +2148,7 @@ mod tests {
         );
     }
 
-    /// A step that answers SIGINT with a `cancelled` outcome is told
+    /// A step that exits on SIGINT with a `cancelled` outcome is told
     /// apart from one that fell over: its message says it stopped, not
     /// that it exited with 130.
     #[tokio::test]

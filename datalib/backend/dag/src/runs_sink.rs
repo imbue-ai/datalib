@@ -30,7 +30,7 @@ struct Acc {
     /// The attempt's process: what came out of the step's pipes is its,
     /// and how it ended goes on it.
     process: Option<ProcessRow>,
-    /// The sugar accumulators: increments so far, and the announced total.
+    /// The sugar accumulators: increments so far, and the reported total.
     done: u64,
     total: Option<u64>,
     checkpoints: u64,
@@ -40,8 +40,8 @@ struct Acc {
     /// This attempt's last value of its own `queued`, the one without a
     /// `from`: what it still owes if it ends now.
     own_queued: Option<i64>,
-    /// The passes started so far: a streaming consumer runs once per
-    /// seal it reads, each pass a first attempt.
+    /// The processes started so far: a streaming consumer is started once
+    /// per seal it reads, each process a first attempt.
     passes: u32,
     /// This attempt's last value of each running total (`name`, labels),
     /// and whether it has already been caught going down.
@@ -67,7 +67,7 @@ fn raise_peak(process: Option<&mut ProcessRow>, bytes: i64) -> Option<ProcessRow
 /// What a step owes as it ends `status`, its own queue last at `queued`;
 /// `None` keeps what its last run said, for a step this run did not
 /// invoke. Only an end short of done owes: a render's or an index's bar
-/// ends a successful run still holding work it announced and then found
+/// ends a successful run still holding work it reported and then found
 /// it had no need to do, and a download that gives up with work owed
 /// ends `incomplete`, which is a failure.
 fn owed_at_end(status: RunState, ran: bool, queued: Option<i64>) -> Option<i64> {
@@ -219,7 +219,7 @@ impl RunStoreSink {
 
     /// A running total that went down is a step naming a gauge as a
     /// counter: `GET /metrics` would serve it as a counter, and a scraper
-    /// would read each fall as a reset and count the climb back twice.
+    /// would read each fall as a reset and count the rise back twice.
     fn warn_counter_fell(&self, step: &StepId, name: &str, labels: &str, before: i64, now: i64) {
         let series = if labels.is_empty() {
             name.to_string()
@@ -333,9 +333,9 @@ impl RunStoreSink {
         });
     }
 
-    /// A pass that failed, at error level, as the runner's line about the
-    /// step: which pass, and why — the error carries the exit status and
-    /// the end of the pass's stderr.
+    /// A process of a streaming consumer that failed, at error level, as
+    /// the runner's line about the step: which process, and why — the
+    /// error carries the exit status and the end of the process's stderr.
     fn log_failed_pass(
         &self,
         step: &StepId,
@@ -378,7 +378,7 @@ impl RunStoreSink {
     }
 
     /// The sugar: `done` is the increments so far, `queued` what the
-    /// announced total leaves. A step that never announced a total gets
+    /// reported total leaves. A step that never reported a total gets
     /// `done` alone, which a bar cannot be drawn from and a count can.
     fn publish_sugar(&self, step: &StepId) {
         let (done, total) = {
@@ -463,8 +463,9 @@ impl EventSink for RunStoreSink {
                     a.row.state = status.as_str().into();
                     a.row.finished_at_utc = Some(finished_at_utc.clone());
                     a.row.error = error.clone();
-                    // A pass that ended while its producers ran was closed
-                    // by its `PassEnd`; the finish only settles the row.
+                    // A process that ended while its producers ran was
+                    // closed by its `PassEnd`; the finish only fills in the
+                    // step's row.
                     if let Some(p) = a.process.as_mut().filter(|p| p.finished_at_utc.is_none()) {
                         p.finished_at_utc = Some(finished_at_utc.clone());
                         p.exit_code = exit_code.map(i64::from);
@@ -506,9 +507,9 @@ impl EventSink for RunStoreSink {
                     });
                 }
             }
-            // The pass's process is closed the way a finished attempt's
-            // is; the step row is not touched, since the step goes on. A
-            // pass that failed is an error line now: the next pass may
+            // The process is closed the way a finished attempt's is; the
+            // step row is not touched, since the step goes on. A process
+            // that failed is an error line now: the next process may
             // succeed, and the step's finish then says nothing of it.
             Event::PassEnd {
                 step,
@@ -949,10 +950,10 @@ mod tests {
         assert_eq!(slack.len(), 3);
     }
 
-    /// A streaming consumer is spawned once per producer checkpoint,
-    /// and every pass is a process that ends — with an exit code — while
-    /// the step stays running until its final pass. Without `PassEnd`
-    /// every pass but the last was left open, its exit code lost.
+    /// A streaming consumer is spawned once per producer checkpoint, and
+    /// every such process ends — with an exit code — while the step stays
+    /// running until its last process. Without `PassEnd` every process
+    /// but the last would be left open, its exit code lost.
     #[tokio::test]
     async fn a_streaming_pass_closes_its_process_and_leaves_the_step_running() {
         let start = || Event::StepStart {
@@ -990,10 +991,10 @@ mod tests {
         assert_eq!(step.state, "running");
     }
 
-    /// A pass that failed and was followed by one that succeeded left no
-    /// trace but the step's own stderr at info: the finish reports the
-    /// last pass, and a clean finish writes no line. The failed pass is
-    /// its own error line, naming the pass and why.
+    /// A process that failed and was followed by one that succeeded would
+    /// leave no trace but the step's own stderr at info: the finish
+    /// reports the last process, and a clean finish writes no line. The
+    /// failed process is its own error line, naming which one and why.
     #[tokio::test]
     async fn a_failed_pass_is_an_error_line_though_the_next_one_succeeds() {
         let start = || Event::StepStart {
@@ -1236,9 +1237,9 @@ mod tests {
         }
     }
 
-    /// Emptying a stopped step's queue left nothing to say what it still
-    /// owed: Slack's conversations, threads and files not reached were
-    /// only in its store. What its own queue held as it ended is its
+    /// Emptying a stopped step's queue would leave nothing to say what it
+    /// still owed: Slack's conversations, threads and files not reached
+    /// were only in its store. What its own queue held as it ended is its
     /// `owed`, which outlives the run; a producer's queue for it is not
     /// owed, and the next run that ends the step replaces the count. A
     /// step that never counted owes nothing it can show.
