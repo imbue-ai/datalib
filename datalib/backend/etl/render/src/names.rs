@@ -82,7 +82,10 @@ fn clean_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
     changed
 }
 
-fn fill_node_sort_key(node: &mut datalib_schema::data_nodes::DataNodeRow, rows: &[GridRow]) -> bool {
+fn fill_node_sort_key(
+    node: &mut datalib_schema::data_nodes::DataNodeRow,
+    rows: &[GridRow],
+) -> bool {
     if !node.sort_key.is_empty() {
         return false;
     }
