@@ -125,7 +125,7 @@ async fn get(state: &AppState, uri: &str) -> serde_json::Value {
 /// anyone pressing Sync on it — only `a` is synced — and leaves the list
 /// of what is behind once it has.
 #[tokio::test]
-async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
+async fn a_launch_prepares_every_step_before_it_or_a_reader_syncs_at_every_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -239,7 +239,7 @@ async fn until_caught_up(state: &AppState) -> serde_json::Value {
 /// pending, so a person can see how many are left (#1678: the pass's run
 /// listed only the steps reached).
 #[tokio::test]
-async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
+async fn the_prepare_run_lists_every_step_it_will_prepare_from_the_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
