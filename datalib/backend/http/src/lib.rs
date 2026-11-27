@@ -1366,7 +1366,7 @@ pub struct DagResponse {
 /// The runner's own rows of what each step did and is doing, with
 /// the run store's live numbers laid over it. What `GET /api/dag` and
 /// `GET /api/manage/rows` both read.
-pub struct DagRecord {
+pub struct DagSnapshot {
     /// The run in flight, or the one that finished last. Absent on a
     /// root that has never synced, which is not an error.
     pub run: Option<DagRunInfo>,
@@ -1392,13 +1392,13 @@ pub struct DagRecord {
     /// step id → what its own queue still held when its last run ended.
     pub owed: std::collections::HashMap<String, manage::Owed>,
     /// How long each read took, for the line a slow Manage answer writes.
-    pub took: RecordTimings,
+    pub took: SnapshotTimings,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
-pub struct RecordTimings {
+pub struct SnapshotTimings {
     /// The loop's store, `system/supervisor.sqlite`.
-    pub loop_record: std::time::Duration,
+    pub loop_store: std::time::Duration,
     /// The rest is the run store, `system/runs/runs.sqlite`: the live
     /// run's progress, then the metrics behind Problems, Items and what a step owes.
     pub run_progress: std::time::Duration,
@@ -1407,10 +1407,10 @@ pub struct RecordTimings {
 
 /// An open run in the loop's `runs` table while nothing is running is a
 /// run that died, so `live` is [`supervisor::SyncControl::running`].
-pub async fn dag_record(
+pub async fn dag_snapshot(
     root: &std::path::Path,
     sync: &supervisor::SyncControl,
-) -> anyhow::Result<DagRecord> {
+) -> anyhow::Result<DagSnapshot> {
     let started = std::time::Instant::now();
     let loaded = match sync.supervisor_store().await {
         Ok(store) => store.load_record().await,
@@ -1433,9 +1433,9 @@ pub async fn dag_record(
         .map(|r| r.states.clone())
         .unwrap_or_default();
 
-    let loop_record = started.elapsed();
+    let loop_store = started.elapsed();
     let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await?;
-    let run_progress = started.elapsed() - loop_record;
+    let run_progress = started.elapsed() - loop_store;
 
     let problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await?,
@@ -1463,13 +1463,13 @@ pub async fn dag_record(
     );
     let owed =
         manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await?);
-    let took = RecordTimings {
-        loop_record,
+    let took = SnapshotTimings {
+        loop_store,
         run_progress,
-        run_metrics: started.elapsed() - loop_record - run_progress,
+        run_metrics: started.elapsed() - loop_store - run_progress,
     };
 
-    Ok(DagRecord {
+    Ok(DagSnapshot {
         run,
         states,
         steps: state.steps,
@@ -1507,7 +1507,7 @@ async fn live_progress(
 async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal> {
     use datalib_dag::config;
 
-    let DagRecord {
+    let DagSnapshot {
         run,
         states,
         steps: records,
@@ -1518,7 +1518,7 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
         spend: _,
         owed: _,
         took: _,
-    } = dag_record(&s.root, &s.sync).await.map_err(unread)?;
+    } = dag_snapshot(&s.root, &s.sync).await.map_err(unread)?;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
         let (cfg, _root) = config::load(&s.config_path())?;

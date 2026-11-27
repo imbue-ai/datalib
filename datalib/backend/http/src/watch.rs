@@ -200,10 +200,10 @@ pub type RootTx = broadcast::Sender<RootFrame>;
 enum Moved {
     Config,
     /// The loop's store, `system/supervisor.sqlite`: heard by
-    /// [`watch_record`], not seen by the filesystem.
+    /// [`watch_supervisor_store`], not seen by the filesystem.
     Supervisor,
     /// A wipe opened, closed, or moved on to its next step: heard by
-    /// [`watch_record`] in the announcement's words.
+    /// [`watch_supervisor_store`] in the announcement's words.
     Wipe,
     RunStore,
     Frontend,
@@ -763,7 +763,11 @@ fn start(
     let (raw_tx, mut raw_rx) = tokio::sync::mpsc::unbounded_channel::<Moved>();
     let nudge = Nudge(raw_tx.clone());
     let (listening_tx, listening) = tokio::sync::oneshot::channel();
-    tokio::spawn(watch_record(root.clone(), raw_tx.clone(), listening_tx));
+    tokio::spawn(watch_supervisor_store(
+        root.clone(),
+        raw_tx.clone(),
+        listening_tx,
+    ));
     let listeners = datalib_dag::supervisor::announce::listeners_dir(&root);
 
     let mut feed = None;
@@ -983,7 +987,7 @@ fn watch_dir(
 /// announced; the filesystem would report writes, and none at all to a
 /// file already held open. The lock and the config have announcements of
 /// their own that are not the store moving.
-async fn watch_record(
+async fn watch_supervisor_store(
     root: PathBuf,
     moved: tokio::sync::mpsc::UnboundedSender<Moved>,
     listening: tokio::sync::oneshot::Sender<()>,

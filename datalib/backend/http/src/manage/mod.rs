@@ -37,7 +37,7 @@ use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
-use crate::{usage, AppState, DagRecord, DagRunInfo, RecordTimings};
+use crate::{usage, AppState, DagRunInfo, DagSnapshot, SnapshotTimings};
 use buttons::SyncOffer;
 use group::{Child, ChildKind, ChildStamp, ChildStatus};
 use status::{StatusView, StepEdges};
@@ -274,7 +274,7 @@ const SLOW_ANSWER: Duration = Duration::from_secs(1);
 /// Where one Manage answer spent its time, besides the walk.
 #[derive(Debug, Default)]
 struct Took {
-    record: RecordTimings,
+    record: SnapshotTimings,
     requests: Duration,
     /// Everything after the run and request reads: the sampler's last
     /// numbers, the config's check, the join.
@@ -333,7 +333,7 @@ async fn answer(
             ms = ms(total),
             refresh,
             walk_ms = ms(walk),
-            loop_record_ms = ms(took.record.loop_record),
+            loop_record_ms = ms(took.record.loop_store),
             run_progress_ms = ms(took.record.run_progress),
             run_metrics_ms = ms(took.record.run_metrics),
             requests_ms = ms(took.requests),
@@ -351,7 +351,7 @@ async fn answer(
 async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refusal> {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let record = crate::dag_record(&s.root, &s.sync)
+    let record = crate::dag_snapshot(&s.root, &s.sync)
         .await
         .map_err(crate::unread)?;
     // After `record`: a request its steps name was opened before the loop
@@ -512,7 +512,7 @@ fn raw_stores(outputs: &[OutputStorage]) -> HashMap<String, String> {
 }
 
 /// The requests `record`'s steps are being run for, by id.
-async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, RequestRow> {
+async fn requests_named(s: &AppState, record: &DagSnapshot) -> HashMap<String, RequestRow> {
     let Ok(store) = s.sync.supervisor_store().await else {
         return HashMap::new();
     };
@@ -532,7 +532,7 @@ async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, Req
 struct Snapshot<'a> {
     written: &'a WrittenEntries,
     diagnostics: &'a [Diagnostic],
-    record: &'a DagRecord,
+    record: &'a DagSnapshot,
     requests: &'a HashMap<String, RequestRow>,
     outputs: &'a [OutputStorage],
     /// Each tree holding a raw store, by step id, to the store's path.
