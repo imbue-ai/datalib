@@ -521,6 +521,7 @@ for an agent, as steps:
 | `POST /contact/{id}/draft/save` | `{seen, held?}`, the published commit the card last showed: publishes the draft, and each email and number in its fields becomes a handle of the contact. `{"outcome": "saved", "commit"}`; `{"outcome": "stale", "view"}` when the contact moved since; or `{"outcome": "held", "held": [{handle, by}]}` for a handle other contacts have (`by` their names) that `held`, `{<handle>: "share" \| "move"}`, says nothing of. Only `saved` saved anything |
 | `POST /proposals` | an agent's batch, one commit: `{agent, run?, contacts: [{contact_id?, name?, handles, reason?, confidence?, labels}], handles: [{handle, labels}]}`, each label `{label, applies?, reason?, confidence?}`, a confidence 0 to 1. Answers `{contacts_created, linked, labelled, skipped: [{what, why}]}` |
 | `GET /review?label=` | the review as a typed table, one row per contact or handle with anything an agent proposed or a label, with a `membership` column for `real` and for `label` if given; `GET /review/items` the same as plain records, for an agent |
+| `GET /suggestions` | `{suggestions}`: what agents suggested that waits for the person, least sure first. Each is a new contact (`new_contact`), handles for one of yours (`handles`, beside what it `held` already) or labels, with its `agents`, `runs`, `reasons` and `confidence`, and the `subject` that `/review/confirm` (Yes) and `/review/reject` (No) take. What the contacts card's suggestions show |
 | `POST /review/confirm`, `POST /review/reject` | `{subjects}`, each a handle or `contact:<id>`: agree with, or turn down, everything an agent proposed for each |
 | `POST /label` | `{subjects, label, applies}`: a person's in (`true`), out (`false`) or unknown (`null`) |
 | `GET /not_linked` | every handle a person took off a contact, newest first |
@@ -627,6 +628,23 @@ things the same way.
   person's own say is `manual` and names none. `reviewed_at_utc` is when
   a person looked: an agent's link or label without one waits for
   review.
+- **Until a person says Yes, an agent's link is a suggestion and
+  nobody's.** A link counts when it is `manual` or has a
+  `reviewed_at_utc`; one that does not is left out of everything that
+  reads the store as the person's contacts: `POST /resolve` (so chips
+  stay grey), a contact's handles and the list, the search's
+  `contact:<id>` and `me`, the contacts list's counts, and who
+  *Unfiled* counts as filed. A contact an agent made with no link that
+  counts and one that waits is a suggestion too, and is not listed or
+  found by name. `Store::suggestions` (`GET /suggestions`) is what
+  waits, one per subject.
+- **A suggestion holds nothing.** A person linking a handle that an
+  agent only suggested for someone else is not asked about sharing it:
+  the suggestion loses it, written down in `not_linked` as if the person
+  had said No, and an agent's contact left with no handle goes. Linking
+  it to the very contact it was suggested for is a Yes to that link
+  (`settle_suggestions` in `contacts/src/lib.rs`). An agent still never
+  proposes a handle any contact has, a suggestion included.
 - **A label is in, out, or unknown.** A row says in or out
   (`applies`); no row says nobody has decided, which is most of them.
   A label is any word, and each stands alone: what one says never
@@ -656,17 +674,13 @@ things the same way.
   answer winning where both have one; a delete takes the contact's labels and keeps its
   turn-downs, which name it as it was called.
 
-The contacts card's *Review* switch is the person's side: every row
-with something proposed or labelled, close calls first (what waits,
-the agent's least sure first), filtered by what `real` says or by any
-other label. `real`, and the label picked in the filter, is a
-`membership` column: a three-position switch per row, out · not known · in, the agent's
-unreviewed answer outlined; a press on a third of it is the person's
-answer. *Confirm*, *Reject*, *Real*, *Not real* or a new label in the
-bar act on every selected row, and the right-click adds *Not <label>*
-for each other label a row holds. Labels sit over the view like
-links: no document renders again, and the search does not read them
-yet.
+The person's side is the contacts card's suggestions (§"The contacts
+list") and the person's page, which shows each suggestion about them
+(`suggestions.ts::suggestionsAbout`) with *Yes* (`/review/confirm`) and
+*No* (`/review/reject`). A person says a sender is not real from
+*Unfiled*'s right-click, *Hide this sender* (`POST /label`). Labels sit
+over the view like links: no document renders again, and the search
+does not read them yet.
 
 ## In the UI
 
@@ -757,7 +771,8 @@ Everything is in `datalib/ui/src/cards/`:
   wears a "me" chip. Its right-click deletes the rows it aims at, or
   merges every other selected row into the one clicked. Your contacts
   are not in the search grid: nothing renders this store. Its tabs are
-  the list, *Unfiled* and *Review* (§"The contacts list").
+  the list and *Unfiled*, and a banner opens an agent's suggestions
+  (§"The contacts list").
 
 ### The contacts list
 
@@ -769,6 +784,13 @@ the grid's rows (§"How much someone wrote", `authors.rs` in
 `unified_grid_and_search_index`), and read who is filed from the
 contacts store (`ContactsReader::filing`, a detached read):
 
+- **Suggestions.** While an agent's suggestions wait, a banner above
+  the list says whose and how many ("tng-curator suggests one change to
+  your contacts"); it opens them (`SuggestionsList.ce.vue`), least sure
+  first, each a sentence ("These two are **Will Riker**", "This is also
+  **Data**"), its handles as grey chips, the agent's reason and run,
+  and *Yes* and *No* (`SuggestionItem.ce.vue`). *Yes to all* agrees
+  with everything one run of an agent suggested.
 - **`GET /people/contacts`** answers `{counts: {<contact_id>: {items,
   last_at}}}`: the rows written by every handle the contact reaches, as
   `from:contact:<id>` reads them (a merged-away contact's and a group's
@@ -870,7 +892,8 @@ What a document's own row answers to:
 The search terms know handles and never contacts. A `contact:<id>`
 value is read from the contacts store when the search runs (a detached
 read, so the applet stays the one writer) and matches each handle the
-contact reaches: its own, stopped ones included; those of a contact
+contact reaches: its own, stopped ones included but not those an
+agent suggested and nobody said Yes to; those of a contact
 merged with it; and, for a group, every member's. So a new link changes
 nothing in the index and search follows it at once, as chips do. A root
 without the contacts app refuses `contact:` by name.

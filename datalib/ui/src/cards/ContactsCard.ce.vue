@@ -7,8 +7,8 @@
 // opens the person card, a right-click offers the card, everything with
 // them, copying the name, merging the selected rows into the one
 // clicked, and deleting. A new contact is made from the box at the top.
-// Unfiled lists everyone else who wrote (`UnfiledList.ce.vue`); Review,
-// what agents proposed (`ContactsReview.ce.vue`).
+// Unfiled lists everyone else who wrote (`UnfiledList.ce.vue`). While an
+// agent's suggestions wait, a banner opens them (`SuggestionsList.ce.vue`).
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from "vue";
 import { copyToClipboard } from "@/clipboard";
 import { confirmAction } from "@/desktop";
@@ -43,8 +43,8 @@ import {
   type ListSort,
   type Wrote,
 } from "./contactsTable";
-import type { ReviewRow } from "./contactsReview";
-import ContactsReview from "./ContactsReview.ce.vue";
+import { loadSuggestions, type Suggestion } from "./suggestions";
+import SuggestionsList from "./SuggestionsList.ce.vue";
 import UnfiledList from "./UnfiledList.ce.vue";
 import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
@@ -65,17 +65,18 @@ the one to keep.</p>
 either, or by name.</p>
 <p><b>Unfiled</b> lists everyone else who wrote something here, the most
 first. Select some and <em>Add selected to contacts</em>: each comes with
-every handle a source says is theirs. Senders you or an agent marked not
-real are left out unless you ask for them.</p>
-<p><b>Review</b> lists what agents proposed: contacts they made, handles
-they put on one, and whether each person or sender is <i>real</i>, which is
-to say not spam. A label is in, out, or not decided. Confirm agrees with the agent; Reject takes off the
-handles it put on and flips its labels, and both are written down so no agent
-proposes the same again. Select many rows to act on them at once.</p>
+every handle a source says is theirs. Right-click a sender and <em>Hide
+this sender</em> to say they are not real (spam). Senders you or an agent
+marked not real are left out unless you ask for them.</p>
+<p>When an agent has suggested people, handles for one of yours, or which
+senders are not real, a banner above the list says how many. Nothing an
+agent suggests is a contact until you say <em>Yes</em>: until then its
+chips stay grey and searches for your contacts leave it out. <em>No</em>
+is remembered, so no agent suggests the same again.</p>
 `);
 
-const mode = ref<"contacts" | "unfiled" | "review">("contacts");
-const waitingReview = ref<number | null>(null);
+const mode = ref<"contacts" | "unfiled" | "suggestions">("contacts");
+const suggestions = ref<Suggestion[]>([]);
 
 const columns = ref<ColumnSpec[]>([]);
 const rows = ref<ContactRow[]>([]);
@@ -126,19 +127,25 @@ async function load() {
   } finally {
     if (mine === asked) loaded.value = true;
   }
-  void countReview();
+  void loadWaiting();
 }
 
-/** How many review rows wait for you, for the switch's label. */
-async function countReview() {
+/** What agents suggested that waits for the person, for the banner. */
+async function loadWaiting() {
   try {
-    const r = await fetch(`${CONTACTS_APPLET}/review`);
-    if (!r.ok) return;
-    const t = (await r.json()) as { rows: ReviewRow[] };
-    waitingReview.value = t.rows.filter((row) => row.awaiting).length;
+    suggestions.value = await loadSuggestions();
   } catch {
-    // An applet from before the review answers 404; the switch says no count.
+    // An applet from before suggestions answers 404: no banner.
+    suggestions.value = [];
   }
+  if (mode.value === "suggestions" && suggestions.value.length === 0) mode.value = "contacts";
+}
+
+function suggestionsBanner(): string {
+  const n = suggestions.value.length;
+  const agents = [...new Set(suggestions.value.flatMap((s) => s.agents))];
+  const who = agents.length === 1 ? agents[0] : "Agents";
+  return `${who} ${agents.length === 1 ? "suggests" : "suggest"} ${n === 1 ? "one change" : `${n} changes`} to your contacts.`;
 }
 
 async function create() {
@@ -274,22 +281,22 @@ onBeforeUnmount(() => {
       >
         Unfiled
       </button>
-      <button
-        role="tab"
-        class="contacts-mode"
-        :aria-selected="mode === 'review'"
-        @click="mode = 'review'"
-      >
-        Review<span v-if="waitingReview" class="contacts-waiting">{{ waitingReview }} waiting</span>
-      </button>
     </div>
     <UnfiledList v-if="!absent && mode === 'unfiled'" :ctx="props.ctx" @added="load" />
-    <ContactsReview
-      v-else-if="!absent && mode === 'review'"
+    <SuggestionsList
+      v-else-if="!absent && mode === 'suggestions'"
       :ctx="props.ctx"
-      @waiting="(n) => (waitingReview = n)"
+      :suggestions="suggestions"
+      @changed="load"
+      @back="mode = 'contacts'"
     />
     <template v-else-if="!absent">
+      <div v-if="suggestions.length" class="contacts-banner" role="status">
+        <span>{{ suggestionsBanner() }}</span>
+        <button type="button" class="contacts-button" @click="mode = 'suggestions'">
+          {{ suggestions.length === 1 ? "See it" : "See them" }}
+        </button>
+      </div>
       <div class="contacts-bar">
         <input
           v-model="filter"
@@ -374,13 +381,13 @@ onBeforeUnmount(() => {
   background: var(--datalib-surface);
   color: var(--datalib-fg);
 }
-.contacts-waiting {
-  margin-left: 0.4rem;
-  padding: 0 0.4rem;
-  border-radius: 999px;
-  background: var(--datalib-accent);
-  color: var(--datalib-accent-fg, #fff);
-  font-size: 0.85em;
+.contacts-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--datalib-border-soft);
+  background: var(--datalib-surface);
 }
 .contacts-bar {
   display: flex;

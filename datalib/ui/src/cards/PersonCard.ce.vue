@@ -20,6 +20,7 @@ import EntityChip from "./EntityChip.ce.vue";
 import { contactPageCell, contactPages } from "./contactPages";
 import {
   chipCell,
+  confirmReview,
   contactCell,
   addedSummary,
   addPeople,
@@ -34,6 +35,7 @@ import {
   NOBODY,
   notTheirs,
   people,
+  rejectReview,
   searchContacts,
   setMe,
   setStoppedWorking,
@@ -74,6 +76,8 @@ import {
   type Offer,
   type PersonSection,
 } from "./person";
+import SuggestionItem from "./SuggestionItem.ce.vue";
+import { loadSuggestions, suggestionsAbout, type Suggestion } from "./suggestions";
 import type { CardCtx } from "./types";
 
 const props = defineProps<{ ctx: CardCtx; subject: string; seenIn: string | null }>();
@@ -108,8 +112,24 @@ const asked = ref(false);
 /// The handles you took off your contact as not theirs.
 const turnedDown = ref<ReadonlySet<string>>(new Set());
 
+/// What agents suggested that waits for the person; the page shows those
+/// about whoever it is about.
+const waiting = ref<Suggestion[]>([]);
+const aboutHere = computed(() => {
+  void version.value;
+  const now = model.value;
+  const opened = subject.value.kind === "handle" ? [subject.value.handle] : [];
+  return suggestionsAbout(
+    waiting.value,
+    [...opened, ...now.handles, ...shownHandles(now)],
+    now.mine?.key ?? null,
+  );
+});
+
 async function ask() {
   error.value = null;
+  // A contacts app from before suggestions answers 404: none to show.
+  const suggested = loadSuggestions().catch(() => []);
   try {
     const s = subject.value;
     if (s.kind === "handle") await people.ask([s.handle]);
@@ -123,6 +143,7 @@ async function ask() {
     await people.ask(shownHandles(now));
     await entities.ask(now.sections.map((x) => sourceUri(x.sourceId)));
     turnedDown.value = now.mine ? await notTheirs(now.mine.key) : new Set();
+    waiting.value = await suggested;
   } catch (e) {
     error.value = (e as Error).message;
   }
@@ -346,6 +367,19 @@ function stoppedBy(handle: string, ev: Event) {
 }
 
 const busy = ref(false);
+
+async function answerSuggestion(s: Suggestion, yes: boolean) {
+  busy.value = true;
+  error.value = null;
+  try {
+    await (yes ? confirmReview : rejectReview)([s.subject]);
+    await ask();
+  } catch (e) {
+    error.value = (e as Error).message;
+  } finally {
+    busy.value = false;
+  }
+}
 async function act(f: () => Promise<void>) {
   busy.value = true;
   error.value = null;
@@ -677,6 +711,18 @@ const headPhoto = computed(() => {
         <p v-if="error" class="person-error">{{ error }}</p>
       </div>
     </header>
+
+    <section v-if="aboutHere.length" class="person-section" aria-label="Suggested">
+      <h2 class="person-source">Suggested</h2>
+      <SuggestionItem
+        v-for="x in aboutHere"
+        :key="x.subject"
+        :suggestion="x"
+        :busy="busy"
+        @yes="answerSuggestion(x, true)"
+        @no="answerSuggestion(x, false)"
+      />
+    </section>
 
     <section v-if="model.mine" class="person-section person-mine" aria-label="Your contact">
       <h2 class="person-source">Your contact</h2>

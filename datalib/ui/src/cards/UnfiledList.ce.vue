@@ -18,8 +18,10 @@ import {
   contactsById,
   movesPeople,
   people,
+  setLabel,
   unfiledPeople,
 } from "./contacts";
+import { REAL } from "./suggestions";
 import {
   filterUnfiled,
   LIST_SORTS,
@@ -87,6 +89,21 @@ function addSelected() {
   void add(grid.value?.selectedRows() ?? []);
 }
 
+/// Hide a sender: the person says they are not real (spam), so Unfiled
+/// leaves them out; or, shown again, says they are.
+async function setReal(targets: UnfiledRow[], real: boolean) {
+  try {
+    await setLabel(
+      targets.map((r) => r.handle),
+      REAL,
+      real,
+    );
+    await load();
+  } catch (e) {
+    error.value = (e as Error).message;
+  }
+}
+
 function openPerson(row: UnfiledRow) {
   props.ctx.host.openCards(personSource(row.handle, { seenIn: null }));
 }
@@ -99,6 +116,15 @@ function menu(row: UnfiledRow, targets: UnfiledRow[]): MenuEntry[] {
       action: () => void add(targets),
     },
     { name: "Open", action: () => openPerson(row) },
+    row.marks.length
+      ? {
+          name: targets.length === 1 ? "Show this sender" : `Show these ${targets.length} senders`,
+          action: () => void setReal(targets, true),
+        }
+      : {
+          name: targets.length === 1 ? "Hide this sender" : `Hide these ${targets.length} senders`,
+          action: () => void setReal(targets, false),
+        },
     {
       name: `Everything from ${name}`,
       action: () => props.ctx.host.openCards(searchSource(filterToken("from", row.handle, false))),

@@ -363,6 +363,37 @@ test("the contacts list sorts by what each wrote, and Unfiled adds whom it lists
   await deleteContacts(request, [held[boothby]!.id]);
 });
 
+/// What an agent suggests is nobody's until the person says Yes: no chip
+/// resolves to it, a banner above the list opens it, and Yes makes it a
+/// contact the list shows.
+test("an agent's suggestion is no one's until the person says Yes", async ({ page, request }) => {
+  const stamp = Date.now();
+  const handle = `email:keiko.${stamp}@enterprise.test`;
+  const name = `Keiko O'Brien ${stamp}`;
+  const sent = await request.post("/applet/datalib_contacts/proposals", {
+    data: {
+      agent: "e2e-agent",
+      run: `run-${stamp}`,
+      contacts: [{ name, handles: [handle], reason: "she signs as Keiko" }],
+    },
+  });
+  expect(sent.ok(), await sent.text()).toBeTruthy();
+  expect(await holdersOf(request, [handle])).toEqual({});
+
+  await page.goto("/contactsView()");
+  const card = page.locator(".contacts-card");
+  await card.getByRole("button", { name: /^See (it|them)$/ }).click({ timeout: 15_000 });
+  const suggestion = card.locator(".suggestion", { hasText: name });
+  await expect(suggestion).toContainText("she signs as Keiko");
+  await suggestion.getByRole("button", { name: "Yes" }).click();
+  await expect(suggestion).toHaveCount(0);
+  await expect.poll(async () => (await heldWith(request, [handle]))[handle]?.name).toBe(name);
+  await card.getByRole("tab", { name: "Contacts" }).click();
+  await card.getByLabel("Filter contacts").fill(name);
+  await expect(card.locator(".slick-row")).toHaveCount(1);
+  await deleteContacts(request, [(await heldWith(request, [handle]))[handle]!.id]);
+});
+
 /// Editing your contact on its person card: the edit is a draft nobody
 /// else sees, which a reload resumes; a rename made elsewhere just
 /// before Save makes the save refuse rather than overwrite it, and
