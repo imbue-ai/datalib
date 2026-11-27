@@ -30,7 +30,7 @@ use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
 };
-use datalib_dag::supervisor::record::StepRecord;
+use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::store::RequestRow;
 use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
@@ -1036,7 +1036,7 @@ impl RowCtx<'_> {
             .then(|| g.to_string())
     }
 
-    fn step(&self, id: &str) -> Option<&StepRecord> {
+    fn step(&self, id: &str) -> Option<&StepRow> {
         self.snap.record.steps.get(id)
     }
 

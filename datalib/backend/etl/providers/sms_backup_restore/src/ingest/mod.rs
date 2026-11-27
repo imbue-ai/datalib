@@ -227,7 +227,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     bulk_upsert_in_tx(&mut tx, &call_rows, &now).await?;
     let (marks, unknown) = last_word_on_each(&reads);
     read_marks::write(&mut tx, &marks).await?;
-    read_marks::forget(&mut tx, &unknown).await?;
+    read_marks::delete(&mut tx, &unknown).await?;
     for f in done
         .iter()
         .filter(|f| deletes || !rewritten.contains(f.rel.as_str()))
@@ -287,7 +287,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         let gone = changes.gone();
         summary.files_removed = gone.len();
         for rel in gone {
-            file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
+            file_checkpoint::delete_file_stamp(&mut tx, SCOPE, rel).await?;
         }
     }
     tx.commit().await.context("commit sms_backup_restore tx")?;
@@ -333,7 +333,7 @@ async fn prune_unseen(
     let keep_calls: HashSet<String> = calls.iter().map(|r| r.id_and_payload.id.clone()).collect();
     let gone_messages = prune::prune_scope_in_tx(tx, "sms_messages", &[], &keep_messages).await?;
     prune::delete_owned_in_tx(tx, "sms_attachments", "message_id", &gone_messages).await?;
-    read_marks::forget(tx, &gone_messages).await?;
+    read_marks::delete(tx, &gone_messages).await?;
     let gone_calls = prune::prune_scope_in_tx(tx, "sms_calls", &[], &keep_calls).await?;
     prune::record(
         "sms_messages",
@@ -353,7 +353,7 @@ async fn prune_unseen(
 type Read = (String, Option<bool>);
 
 /// The marks to write, and the ids whose marks to delete
-/// (`read_marks::forget`). A message is in several
+/// (`read_marks::delete`). A message is in several
 /// backups; the file read last has the last word, as it does on the
 /// message's row.
 fn last_word_on_each(reads: &[Read]) -> (Vec<ReadMarkRow>, Vec<String>) {

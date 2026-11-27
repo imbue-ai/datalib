@@ -708,7 +708,7 @@ async fn a_failed_pass_is_grey_and_not_a_warning() {
         w.metric(datalib_runs::MetricRow {
             run_id: "r1".into(),
             step: "slack/ingest".into(),
-            name: datalib_metrics::FAILED_PASSES.into(),
+            name: datalib_metrics::FAILED_PROCESSES.into(),
             labels: String::new(),
             value: 2,
             updated_at_utc: "2026-08-31T09:00:00+00:00".into(),

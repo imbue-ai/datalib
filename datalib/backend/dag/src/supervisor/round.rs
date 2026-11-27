@@ -32,7 +32,7 @@ use crate::scheduler::{
 };
 use crate::step::{Exit, FailureKind, StepCtx, StepError, StepId, StepOutcome, StopSignal};
 use crate::subprocess::Shrink;
-use crate::supervisor::record::{CurrentRun, Record};
+use crate::supervisor::record::{CurrentRun, LoopState};
 use crate::version::UNKNOWN;
 
 /// How often an open round looks at the disk while the config sets a
@@ -70,8 +70,8 @@ impl Ended {
 }
 
 /// What the loop keeps for one step, by its id: a config swap leaves it
-/// where it is. Besides the round's bookkeeping, the facts the `Record`
-/// does not have, which [`facts_of`] lays over the `Record`'s.
+/// where it is. Besides the round's bookkeeping, the facts the `LoopState`
+/// does not have, which [`facts_of`] lays over the `LoopState`'s.
 #[derive(Default)]
 struct Slot {
     running: Option<Running>,
@@ -277,21 +277,21 @@ impl PreparePass {
 }
 
 /// The loop's tables as the last save left them, beside the store: a save
-/// writes the difference between this and the loop's `Record` now.
+/// writes the difference between this and the loop's `LoopState` now.
 struct Saver<'a> {
     store: &'a Store,
-    last: Record,
+    last: LoopState,
 }
 
 impl<'a> Saver<'a> {
     async fn load(store: &'a Store) -> Result<Saver<'a>> {
-        let last = store.load_record().await.context("load the record")?;
+        let last = store.load_state().await.context("load the record")?;
         Ok(Saver { store, last })
     }
 
-    async fn save(&mut self, state: &Record) -> Result<()> {
+    async fn save(&mut self, state: &LoopState) -> Result<()> {
         self.store
-            .save_record(&self.last, state)
+            .save_state(&self.last, state)
             .await
             .context("save the record")?;
         self.last = state.clone();
@@ -359,7 +359,7 @@ struct OpenRun {
 #[cfg(test)]
 impl Runner {
     pub(crate) async fn run(&self, graph: &Graph) -> Result<RunReport> {
-        let sources: Vec<&str> = graph.fringe_ids();
+        let sources: Vec<&str> = graph.ids_without_inputs();
         self.run_roots(graph, &sources).await
     }
 
@@ -1080,7 +1080,7 @@ impl Runner {
     }
 
     /// What one step's `--prepare` process reported, written into the
-    /// loop's `Record`: a new version or `needs_rerun` recorded; a refusal
+    /// loop's `LoopState`: a new version or `needs_rerun` recorded; a refusal
     /// turns it off by [`REFUSED_PREPARE`] until a later pass's
     /// `--prepare` does not refuse; anything else is logged and the pass
     /// goes on.
@@ -1091,7 +1091,7 @@ impl Runner {
         &self,
         graph: &Graph,
         store: &Store,
-        state: &mut Record,
+        state: &mut LoopState,
         step: &str,
         at: Option<(String, usize, Option<String>)>,
         result: std::result::Result<StepOutcome, InvokeError>,
@@ -1147,7 +1147,12 @@ impl Runner {
     /// wrote is not shown until they run, and none of them downloads. One
     /// request, unless one this requester opened is still open. Whether it
     /// opened one.
-    async fn open_the_reruns(&self, graph: &Graph, store: &Store, state: &Record) -> Result<bool> {
+    async fn open_the_reruns(
+        &self,
+        graph: &Graph,
+        store: &Store,
+        state: &LoopState,
+    ) -> Result<bool> {
         use super::serve::UPGRADE_REQUESTER;
         let roots = rerun_offer(graph, state);
         if roots.is_empty() {
@@ -1167,13 +1172,13 @@ impl Runner {
     }
 
     /// The run opened: its plan sent, its run id and "now" recorded as the
-    /// `Record`'s current run. The steps' environment
+    /// `LoopState`'s current run. The steps' environment
     /// carries both.
     async fn open_run(
         &self,
         graph: &Graph,
         saver: &mut Saver<'_>,
-        state: &mut Record,
+        state: &mut LoopState,
     ) -> Result<OpenRun> {
         let child_env = self.steps_env();
         let plan: Vec<PlannedStep> = graph
@@ -1214,14 +1219,14 @@ impl Runner {
     }
 
     /// Nothing is open and nothing runs: each step the run reached
-    /// finished, the `Record`'s current run closed, and the summary sent. A step no
+    /// finished, the `LoopState`'s current run closed, and the summary sent. A step no
     /// request reached took no part, and has no line.
     #[allow(clippy::too_many_arguments)]
     async fn end_run(
         &self,
         graph: &Graph,
         saver: &mut Saver<'_>,
-        state: &mut Record,
+        state: &mut LoopState,
         slots: &mut Slots,
         queue: &mut ConsumerQueues,
         cancelled: bool,
@@ -1278,7 +1283,7 @@ impl Runner {
         if let Some(host) = host {
             host.close(&this_run.run_id);
         }
-        // Nothing runs: what the slots keep of the facts the `Record` does
+        // Nothing runs: what the slots keep of the facts the `LoopState` does
         // not, a step's last attempt among them, ends with the run.
         slots.clear();
         Ok(report)
@@ -1441,7 +1446,7 @@ impl Runner {
         next_graph: Option<&Graph>,
         store: &Store,
         saver: &mut Saver<'_>,
-        state: &mut Record,
+        state: &mut LoopState,
         wipes: &mut Vec<JobRow>,
         slots: &mut Slots,
     ) -> Result<bool> {
@@ -1530,7 +1535,7 @@ impl Runner {
         &self,
         graph: &Graph,
         targets: &[String],
-        state: &mut Record,
+        state: &mut LoopState,
         slots: &mut Slots,
     ) -> Result<()> {
         for step in targets {
@@ -1554,7 +1559,7 @@ impl Runner {
         graph: &Graph,
         w: &JobRow,
         how: Shrink,
-        state: &mut Record,
+        state: &mut LoopState,
         store: &Store,
     ) -> Result<()> {
         let to_shrink = wipe::compact_targets(graph, &w.targets, how);
@@ -1612,7 +1617,7 @@ impl Runner {
         &self,
         graph: &Graph,
         facts: &Facts,
-        state: &Record,
+        state: &LoopState,
         i: usize,
         consumed: &Consumed,
         checkpoint: &crate::step::CheckpointSink,
@@ -1655,10 +1660,10 @@ impl Runner {
     /// A step done with its last invocation: its finish, after the count
     /// of its processes before that one that failed, which replaces the
     /// count its last run left.
-    fn finish_ended(&self, graph: &Graph, state: &mut Record, s: &mut Slot, i: usize, e: Ended) {
+    fn finish_ended(&self, graph: &Graph, state: &mut LoopState, s: &mut Slot, i: usize, e: Ended) {
         self.sink.emit(&Event::Metric {
             step: graph.steps[i].id.clone(),
-            name: datalib_metrics::FAILED_PASSES.to_string(),
+            name: datalib_metrics::FAILED_PROCESSES.to_string(),
             labels: BTreeMap::new(),
             value: i64::from(s.failed_passes),
         });
@@ -1680,7 +1685,7 @@ impl Runner {
     fn give_final_status(
         &self,
         graph: &Graph,
-        state: &mut Record,
+        state: &mut LoopState,
         queue: &mut ConsumerQueues,
         s: &mut Slot,
         i: usize,
@@ -1721,7 +1726,7 @@ impl Runner {
         &self,
         graph: &Graph,
         signal: crate::step::StepSignal,
-        state: &mut Record,
+        state: &mut LoopState,
         queue: &mut ConsumerQueues,
         slots: &mut Slots,
     ) {
@@ -1793,7 +1798,7 @@ impl Runner {
         res: Result<StepOutcome, StepError>,
         live: &Live,
         slots: &Slots,
-        state: &mut Record,
+        state: &mut LoopState,
         queue: &mut ConsumerQueues,
     ) -> Ended {
         let spec = &graph.steps[i];
@@ -1876,7 +1881,7 @@ fn wiping(graph: &Graph, wipes: &[JobRow]) -> BTreeMap<usize, JobKind> {
 
 /// A step a wipe keeps from running reads as off, which is not what a
 /// person did: say why.
-fn say_wiping(graph: &Graph, state: &mut Record, t: &Tick, wiping: &BTreeMap<usize, JobKind>) {
+fn say_wiping(graph: &Graph, state: &mut LoopState, t: &Tick, wiping: &BTreeMap<usize, JobKind>) {
     for (&i, kind) in wiping {
         let why = match kind {
             JobKind::Reset => "being reset",
@@ -1941,7 +1946,7 @@ fn turned_off_of(graph: &Graph, all: &BTreeMap<String, String>) -> BTreeMap<usiz
 fn record_states(
     graph: &Graph,
     shape: &Shape,
-    state: &mut Record,
+    state: &mut LoopState,
     t: &Tick,
     waiting_on: &[Option<usize>],
     turned_off: &BTreeMap<usize, String>,
@@ -2026,7 +2031,7 @@ impl DiskWatch {
             None => None,
             Some((floor, Ok(s))) => {
                 self.unmeasured = false;
-                floor.holds(self.low, s.available).then_some(LowDisk {
+                floor.pauses(self.low, s.available).then_some(LowDisk {
                     available: s.available,
                     floor,
                 })
@@ -2063,7 +2068,7 @@ impl DiskWatch {
 
 /// A step this loop's graph lacks reads as waiting while a request the
 /// loop has set aside names it, and as nothing once none does.
-fn record_deferred(graph: &Graph, state: &mut Record, deferred: &BTreeMap<String, Vec<String>>) {
+fn record_deferred(graph: &Graph, state: &mut LoopState, deferred: &BTreeMap<String, Vec<String>>) {
     for root in deferred.values().flatten() {
         state.steps.entry(root.clone()).or_default();
     }
@@ -2169,9 +2174,9 @@ fn shape_of(graph: &Graph, slots: &BTreeMap<String, usize>) -> Shape {
     }
 }
 
-/// The `Record`'s facts, with what only the loop's slots have laid over
+/// The `LoopState`'s facts, with what only the loop's slots have laid over
 /// them.
-fn facts_of(graph: &Graph, state: &Record, slots: &Slots) -> Facts {
+fn facts_of(graph: &Graph, state: &LoopState, slots: &Slots) -> Facts {
     let recorded = |i: usize| state.steps.get(&graph.steps[i].id);
     let sinks: Vec<Option<String>> = (0..graph.steps.len())
         .map(|i| {
@@ -2222,7 +2227,7 @@ fn facts_of(graph: &Graph, state: &Record, slots: &Slots) -> Facts {
 /// The steps whose `--prepare` at the loop's start reported `needs_rerun`
 /// and have not succeeded since, turned-off ones aside: what the loop runs
 /// after an upgrade's pass, and what the app waits on.
-pub fn rerun_offer(graph: &Graph, state: &Record) -> Vec<StepId> {
+pub fn rerun_offer(graph: &Graph, state: &LoopState) -> Vec<StepId> {
     graph
         .steps
         .iter()
@@ -2259,7 +2264,7 @@ mod tests {
 
     use super::*;
     use crate::step::{StepRun, StepSpec};
-    use crate::supervisor::record::StepRecord;
+    use crate::supervisor::record::StepRow;
     use crate::supervisor::reload::GraphSource;
     use crate::supervisor::tick::{StateKind, WaitKind};
     use crate::EventSink;
@@ -2532,7 +2537,7 @@ mod tests {
         assert_eq!(f.runs[0].load(Ordering::SeqCst), 0);
         assert_eq!(f.runs[1].load(Ordering::SeqCst), 1);
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
-        let a = crate::supervisor::record::recorded(f.root.path())
+        let a = crate::supervisor::record::saved_state(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
@@ -2801,7 +2806,7 @@ mod tests {
         running.await.unwrap().unwrap();
         assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
         assert_eq!(t.runs(0), 2, "stopped once, then run to the end");
-        let a = crate::supervisor::record::recorded(t.root.path()).await;
+        let a = crate::supervisor::record::saved_state(t.root.path()).await;
         assert_eq!(
             a.steps["a/raw"].waiting_for, None,
             "a step no longer waiting says it waits for nothing"
@@ -2907,7 +2912,7 @@ mod tests {
         .await;
         gates[0].store(true, Ordering::SeqCst);
         until("a to run again", || runs.load(Ordering::SeqCst) == 2).await;
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::record::saved_state(root.path()).await;
         assert_eq!(record.steps["a/raw"].fingerprint, ran_with);
 
         gates[1].store(true, Ordering::SeqCst);
@@ -2916,7 +2921,7 @@ mod tests {
             outcome(&other, &first).await,
             Some(Some(RequestOutcome::Done))
         );
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::record::saved_state(root.path()).await;
         assert_eq!(record.steps["a/raw"].fingerprint, edited);
     }
 
@@ -2964,10 +2969,10 @@ mod tests {
             .unwrap();
         assert_eq!(b_render.load(Ordering::SeqCst), 1);
         let store = Store::open(root.path()).await.unwrap();
-        let saved = store.load_record().await.unwrap();
+        let saved = store.load_state().await.unwrap();
         let mut marked = saved.clone();
         marked.steps.get_mut("b/render").unwrap().needs_rerun = true;
-        store.save_record(&saved, &marked).await.unwrap();
+        store.save_state(&saved, &marked).await.unwrap();
         store.close().await;
 
         Runner::new(root.path())
@@ -2979,7 +2984,7 @@ mod tests {
             1,
             "not pulled into a's sync"
         );
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::record::saved_state(root.path()).await;
         let offer = rerun_offer(&graph, &record);
         assert_eq!(offer, ["b/render"]);
 
@@ -2990,7 +2995,7 @@ mod tests {
             .unwrap();
         assert_eq!(b_render.load(Ordering::SeqCst), 2);
         assert_eq!(b_raw.load(Ordering::SeqCst), 1, "its download did not run");
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::record::saved_state(root.path()).await;
         assert!(rerun_offer(&graph, &record).is_empty());
         assert_eq!(
             record.steps["index/grid"].reads.get("b/render"),
@@ -3004,11 +3009,11 @@ mod tests {
         root: &std::path::Path,
         step: &str,
         what: &str,
-        ready: impl Fn(&StepRecord) -> bool,
-    ) -> StepRecord {
+        ready: impl Fn(&StepRow) -> bool,
+    ) -> StepRow {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         loop {
-            let record = crate::supervisor::record::recorded(root).await;
+            let record = crate::supervisor::record::saved_state(root).await;
             if let Some(st) = record.steps.get(step).filter(|st| ready(st)) {
                 return st.clone();
             }
@@ -3035,7 +3040,7 @@ mod tests {
         })
         .await;
         assert_eq!(a.requests, [id.as_str()]);
-        let b = crate::supervisor::record::recorded(f.root.path())
+        let b = crate::supervisor::record::saved_state(f.root.path())
             .await
             .steps["b/raw"]
             .clone();
@@ -3044,7 +3049,7 @@ mod tests {
 
         f.go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
-        let a = crate::supervisor::record::recorded(f.root.path())
+        let a = crate::supervisor::record::saved_state(f.root.path())
             .await
             .steps["a/raw"]
             .clone();
@@ -3092,7 +3097,7 @@ mod tests {
         })
         .await;
         assert!(a.requests.is_empty(), "{:?}", a.requests);
-        let record = crate::supervisor::record::recorded(root.path()).await;
+        let record = crate::supervisor::record::saved_state(root.path()).await;
         assert_eq!(record.steps["b/raw"].requests, [rb.as_str()]);
         assert_eq!(
             record.steps["index/all"].requests,
@@ -3175,7 +3180,10 @@ mod tests {
 
         let_go.store(true, Ordering::SeqCst);
         running.await.unwrap().unwrap();
-        let a = crate::supervisor::record::recorded(root.path()).await.steps["a/raw"].clone();
+        let a = crate::supervisor::record::saved_state(root.path())
+            .await
+            .steps["a/raw"]
+            .clone();
         assert_ne!(a.state, Some(StateKind::Running));
         assert_eq!(a.last_run.unwrap().status, "stopped");
     }
@@ -3224,8 +3232,8 @@ mod tests {
         (stop, task)
     }
 
-    async fn state_of(root: &std::path::Path, step: &str) -> StepRecord {
-        let recorded = crate::supervisor::record::recorded(root).await;
+    async fn state_of(root: &std::path::Path, step: &str) -> StepRow {
+        let recorded = crate::supervisor::record::saved_state(root).await;
         recorded.steps.get(step).cloned().unwrap_or_default()
     }
 
@@ -3439,7 +3447,7 @@ mod tests {
         let state_of = |step: &'static str| {
             let root = root.clone();
             async move {
-                crate::supervisor::record::recorded(&root)
+                crate::supervisor::record::saved_state(&root)
                     .await
                     .current_run
                     .and_then(|r| r.states.get(step).cloned())
@@ -3530,7 +3538,7 @@ mod tests {
             .await
             .unwrap();
 
-        let run = store.load_record().await.unwrap().current_run.unwrap();
+        let run = store.load_state().await.unwrap().current_run.unwrap();
         store.close().await;
         assert_eq!(run.started_at, pinned);
         let finished = run.finished_at.expect("the round closed its run");

@@ -1451,16 +1451,16 @@ mod tests {
         let store = datalib_dag::supervisor::store::Store::open(td.path())
             .await
             .unwrap();
-        let unmarked = store.load_record().await.unwrap();
+        let unmarked = store.load_state().await.unwrap();
         let mut marked = unmarked.clone();
         marked
             .steps
             .entry("idx/index".into())
             .or_default()
             .needs_rerun = true;
-        store.save_record(&unmarked, &marked).await.unwrap();
+        store.save_state(&unmarked, &marked).await.unwrap();
         let (mut rx, _feed) = watching(td.path()).await;
-        store.save_record(&marked, &unmarked).await.unwrap();
+        store.save_state(&marked, &unmarked).await.unwrap();
         until(&mut rx, RootEvent::PassChanged).await;
     }
 

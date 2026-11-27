@@ -211,7 +211,8 @@ impl RawDb {
             .await
             .context("begin delete calendar tx")?;
         let events = Self::delete_calendar(&mut tx, calendar_id).await?;
-        datalib_etl_files::file_checkpoint::forget_file(&mut tx, checkpoint_scope, rel).await?;
+        datalib_etl_files::file_checkpoint::delete_file_stamp(&mut tx, checkpoint_scope, rel)
+            .await?;
         tx.commit().await.context("commit delete calendar tx")?;
         Ok(events)
     }
@@ -246,7 +247,7 @@ impl RawDb {
         let mut events = 0;
         for id in gone {
             events += Self::delete_calendar(&mut tx, id).await?;
-            datalib_etl_web::dav::state::forget_collection(&mut tx, id).await?;
+            datalib_etl_web::dav::state::delete_collection(&mut tx, id).await?;
         }
         tx.commit().await.context("commit delete calendars tx")?;
         Ok(events)
@@ -463,7 +464,7 @@ impl RawDb {
     ) -> Result<()> {
         Self::delete_ids_in_tx(tx, "calendly_invitees", keys).await?;
         for key in keys {
-            datalib_etl::prune::forget_record_problems_in_tx(tx, "calendly_invitees", key).await?;
+            datalib_etl::prune::delete_record_problems_in_tx(tx, "calendly_invitees", key).await?;
         }
         Ok(())
     }

@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::supervisor::record::{Record, StepRecord};
+use datalib_dag::supervisor::record::{LoopState, StepRow};
 use datalib_dag::supervisor::store::Store;
 use datalib_sql::sql;
 
@@ -34,30 +34,30 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        // The loop saving its `Record`, one step's row more each time.
+        // The loop saving its `LoopState`, one step's row more each time.
         "record" => {
-            let mut prev = Record::default();
+            let mut prev = LoopState::default();
             for k in 0..n {
                 let mut next = prev.clone();
                 next.steps.insert(
                     format!("{tag}/{k}"),
-                    StepRecord {
+                    StepRow {
                         fingerprint: k.to_string(),
                         succeeded: true,
                         ..Default::default()
                     },
                 );
-                store.save_record(&prev, &next).await?;
+                store.save_state(&prev, &next).await?;
                 prev = next;
             }
         }
         // The server reading the store for the Manage screen.
         "reader" => {
             for _ in 0..n {
-                store.load_record().await?;
+                store.load_state().await?;
                 store.open_requests().await?;
                 store.recent_requests(100).await?;
-                store.taken_on("nobody").await?;
+                store.serving_started("nobody").await?;
             }
         }
         other => bail!("no role {other:?}"),

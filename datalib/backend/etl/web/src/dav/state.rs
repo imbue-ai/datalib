@@ -141,7 +141,7 @@ pub async fn delete_object(
     href: &str,
 ) -> Result<()> {
     unlist(tx, collection, href).await?;
-    owed::forget(tx, RESOURCES, &resource_id(collection, href)).await
+    owed::delete_gone(tx, RESOURCES, &resource_id(collection, href)).await
 }
 
 /// The listing row alone; for a loop that drops the sidecar itself.
@@ -162,7 +162,7 @@ pub async fn unlist(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &s
 /// the sidecars, the fetch problems and any listing under way are
 /// deleted, in the transaction that removes the provider's content for
 /// it.
-pub async fn forget_collection(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
+pub async fn delete_collection(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
     for sql in [
         sql!(
             "etl.web.forget_collection.delete_problems",

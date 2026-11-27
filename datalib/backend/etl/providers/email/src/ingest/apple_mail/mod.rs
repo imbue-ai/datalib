@@ -570,7 +570,7 @@ async fn read_accounts(opts: FetchOptions, found: RunProblems) -> Result<FetchSu
             summary.emails_removed += db.prune_emails_to(&c.account_id, kept).await?;
         }
         let gone = changes.gone_by_path(&BTreeSet::new());
-        file_checkpoint::forget_files(db.pool(), SCOPE, &gone).await?;
+        file_checkpoint::delete_file_stamps(db.pool(), SCOPE, &gone).await?;
     } else {
         found.push(RunProblem::listing(
             "removed_records",

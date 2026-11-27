@@ -76,7 +76,7 @@ impl RawDb {
     }
 
     pub async fn delete_manifest_sweep(&self, key: &str) -> Result<()> {
-        SWEEPS.forget(self.pool(), key).await
+        SWEEPS.delete_marker(self.pool(), key).await
     }
 
     pub async fn record_manifest_sweep(&self, key: &str, now: &DateTime<Utc>) -> Result<()> {
@@ -1361,7 +1361,7 @@ async fn prune_enumerated(
         gone += messages.len();
     }
     let gone_marks: Vec<String> = gone_threads.iter().map(|t| t.to_string()).collect();
-    read_marks::forget(tx, &gone_marks).await?;
+    read_marks::delete(tx, &gone_marks).await?;
     datalib_etl::prune::record(
         &format!("slack channel {channel_id} history"),
         top_level.len(),

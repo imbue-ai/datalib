@@ -159,7 +159,7 @@ async fn delete_ids_in_tx(
 }
 
 /// One record's problems, for a record upstream no longer has.
-pub async fn forget_record_problems_in_tx(
+pub async fn delete_record_problems_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     id: &str,

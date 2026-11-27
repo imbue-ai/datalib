@@ -35,7 +35,7 @@ pub struct ProblemCounts {
 }
 
 /// `step id → counts`, from the newest [`METRIC`] samples per step and
-/// the newest [`datalib_metrics::FAILED_PASSES`] ones. A step with only
+/// the newest [`datalib_metrics::FAILED_PROCESSES`] ones. A step with only
 /// one of the two severities reported is still counted — the other
 /// reads as zero — but a label this build cannot name is skipped rather
 /// than guessed at.
@@ -46,7 +46,7 @@ pub fn counts_by_step(
     let mut out: HashMap<String, ProblemCounts> = HashMap::new();
     for m in failed_processes
         .iter()
-        .filter(|m| m.name == datalib_metrics::FAILED_PASSES)
+        .filter(|m| m.name == datalib_metrics::FAILED_PROCESSES)
     {
         let entry = out.entry(m.step.clone()).or_default();
         entry.failed_processes = m.value;
@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn what_only_the_log_holds_is_grey_and_apart_from_the_rows() {
         let failed = |step: &str, value: i64, run: &str| MetricRow {
-            name: datalib_metrics::FAILED_PASSES.into(),
+            name: datalib_metrics::FAILED_PROCESSES.into(),
             ..sample(step, "", value, run)
         };
         let by = counts_by_step(
