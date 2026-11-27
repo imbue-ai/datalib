@@ -91,11 +91,15 @@ const storeNote = computed(() =>
     : `every store under ${props.opts.trees.map((t) => `${t}/`).join(", ")}`,
 );
 
-/// A commit names its run, and that run's log is the "how" behind the
-/// commit's "what" — filtered to the step that writes the store.
+/// A commit names the invocation that made it, or an older build's run,
+/// and that log is the "how" behind the commit's "what" — an old run's
+/// filtered to the step that writes the store.
 function openRunLog(row: HistoryRow) {
-  if (!row.run) return;
-  props.ctx.host.openCards(logSource({ run: row.run, step: row.stepId }));
+  if (row.invocation) {
+    props.ctx.host.openCards(logSource({ q: `min_level:info invocation:${row.invocation}` }));
+  } else if (row.run) {
+    props.ctx.host.openCards(logSource({ run: row.run, step: row.stepId }));
+  }
 }
 
 // ── Compare. The pair being compared, or why the pair asked for is not
@@ -171,8 +175,8 @@ function menu(anchor: HistoryRow, targets: HistoryRow[]): MenuEntry[] {
     });
   }
   entries.push({
-    name: "Show the run's log",
-    disabled: anchor.run ? null : "No run is named on this commit",
+    name: "Show the log of what made it",
+    disabled: anchor.invocation || anchor.run ? null : "No run is named on this commit",
     action: () => openRunLog(anchor),
   });
   entries.push({
@@ -264,12 +268,15 @@ const historyOverrides: Record<string, Partial<Column<HistoryRow>>> = {
     width: 120,
     formatter: (_r, _c, _v, _col, row) => {
       const wrap = document.createElement("span");
-      if (!row?.run) return wrap;
+      const id = row?.invocation ?? row?.run;
+      if (!row || !id) return wrap;
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "hc-run";
-      btn.textContent = row.run.slice(0, 8);
-      btn.title = `Show the log of run ${row.run}`;
+      btn.textContent = id.slice(0, 8);
+      btn.title = row.invocation
+        ? `Show the log of invocation ${row.invocation}`
+        : `Show the log of run ${row.run}`;
       btn.addEventListener("click", () => void openRunLog(row));
       wrap.appendChild(btn);
       return wrap;

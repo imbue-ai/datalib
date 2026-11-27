@@ -20,6 +20,7 @@ const commit = (hash: string, date: string): HistoryCommit => ({
   committer: "doltlite",
   date,
   message: `sync ${hash}`,
+  invocation: null,
   run: null,
   tables: [],
 });
