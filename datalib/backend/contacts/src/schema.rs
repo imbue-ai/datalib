@@ -2,7 +2,6 @@
 // table's schema, and its DDL, column list and upsert are derived from
 // it (`etl/macros/README.md` § "PortableTable").
 
-use datalib_contact_schema::ContactKind;
 use datalib_etl_macros::PortableTable;
 
 use crate::{DecidedHow, FieldKind};
@@ -15,8 +14,6 @@ pub mod contacts {
     pub struct ContactRow {
         #[col(sql = "TEXT")]
         pub contact_id: String,
-        #[col(sql = "TEXT", enum)]
-        pub kind: ContactKind,
         #[col(sql = "TEXT")]
         pub name: String,
         #[col(sql = "TEXT")]
@@ -112,23 +109,6 @@ pub mod not_linked {
         pub tz_offset: String,
         #[col(sql = "INTEGER")]
         pub contact_rejected: bool,
-    }
-}
-
-pub mod members {
-    use super::*;
-
-    #[derive(Debug, Clone, PortableTable)]
-    #[portable_table(table = "members", primary_key = "group_id, member_id")]
-    pub struct MemberRow {
-        #[col(sql = "TEXT")]
-        pub group_id: String,
-        #[col(sql = "TEXT")]
-        pub member_id: String,
-        #[col(sql = "TEXT")]
-        pub added_at_utc: String,
-        #[col(sql = "TEXT")]
-        pub tz_offset: String,
     }
 }
 
@@ -252,7 +232,6 @@ pub mod labels {
 pub const DDL: &[&str] = &[
     contacts::DDL[0].1,
     handles::DDL[0].1,
-    members::DDL[0].1,
     photos::DDL[0].1,
     fields::DDL[0].1,
     me::DDL[0].1,

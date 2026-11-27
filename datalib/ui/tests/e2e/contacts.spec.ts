@@ -306,15 +306,15 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   await expect(row(dup).locator(`a.chip[data-contact="${dup}"]`)).toContainText(name);
   await expect(row(keep).locator(`a.chip[data-contact="${keep}"]`)).toContainText(name);
 
-  await row(dup).locator('[col-id="kind"]').click();
-  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await row(dup).locator('[col-id="handles"]').click();
+  await row(keep).locator('[col-id="handles"]').click({ button: "right" });
   await expect(menuEntry(page, /^Merge into this one/)).toHaveClass(MENU_DISABLED);
   await page.keyboard.press("Escape");
-  await row(dup).locator('[col-id="kind"]').click();
+  await row(dup).locator('[col-id="handles"]').click();
   await row(keep)
-    .locator('[col-id="kind"]')
+    .locator('[col-id="handles"]')
     .click({ modifiers: ["ControlOrMeta"] });
-  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await row(keep).locator('[col-id="handles"]').click({ button: "right" });
   await menuEntry(page, "Merge the other selected contact into this one").click();
   await expect(row(dup)).toHaveCount(0);
   await expect(row(keep)).toHaveCount(1);
@@ -324,7 +324,7 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   );
 
   page.once("dialog", (d) => void d.accept());
-  await row(keep).locator('[col-id="kind"]').click({ button: "right" });
+  await row(keep).locator('[col-id="handles"]').click({ button: "right" });
   await menuEntry(page, "Delete contact…").click();
   await expect(row(keep)).toHaveCount(0);
   const gone = await request.get(`/applet/datalib_contacts/contact/${keep}`);
@@ -392,6 +392,37 @@ test("an agent's suggestion is no one's until the person says Yes", async ({ pag
   await card.getByLabel("Filter contacts").fill(name);
   await expect(card.locator(".slick-row")).toHaveCount(1);
   await deleteContacts(request, [(await heldWith(request, [handle]))[handle]!.id]);
+});
+
+/// A label you give a contact on their page is a node of the Library tree,
+/// under Contacts, as an address book's groups are under it; picking it
+/// lists who carries it beside the tree.
+test("a label given on a contact's page is a node of the Library tree listing who has it", async ({
+  page,
+  request,
+}) => {
+  const stamp = Date.now();
+  const name = `Alexander Rozhenko ${stamp}`;
+  const label = `house-of-mogh-${stamp}`;
+  const made = await request.post("/applet/datalib_contacts/contacts", { data: { name } });
+  expect(made.ok(), await made.text()).toBeTruthy();
+  const { contact_id: id } = (await made.json()) as { contact_id: string };
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(`contact:${id}`)}, {})`)}`);
+  const box = page.getByLabel("Add a label");
+  await box.fill(label);
+  await box.press("Enter");
+  await expect(page.locator(".person-label", { hasText: label })).toBeVisible();
+
+  await page.goto("/" + encodeURIComponent("libraryTreeView()"));
+  const row = (text: string | RegExp) =>
+    page.locator("vs-tree .monaco-list-row", { hasText: text }).first();
+  await row(/^Contacts$/).click({ timeout: 15_000 });
+  await row(label).click();
+  const pane = page.locator("[data-testid=library-node]");
+  await expect(pane.locator(`.slick-row[data-key="${id}"]`)).toContainText(name);
+  await expect(pane.locator(".slick-row")).toHaveCount(1);
+  await deleteContacts(request, [id]);
 });
 
 /// Editing your contact on its person card: the edit is a draft nobody

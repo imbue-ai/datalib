@@ -237,7 +237,7 @@ The value can be:
   finds Riker under every spelling a source used, and anyone else whose
   name holds it.
 - **`contact:<id>`**: every handle linked to that contact in the
-  contacts app, and its members' for a group. The app writes this for
+  contacts app. The app writes this for
   you when you pick a person from the search box's suggestions.
 - **`me`**: you. See below.
 

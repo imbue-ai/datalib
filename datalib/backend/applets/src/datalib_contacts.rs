@@ -27,7 +27,7 @@ use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
 use datalib_contact_schema::{Medium, NormalizedContact};
 use datalib_contacts::add_people::{AddedPeople, NewPerson};
 use datalib_contacts::drafts::ContactEdit;
-use datalib_contacts::{ContactKind, HandleFrom, Store, WhenHeld};
+use datalib_contacts::{HandleFrom, Store, WhenHeld};
 use datalib_handle::Handle;
 use serde::Deserialize;
 use serde_json::json;
@@ -118,10 +118,18 @@ fn api() -> Api {
             list,
         )
         .add(
+            Get,
+            "/labels",
+            Read,
+            "`{labels: [{label, contacts}]}`: every label your contacts carry but `real`, \
+             and how many carry each",
+            labels,
+        )
+        .add(
             Post,
             "/contacts",
             Person,
-            "`{name, kind?, handles?}`: make a contact, linking the handles at once",
+            "`{name, handles?}`: make a contact, linking the handles at once",
             create,
         )
         .add(
@@ -149,6 +157,14 @@ fn api() -> Api {
             Person,
             "delete the contact and every contact merged into it",
             delete,
+        )
+        .add(
+            Get,
+            "/contact/{contact_id}/labels",
+            Read,
+            "`{labels}`: the contact's labels but `real`, as `POST /label` sets them; a \
+             merged-away id answers its survivor's",
+            contact_labels,
         )
         .add(
             Post,
@@ -287,8 +303,6 @@ fn refused(e: anyhow::Error) -> ApiError {
         "two fields share",
         "merged into itself",
         "already merged",
-        "can be merged",
-        "only a person",
         "not a handle or a contact",
         "is not a label",
         "names its agent",
@@ -350,16 +364,45 @@ async fn search(
 
 async fn list(State(store): AppState) -> Result<Json<serde_json::Value>, ApiError> {
     let contacts = store.list().await.map_err(refused)?;
-    Ok(Json(contacts_table(&contacts)))
+    let labels = store.contact_labels().await.map_err(refused)?;
+    Ok(Json(contacts_table(&contacts, &labels)))
+}
+
+/// `{labels: [{label, contacts}]}`: every label a listed contact carries,
+/// by label, and how many carry it. The Library tree's labels.
+async fn labels(State(store): AppState) -> Result<Json<serde_json::Value>, ApiError> {
+    let listed: std::collections::BTreeSet<String> = store
+        .list()
+        .await
+        .map_err(refused)?
+        .into_iter()
+        .map(|c| c.key)
+        .collect();
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    for (id, labels) in store.contact_labels().await.map_err(refused)? {
+        if listed.contains(&id) {
+            for l in labels {
+                *counts.entry(l).or_default() += 1;
+            }
+        }
+    }
+    let labels: Vec<serde_json::Value> = counts
+        .into_iter()
+        .map(|(label, contacts)| json!({ "label": label, "contacts": contacts }))
+        .collect();
+    Ok(Json(json!({ "labels": labels })))
 }
 
 /// Every contact as a typed table (docs/dev/cards.md § "Typed tables"),
 /// in the address book's columns: the contact as a chip, the first
-/// working address and number, how many handles, the note, the kind and
-/// when it last changed. The chip is the contact itself, not one of its
+/// working address and number, how many handles, the note, and when it
+/// last changed. The chip is the contact itself, not one of its
 /// handles: a handle may be shared, and its chip then names everyone
 /// who has it.
-fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
+fn contacts_table(
+    contacts: &[NormalizedContact],
+    labels: &std::collections::BTreeMap<String, Vec<String>>,
+) -> serde_json::Value {
     let columns = vec![
         ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity).width(200),
         ColumnSpec::new("me", "Me", ColumnType::Chips)
@@ -369,10 +412,12 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
             .width(56),
         ColumnSpec::new("email", "Email", ColumnType::Text),
         ColumnSpec::new("phone", "Phone", ColumnType::Text),
+        ColumnSpec::new("labels", "Labels", ColumnType::Chips)
+            .describe("The labels you gave the contact.")
+            .width(160),
         ColumnSpec::new("handles", "Handles", ColumnType::Count)
             .describe("How many handles are linked to the contact."),
         ColumnSpec::new("note", "Note", ColumnType::Text),
-        ColumnSpec::new("kind", "Type", ColumnType::Text).width(110),
         ColumnSpec::new("updated_at", "Changed", ColumnType::Timestamp),
     ];
     let rows: Vec<serde_json::Value> = contacts
@@ -396,19 +441,26 @@ fn contacts_table(contacts: &[NormalizedContact]) -> serde_json::Value {
                 "key": c.key,
                 "contact_ref": contact_ref,
                 "me": me_chip(c.account),
+                "labels": labels.get(&c.key).map_or_else(Vec::new, |ls| {
+                    ls.iter().map(|l| label_chip(l)).collect()
+                }),
                 "email": working(Medium::Email).map(|h| h.value.clone()),
                 "phone": working(Medium::Phone).map(|h| h.value.clone()),
                 "handles": c.handles.len(),
                 "note": c.note,
-                "kind": match c.kind {
-                    ContactKind::Person => "Contact",
-                    ContactKind::Group => "Contact group",
-                },
                 "updated_at": c.modified_at,
             })
         })
         .collect();
     json!({ "columns": columns, "rows": rows, "row_key": "key" })
+}
+
+fn label_chip(label: &str) -> Chip {
+    Chip {
+        kind: ChipKind::Metric,
+        text: label.to_string(),
+        title: format!("Labelled {label}"),
+    }
 }
 
 fn me_chip(me: bool) -> Vec<Chip> {
@@ -426,8 +478,6 @@ fn me_chip(me: bool) -> Vec<Chip> {
 struct CreateBody {
     name: String,
     #[serde(default)]
-    kind: Option<String>,
-    #[serde(default)]
     handles: Vec<String>,
 }
 
@@ -435,24 +485,12 @@ async fn create(
     State(store): AppState,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let kind = match body.kind.as_deref() {
-        None => ContactKind::Person,
-        Some(k) => ContactKind::parse(k).ok_or_else(|| {
-            ApiError(
-                StatusCode::BAD_REQUEST,
-                format!("{k:?} is not a contact kind"),
-            )
-        })?,
-    };
     let handles = body
         .handles
         .iter()
         .map(|h| handle(h))
         .collect::<Result<Vec<_>, _>>()?;
-    let contact_id = store
-        .create(&body.name, kind, &handles)
-        .await
-        .map_err(refused)?;
+    let contact_id = store.create(&body.name, &handles).await.map_err(refused)?;
     Ok(Json(json!({ "contact_id": contact_id })))
 }
 
@@ -508,6 +546,21 @@ async fn contact(
             format!("no contact {contact_id}"),
         )),
     }
+}
+
+async fn contact_labels(
+    State(store): AppState,
+    Path(contact_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let Some(c) = store.contact(&contact_id).await.map_err(refused)? else {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("no contact {contact_id}"),
+        ));
+    };
+    let mut all = store.contact_labels().await.map_err(refused)?;
+    let labels = all.remove(&c.key).unwrap_or_default();
+    Ok(Json(json!({ "labels": labels })))
 }
 
 /// Everything of the contact goes; its handles are nobody's afterwards.
@@ -1035,22 +1088,18 @@ mod tests {
         let work = Handle::email("riker@enterprise.org").unwrap();
         let tel = Handle::tel("+15550123456").unwrap();
         let will = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                &[old.clone(), work.clone(), tel],
-            )
+            .create("Will Riker", &[old.clone(), work.clone(), tel])
             .await
             .unwrap();
         store
             .set_stopped_working(&old, &will, Some("2369"))
             .await
             .unwrap();
-        store.create("Q", ContactKind::Person, &[]).await.unwrap();
-        store
-            .create("Away team", ContactKind::Group, &[])
-            .await
-            .unwrap();
+        let q = store.create("Q", &[]).await.unwrap();
+        let q_subject = datalib_contacts::contact_subject(&q);
+        for (label, applies) in [("continuum", Some(true)), ("real", Some(false))] {
+            store.set_label(&q_subject, label, applies).await.unwrap();
+        }
         let app = routes(Arc::new(store));
 
         let (status, body) = call(&app, "GET", "/contacts", json!(null)).await;
@@ -1061,8 +1110,20 @@ mod tests {
             .iter()
             .map(|r| r["contact_ref"]["label"].as_str().unwrap())
             .collect();
-        assert_eq!(names, ["Away team", "Q", "Will Riker"]);
-        let riker = &rows[2];
+        assert_eq!(names, ["Q", "Will Riker"]);
+        assert_eq!(
+            rows[0]["labels"][0]["text"], "continuum",
+            "a label shows; `real` is no label of the list's"
+        );
+        assert_eq!(rows[0]["labels"].as_array().unwrap().len(), 1);
+        let (_, labels) = call(&app, "GET", "/labels", json!(null)).await;
+        assert_eq!(
+            labels,
+            json!({"labels": [{"label": "continuum", "contacts": 1}]})
+        );
+        let (_, of_q) = call(&app, "GET", &format!("/contact/{q}/labels"), json!(null)).await;
+        assert_eq!(of_q, json!({"labels": ["continuum"]}));
+        let riker = &rows[1];
         assert_eq!(riker["key"], will.as_str());
         assert_eq!(
             riker["contact_ref"]["id"],
@@ -1072,7 +1133,6 @@ mod tests {
         assert_eq!(riker["email"], "riker@enterprise.org");
         assert_eq!(riker["phone"], "+15550123456");
         assert_eq!(riker["handles"], 3);
-        assert_eq!(rows[0]["kind"], "Contact group");
         let fields: Vec<&str> = body["columns"]
             .as_array()
             .unwrap()
@@ -1086,9 +1146,9 @@ mod tests {
         }
     }
 
-    /// An agent's batch lands as one call; the review table puts each
-    /// subject on a row with its importance and labels, a person's
-    /// confirm and label land, and a bad subject is the person's to fix.
+    /// An agent's batch lands as one call; the suggestions list each
+    /// subject; a person's Yes and label land; and a bad subject is the
+    /// person's to fix.
     #[tokio::test]
     async fn an_agents_batch_is_reviewed_through_the_routes() {
         let dir = tempfile::tempdir().unwrap();
@@ -1121,37 +1181,23 @@ mod tests {
             (Some(1), Some(3))
         );
 
-        let (_, table) = call(&app, "GET", "/review", json!(null)).await;
-        let rows = table["rows"].as_array().unwrap();
-        assert_eq!(rows.len(), 2);
-        let troi = &rows[0];
-        assert_eq!(troi["who"]["id"], "mailto:troi@enterprise.org");
-        assert_eq!(
-            troi["label:real"],
-            json!({"applies": true, "proposed": true, "title": "claude-test proposed it; you have not looked: wrote back"})
-        );
-        assert_eq!(troi["real"], true);
-        assert_eq!(troi["labels"][0]["text"], "crew?");
-        assert_eq!(troi["status"], "waiting for you");
-        assert_eq!(rows[1]["label:real"]["applies"], false);
-        assert_eq!(
-            rows[1]["label:crew"],
-            json!(null),
-            "no column for a label nobody asked to see"
-        );
-        let fields: Vec<&str> = table["columns"]
+        let (_, waiting) = call(&app, "GET", "/suggestions", json!(null)).await;
+        let waiting = waiting["suggestions"].as_array().unwrap();
+        assert_eq!(waiting.len(), 2, "{waiting:?}");
+        let troi = waiting
+            .iter()
+            .find(|s| s["name"] == "Deanna Troi")
+            .expect("Troi waits");
+        assert_eq!(troi["new_contact"], true);
+        assert_eq!(troi["handles"], json!(["email:troi@enterprise.org"]));
+        let labels: Vec<&str> = troi["labels"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|c| c["field"].as_str().unwrap())
+            .filter_map(|l| l["label"].as_str())
             .collect();
-        for r in rows {
-            for f in &fields {
-                assert!(r.get(*f).is_some(), "row lacks {f}: {r}");
-            }
-        }
-
-        let subject = troi["key"].clone();
+        assert_eq!(labels, ["crew", "real"]);
+        let subject = troi["subject"].clone();
         let (_, done) = call(
             &app,
             "POST",
@@ -1168,25 +1214,8 @@ mod tests {
         )
         .await;
         assert_eq!(done["changed"], 1);
-        let (_, table) = call(&app, "GET", "/review", json!(null)).await;
-        let statuses: Vec<&str> = table["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r["status"].as_str().unwrap())
-            .collect();
-        assert_eq!(statuses, ["you confirmed", "you overrode the agent"]);
-
-        let (_, table) = call(&app, "GET", "/review?label=Crew", json!(null)).await;
-        let fields: Vec<&str> = table["columns"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|c| c["field"].as_str().unwrap())
-            .collect();
-        assert!(fields.contains(&"label:crew"), "{fields:?}");
-        assert_eq!(table["rows"][0]["label:crew"]["applies"], true);
-
+        let (_, waiting) = call(&app, "GET", "/suggestions", json!(null)).await;
+        assert_eq!(waiting["suggestions"], json!([]), "nothing waits");
         let (status, err) = call(
             &app,
             "POST",
@@ -1197,23 +1226,17 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT, "{err}");
     }
 
-    /// The card's switch: a person marked as me answers as the account and
-    /// wears the chip in the table; a group is refused as the person's to
-    /// fix.
+    /// The card's switch: a contact marked as me answers as the account
+    /// and wears the chip in the table; one the store lacks is the
+    /// person's to fix.
     #[tokio::test]
     async fn a_contact_is_marked_as_me_and_the_table_says_so() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&datalib_contacts::store_path(dir.path()))
             .await
             .unwrap();
-        let picard = store
-            .create("Picard", ContactKind::Person, &[])
-            .await
-            .unwrap();
-        let crew = store
-            .create("Bridge crew", ContactKind::Group, &[])
-            .await
-            .unwrap();
+        let picard = store.create("Picard", &[]).await.unwrap();
+        store.create("Data", &[]).await.unwrap();
         let store = Arc::new(store);
         let app = routes(store.clone());
 
@@ -1229,11 +1252,9 @@ mod tests {
             .iter()
             .map(|r| r["me"].clone())
             .collect();
-        assert_eq!(chips[0], json!([]), "the crew is not me");
+        assert_eq!(chips[0], json!([]), "Data is not me");
         assert_eq!(chips[1][0]["text"], "me");
 
-        let (status, body) = call(&app, "POST", "/me", mark(&crew, true)).await;
-        assert_eq!(status, StatusCode::CONFLICT, "{body}");
         let (status, _) = call(&app, "POST", "/me", mark("no-such", true)).await;
         assert_eq!(status, StatusCode::CONFLICT);
         let (_, body) = call(&app, "POST", "/me", mark(&picard, false)).await;
@@ -1257,13 +1278,10 @@ mod tests {
             .unwrap();
         let tel = Handle::tel("+15550123456").unwrap();
         let keep = store
-            .create("Data", ContactKind::Person, std::slice::from_ref(&tel))
+            .create("Data", std::slice::from_ref(&tel))
             .await
             .unwrap();
-        let dup = store
-            .create("Data", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let dup = store.create("Data", &[]).await.unwrap();
         let store = Arc::new(store);
         let app = routes(store.clone());
 
@@ -1440,10 +1458,7 @@ mod tests {
         let store = Store::open(&datalib_contacts::store_path(dir.path()))
             .await
             .unwrap();
-        let id = store
-            .create("William Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let id = store.create("William Riker", &[]).await.unwrap();
         let store = Arc::new(store);
         let app = routes(store.clone());
         let draft = format!("/contact/{id}/draft");
@@ -1507,10 +1522,7 @@ mod tests {
         let store = Store::open(&datalib_contacts::store_path(dir.path()))
             .await
             .unwrap();
-        let id = store
-            .create("Will Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let id = store.create("Will Riker", &[]).await.unwrap();
         let store = Arc::new(store);
         let app = routes(store.clone());
 

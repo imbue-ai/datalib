@@ -20,10 +20,7 @@ fn stores(data_root: &Path) -> Vec<PathBuf> {
 
 /// Tables a checked-in store may leave empty, and why: nothing the app
 /// offers can write a row there yet.
-const MAY_BE_EMPTY: &[(&str, &str)] = &[(
-    "members",
-    "no route adds a member to a group yet (docs/dev/contacts.md §\"Not built\")",
-)];
+const MAY_BE_EMPTY: &[(&str, &str)] = &[];
 
 /// The `_datalib_meta` keys naming the build that last opened a store,
 /// which move with every build and are no change to the store.
@@ -252,7 +249,7 @@ pub fn overlay(applet: &Path, data_root: &Path) -> Value {
         let (Some(id), Some(name)) = (s(c, "contact_id"), s(c, "name")) else {
             continue;
         };
-        let label = format!("{name} ({})", s(c, "kind").unwrap_or_default());
+        let label = name.clone();
         let found = find(&format!("with:contact:{id}"));
         if let Some(into) = s(c, "merged_into") {
             contacts.insert(label, json!(format!("merged into {}", names[&into])));
@@ -299,18 +296,6 @@ pub fn overlay(applet: &Path, data_root: &Path) -> Value {
             ));
         }
     }
-    for m in rows(&store, "members") {
-        let (Some(group), Some(member)) = (s(m, "group_id"), s(m, "member_id")) else {
-            continue;
-        };
-        if !uuids(&found_for[&member]).is_subset(&uuids(&found_for[&group])) {
-            failures.push(format!(
-                "group {:?} misses rows its member {:?} finds",
-                names[&group], names[&member]
-            ));
-        }
-    }
-
     let me = find("from:me");
     let mut from_me = BTreeMap::new();
     for m in rows(&store, "me") {

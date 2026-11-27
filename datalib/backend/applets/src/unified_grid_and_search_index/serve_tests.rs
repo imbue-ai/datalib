@@ -274,14 +274,7 @@ fn contacts_are_counted_as_from_finds_and_unfiled_is_everyone_else() {
             .iter()
             .map(|h| datalib_handle::Handle::parse(h).unwrap())
             .collect();
-        let riker = store
-            .create(
-                "Will Riker",
-                datalib_contacts::ContactKind::Person,
-                &handles,
-            )
-            .await
-            .unwrap();
+        let riker = store.create("Will Riker", &handles).await.unwrap();
         store
             .set_label(quark, datalib_contacts::REAL, Some(false))
             .await

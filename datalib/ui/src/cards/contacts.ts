@@ -53,7 +53,7 @@ export type NormalizedContact = {
   account?: boolean;
 };
 
-export type ContactSummary = { contact_id: string; name: string; kind: string };
+export type ContactSummary = { contact_id: string; name: string };
 
 /** Each number written with no country code, as its record writes it, with
  *  the full numbers a source knows that it may be. */
@@ -685,6 +685,25 @@ export async function rejectReview(subjects: string[]): Promise<number> {
   return r.turned_down;
 }
 
+/** A label and how many of your contacts carry it. */
+export type LabelCount = { label: string; contacts: number };
+
+/** Every label your contacts carry but `real`, by label. */
+export async function labelCounts(): Promise<LabelCount[]> {
+  return (await call<{ labels: LabelCount[] }>("/labels")).labels;
+}
+
+/** One contact's labels but `real`. */
+export async function labelsOf(contactId: string): Promise<string[]> {
+  return (await call<{ labels: string[] }>(`/contact/${encodeURIComponent(contactId)}/labels`))
+    .labels;
+}
+
+/** Give a contact `label`, or take it off. */
+export async function labelContact(contactId: string, label: string, on: boolean): Promise<void> {
+  await setLabel([`contact:${contactId}`], label, on ? true : null);
+}
+
 /** Say `label` is in (`true`), out (`false`) or unknown (`null`). */
 export async function setLabel(
   subjects: string[],
@@ -849,18 +868,14 @@ export const contactsById = new Resolver<NormalizedContact>(
 export function contactLook(shown: string, contact: NormalizedContact | undefined): ChipLook {
   const name = contact ? nameOf(contact) : shown;
   const handles = (contact?.handles ?? []).map((h) => h.value);
-  const group = contact?.kind === "group";
   return {
     text: name,
-    ariaLabel: group ? `${name}, a group of your contacts` : `${name}, your contact`,
+    ariaLabel: `${name}, your contact`,
     classes: ["handle-chip", "handle-resolved", "contact-chip"],
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
     photo: contact ? contactPhoto(contact) : null,
-    title: [
-      group ? `${name} (a group)` : name,
-      ...(handles.length > 0 ? [`Linked: ${handles.join(", ")}`] : []),
-    ].join("\n"),
+    title: [name, ...(handles.length > 0 ? [handles.join(", ")] : [])].join("\n"),
   };
 }
 

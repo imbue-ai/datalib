@@ -2105,7 +2105,6 @@ disk_usage
 == datalib_curated/contacts ==
 contacts
     contact_id
-    kind
     name
     note
     merged_into
@@ -2153,11 +2152,6 @@ labels
 me
     contact_id
     marked_at_utc
-    tz_offset
-members
-    group_id
-    member_id
-    added_at_utc
     tz_offset
 not_linked
     handle

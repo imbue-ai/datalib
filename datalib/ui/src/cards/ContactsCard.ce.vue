@@ -26,6 +26,7 @@ import {
   createContact,
   deleteContact,
   isAbsent,
+  labelContact,
   mergeContacts,
   movesPeople,
   people,
@@ -39,6 +40,7 @@ import {
   sortList,
   withCountColumns,
   withCounts,
+  withLabel,
   type ContactRow,
   type ListSort,
   type Wrote,
@@ -50,8 +52,11 @@ import TableGrid from "./TableGrid.ce.vue";
 import type { TableGridApi } from "./tableGridApi";
 import type { CardCtx } from "./types";
 
-const props = defineProps<{ ctx: CardCtx }>();
-props.ctx.setTitle("Contacts");
+const props = defineProps<{ ctx: CardCtx; label?: string | null }>();
+/// The one label this card lists, as the Library tree shows a label; null
+/// for every contact.
+const label = props.label ?? null;
+props.ctx.setTitle(label === null ? "Contacts" : `Contacts labelled ${label}`);
 props.ctx.setHelp(`
 <p>The people you have added, and nobody else: no source fills this list.
 To add someone, double-click them anywhere and choose <em>Add to
@@ -91,9 +96,15 @@ const counts = ref<Record<string, Wrote> | null>(null);
 const newName = ref("");
 const creating = ref(false);
 const loaded = ref(false);
+/// The contacts this card lists, before the filter box.
+const listed = computed(() => withLabel(rows.value, label));
 const shown = computed(() => {
   const counted = counts.value ? withCounts(rows.value, counts.value) : rows.value;
-  return sortList(filterContacts(counted, filter.value), sort.value, contactSortKey);
+  return sortList(
+    filterContacts(withLabel(counted, label), filter.value),
+    sort.value,
+    contactSortKey,
+  );
 });
 const shownColumns = computed(() =>
   counts.value ? withCountColumns(columns.value) : columns.value,
@@ -153,7 +164,9 @@ async function create() {
   if (!name) return;
   creating.value = true;
   try {
-    await createContact(name, []);
+    const id = await createContact(name, []);
+    // Made from a label's list, it carries the label.
+    if (label !== null) await labelContact(id, label, true);
     newName.value = "";
     await load();
   } catch (e) {
@@ -264,7 +277,7 @@ onBeforeUnmount(() => {
     <p v-if="absent" class="contacts-absent">
       This library has no contacts app. Add it from <b>Sources</b>, under <b>Add source</b>.
     </p>
-    <div v-if="!absent" class="contacts-modes" role="tablist">
+    <div v-if="!absent && label === null" class="contacts-modes" role="tablist">
       <button
         role="tab"
         class="contacts-mode"
@@ -291,7 +304,7 @@ onBeforeUnmount(() => {
       @back="mode = 'contacts'"
     />
     <template v-else-if="!absent">
-      <div v-if="suggestions.length" class="contacts-banner" role="status">
+      <div v-if="suggestions.length && label === null" class="contacts-banner" role="status">
         <span>{{ suggestionsBanner() }}</span>
         <button type="button" class="contacts-button" @click="mode = 'suggestions'">
           {{ suggestions.length === 1 ? "See it" : "See them" }}
@@ -309,8 +322,10 @@ onBeforeUnmount(() => {
           <option v-for="s in LIST_SORTS" :key="s.sort" :value="s.sort">{{ s.label }}</option>
         </select>
         <span class="contacts-count">
-          {{ shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}` }}
-          {{ rows.length === 1 ? "contact" : "contacts" }}
+          {{
+            shown.length === listed.length ? listed.length : `${shown.length} of ${listed.length}`
+          }}
+          {{ listed.length === 1 ? "contact" : "contacts" }}
         </span>
         <form class="contacts-new" @submit.prevent="create">
           <input
@@ -325,7 +340,10 @@ onBeforeUnmount(() => {
         </form>
       </div>
       <div v-if="error" class="contacts-error">{{ error }}</div>
-      <p v-if="loaded && !error && rows.length === 0" class="contacts-empty">
+      <p v-if="loaded && !error && label !== null && listed.length === 0" class="contacts-empty">
+        None of your contacts is labelled {{ label }}. Label one on their page.
+      </p>
+      <p v-else-if="loaded && !error && rows.length === 0" class="contacts-empty">
         No contacts yet. Double-click anyone in a message and choose <em>Add to contacts</em>, or
         pick people from <b>Unfiled</b>.
       </p>

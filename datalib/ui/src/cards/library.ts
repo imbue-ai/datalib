@@ -5,6 +5,7 @@ import type { ManageRow, Place } from "@/api";
 import { filterToken } from "@/grid/query";
 import { nodeSource, type NodeViewOpts } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
+import type { LabelCount } from "./contacts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /// A group id, as the config loader takes one: path segments of the
@@ -64,6 +65,37 @@ export function sourceNodes(
         hasChildren: holdsPlaces(sourceTop(r.id)),
       };
     });
+}
+
+/// Your contacts' place in the tree, ahead of the sources: a node whose
+/// children are the labels your contacts carry, as an address book's
+/// groups are its children. Picking it lists your contacts beside the
+/// tree; picking a label, those that carry it.
+export const CONTACTS_NODE = "contacts:";
+const LABEL_NODE = "contacts:label:";
+
+export function contactsNode(labels: number): TreeNode {
+  return { id: CONTACTS_NODE, label: "Contacts", hasChildren: labels > 0 };
+}
+
+/// The labels under Contacts, by name, each saying how many carry it.
+export function labelNodes(labels: LabelCount[]): TreeNode[] {
+  return [...labels]
+    .sort((a, b) => a.label.localeCompare(b.label))
+    .map((l) => ({
+      id: `${LABEL_NODE}${l.label}`,
+      label: l.label,
+      kind: "Label",
+      description: `${l.contacts}`,
+      hasChildren: false,
+    }));
+}
+
+/// What a node of your contacts lists: every contact (`label: null`), or
+/// those carrying one label. Null for a node of a source.
+export function contactsNodeOf(id: string): { label: string | null } | null {
+  if (id === CONTACTS_NODE) return { label: null };
+  return id.startsWith(LABEL_NODE) ? { label: id.slice(LABEL_NODE.length) } : null;
 }
 
 /// The chip a node of the tree is drawn as: a source as its group's

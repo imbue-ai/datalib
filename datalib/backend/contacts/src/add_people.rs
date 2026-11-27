@@ -11,8 +11,8 @@ use serde::Serialize;
 
 use crate::review::Skipped;
 use crate::{
-    holders, insert_contact, insert_handle, link_in, name_of, names_of, ContactKind, HandleFrom,
-    Maker, Store, WhenHeld,
+    holders, insert_contact, insert_handle, link_in, name_of, names_of, HandleFrom, Maker, Store,
+    WhenHeld,
 };
 use datalib_sql::sql;
 
@@ -143,8 +143,7 @@ impl Store {
                 }
                 Plan::Create => {
                     out.created += 1;
-                    let kind = ContactKind::Person;
-                    insert_contact(&mut tx, name, kind, Maker::Person, &now, &tz).await?
+                    insert_contact(&mut tx, name, Maker::Person, &now, &tz).await?
                 }
             };
             for h in free {
@@ -225,7 +224,6 @@ mod tests {
         let riker = store
             .create(
                 "Will Riker",
-                ContactKind::Person,
                 &[Handle::parse("email:riker@enterprise.org").unwrap()],
             )
             .await
@@ -331,11 +329,7 @@ mod tests {
         let store = Store::open(&store_path(dir.path())).await.unwrap();
         let vineyard = Handle::parse("email:vineyard@labarre.earth").unwrap();
         let robert = store
-            .create(
-                "Robert Picard",
-                ContactKind::Person,
-                std::slice::from_ref(&vineyard),
-            )
+            .create("Robert Picard", std::slice::from_ref(&vineyard))
             .await
             .unwrap();
         let card = person(

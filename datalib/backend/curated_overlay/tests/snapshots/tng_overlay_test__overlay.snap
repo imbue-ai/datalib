@@ -4,7 +4,7 @@ expression: overlay
 ---
 {
   "contacts": {
-    "Beverly Crusher (person)": {
+    "Beverly Crusher": {
       "contact:Beverly Crusher": [
         "discord",
         "notion",
@@ -20,7 +20,7 @@ expression: overlay
         "signal"
       ]
     },
-    "Data (person)": {
+    "Data": {
       "contact:Data": [
         "discord",
         "github",
@@ -62,7 +62,7 @@ expression: overlay
         "whatsapp"
       ]
     },
-    "Deanna Troi (person)": {
+    "Deanna Troi": {
       "contact:Deanna Troi": [
         "discord",
         "signal",
@@ -89,7 +89,7 @@ expression: overlay
         "whatsapp"
       ]
     },
-    "Enterprise systems (group)": {
+    "Enterprise systems": {
       "contact:Enterprise systems": [
         "tng_email"
       ],
@@ -97,7 +97,7 @@ expression: overlay
         "tng_email"
       ]
     },
-    "Geordi La Forge (person)": {
+    "Geordi La Forge": {
       "contact:Geordi La Forge": [
         "discord",
         "google-drive",
@@ -135,7 +135,7 @@ expression: overlay
         "whatsapp"
       ]
     },
-    "Jean-Luc Picard (person)": {
+    "Jean-Luc Picard": {
       "contact:Jean-Luc Picard": [
         "beeper",
         "discord",
@@ -195,7 +195,7 @@ expression: overlay
         "tng_contacts-diff"
       ]
     },
-    "Marie Picard (person)": {
+    "Marie Picard": {
       "contact:Marie Picard": [
         "tng_contacts"
       ],
@@ -206,7 +206,7 @@ expression: overlay
         "tng_contacts"
       ]
     },
-    "Robert Picard (person)": {
+    "Robert Picard": {
       "contact:Robert Picard": [
         "tng_contacts"
       ],
@@ -214,8 +214,8 @@ expression: overlay
         "tng_contacts"
       ]
     },
-    "Will Riker (person)": "merged into William T. Riker",
-    "William T. Riker (person)": {
+    "Will Riker": "merged into William T. Riker",
+    "William T. Riker": {
       "contact:William T. Riker": [
         "beeper",
         "discord",
@@ -270,7 +270,7 @@ expression: overlay
         "whatsapp"
       ]
     },
-    "Worf (person)": {
+    "Worf": {
       "contact:Worf": [
         "beeper",
         "discord",
