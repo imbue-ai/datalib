@@ -75,7 +75,8 @@ pub struct MarkdownRow {
     /// The render unit this document was rendered from — the unit the
     /// provider loads, a conversation or a thread or a page — so a
     /// render unit that re-renders to fewer documents can drop the extras.
-    /// NULL from a renderer that has not been ported to declare render units.
+    /// Every provider's renderer sets it; NULL only on the storage report
+    /// (`datalib_step::introspect::plan`), which no render unit produces.
     #[col(sql = "VARCHAR(256)")]
     pub render_unit_key: Option<String>,
     /// blake3 of the document's text, its sections end to end, as hex: what

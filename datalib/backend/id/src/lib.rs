@@ -35,9 +35,10 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 /// `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` it
 /// produced, and orphans every link handed out naming them. The only
 /// supported way to change one is to bump that provider's
-/// `RENDER_VERSION` in the same commit, which makes the next run
-/// render every one of that provider's documents again from the raw
-/// store — see `datalib_step::render`.
+/// `RENDER_VERSION` in the same commit: the next render of each of that
+/// provider's sources then renders every document again from the raw
+/// store and deletes the ones it did not produce, so the old ids go out
+/// of the index as deletions (`datalib_step::render`, `RenderPlan`).
 ///
 /// One entry per provider that renders anything, spelled as its
 /// `grid_rows.provider` tag; [`IdNamespace::Datalib`] is the one entry

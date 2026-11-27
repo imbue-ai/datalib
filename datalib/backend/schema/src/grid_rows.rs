@@ -297,7 +297,10 @@ pub struct GridRow {
     /// (beeper renders one per period). The addressing primitive behind `/api/chat/{uuid}`, and
     /// what drives incremental re-render.
     ///
-    /// Nullable until every renderer populates it.
+    /// NULL only on a row the grid index writes for a data node that no
+    /// document has a row for (`etl/render/src/grid_index/nodes.rs`). A
+    /// document's own rows must name it: the index refuses a document
+    /// holding a row that does not (`grid_index::misfiled`).
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: Option<String>,
     /// How many bytes the thing this row describes occupies. A file's
