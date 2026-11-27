@@ -193,3 +193,33 @@ async fn an_open_run_row_is_live_while_a_runner_holds_the_root() {
     let dag = get_dag(tmp.path()).await;
     assert_eq!(dag["run"]["live"], true);
 }
+
+/// Two syncs open at once: a step working for the second reads as
+/// running too, not only one working for the oldest. Guards the
+/// `current_state` that named the oldest open request alone, which left
+/// a source started during another's sync reading as not reached.
+#[tokio::test]
+async fn a_step_working_for_any_open_sync_has_its_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(
+        tmp.path(),
+        Some(
+            r#"{
+              "steps": {
+                "slack/ingest": {"state": "running", "requests": ["r-1"]},
+                "slack/render_markdown": {"state": "running", "requests": ["r-2"]}
+              },
+              "requests": [
+                {"id": "r-1", "roots": ["slack/ingest"]},
+                {"id": "r-2", "roots": ["slack/render_markdown"]}
+              ]
+            }"#,
+        ),
+    )
+    .await;
+
+    let dag = get_dag(tmp.path()).await;
+    for step in dag["steps"].as_array().unwrap() {
+        assert_eq!(step["current_state"], "running", "{step}");
+    }
+}
