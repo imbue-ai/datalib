@@ -374,7 +374,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # What CUDA adds, x86_64 gnu Linux only (docs/dev/plans/embed_on_modal.md):
+  # What CUDA adds, x86_64 gnu Linux only (docs/dev/embed_on_modal.md):
   # the module `libggml-cuda.so` as a release asset, and the cuBLAS the
   # `-cuda` image carries, which is not published. One script stages both
   # and checks them (scripts/release/build_cuda.sh), the one

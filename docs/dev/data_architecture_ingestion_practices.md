@@ -154,6 +154,24 @@ transactions. And don't touch the SQLite mirrors: a truncate-and-refill
 inside one transaction produces the same tree as before when the
 source has not changed, and the commit stores nothing new.
 
+### Fetch what every document reads before what reads it
+
+A run that writes several tables seals checkpoints along the way, and a
+render may run at any of them, so a reader can see this run's messages
+beside last run's users, or a thread whose replies are not in yet.
+That is a true picture of what the download has so far, and render
+copes: it records every row it asked for, found or not
+([parse and render § "What is recorded"](data_architecture_parse_and_render.md#what-is-recorded)),
+so a row that arrives later re-renders what looked for it.
+
+It costs a second render, though, so where the API allows it **fetch the
+tables every document's header reads first** — users, channels, orgs,
+recipients, the account's own identity — and then the entities that
+point at them. A render that runs at a checkpoint then finds each new
+message's author, rather than writing a wave of "unknown user"
+documents that render again when the users land. Some sources cannot:
+a listing that names its authors only as it goes.
+
 ### Say what a refusal means where you read it
 
 When a step fails, `datalib-step` tells the runner what kind of failure

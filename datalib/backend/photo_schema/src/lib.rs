@@ -2,7 +2,7 @@
 //! Lightroom catalog's image, later an Apple Photos asset. Only the shape:
 //! a render crate fills it from raw rows, the render store keeps it with
 //! the photo's document, and the `photos` applet reads nothing else
-//! (`docs/dev/plans/photos_applet.md`).
+//! (`docs/dev/grid_rows.md` § "`image`, `latitude`, `longitude`").
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};

@@ -750,8 +750,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _diff_shape(self, group: str) -> dict[str, tuple[str, str]]:
         """A contacts diff group's rows: contact → (status, changed columns).
 
-        The contacts diff is one add, one delete and one edit, which is
-        every row of the table in docs/dev/plans/completed/diff_renderer.md; the
+        The contacts diff is one add, one delete and one edit, every
+        `diff_status` a changed row can have (docs/dev/grid_rows.md); the
         edit names the columns that moved. A real source's rows carry
         NULL, and the diff's rows carry their own ids — the source's
         Picard and the diff's Picard are two rows, or the index would

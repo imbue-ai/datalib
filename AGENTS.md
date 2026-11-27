@@ -39,6 +39,7 @@ merge conflict waiting to happen.
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
 - [`docs/dev/packages.md`](docs/dev/packages.md) — packages: custom steps and applets published at a URL, added to a library and pinned in its config.
 - [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as an `id` and a `command`, ingest methods and their reach, the fan-ins' `inputs`. [`configs/dag_example.toml`](configs/dag_example.toml) is a complete, commented one.
+- [`docs/dev/embed_on_modal.md`](docs/dev/embed_on_modal.md) — the `embed` step on Modal's GPUs: what a person writes, what leaves the machine, how the step drives the Sandboxes and what a run reports it spent. **Start here** for anything about embedding off the machine.
 - [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it, how to add a line from each writer and how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 
 **Data architecture**
@@ -280,7 +281,7 @@ datalib/
                    `search_*` tables of the grid index's file, and the
                    inference cache: each document's chunks keyed by their
                    prompt's hash, and the vectors, holding no text
-                   (docs/dev/plans/completed/search_index_from_ram.md).
+                   (search_index/README.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
                    Metal on a mac, CUDA as a module on gnu Linux. Tested

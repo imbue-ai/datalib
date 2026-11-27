@@ -496,13 +496,13 @@ range recorded in `sync_runs` — is #513.
 
 The commits answer "what changed?" at the level of rows; a person asks
 it at the level of the things the rows make up. A **diff group**
-(`type = "diff"`, `source = <group>`, two raw commits under
+(`type = "diff"`, reading `<source>/ingest`, two raw commits under
 `params.diff`) is the source's own render step run at both commits and
 subtracted, written as an ordinary render tree — documents with the
 changes marked, `grid_rows` with `diff_status` set — so everything that
 serves a source serves the difference. "Compare two versions…" on a
 Manage row opens its commit history, where one is written; [`config_model.md`](config_model.md) has the
-shape and [`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md) the design.
+shape and [parse and render § "Rendering the delta itself"](data_architecture_parse_and_render.md#rendering-the-delta-itself) how it is computed.
 
 What a diff can show is bounded by what the ingest carried into the
 store. A provider that syncs forward from a cursor — an API

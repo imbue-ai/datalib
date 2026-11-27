@@ -1,17 +1,23 @@
 # Problems in the step protocol, read where each step keeps them
 
-*Proposal (2026-11-16), mostly built: steps 1–5 below landed in
-#1766, with the linking of a download's problem to its record (render's
-`entity_items`, the reader's `datalib_step_problems::link`); the
-`grid_index` inputs #1755 added are taken out by the unattended rewrite
-`unread_inputs.rs`. Still to do: step 6, the roll-up through data nodes,
-and step 7, the per-provider recipes for a record's upstream values.
-How problems are kept now: `datalib/backend/etl/README.md` §"Problems
-stay in the step that found them". It leans on `documents_to_blocks.md`,
-which gives every row a place in a tree of data nodes. Its rule that a
-step with a store keeps its problems in that store is reversed by
+*Proposal (2026-11-16), checked against the tree on 2026-11-27: mostly
+built. Steps 1–4 and most of step 5 landed in #1766, with the linking
+of a download's problem to its record (render's `entity_items`, the
+reader's `datalib_step_problems::link`); the `grid_index` inputs #1755
+added are taken out by the unattended rewrite `unread_inputs.rs`. Left
+of step 5: `CountedBy` did not go. It is still in
+`datalib/backend/problems/src/lib.rs`, and `datalib_problem_mutes` and
+`datalib-http`'s `manage/problems.rs` use it to say, by a row's stage,
+which of a source's steps counts it. Still to do as well: step 6, the
+roll-up through data nodes, and step 7, the per-provider recipes for a
+record's upstream values (GitLab's download still names a merge
+request `{path}!{iid}`). How problems are kept now:
+`datalib/backend/etl/README.md` §"Problems stay in the step that found
+them". It leans on `documents_to_blocks.md`, which gives every row a
+place in a tree of data nodes. Its rule that a step with a store keeps
+its problems in that store is reversed by
 [`problems_in_a_file_of_their_own.md`](problems_in_a_file_of_their_own.md)
-(proposed 2026-11-24).*
+(proposed 2026-11-24, not built).*
 
 ## The problem
 
@@ -188,10 +194,10 @@ an unattended config rewrite.
 2. **The protocol lines and the runner's writer**: built.
 3. **The reader** (`of_step`), and the three upstream columns: built.
 4. **Downloads name their source**, so their rows' ids are the ones the
-   copies carried.
+   copies carried: built (#1766).
 5. **The Manage counts, "Needs you" and the problems grid read
    `of_step`**; render stops copying download rows; `grid_index` stops
-   copying; `CountedBy` goes.
+   copying: built (#1766). `CountedBy` goes: not done.
 6. **The banner and the roll-up**, once the data-node tree's parent
    pointers land, with the index on `(source_id, upstream_entity_kind,
    upstream_id, upstream_account)` and the query that uses it.

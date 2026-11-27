@@ -71,7 +71,7 @@ carries that digest as its `docker-image.digest` asset
 `ghcr.io/imbue-ai/datalib:<version>-cuda` (and `latest-cuda`), for
 `linux/amd64` only, is what a person with an NVIDIA GPU runs, with
 `docker run --gpus all`, and what embedding on Modal runs
-([`plans/embed_on_modal.md`](plans/embed_on_modal.md)). On top of the
+([`embed_on_modal.md`](embed_on_modal.md)). On top of the
 plain image it holds:
 
 - **`/opt/datalib/lib/libggml-cuda.so`**, the release's

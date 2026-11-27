@@ -110,7 +110,7 @@ http_archive(
 )
 
 # NVIDIA's CUDA toolkit for llama.cpp's CUDA backend on Linux x86_64
-# (docs/dev/plans/embed_on_modal.md). NVIDIA's redistributable manifest,
+# (docs/dev/embed_on_modal.md). NVIDIA's redistributable manifest,
 # pinned by its sha256, names every component's archive and hash; only
 # the four ggml-cuda needs are fetched, and only when a CUDA target builds.
 bazel_dep(name = "rules_cuda", version = "0.4.0")
