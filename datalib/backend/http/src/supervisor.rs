@@ -170,9 +170,8 @@ impl SyncControl {
 
     /// Delete the trees of `groups`, which the config no longer names, and
     /// their steps' rows in the loop's `steps` table, so a group re-added
-    /// under the same id
-    /// starts from nothing. Checked against the config at once; done by the
-    /// loop as soon as the groups' steps have stopped.
+    /// under the same id starts from nothing. Checked against the config
+    /// at once; done by the loop as soon as the groups' steps have stopped.
     pub async fn purge(&self, groups: &[String], by: &str) -> Result<WipeAnswer, String> {
         let checked = load_config(&self.root)?;
         if let Some(why) = purge_refusal(&checked.cfg, groups) {
