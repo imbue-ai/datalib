@@ -258,7 +258,7 @@ none of it. Name the branch in every read of one:
 ## Inspecting a scan: what changed?
 
 Each scan is one `dolt_commit`, so "what did this scan change?" is a
-diff between the last two commits. Ask `dolt_diff_dirs` first: it is a
+diff between the last two commits. Query `dolt_diff_dirs` first: it is a
 few percent of the rows and names every directory anything changed
 under, with the subtree's size and entry count on the row. Then
 `dolt_diff_files` for the file-level detail; a diff costs what changed,
@@ -308,8 +308,8 @@ part of any tree-hash; see §"Stamping policy".
 - No render side. Filesystem entries do not project to `GridRow`.
 - No CAS, no `blobs.sqlite`. We hash bytes; we don't store
   them.
-- No JSONL wire-event tape. There is no upstream wire to mirror; the
-  filesystem itself is the human-inspectable tape.
+- No JSONL log of wire events. There is no upstream wire to record;
+  a person inspects the filesystem itself.
 - No retry semantics for transient failures. A `read(2)` either
   succeeds or it's a real error, and the next scan simply tries it
   again. An entry the scan could not record — a folder that would not

@@ -254,8 +254,7 @@ async fn initial_scan_and_incremental_rescan() {
 /// pass: a dir whose cascade enables `stamp_me_with_uuid` gets a UUID
 /// breadcrumb written into it and its `dirs.identity_uuid` set. A
 /// second scan is idempotent — it reuses the existing breadcrumb and
-/// writes no new ones. This is the path that used to be the untested
-/// `legacy_inmemory` branch.
+/// writes no new ones.
 #[tokio::test]
 async fn stamping_writes_breadcrumb_and_sets_identity_uuid() {
     let tmp = TempDir::new().unwrap();
@@ -521,7 +520,7 @@ async fn the_summary_accounts_for_the_cache() {
     assert_eq!(warm.cache_entries_written, 6);
     assert_eq!(warm.cache_entries_forgotten, 0);
 
-    // Delete two: read the old six, write the surviving four, forget two.
+    // Delete two: read the old six, write the surviving four, drop two.
     std::fs::remove_file(root.join("f0.txt")).unwrap();
     std::fs::remove_file(root.join("f1.txt")).unwrap();
     let after = ingest::fetch(fetch_opts(&db, &root, cache.clone()))

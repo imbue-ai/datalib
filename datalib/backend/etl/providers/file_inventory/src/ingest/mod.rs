@@ -165,7 +165,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
     let cache_bytes_before = opts.cache.disk_bytes();
     // Loading the rescan cache for a large tree can take a while, and
     // it happens before the walk's per-entry progress bar exists — so
-    // announce it (start log + live message) so it's clearly working,
+    // log a start line and set a live message, so it's clearly working,
     // not hung, on both a TTY and the NDJSON log sink.
     info!(
         event = "file_inventory_load_cache_start",
@@ -250,11 +250,11 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
         }
     }
 
-    // ── forget what the filesystem forgot ─────────────────────────────
+    // ── drop cache entries whose paths are gone from disk ────────────
     // Cache entries under this root that the walk did not write a row
     // for are *candidates*, not casualties: the walk may simply have
     // filtered them out, and this cache is shared with consumers whose
-    // filters differ. One `lstat` settles it — a path that is really
+    // filters differ. One `lstat` decides — a path that is really
     // gone is dropped, and anything still on disk is kept whatever this
     // scan thought of it.
     let mut cache_entries_forgotten = 0u64;
@@ -275,7 +275,7 @@ async fn scan_tree(opts: FetchOptions, found: RunProblems) -> Result<FetchSummar
                         "could not tidy the fingerprint cache: {e}"),
     }
 
-    // Settle the WAL before measuring, or the footprint depends on
+    // Checkpoint the WAL before measuring, or the footprint depends on
     // when SQLite last checkpointed rather than on what we wrote.
     opts.cache.checkpoint().await;
     summary.cache_path = opts.cache.path().to_path_buf();

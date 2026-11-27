@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor` for the `file_inventory` source.
+//! The download `DataProcessor` for the `file_inventory` source.
 
 use std::path::PathBuf;
 
