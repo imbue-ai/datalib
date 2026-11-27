@@ -107,7 +107,7 @@ impl ProgressSink for NoopSink {}
 #[derive(Clone)]
 pub struct RunBar {
     bar: Progress,
-    announced: Arc<AtomicU64>,
+    total: Arc<AtomicU64>,
     done: Arc<AtomicU64>,
 }
 
@@ -122,14 +122,14 @@ impl RunBar {
         }
         Self {
             bar: progress.clone(),
-            announced: Arc::new(AtomicU64::new(fixed)),
+            total: Arc::new(AtomicU64::new(fixed)),
             done: Arc::default(),
         }
     }
 
     /// Another `more` items this run has committed to handling.
     pub fn expect(&self, more: u64) {
-        let total = self.announced.fetch_add(more, Ordering::SeqCst) + more;
+        let total = self.total.fetch_add(more, Ordering::SeqCst) + more;
         if total > 0 {
             self.bar.set_length(Some(total));
         }
@@ -137,8 +137,8 @@ impl RunBar {
 
     /// The total reported so far, so a phase can raise the total to
     /// "everything before me, plus my own size".
-    pub fn announced(&self) -> u64 {
-        self.announced.load(Ordering::SeqCst)
+    pub fn total(&self) -> u64 {
+        self.total.load(Ordering::SeqCst)
     }
 
     /// Take back `n` ticks of the total for work this run will not do and
@@ -150,7 +150,7 @@ impl RunBar {
             return;
         }
         let before = self
-            .announced
+            .total
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |cur| {
                 Some(cur.saturating_sub(n))
             })
@@ -446,13 +446,13 @@ mod tests {
     /// What is left on a run's bar when its step ends is what the step
     /// owes, so work the run takes back comes off the total it reported.
     #[test]
-    fn work_forgone_comes_off_the_announced_total() {
+    fn work_forgone_comes_off_the_reported_total() {
         let sink = Arc::new(RecordingSink::default());
         let bar = RunBar::new(&Progress::new(sink.clone()), 10);
         bar.did(3);
         bar.forgo(4);
         bar.forgo(0);
-        assert_eq!((bar.announced(), bar.done()), (6, 3));
+        assert_eq!((bar.total(), bar.done()), (6, 3));
         assert_eq!(*sink.lengths.lock().unwrap(), vec![Some(10), Some(6)]);
     }
 }
