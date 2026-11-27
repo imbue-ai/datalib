@@ -433,8 +433,9 @@ fetches, and at the end writes the marks that differ. A search that fails is a
 stopped short would read as messages being unmuted; a message fetched in
 that run has `muted` NULL until a later run's search succeeds. A mute
 moves the store's version but is not a moved mark (`read_marks::moved`),
-since no document shows it. Rung 9 adds the column, moves a `$muted` the store already holds,
-and clears the mbox's read stamp so its labels are read again.
+since no document shows it. Rung 9 adds the column, moves a `$muted`
+the store already holds, and clears the mbox's read stamp so its labels
+are read again.
 
 ### `emails.preview` is a line of the body
 

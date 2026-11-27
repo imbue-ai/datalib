@@ -988,8 +988,9 @@ pub async fn migrate_gmail_labels_and_thread_counts(conn: &mut SqliteConnection)
 /// the message and thread ids in columns of their own. This build keys a
 /// thread id as it keys a message id (`envelope::GmailId::key`), and
 /// those columns say nothing `id` and `thread_id` do not. A JMAP store's
-/// thread ids are its server's, and stay. So does a thread id an mbox minted from the
-/// email's own id, which is the email's id and so not a Gmail thread's.
+/// thread ids are its server's, and stay. So does a thread id an mbox
+/// minted from the email's own id, which is the email's id and so not a
+/// Gmail thread's.
 pub async fn migrate_gmail_thread_ids_to_hex(conn: &mut SqliteConnection) -> Result<()> {
     for column in ["gmail_message_id", "gmail_thread_id"] {
         let has: bool = sql!(

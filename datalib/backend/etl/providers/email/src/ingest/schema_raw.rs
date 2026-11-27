@@ -600,8 +600,8 @@ pub const LADDER: &[Migration] = &[
 /// The column is made here because a mark is written from `$muted` below,
 /// before an open adds what the DDL declares. A store that rung 8
 /// migrated in this same open has it already. An mbox is read again for
-/// its `Muted` labels, which no row kept; the Gmail API's are asked for every run, and
-/// a JMAP server's were the keyword moved here.
+/// its `Muted` labels, which no row kept; the Gmail API's are asked for
+/// every run, and a JMAP server's were the keyword moved here.
 async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
     let has_column: bool = sql!(
         "email.migrate_muted.has_muted_column",
