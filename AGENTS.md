@@ -288,9 +288,13 @@ datalib/
                    facts, each a test in `embedding_facts`.
     store_meta/    `_datalib_meta`, the table every store carries naming
                    the build that wrote it and the shape it is in.
-    sql_work/      counts what every SQLite statement in a process does
-                   and logs the ones that walked many rows for few;
-                   every binary that opens a store installs it.
+    sql/           `Sql`, `sql!` and `sql_id!`: every statement Datalib
+                   runs, named where it is written; its one dep is sqlx.
+    sql_work/      counts what every SQLite statement in a process does,
+                   by the name it carries: runs, rows answered and walked,
+                   the index each loop read, time; logs the ones that
+                   walked many rows for few. Every binary that opens a
+                   store installs it.
     sql_guard/     reads SQL a caller wrote, and nothing else: a
                    read-only open over SQLite's C API, the authorizer,
                    deadline and one-statement check, parameters by name
@@ -313,6 +317,9 @@ datalib/
                    written lowercase with dashes; the one reader. No deps.
     store_dump/    a store's tables as the text of a golden, one row a
                    line; only tests link it.
+    curated_overlay/ a checked-in `datalib_curated/` laid over a root and
+                   checked to fit; the TNG test and the live bake share
+                   it. Only tests link it.
     contact_schema/ `NormalizedContact`: a person as one source describes
                    them. Only the shape; contact-common renders it.
     photo_schema/  `NormalizedPhoto`: a photo or video as one source
@@ -848,6 +855,7 @@ upstream (block types, MIME types), free-form display text
 | which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
 | what a call to a contacts-app route means | `RouteKind` | `applets/src/datalib_contacts/api.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| what linking a handle another contact has does: refuse, share it, or move it | `WhenHeld` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | who muted a problem row: a person, or an agent | `MutedHow` | `problem_mutes/src/lib.rs` (`datalib_problem_mutes`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 
@@ -912,11 +920,30 @@ row's count and the banner above the document
 ([`etl/README.md`](datalib/backend/etl/README.md) §"Problems stay in
 the step that found them"). A `warn!` alone reaches nobody.
 
-## Dynamic SQL needs `AssertSqlSafe` and a reason
+## Every statement is a named `Sql`
 
-sqlx 0.9 only accepts `&'static str` as a query string. Anything built at
-runtime is wrapped in `sqlx::AssertSqlSafe(...)` — an assertion *you*
-make — with a comment saying why it is safe. Two patterns cover almost
+**A statement is named where it is written, for what it does:**
+`sql!("runs.count_tables", "SELECT …").query()`, or for text built while
+running, `Sql::dynamic(sql_id!("etl.render.grid.settle_nodes"), text)`
+(`datalib/backend/sql`). The name is `<package>.<what_it_does>`, verb
+first, and it is what a statement's runs, rows scanned, index use and time
+are counted under (`docs/dev/logging.md` §"Where a line comes from", "What
+every statement did is counted under its name").
+Clippy refuses sqlx's own entry points (`sqlx::query`, `raw_sql`, an
+executor handed a `&str`), so a statement without a name does not build,
+and `//:lint_repo` refuses a name written twice. A test writes
+`test_sql!("…")` / `test_sql_id!()`, named for its module and line.
+
+**Schema text stays plain text and is named where it runs**
+(`Sql::ddl(sql_id!(…), DDL)`, filed under the table it makes): a store's
+recorded shape is a hash over its DDL, and a name in that text would
+move every store's shape.
+
+## Dynamic SQL needs a reason
+
+sqlx 0.9 only accepts `&'static str` as a query string, and
+`Sql::dynamic` is the one way past that: an assertion *you* make, with a
+comment saying why the text is safe. Two patterns cover almost
 everything: a `?` run sized from `chunk.len()` with every value bound, and
 table/column names that are `&'static str` at every callsite. Anything
 from upstream data is quoted (`doltlite_raw::quote_ident`) or

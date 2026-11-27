@@ -6,7 +6,8 @@ runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 2, 5a, 5b and 6, and of item 7 all but one
 constant; item 5 is closed as not a coupling, and item 4 as Datalib's
 own tool. Item 3 is done but for comparisons, and item 9 is half done.
-Untouched: item 8 (decided), and the reconciler in section 10.
+Untouched: item 8 (decided). Of the reconciler in section 10, steps 1
+to 3 are done.
 
 ## The end state
 
@@ -403,7 +404,7 @@ pieces already exist; the change is mainly what gets removed.
 | **observed** | `steps` (reads, fingerprint, last success, needs-rerun), `sinks` (versions), `invocations`, `job_steps` | the loop only |
 
 `jobs` replaces `wipes` and also holds the prepare pass; `job_steps`
-replaces `wipe_steps` and the server's in-memory `Upgrade`. The config
+replaces `job_steps` and the server's in-memory `Upgrade`. The config
 file is wanted state too: the loop reads it on `config changed`.
 
 #### The loop
@@ -496,15 +497,28 @@ or shows as Running.
 
 Each step ships alone, and the harness stays green throughout.
 
-1. **One loop.** Merge `serve` and `run_idle` into a loop that does
-   not exit. Keep the busy period only as the run store's grouping for
-   now. This removes `settle`, `Periods` and the at-rest tick.
-2. **Key by step id.** This removes the remap code.
-3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
-   and add prepare, with its progress in `job_steps` instead of the
-   server's memory. Make the CLI's reset and shrink write jobs. Put
-   both hosts on `supervisor::run`. Item 6 did not wait for this: the
-   prepare pass's progress reaches the server as `ServeEvent` lines.
+1. **One loop (done).** `serve` and `run_idle` are one loop that does
+   not exit, `Runner::run_forever`. The busy period is kept only as the
+   run store's grouping, which the host records through
+   `supervisor::period::RunPeriods`. `settle`, `run_idle`, the old
+   `Periods` trait and the at-rest tick are gone. The CLI's sync still
+   serves one period and exits (`Runner::serve`), until step 3 makes it
+   a client.
+2. **Key by step id (done).** The loop's own state is one slot per step
+   id (`round.rs`'s `Slots`), holding what an invocation read by producer
+   id; the facts the tick takes are laid out by index from the record and
+   those slots at every tick. A swap replaces the graph and the lock shape,
+   and finishes what a dropped step had ended. `carry`, `remap_consumed`,
+   `Slot::remapped`, `QueueLedger::remap` and `remap_by_step` are gone,
+   and the queue ledger is keyed by step id.
+3. **Everything goes through the mailbox.** Done so far: the prepare
+   pass runs inside the loop and holds only what it has not reached
+   (open question 3); `wipes` are `jobs`, and the pass is one, with its
+   progress in `job_steps`, which the server reads instead of
+   `ServeEvent` lines. The CLI's `sync`, `reset` and `free-disk-space`
+   write their request or job and follow it; with no loop running, each
+   runs the same host as `datalib-pipeline serve`
+   (`serve::run_until_idle`) until nothing is open. **(done)**
 4. **Invocations and requests replace runs** in the run store, the
    record, the server's routes and the UI. This is the largest step.
    The run store is history, not data a person built, so the old rows
@@ -532,13 +546,13 @@ now outside the loop.
    by invocation matches what a process did. Before we choose, we need
    to know which one people look at.
 3. **Does the prepare pass block every request, or only the steps it
-   has not reached?** Now it blocks everything: the server disables
-   every Sync (`ManageResponse::sync_paused`,
-   `datalib/backend/http/src/manage/mod.rs:266`) and a request opened
-   another way waits for the pass. Since #1894 the pass runs at every
-   start, not only after an upgrade, so that wait is paid at every
-   launch. As a job, it could hold only the steps it has yet to ask and
-   what reads them, the way a wipe holds only its targets.
+   has not reached? (answered: only those.)** The pass runs inside a
+   host's loop beside everything else, up to four `--prepare` processes
+   at once, each started after those of the steps upstream of it have
+   exited. A step whose `--prepare` has not exited, and every step
+   downstream of one, waits (`Wait::Prepare`), and Sync stays offered.
+   A CLI sync that finds no loop running runs the same loop until it is
+   idle, with the same pass.
 4. **Retries and locks.** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it
    lets another step take the slot in between. Check whether any

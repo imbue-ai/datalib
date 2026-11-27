@@ -9,6 +9,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_pdf::ingest::{self, RawDb};
 use datalib_etl_pdf_render::render;
 use datalib_etl_render::section::join;
+use datalib_sql::test_sql;
 
 const NOW: &str = "2364-04-13T08:45:00-07:00";
 
@@ -175,11 +176,13 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     // convertible (neither scanned blueprint is; the mixed hull survey
     // is, for its one text page).
     let db = h.db().await;
-    let n_docs: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents")
+    let n_docs: i64 = test_sql!("SELECT COUNT(*) AS c FROM pdf_documents")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("c");
-    let n_paths: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_paths")
+    let n_paths: i64 = test_sql!("SELECT COUNT(*) AS c FROM pdf_paths")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("c");
@@ -189,10 +192,11 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
     );
 
     // The duplicate pair points at one blake3.
-    let dupes: i64 = sqlx::query(
+    let dupes: i64 = test_sql!(
         "SELECT COUNT(*) AS c FROM pdf_paths
-          WHERE blake3 = (SELECT blake3 FROM pdf_paths WHERE id = 'captains_log.pdf')",
+          WHERE blake3 = (SELECT blake3 FROM pdf_paths WHERE id = 'captains_log.pdf')"
     )
+    .query()
     .fetch_one(db.pool())
     .await?
     .get("c");
@@ -205,7 +209,8 @@ async fn scan_dedups_by_content_and_records_scanned_docs() -> Result<()> {
         s.needs_ocr, 3,
         "every document with an unreadable page must be on the OCR work list"
     );
-    let flagged: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents WHERE needs_ocr = 1")
+    let flagged: i64 = test_sql!("SELECT COUNT(*) AS c FROM pdf_documents WHERE needs_ocr = 1")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("c");
@@ -224,12 +229,13 @@ async fn a_mixed_document_renders_its_readable_pages() -> Result<()> {
     // The premise: this fixture really is the Mixed case, and really is
     // on the OCR work list. Without these the test below could pass on
     // a document that simply had nothing to skip.
-    let r = sqlx::query(
+    let r = test_sql!(
         "SELECT d.pdf_type, d.needs_ocr, d.page_count, d.ocr_page_count,
                 d.has_encoding_issues
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
-          WHERE p.id = 'engineering/hull_survey.pdf'",
+          WHERE p.id = 'engineering/hull_survey.pdf'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert_eq!(r.get::<String, _>("pdf_type"), "mixed");
@@ -296,13 +302,14 @@ async fn a_metadata_only_variant_shares_one_content_hash() -> Result<()> {
     h.scan().await?;
     let db = h.db().await;
 
-    let rows = sqlx::query(
+    let rows = test_sql!(
         "SELECT p.id AS path, d.blake3 AS blake3, d.content_blake3 AS content_blake3,
                 d.title AS title
            FROM pdf_paths p JOIN pdf_documents d ON d.blake3 = p.blake3
           WHERE p.id LIKE 'holodeck/scanned_blueprint%'
-          ORDER BY p.id",
+          ORDER BY p.id"
     )
+    .query()
     .fetch_all(db.pool())
     .await?;
     assert_eq!(rows.len(), 2, "the blueprint and its retitled twin");
@@ -337,7 +344,8 @@ async fn content_hash_is_populated_for_every_parseable_document() -> Result<()> 
     let db = h.db().await;
 
     let missing: i64 =
-        sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents WHERE content_blake3 IS NULL")
+        test_sql!("SELECT COUNT(*) AS c FROM pdf_documents WHERE content_blake3 IS NULL")
+            .query()
             .fetch_one(db.pool())
             .await?
             .get("c");
@@ -349,12 +357,14 @@ async fn content_hash_is_populated_for_every_parseable_document() -> Result<()> 
     // Distinct documents must not collide. The two blueprints share a
     // content hash by design, so the corpus has one fewer content
     // identity than it has documents.
-    let docs: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_documents")
+    let docs: i64 = test_sql!("SELECT COUNT(*) AS c FROM pdf_documents")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("c");
     let identities: i64 =
-        sqlx::query("SELECT COUNT(DISTINCT content_blake3) AS c FROM pdf_documents")
+        test_sql!("SELECT COUNT(DISTINCT content_blake3) AS c FROM pdf_documents")
+            .query()
             .fetch_one(db.pool())
             .await?
             .get("c");
@@ -372,11 +382,12 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     h.scan().await?;
     let db = h.db().await;
 
-    let r = sqlx::query(
+    let r = test_sql!(
         "SELECT d.title, d.author, d.pdf_id_permanent, d.xmp_document_id, d.doc_created_at
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
-          WHERE p.id = 'captains_log.pdf'",
+          WHERE p.id = 'captains_log.pdf'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert_eq!(
@@ -406,11 +417,12 @@ async fn identity_columns_are_populated_and_absent_metadata_is_null() -> Result<
     // column must come back NULL rather than the scan failing. `title` is
     // deliberately not asserted NULL — pdf-inspector may infer one from the
     // page's largest text, which is a better grid label than nothing.
-    let u = sqlx::query(
+    let u = test_sql!(
         "SELECT d.author, d.pdf_id_permanent, d.xmp_document_id
            FROM pdf_documents d JOIN pdf_paths p ON p.blake3 = d.blake3
-          WHERE p.id = 'engineering/warp_core_manual.pdf'",
+          WHERE p.id = 'engineering/warp_core_manual.pdf'"
     )
+    .query()
     .fetch_one(db.pool())
     .await?;
     assert!(u.get::<Option<String>, _>("pdf_id_permanent").is_none());
@@ -432,11 +444,12 @@ async fn revisions_are_distinct_documents_joined_by_lineage() -> Result<()> {
     h.scan().await?;
     let db = h.db().await;
 
-    let rows = sqlx::query(
+    let rows = test_sql!(
         "SELECT blake3, xmp_instance_id FROM pdf_documents
           WHERE xmp_document_id = 'uuid:enterprise-ncc-1701-d'
-          ORDER BY xmp_instance_id",
+          ORDER BY xmp_instance_id"
     )
+    .query()
     .fetch_all(db.pool())
     .await?;
 
@@ -485,7 +498,8 @@ async fn rescan_reuses_hashes_and_is_idempotent() -> Result<()> {
 
     // Row counts must not drift between identical scans.
     let db = h.db().await;
-    let n: i64 = sqlx::query("SELECT COUNT(*) AS c FROM pdf_paths")
+    let n: i64 = test_sql!("SELECT COUNT(*) AS c FROM pdf_paths")
+        .query()
         .fetch_one(db.pool())
         .await?
         .get("c");
@@ -623,7 +637,8 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
 
 async fn problems(h: &Harness) -> Result<Vec<(String, String)>> {
     let db = h.db().await;
-    let rows = sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+    let rows = test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        .query_as()
         .fetch_all(db.pool())
         .await?;
     db.close().await;
@@ -643,19 +658,20 @@ async fn problem_keys(h: &Harness) -> Result<Vec<String>> {
 /// The severity, reason, outcome and sample of the row on this key.
 async fn problem_row(h: &Harness, key: &str) -> Result<Option<(String, String, String, String)>> {
     let db = h.db().await;
-    let row = sqlx::query_as(
-        "SELECT severity, reason, outcome, sample FROM problems WHERE scope_key = ?",
-    )
-    .bind(key)
-    .fetch_optional(db.pool())
-    .await?;
+    let row =
+        test_sql!("SELECT severity, reason, outcome, sample FROM problems WHERE scope_key = ?")
+            .query_as()
+            .bind(key)
+            .fetch_optional(db.pool())
+            .await?;
     db.close().await;
     Ok(row)
 }
 
 async fn paths(h: &Harness) -> Result<Vec<String>> {
     let db = h.db().await;
-    let rows = sqlx::query_scalar("SELECT id FROM pdf_paths ORDER BY id")
+    let rows = test_sql!("SELECT id FROM pdf_paths ORDER BY id")
+        .query_scalar()
         .fetch_all(db.pool())
         .await?;
     db.close().await;
@@ -664,7 +680,8 @@ async fn paths(h: &Harness) -> Result<Vec<String>> {
 
 async fn documents(h: &Harness) -> Result<Vec<String>> {
     let db = h.db().await;
-    let rows = sqlx::query_scalar("SELECT blake3 FROM pdf_documents ORDER BY blake3")
+    let rows = test_sql!("SELECT blake3 FROM pdf_documents ORDER BY blake3")
+        .query_scalar()
         .fetch_all(db.pool())
         .await?;
     db.close().await;
@@ -673,7 +690,8 @@ async fn documents(h: &Harness) -> Result<Vec<String>> {
 
 async fn blake3_of(h: &Harness, rel: &str) -> Result<String> {
     let db = h.db().await;
-    let b = sqlx::query_scalar("SELECT blake3 FROM pdf_paths WHERE id = ?")
+    let b = test_sql!("SELECT blake3 FROM pdf_paths WHERE id = ?")
+        .query_scalar()
         .bind(rel)
         .fetch_one(db.pool())
         .await?;
@@ -834,9 +852,10 @@ async fn a_file_over_max_bytes_says_so_until_it_is_read() -> Result<()> {
 async fn documents_that_never_render_are_one_warning_with_a_count() -> Result<()> {
     async fn unrendered(h: &Harness) -> Result<Vec<String>> {
         let db = h.db().await;
-        let rows = sqlx::query_scalar(
-            "SELECT sample FROM problems WHERE scope_key LIKE 'skipped:documents_without_text:%'",
+        let rows = test_sql!(
+            "SELECT sample FROM problems WHERE scope_key LIKE 'skipped:documents_without_text:%'"
         )
+        .query_scalar()
         .fetch_all(db.pool())
         .await?;
         db.close().await;
@@ -912,7 +931,8 @@ async fn a_document_the_scan_misjudged_is_named_by_what_was_read() -> Result<()>
     // Forget the document, so the scan reads the file rather than taking
     // the stored document for it.
     let db = h.db().await;
-    sqlx::query("DELETE FROM pdf_documents WHERE blake3 = ?")
+    test_sql!("DELETE FROM pdf_documents WHERE blake3 = ?")
+        .query()
         .bind(&old)
         .execute(db.pool())
         .await?;

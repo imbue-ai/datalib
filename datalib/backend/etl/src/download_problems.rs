@@ -12,6 +12,7 @@
 //! list costs that entry and nothing else, the same way a config entry
 //! the loader cannot use costs that entry and nothing else.
 
+use datalib_sql::{sql, sql_id, Sql};
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
@@ -558,10 +559,12 @@ pub(crate) async fn apply(
     for sweep in sweeps {
         let end = crate::key_range::prefix_end(&sweep.prefix)
             .with_context(|| format!("no key follows the prefix {:?}", sweep.prefix))?;
-        let swept = sqlx::query(
+        let swept = sql!(
+            "etl.download_problems.list_problems_under_prefix",
             "SELECT * FROM problems INDEXED BY problems_by_scope \
-             WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?",
+             WHERE scope_kind = ? AND scope_key >= ? AND scope_key < ?"
         )
+        .query()
         .bind(ScopeKind::Entity.as_str())
         .bind(&sweep.prefix)
         .bind(&end)
@@ -589,12 +592,15 @@ pub(crate) async fn apply(
     for chunk in unswept.chunks(KEY_CHUNK) {
         // Audited: only `?` placeholders are built, one per key; every
         // key is bound.
-        let sql = format!(
-            "SELECT * FROM problems INDEXED BY problems_by_scope \
+        let sql = Sql::dynamic(
+            sql_id!("etl.download_problems.list_problems_of_keys"),
+            format!(
+                "SELECT * FROM problems INDEXED BY problems_by_scope \
              WHERE scope_kind = ? AND scope_key IN ({})",
-            vec!["?"; chunk.len()].join(",")
+                vec!["?"; chunk.len()].join(",")
+            ),
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());
+        let mut q = sql.query().bind(ScopeKind::Entity.as_str());
         for key in chunk {
             q = q.bind(*key);
         }
@@ -610,12 +616,15 @@ pub(crate) async fn apply(
     }
     for chunk in gone.chunks(KEY_CHUNK) {
         // Audited: as above.
-        let sql = format!(
-            "DELETE FROM problems INDEXED BY problems_by_scope \
+        let sql = Sql::dynamic(
+            sql_id!("etl.download_problems.delete_problems_of_keys"),
+            format!(
+                "DELETE FROM problems INDEXED BY problems_by_scope \
              WHERE scope_kind = ? AND scope_key IN ({})",
-            vec!["?"; chunk.len()].join(",")
+                vec!["?"; chunk.len()].join(",")
+            ),
         );
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(ScopeKind::Entity.as_str());
+        let mut q = sql.query().bind(ScopeKind::Entity.as_str());
         for key in chunk {
             q = q.bind(key);
         }
@@ -636,10 +645,13 @@ pub(crate) async fn apply(
             None,
         )
         .stamped(earlier.get(key), &now, Some(&tz_offset));
-        let sql = crate::bulk::insert_sql::<ProblemRow>();
+        let sql = Sql::dynamic(
+            sql_id!("etl.download_problems.insert_problem"),
+            crate::bulk::insert_sql::<ProblemRow>(),
+        );
         // Audited: `sql` is built from `ProblemRow`'s associated consts,
         // never from row data; all values bound.
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+        row.bind_into(sql.query())
             .execute(&mut *tx)
             .await
             .with_context(|| format!("record {key}"))?;

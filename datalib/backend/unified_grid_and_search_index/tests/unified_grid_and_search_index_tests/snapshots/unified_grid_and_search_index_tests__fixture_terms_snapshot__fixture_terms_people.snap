@@ -65,6 +65,7 @@ email:laforge@enterprise.test	Geordi La Forge
 email:lcars@enterprise.starfleet	LCARS Status
 email:lcars@enterprise.starfleet	LCARS Status <lcars@enterprise.starfleet>
 email:locutus@unicomplex.borg	Locutus of Borg
+email:marie@labarre.earth	Marie Picard
 email:picard@enterprise.starfleet	Captain Picard
 email:picard@enterprise.starfleet	Jean-Luc Picard
 email:picard@enterprise.starfleet	Jean-Luc Picard <picard@enterprise.starfleet>
@@ -80,6 +81,8 @@ email:seven.of.nine@unimatrix01.borg	Seven of Nine
 email:third.of.five@unimatrix01.borg	Hugh
 email:troi@enterprise.starfleet	Deanna Troi
 email:troi@enterprise.test	Deanna Troi
+email:vineyard@labarre.earth	Marie Picard
+email:vineyard@labarre.earth	Robert Picard
 email:will.riker@alaska.earth	William T. Riker
 email:worf@enterprise.starfleet	Worf
 email:wriker@enterprise.starfleet	William T. Riker
@@ -158,6 +161,7 @@ tel:+17015550104	Worf Rozhenko
 tel:+17015550105	+17015550105
 tel:+17015550105	Deanna Troi
 tel:+17015550106	Beverly Crusher
+tel:+33380550101	Robert Picard
 whatsapp:100000000000108	WhatsApp user …0108
 
 # each source's own handles, what `me` finds

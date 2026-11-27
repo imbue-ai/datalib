@@ -9,6 +9,7 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::processor::RunCtx;
 use crate::store_handle::RawStoreHandle;
+use datalib_sql::sql;
 
 static SEALED_A_CHECKPOINT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -387,10 +388,13 @@ impl SealState {
     /// while the download is still running. Never a reason to fail.
     async fn publish_problem_counts(&self) {
         use datalib_problems::{Severity, METRIC};
-        let counted: Result<Vec<(String, i64)>, _> =
-            sqlx::query_as("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-                .fetch_all(&self.pool)
-                .await;
+        let counted: Result<Vec<(String, i64)>, _> = sql!(
+            "etl.raw_store.count_problems_by_severity",
+            "SELECT severity, COUNT(*) FROM problems GROUP BY severity"
+        )
+        .query_as()
+        .fetch_all(&self.pool)
+        .await;
         match counted {
             Ok(rows) => {
                 for severity in [Severity::Error, Severity::Warning] {
@@ -414,6 +418,7 @@ impl SealState {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     async fn store(path: &std::path::Path) -> SqlitePool {
         crate::doltlite_raw::open(
             path,
@@ -424,7 +429,8 @@ mod tests {
     }
 
     async fn commits(pool: &SqlitePool) -> i64 {
-        sqlx::query_scalar("SELECT count(*) FROM dolt_log()")
+        test_sql!("SELECT count(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(pool)
             .await
             .unwrap()
@@ -478,7 +484,8 @@ mod tests {
             },
         );
         let before = commits(&entities).await;
-        sqlx::query("INSERT INTO rows_t VALUES ('a')")
+        test_sql!("INSERT INTO rows_t VALUES ('a')")
+            .query()
             .execute(&entities)
             .await
             .unwrap();
@@ -512,7 +519,8 @@ mod tests {
         let rows = |pool: &SqlitePool| {
             let pool = pool.clone();
             async move {
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM rows_t")
+                test_sql!("SELECT count(*) FROM rows_t")
+                    .query_scalar::<i64>()
                     .fetch_one(&pool)
                     .await
                     .unwrap()
@@ -532,7 +540,8 @@ mod tests {
         let before = commits(&entities).await;
         let mut writes = Batch::new(&entities, Some(&sealer));
         for id in ["a", "b"] {
-            sqlx::query("INSERT INTO rows_t VALUES (?)")
+            test_sql!("INSERT INTO rows_t VALUES (?)")
+                .query()
                 .bind(id)
                 .execute(&mut **writes.tx().await.unwrap())
                 .await
@@ -555,7 +564,8 @@ mod tests {
             )),
         };
         let mut writes = Batch::new(&entities, Some(&every_write));
-        sqlx::query("INSERT INTO rows_t VALUES ('c')")
+        test_sql!("INSERT INTO rows_t VALUES ('c')")
+            .query()
             .execute(&mut **writes.tx().await.unwrap())
             .await
             .unwrap();
@@ -592,7 +602,8 @@ mod tests {
         let mut writes = Batch::new(&entities, Some(&sealer)).byte_limit(10);
         let mut committed = Vec::new();
         for id in ["a", "b", "c"] {
-            sqlx::query("INSERT INTO rows_t VALUES (?)")
+            test_sql!("INSERT INTO rows_t VALUES (?)")
+                .query()
                 .bind(id)
                 .execute(&mut **writes.tx().await.unwrap())
                 .await
@@ -622,7 +633,8 @@ mod tests {
         if !crate::doltlite_raw::has_dolt_extensions(&entities).await {
             return;
         }
-        sqlx::query("INSERT INTO rows_t VALUES ('e')")
+        test_sql!("INSERT INTO rows_t VALUES ('e')")
+            .query()
             .execute(&entities)
             .await
             .unwrap();
@@ -690,7 +702,8 @@ mod tests {
                 let reader = crate::doltlite_raw::open_reader(&path, Some(head.commit()))
                     .await?
                     .unwrap();
-                let keys: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+                let keys: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+                    .query_scalar()
                     .fetch_all(reader.pool())
                     .await?;
                 reader.pool().close().await;
@@ -731,7 +744,8 @@ mod tests {
         );
         let failed = ctx
             .run_store(entities.clone(), None, |_| async {
-                sqlx::query("INSERT INTO rows_t VALUES ('picard')")
+                test_sql!("INSERT INTO rows_t VALUES ('picard')")
+                    .query()
                     .execute(&entities)
                     .await?;
                 anyhow::bail!("HTTP 401")
@@ -741,7 +755,8 @@ mod tests {
         // What the next writer finds once its open has discarded
         // whatever was never committed.
         let reopened = store(&path).await;
-        let kept: i64 = sqlx::query_scalar("SELECT count(*) FROM rows_t")
+        let kept: i64 = test_sql!("SELECT count(*) FROM rows_t")
+            .query_scalar()
             .fetch_one(&reopened)
             .await
             .unwrap();

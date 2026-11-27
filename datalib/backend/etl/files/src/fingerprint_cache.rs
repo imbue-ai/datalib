@@ -15,6 +15,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
 
 use crate::fswalk::{Blake3, StampCursor, StampKind};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// What kind of thing a cached entry describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -219,23 +220,34 @@ impl FingerprintCache {
             .begin_with("BEGIN IMMEDIATE")
             .await
             .context("lock fingerprint cache to check its shape")?;
-        let version: i64 = sqlx::query_scalar("PRAGMA user_version")
-            .fetch_one(&mut *tx)
-            .await
-            .context("read fingerprint cache version")?;
+        let version: i64 = sql!(
+            "etl.files.fingerprints.read_schema_version",
+            "PRAGMA user_version"
+        )
+        .query_scalar()
+        .fetch_one(&mut *tx)
+        .await
+        .context("read fingerprint cache version")?;
         if version != SCHEMA_VERSION {
-            sqlx::query("DROP TABLE IF EXISTS fingerprints")
-                .execute(&mut *tx)
-                .await
-                .context("drop an older fingerprints table")?;
-            sqlx::query(SCHEMA)
+            sql!(
+                "etl.files.fingerprints.drop_outdated_table",
+                "DROP TABLE IF EXISTS fingerprints"
+            )
+            .query()
+            .execute(&mut *tx)
+            .await
+            .context("drop an older fingerprints table")?;
+            Sql::ddl(sql_id!("etl.files.fingerprints.create_table"), SCHEMA)
+                .query()
                 .execute(&mut *tx)
                 .await
                 .context("create fingerprints table")?;
             // Audited: an integer constant, not input.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "PRAGMA user_version = {SCHEMA_VERSION}"
-            )))
+            Sql::dynamic(
+                sql_id!("etl.files.fingerprints.stamp_schema_version"),
+                format!("PRAGMA user_version = {SCHEMA_VERSION}"),
+            )
+            .query()
             .execute(&mut *tx)
             .await
             .context("stamp fingerprint cache version")?;
@@ -266,10 +278,12 @@ impl FingerprintCache {
         let root_s = canonical_root(root).display().to_string();
         let prefix = format!("{}/", root_s.trim_end_matches('/'));
         let end = datalib_etl::key_range::prefix_end(&prefix).context("a path ends in '/'")?;
-        let rows = sqlx::query(
+        let rows = sql!(
+            "etl.files.fingerprints.list_under_root",
             "SELECT abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev \
-             FROM fingerprints WHERE abs_path = ? OR (abs_path >= ? AND abs_path < ?)",
+             FROM fingerprints WHERE abs_path = ? OR (abs_path >= ? AND abs_path < ?)"
         )
+        .query()
         .bind(&root_s)
         .bind(&prefix)
         .bind(&end)
@@ -319,10 +333,12 @@ impl FingerprintCache {
             .with_context(|| format!("resolve {}", path.display()))?
             .display()
             .to_string();
-        let done = sqlx::query(
+        let done = sql!(
+            "etl.files.fingerprints.update_stat_for_test",
             "UPDATE fingerprints SET mtime_ns = ?, size = ?, ctime_ns = ?, inode = ?, dev = ? \
-             WHERE abs_path = ?",
+             WHERE abs_path = ?"
         )
+        .query()
         .bind(fresh.mtime_ns)
         .bind(fresh.size)
         .bind(fresh.ctime_ns)
@@ -344,7 +360,8 @@ impl FingerprintCache {
         }
         let mut tx = self.pool.begin().await.context("begin cache tx")?;
         for fp in batch {
-            sqlx::query(
+            sql!(
+                "etl.files.fingerprints.upsert_fingerprint",
                 "INSERT INTO fingerprints
                      (abs_path, kind, blake3, mtime_ns, size, ctime_ns, stamp_kind, inode, dev)
                  VALUES (?,?,?,?,?,?,?,?,?)
@@ -353,8 +370,9 @@ impl FingerprintCache {
                      mtime_ns=excluded.mtime_ns, size=excluded.size,
                      ctime_ns=excluded.ctime_ns,
                      stamp_kind=excluded.stamp_kind,
-                     inode=excluded.inode, dev=excluded.dev",
+                     inode=excluded.inode, dev=excluded.dev"
             )
+            .query()
             .bind(&fp.abs_path)
             .bind(fp.kind.as_str())
             .bind(&fp.blake3[..])
@@ -379,11 +397,15 @@ impl FingerprintCache {
         let mut removed = 0u64;
         let mut tx = self.pool.begin().await.context("begin forget tx")?;
         for path in abs_paths {
-            let r = sqlx::query("DELETE FROM fingerprints WHERE abs_path = ?")
-                .bind(path)
-                .execute(&mut *tx)
-                .await
-                .context("forget fingerprint")?;
+            let r = sql!(
+                "etl.files.fingerprints.delete_by_path",
+                "DELETE FROM fingerprints WHERE abs_path = ?"
+            )
+            .query()
+            .bind(path)
+            .execute(&mut *tx)
+            .await
+            .context("forget fingerprint")?;
             removed += r.rows_affected();
         }
         tx.commit().await.context("commit forget tx")?;
@@ -403,16 +425,24 @@ impl FingerprintCache {
     }
 
     pub async fn checkpoint(&self) {
-        let _ = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&self.pool)
-            .await;
+        let _ = sql!(
+            "etl.files.fingerprints.truncate_wal",
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        )
+        .query()
+        .execute(&self.pool)
+        .await;
     }
 
     pub async fn count(&self) -> Result<i64> {
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM fingerprints")
-            .fetch_one(&self.pool)
-            .await
-            .context("count fingerprints")?;
+        let n: i64 = sql!(
+            "etl.files.fingerprints.count_all",
+            "SELECT COUNT(*) FROM fingerprints"
+        )
+        .query_scalar()
+        .fetch_one(&self.pool)
+        .await
+        .context("count fingerprints")?;
         Ok(n)
     }
 }
@@ -437,6 +467,7 @@ pub fn abs_key(root: &Path, rel: &str) -> String {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn cursor(mtime: i64, size: i64, inode: Option<i64>) -> StampCursor {
         StampCursor {
             mtime_ns: mtime,
@@ -503,17 +534,19 @@ mod tests {
             )
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "CREATE TABLE fingerprints (abs_path TEXT PRIMARY KEY, kind TEXT NOT NULL, \
              blake3 BLOB NOT NULL, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL, \
-             stamp_kind TEXT NOT NULL, inode INTEGER, dev INTEGER)",
+             stamp_kind TEXT NOT NULL, inode INTEGER, dev INTEGER)"
         )
+        .query()
         .execute(&old)
         .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO fingerprints VALUES ('/r/a', 'file', zeroblob(32), 1, 1, 'inode', 1, 1)",
+        test_sql!(
+            "INSERT INTO fingerprints VALUES ('/r/a', 'file', zeroblob(32), 1, 1, 'inode', 1, 1)"
         )
+        .query()
         .execute(&old)
         .await
         .unwrap();

@@ -82,6 +82,7 @@ pub async fn claims(env: &StepEnv, data_root: &Path) -> Vec<OutputClaim> {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn env(step: &str, function: Function) -> StepEnv {
         StepEnv {
             step: step.to_string(),
@@ -108,7 +109,8 @@ mod tests {
         let store = datalib_etl::raw_layout::entities_db(&root.path().join("mail/ingest"));
         std::fs::create_dir_all(store.parent().unwrap()).unwrap();
         let pool = datalib_etl::doltlite_raw::open(&store, &[]).await.unwrap();
-        sqlx::query("CREATE TABLE t (x INTEGER)")
+        test_sql!("CREATE TABLE t (x INTEGER)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();

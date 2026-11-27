@@ -648,10 +648,13 @@ does not fetch what it believes it already has.
 
 ## Prepare
 
-Each time the runner starts, before the loop takes any request, the
-process that holds the runner lock invokes every step whose program
-takes the verb once, producers before their readers, with `--prepare`
-appended ([the runner's README](../../datalib/backend/dag/README.md#upgrading-a-root)).
+Each time the runner starts, it invokes every step whose program takes
+the verb once, with `--prepare` appended, before your step or anything
+that reads it runs ([the runner's README](../../datalib/backend/dag/README.md#upgrading-a-root)).
+Your step's `--prepare` starts only after that of every step upstream of
+it has exited, so the stores your step reads are already in this
+build's shape. Steps with no path between them may run `--prepare` at
+the same time.
 The runner does not know whether your program changed since the last
 start, so you are asked every time: answer quickly when there is
 nothing to do. The runner knows nothing of what a step wrote; the
@@ -822,9 +825,8 @@ verbs to give back the disk its store holds, once each: with
 `--compact` appended when old versions of derived data are to be
 dropped (`--drop-old-versions-on-derived-data`,
 `"drop_old_versions_on_derived_data": true`), else `--collect`. Nothing
-that reads a store may be reading it while it is rewritten: the command line needs the root to
-itself, as `reset` does, and the app's loop holds the steps it asks
-and every step that reads them until it is done (`dag/README.md`
+that reads a store may be reading it while it is rewritten: the loop
+holds the steps it asks and every step that reads them until it is done (`dag/README.md`
 §"Resets and purges"). The step decides what the verb means for what it
 wrote, runs nothing else, and reports its version as a run would; the
 runner records it, so a step that kept its content and reports a

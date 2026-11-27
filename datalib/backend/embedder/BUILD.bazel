@@ -25,14 +25,14 @@ rust_library(
     deps = [
         ":embedder_shim",
         "//datalib/backend/env:datalib_env",
-        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
     ],
 )
 
 # The TNG fixture's vectors (`//tests/fixtures:ingested_tng_vectors`). It
 # links the embedder alone, so nothing but the embedder, the model and
-# the prompts makes Bazel embed again.
+# the prompts makes Bazel embed again. So it does not link
+# `datalib_runtime` either, and on gnu Linux it embeds on the CPU.
 rust_binary(
     name = "embed_prompts",
     srcs = ["tools/embed_prompts.rs"],
@@ -53,6 +53,7 @@ rust_binary(
     edition = "2021",
     deps = [
         ":datalib_embedder",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:serde_json",
     ],

@@ -7,6 +7,7 @@ use datalib_search_index::{
     chunk::{chunk_hash, four_bytes_a_token},
     ChunkedDoc, Index, IndexDoc, IndexSection, InferenceCache, KeptRows, Reader,
 };
+use datalib_sql::{test_sql_id, Sql};
 
 fn doc(source: &str, uuid: &str, sections: &[(Option<&str>, &str)]) -> IndexDoc {
     IndexDoc {
@@ -430,12 +431,16 @@ async fn a_full_read_walks_the_vectors_in_key_order() {
         .connect_with(sqlx::sqlite::SqliteConnectOptions::new().filename(f.cache_path()))
         .await
         .unwrap();
-    let explain = format!(
-        "EXPLAIN QUERY PLAN {}",
-        datalib_search_index::read::SCAN_SQL
+    let explain = Sql::dynamic(
+        test_sql_id!(),
+        format!(
+            "EXPLAIN QUERY PLAN {}",
+            datalib_search_index::read::SCAN_SQL
+        ),
     );
     // A constant statement of the crate under test.
-    let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(explain))
+    let plan: Vec<(i64, i64, i64, String)> = explain
+        .query_as()
         .bind("m")
         .bind("")
         .bind(1)
@@ -634,7 +639,11 @@ async fn a_grid_index_no_keyword_pass_has_run_on_is_no_index_yet() {
         .await
         .unwrap();
     for ddl in datalib_search_index::KEYWORD_DDL {
-        sqlx::query(ddl).execute(&pool).await.unwrap();
+        Sql::dynamic(test_sql_id!(), ddl)
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
     }
     pool.close().await;
     let cache = dir.path().join("cache.sqlite");

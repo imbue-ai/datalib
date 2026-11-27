@@ -25,6 +25,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_h3",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:h3o",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",

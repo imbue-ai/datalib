@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use datalib_etl_baby_connect::ingest::schema_raw::{ENTRIES, KIDS, USERS};
 use datalib_etl_baby_connect::ingest::RawDb;
 use datalib_etl_render::inputs::{changed_rows, RawRange};
+use datalib_sql::{sql_id, Sql};
 use serde_json::Value;
 use sqlx::Row as _;
 
@@ -69,9 +70,13 @@ impl Store {
 
 async fn read(db: &RawDb, table: &str) -> Result<Rows> {
     // Audited: `table` is one of this crate's `&'static str` table names.
-    let sql = format!("SELECT id, json(payload) AS payload FROM \"{table}\"");
+    let sql = Sql::dynamic(
+        sql_id!("baby_connect_render.list_payloads"),
+        format!("SELECT id, json(payload) AS payload FROM \"{table}\""),
+    );
     let mut out = Rows::new();
-    for row in sqlx::query(sqlx::AssertSqlSafe(sql))
+    for row in sql
+        .query()
         .fetch_all(db.pool())
         .await
         .with_context(|| format!("read {table}"))?

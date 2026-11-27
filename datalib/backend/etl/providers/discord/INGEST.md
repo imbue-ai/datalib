@@ -23,7 +23,9 @@ servers whose admin adds it and never a person's direct messages, and
 the endpoint that lists a channel's threads for a user answers a bot
 403. So the wizard says the risk before the sign-in, and the download
 stays as small as it can: it only ever sends `GET`s, its API requests go
-one at a time, and a conversation with nothing new costs none. It sends
+one at a time, and a conversation with nothing new costs none, but for
+its refresh-window re-read ([Edits, reactions and
+deletions](#edits-reactions-and-deletions)). It sends
 curl's own user agent and no header pretending to be the app.
 
 ## API surface used

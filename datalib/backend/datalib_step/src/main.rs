@@ -532,6 +532,7 @@ async fn main() {
     // beside its binaries, and fetches the one its manifest names where
     // there is an NVIDIA driver.
     datalib_fetch::enable_cuda_fetch();
+    datalib_embedder::look_for_cuda_module(datalib_runtime::cuda_module::find);
 
     // `probe` is answered before any of the step machinery below: it
     // owns no tree, claims no outputs and must leave stdout holding
@@ -735,6 +736,7 @@ async fn main() {
         let _log = LogRecordedProblems;
         run(cli, step_env, &data_root, &now, &control, &emitter).await
     };
+    report_statements(&emitter);
     match result {
         // A run that ended because it was asked to is not a success, even
         // though it committed: it did not finish, and saying so is how the
@@ -782,6 +784,16 @@ async fn main() {
             }
             std::process::exit(1);
         }
+    }
+}
+
+/// What every SQL statement this step ran did, by the name it carries, as
+/// the step's metrics (`datalib_metrics::SQL_RUNS` and its kin).
+fn report_statements(emitter: &Emitter) {
+    let progress = emitter.progress();
+    for s in datalib_sql_work::series(&datalib_sql_work::totals()) {
+        let labels: Vec<(&str, &str)> = s.labels.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        progress.metric(s.name, &labels, s.value as i64);
     }
 }
 
@@ -987,7 +999,7 @@ fn pull_runtime(into: Option<&Path>) -> Result<String> {
 /// the driver and cuBLAS it cannot be.
 fn pull_cuda() -> Result<String> {
     use datalib_runtime::cuda_module::{find, DRIVER_LIBRARY};
-    let module = find(true).map_err(anyhow::Error::msg)?;
+    let module = find(|_| true).map_err(anyhow::Error::msg)?;
     let driver = if datalib_embedder::can_load(DRIVER_LIBRARY) {
         "present"
     } else {

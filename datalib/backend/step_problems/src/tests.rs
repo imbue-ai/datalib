@@ -1,4 +1,5 @@
 use super::*;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const STEP: &str = "enterprise/render_markdown";
 
@@ -192,12 +193,10 @@ fn the_lines_read_as_the_protocol_spells_them() {
 
 async fn insert(pool: &sqlx::SqlitePool, row: &ProblemRow) {
     // Audited: `insert_sql` is built from `ProblemRow`'s consts.
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(
-        datalib_table::insert_sql::<ProblemRow>(),
-    )))
-    .execute(pool)
-    .await
-    .unwrap();
+    row.bind_into(Sql::dynamic(test_sql_id!(), datalib_table::insert_sql::<ProblemRow>()).query())
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 /// A step's problems are read from every store in its folder: a raw
@@ -290,11 +289,13 @@ async fn a_problems_table_in_another_shape_is_reported_by_its_recorded_shape() {
     file.record(vec![row("messages:1")]).await.unwrap();
     file.finish(&[], Ended::Succeeded).await.unwrap();
     let pool = plain(&file_of(dir.path(), STEP)).await;
-    sqlx::query("ALTER TABLE problems DROP COLUMN upstream_entity_kind")
+    test_sql!("ALTER TABLE problems DROP COLUMN upstream_entity_kind")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE _datalib_meta SET value = '0' WHERE key = 'shared_schema_version'")
+    test_sql!("UPDATE _datalib_meta SET value = '0' WHERE key = 'shared_schema_version'")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -335,7 +336,8 @@ async fn a_render_store_without_the_table_this_build_reads_is_in_another_shape()
         .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
         .await
         .unwrap();
-    sqlx::query(datalib_problems::DDL[0].1)
+    Sql::dynamic(test_sql_id!(), datalib_problems::DDL[0].1)
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -351,7 +353,8 @@ async fn a_render_store_without_the_table_this_build_reads_is_in_another_shape()
     assert_eq!(read.other_shape, std::slice::from_ref(&path));
 
     // The same file once its step has run again.
-    sqlx::query("CREATE TABLE entity_items (entity_key TEXT PRIMARY KEY, item_uuid TEXT)")
+    test_sql!("CREATE TABLE entity_items (entity_key TEXT PRIMARY KEY, item_uuid TEXT)")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -376,7 +379,8 @@ async fn a_steps_own_file_that_records_no_shape_is_in_another_shape() {
         .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
         .await
         .unwrap();
-    sqlx::query(datalib_problems::DDL[0].1)
+    Sql::dynamic(test_sql_id!(), datalib_problems::DDL[0].1)
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -399,7 +403,8 @@ async fn a_file_that_records_no_problems_gives_none() {
         .connect_with(datalib_sqlite_open::file(&path).create_if_missing(true))
         .await
         .unwrap();
-    sqlx::query("CREATE TABLE blobs (hash TEXT)")
+    test_sql!("CREATE TABLE blobs (hash TEXT)")
+        .query()
         .execute(&pool)
         .await
         .unwrap();

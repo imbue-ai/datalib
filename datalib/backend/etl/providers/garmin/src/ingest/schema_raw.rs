@@ -11,6 +11,7 @@ use sqlx::SqliteConnection;
 
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{RawTable, WirePayloadRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const DATA_TABLES: &[&str] = &[
     "garmin_account",
@@ -208,9 +209,11 @@ async fn held_versions_to_the_sidecar(conn: &mut SqliteConnection) -> Result<()>
         let sidecar = format!("{table}_bookkeeping");
         if !has_column(conn, &sidecar, "held_version").await? {
             // Audited: `sidecar` is built from a literal of HELD_COLUMNS.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "ALTER TABLE {sidecar} ADD COLUMN held_version TEXT NULL"
-            )))
+            Sql::dynamic(
+                sql_id!("garmin.migrate.add_held_version_to_sidecar"),
+                format!("ALTER TABLE {sidecar} ADD COLUMN held_version TEXT NULL"),
+            )
+            .query()
             .execute(&mut *conn)
             .await?;
         }
@@ -222,7 +225,8 @@ async fn held_versions_to_the_sidecar(conn: &mut SqliteConnection) -> Result<()>
             ),
             format!("ALTER TABLE {table} DROP COLUMN {column}"),
         ] {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(sql_id!("garmin.migrate.move_held_column_to_sidecar"), sql)
+                .query()
                 .execute(&mut *conn)
                 .await?;
         }
@@ -231,11 +235,15 @@ async fn held_versions_to_the_sidecar(conn: &mut SqliteConnection) -> Result<()>
 }
 
 async fn has_column(conn: &mut SqliteConnection, table: &str, column: &str) -> Result<bool> {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
-        .bind(table)
-        .bind(column)
-        .fetch_one(&mut *conn)
-        .await?;
+    let n: i64 = sql!(
+        "garmin.migrate.has_column",
+        "SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?"
+    )
+    .query_scalar()
+    .bind(table)
+    .bind(column)
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(n > 0)
 }
 

@@ -1,7 +1,7 @@
-//! Program-A `DataProcessor`s for the `gitlab` source.
-//! `gitlab` contributes download + render; render is
-//! fingerprint-driven (no render cursor). The source owns its raw store
-//! (open/commit/checkpoint); the orchestrator only drives `run`.
+//! The download `DataProcessor` for the `gitlab` source, planned when
+//! `api` is present; the render one is in `gitlab_render`. The source
+//! owns its raw store (open/commit/checkpoint); the orchestrator only
+//! drives `run`.
 
 use std::path::PathBuf;
 use std::time::Duration;

@@ -14,6 +14,7 @@ use datalib_etl_claude::ingest::{db::db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_claude::synthesize::ClaudeSynth;
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use serde_json::json;
 use sqlx::sqlite::SqlitePoolOptions;
 use sqlx::Row;
@@ -38,7 +39,8 @@ async fn snapshot_table(
     // Fetch the column list so we know which need json() unwrapping.
     // Test snapshot helper: `table` is a literal at every callsite, and
     // `select_list` is built from the columns just introspected.
-    let cols: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})")))
+    let cols: Vec<String> = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_info({table})"))
+        .query()
         .fetch_all(pool)
         .await?
         .into_iter()
@@ -55,10 +57,11 @@ async fn snapshot_table(
         })
         .collect::<Vec<_>>()
         .join(", ");
-    let sql = format!("SELECT {select_list} FROM {table} ORDER BY id");
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
-        .fetch_all(pool)
-        .await?;
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT {select_list} FROM {table} ORDER BY id"),
+    );
+    let rows = sql.query().fetch_all(pool).await?;
     let mut out = BTreeMap::new();
     for r in rows {
         let id: String = r.try_get("id").unwrap_or_default();
@@ -279,11 +282,11 @@ async fn a_reset_and_resync_preserves_data_tables() {
             datalib_etl::doltlite_raw::commit_run(&pool, "reset-test: second")
                 .await
                 .unwrap();
-        let messages: Vec<String> =
-            sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date ASC")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let messages: Vec<String> = test_sql!("SELECT message FROM dolt_log() ORDER BY date ASC")
+            .query_scalar()
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         assert!(
             messages.iter().any(|m| m.contains("reset-test: first")),
             "first commit message missing from dolt_log: {messages:?}"
@@ -337,10 +340,12 @@ async fn a_reset_and_resync_preserves_data_tables() {
 }
 
 async fn configure_committer(pool: &sqlx::SqlitePool) {
-    let _ = sqlx::query("SELECT dolt_config('user.name', 'reset-test')")
+    let _ = test_sql!("SELECT dolt_config('user.name', 'reset-test')")
+        .query()
         .execute(pool)
         .await;
-    let _ = sqlx::query("SELECT dolt_config('user.email', 'reset-test@datalib.local')")
+    let _ = test_sql!("SELECT dolt_config('user.email', 'reset-test@datalib.local')")
+        .query()
         .execute(pool)
         .await;
 }

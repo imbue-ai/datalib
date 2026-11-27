@@ -8,6 +8,7 @@ use anyhow::{anyhow, Context, Result};
 use datalib_etl::bulk::bulk_upsert_in_tx;
 use datalib_etl_yolink::ingest::schema_raw::{YolinkDeviceRow, YolinkReadingRow};
 use datalib_etl_yolink::ingest::{db_path_for, RawDb};
+use datalib_sql::sql;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -170,11 +171,15 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
     // reports build time, which then shows up in the rendered page's
     // commit-log table. (The two commits `doltlite_raw::open` already
     // made are still wall-clock — see the module docs.)
-    sqlx::query("SELECT dolt_commit('-Am', 'yolink tng fixture', '--date', ?1)")
-        .bind(now)
-        .execute(pool)
-        .await
-        .context("dolt_commit the fixture store")?;
+    sql!(
+        "yolink.fixture.commit_store",
+        "SELECT dolt_commit('-Am', 'yolink tng fixture', '--date', ?1)"
+    )
+    .query()
+    .bind(now)
+    .execute(pool)
+    .await
+    .context("dolt_commit the fixture store")?;
     // By hand, because the commit above takes `--date` and `commit_run`
     // — which would have done this — has no parameter for it. A writer
     // works on its own branch, so without this the fixture's rows never

@@ -16,6 +16,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, Mirror, GMAIL,
 };
+use datalib_sql::test_sql;
 
 const ACCOUNT: &str = "t@example.test";
 const UNDER_LIB: &str = "18c9f2a1b2c3d701";
@@ -289,11 +290,11 @@ impl State {
             for (e, ids) in db.load_email_joins().await.unwrap().mailboxes {
                 joins.insert(e, sorted(ids));
             }
-            let rows: Vec<(String, String)> =
-                sqlx::query_as("SELECT id, json(payload) FROM emails")
-                    .fetch_all(db.pool())
-                    .await
-                    .unwrap();
+            let rows: Vec<(String, String)> = test_sql!("SELECT id, json(payload) FROM emails")
+                .query_as()
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
             let payloads = rows
                 .into_iter()
                 .map(|(id, p)| {

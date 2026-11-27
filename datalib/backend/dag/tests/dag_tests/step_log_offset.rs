@@ -2,6 +2,7 @@
 //! the line under that stamp's offset. It must be the offset the runner's
 //! clock is in, as every other line beside it is.
 
+use datalib_sql::test_sql;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -52,23 +53,26 @@ async fn a_step_line_is_filed_under_the_runner_s_offset() {
         .await
         .unwrap();
     let runner: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT tz_offset FROM processes WHERE process = 'dag'")
+        test_sql!("SELECT tz_offset FROM processes WHERE process = 'dag'")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();
-    let step: Vec<(String, Option<String>)> = sqlx::query_as(
+    let step: Vec<(String, Option<String>)> = test_sql!(
         "SELECT l.ts_utc, l.tz_offset FROM log l JOIN processes p USING (process_id) \
-         WHERE p.process = 'step' AND l.msg = 'a line that stamps itself'",
+         WHERE p.process = 'step' AND l.msg = 'a line that stamps itself'"
     )
+    .query_as()
     .fetch_all(&pool)
     .await
     .unwrap();
     pool.close().await;
 
-    assert_eq!(
-        runner,
-        vec![Some("+03:00".to_string())],
-        "the runner's zone"
+    // The runner's own log, and the run's record: both in its zone.
+    assert!(!runner.is_empty(), "no runner process in the run store");
+    assert!(
+        runner.iter().all(|z| z.as_deref() == Some("+03:00")),
+        "the runner's zone: {runner:?}"
     );
     assert_eq!(step.len(), 1, "the step's line: {step:?}\n{out:?}");
     assert_eq!(step[0].1.as_deref(), Some("+03:00"), "{step:?}");

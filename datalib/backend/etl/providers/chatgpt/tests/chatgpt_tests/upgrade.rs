@@ -9,6 +9,7 @@ use datalib_etl_chatgpt::ingest::schema_raw::{ConversationAttachmentRow, Convers
 use datalib_etl_chatgpt::ingest::{db_path_for, RawDb};
 use datalib_etl_web::owed::{self, Listed};
 use datalib_problems::Reason;
+use datalib_sql::{test_sql, Sql};
 
 /// The sidecar as the build before `held_version` wrote it.
 fn old_bookkeeping_ddl(table: &str) -> String {
@@ -20,11 +21,8 @@ fn old_bookkeeping_ddl(table: &str) -> String {
     )
 }
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -43,10 +41,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     // c-picard fetched at a float update_time, with one file landed, one
     // chatgpt.com no longer has and one that failed; c-riker never
     // fetched at all.
-    sqlx::query(
+    test_sql!(
         "INSERT INTO conversations (id, title, update_time, payload) \
-         VALUES ('c-picard', 'Captain''s log', '1710959331.420159', jsonb('{}'))",
+         VALUES ('c-picard', 'Captain''s log', '1710959331.420159', jsonb('{}'))"
     )
+    .query()
     .execute(&pool)
     .await
     .unwrap();
@@ -55,10 +54,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         ("f-lost", None),
         ("f-fail", None),
     ] {
-        sqlx::query(
+        test_sql!(
             "INSERT INTO chatgpt_attachments (id, conversation_id, file_id, blake3) \
-             VALUES (?, 'c-picard', ?, ?)",
+             VALUES (?, 'c-picard', ?, ?)"
         )
+        .query()
         .bind(ConversationAttachmentRow::pk_recipe("c-picard", file))
         .bind(file)
         .bind(blake3)
@@ -123,7 +123,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         "a file landed or gone is held; one that failed is owed"
     );
     assert_eq!(
-        strings(pool, "SELECT scope_key FROM problems ORDER BY scope_key").await,
+        strings(
+            pool,
+            test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        )
+        .await,
         [
             "chatgpt_attachments:c-picard#f-fail",
             "chatgpt_attachments:c-picard#f-lost",
@@ -134,7 +138,7 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     assert_eq!(
         strings(
             pool,
-            "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
         )
         .await,
         ["1"]

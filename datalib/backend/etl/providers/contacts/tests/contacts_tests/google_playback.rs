@@ -13,6 +13,7 @@ use datalib_etl_web::http::{HttpRequest, HttpResponse, LatchkeySettings};
 use datalib_etl_web::playback::{self, Playback};
 use datalib_etl_web::synthesize::{json_response, write_fixture};
 use datalib_probe::ProbeAsk;
+use datalib_sql::{test_sql, Sql};
 use serde_json::{json, Value};
 
 pub(crate) const ME: &str = "people/1701";
@@ -176,19 +177,23 @@ async fn run(playback: &Path, store: &Path) -> FetchSummary {
         .expect("google fetch under playback")
 }
 
-async fn strings(store: &Path, sql: &'static str) -> Vec<String> {
+async fn strings(store: &Path, sql: Sql) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let v = sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap();
+    let v = sql.query_scalar().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     v
 }
 
-const PEOPLE: &str = "SELECT resource_name FROM google_people ORDER BY resource_name";
-const LABELS: &str = "SELECT resource_name FROM google_contact_groups ORDER BY resource_name";
-const PHOTOS: &str = "SELECT b.held_version FROM google_photos p \
-     JOIN google_photos_bookkeeping b ON b.id = p.id WHERE p.blake3 IS NOT NULL ORDER BY p.id";
-const PROBLEMS: &str = "SELECT scope_key FROM problems ORDER BY scope_key";
-const TOKEN: &str = "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope LIKE '%:sync_token'";
+const PEOPLE: Sql = test_sql!("SELECT resource_name FROM google_people ORDER BY resource_name");
+const LABELS: Sql =
+    test_sql!("SELECT resource_name FROM google_contact_groups ORDER BY resource_name");
+const PHOTOS: Sql = test_sql!(
+    "SELECT b.held_version FROM google_photos p \
+     JOIN google_photos_bookkeeping b ON b.id = p.id WHERE p.blake3 IS NOT NULL ORDER BY p.id"
+);
+const PROBLEMS: Sql = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key");
+const TOKEN: Sql =
+    test_sql!("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope LIKE '%:sync_token'");
 
 fn dirs(d: &tempfile::TempDir, n: usize) -> (Vec<PathBuf>, PathBuf) {
     let tapes: Vec<PathBuf> = (0..n).map(|i| d.path().join(format!("run{i}"))).collect();
@@ -315,7 +320,11 @@ async fn a_first_listing_then_only_what_changed() {
         ]
     );
     assert_eq!(
-        strings(&store, "SELECT DISTINCT typeof(payload) FROM google_people").await,
+        strings(
+            &store,
+            test_sql!("SELECT DISTINCT typeof(payload) FROM google_people")
+        )
+        .await,
         ["blob"]
     );
 
@@ -586,7 +595,11 @@ async fn an_expired_token_lists_everyone_again() {
     );
     assert_eq!(strings(&store, PEOPLE).await, ["people/c1"]);
     assert_eq!(
-        strings(&store, "SELECT id FROM google_photos_bookkeeping").await,
+        strings(
+            &store,
+            test_sql!("SELECT id FROM google_photos_bookkeeping")
+        )
+        .await,
         Vec::<String>::new()
     );
     assert_eq!(strings(&store, TOKEN).await, ["s9"]);
@@ -680,9 +693,11 @@ async fn a_restamped_contact_is_not_an_update() {
         &connections_url(Some("s1"), None),
         page(vec![touched], None, Some("s2")),
     );
-    const RENDERED: &str = "SELECT id || json(payload) || addressbook_id || resource_name \
+    const RENDERED: Sql = test_sql!(
+        "SELECT id || json(payload) || addressbook_id || resource_name \
          || display_name FROM google_people \
-         UNION ALL SELECT id || person_id || photo_source || blake3 FROM google_photos";
+         UNION ALL SELECT id || person_id || photo_source || blake3 FROM google_photos"
+    );
     run(&tapes[0], &store).await;
     let before = strings(&store, RENDERED).await;
     assert_eq!(before.len(), 2, "{before:?}");
@@ -794,13 +809,13 @@ async fn another_account_replaces_the_one_before() {
         "{second:?}"
     );
     assert_eq!(
-        strings(&store, "SELECT display_name FROM google_people").await,
+        strings(&store, test_sql!("SELECT display_name FROM google_people")).await,
         ["Tuvok"]
     );
     assert_eq!(
         strings(
             &store,
-            "SELECT DISTINCT addressbook_id FROM google_contact_groups"
+            test_sql!("SELECT DISTINCT addressbook_id FROM google_contact_groups")
         )
         .await,
         ["google!people/74656/connections"]

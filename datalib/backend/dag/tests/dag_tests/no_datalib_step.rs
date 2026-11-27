@@ -122,13 +122,14 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
 
     dag(&bin, &root, &["check"]);
 
-    // A run: every step runs, the declared program is prepared first,
-    // and the scripts get what the protocol promises.
+    // A run: every step runs, the declared program's step is prepared
+    // before it runs, and the scripts get what the protocol promises.
     dag(&bin, &root, &["sync"]);
     let first = calls(&root);
-    assert_eq!(
-        first[0], "prepared --prepare",
-        "prepare comes first: {first:?}"
+    let at = |line: &str| first.iter().position(|l| l == line);
+    assert!(
+        at("prepared --prepare") < at("prepared "),
+        "prepare comes before its step runs: {first:?}"
     );
     assert_eq!(count(&first, "fetch 0:"), 1, "{first:?}");
     assert_eq!(count(&first, "render 0:src/fetch"), 1, "{first:?}");
@@ -140,7 +141,9 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
     );
 
     // A reset of a step whose program takes no verbs: never invoked,
-    // its tree deleted.
+    // its tree deleted. As the app's reset does, it then runs what reads
+    // the download, which takes the emptiness downstream, and does not
+    // refill the download itself.
     std::fs::write(root.join("src/fetch/planted"), "").unwrap();
     dag(&bin, &root, &["reset", "src/fetch"]);
     assert!(!root.join("src/fetch").exists(), "the tree is deleted");
@@ -148,14 +151,19 @@ fn shell_steps_run_reset_and_start_again_with_no_datalib_step_anywhere() {
     assert_eq!(
         count(&after_reset, "fetch 0:"),
         1,
-        "a reset alone runs nothing: {after_reset:?}"
+        "a reset does not refill the download: {after_reset:?}"
+    );
+    assert_eq!(
+        count(&after_reset, "render 0:src/fetch"),
+        2,
+        "what reads it runs: {after_reset:?}"
     );
 
     // A start: the reset step runs again, and so does what reads it.
     dag(&bin, &root, &["sync"]);
     let all = calls(&root);
     assert_eq!(count(&all, "fetch 0:"), 2, "{all:?}");
-    assert_eq!(count(&all, "render 0:src/fetch"), 2, "{all:?}");
+    assert_eq!(count(&all, "render 0:src/fetch"), 3, "{all:?}");
     assert!(root.join("src/fetch/env").exists());
     assert!(!root.join("src/fetch/planted").exists());
     assert_eq!(

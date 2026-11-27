@@ -19,7 +19,8 @@ use datalib_schema::grid_rows::{filed_under, GridRow};
 use datalib_schema::nodes::NodeRow;
 use datalib_schema::providers::Provider;
 
-use super::{put_grid_row, WriteLock};
+use super::WriteLock;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// How the index derives the nodes and their rows. It is part of the grid
 /// index's shape, as the terms' is, and an index in another shape is built
@@ -34,7 +35,7 @@ const AT_ONCE: usize = 4_000;
 /// the document that holds the node's own grid row, which knows it best,
 /// else its newest, the one with the greatest `markdown_uuid`, whose
 /// stamp-led ids make that the latest. A node already so is not written.
-pub(super) static SETTLE: LazyLock<String> = LazyLock::new(|| {
+pub(super) static SETTLE: LazyLock<Sql> = LazyLock::new(|| {
     let columns: Vec<&str> = std::iter::once(NodeRow::ID_COLUMN)
         .chain(NodeRow::TYPED_COLUMNS.iter().copied())
         .collect();
@@ -49,8 +50,10 @@ pub(super) static SETTLE: LazyLock<String> = LazyLock::new(|| {
         .iter()
         .map(|c| format!("{c} = excluded.{c}"))
         .collect();
-    format!(
-        "INSERT INTO nodes ({}) \
+    Sql::dynamic(
+        sql_id!("etl.render.grid.settle_nodes"),
+        format!(
+            "INSERT INTO nodes ({}) \
          SELECT {} FROM json_each(?) CROSS JOIN data_nodes n \
             ON n.uuid = json_each.value AND n.markdown_uuid = COALESCE(\
                (SELECT d.markdown_uuid FROM grid_rows g CROSS JOIN data_nodes d \
@@ -60,32 +63,41 @@ pub(super) static SETTLE: LazyLock<String> = LazyLock::new(|| {
                 WHERE d.uuid = json_each.value)) \
          WHERE true \
          ON CONFLICT (uuid) DO UPDATE SET {} WHERE ({}) IS NOT ({})",
-        each(""),
-        each("n."),
-        set.join(", "),
-        each("nodes."),
-        each("excluded."),
+            each(""),
+            each("n."),
+            set.join(", "),
+            each("nodes."),
+            each("excluded."),
+        ),
     )
 });
 
 /// The nodes of the JSON array `?` no document carries any more.
-pub(super) const UNCARRIED: &str = "\
+pub(super) const UNCARRIED: Sql = sql!(
+    "etl.render.grid.delete_uncarried_nodes",
+    "\
     DELETE FROM nodes \
     WHERE uuid IN (SELECT value FROM json_each(?)) \
       AND NOT EXISTS (SELECT 1 FROM data_nodes n INDEXED BY data_nodes_by_uuid \
-                      WHERE n.uuid = nodes.uuid)";
+                      WHERE n.uuid = nodes.uuid)"
+);
 
 /// The rows written for nodes of the JSON array `?` that are gone.
-pub(super) const ORPHANED: &str = "\
+pub(super) const ORPHANED: Sql = sql!(
+    "etl.render.grid.delete_orphaned_node_rows",
+    "\
     DELETE FROM grid_rows \
     WHERE uuid IN (SELECT value FROM json_each(?)) \
       AND markdown_uuid IS NULL \
       AND NOT EXISTS (SELECT 1 FROM nodes n WHERE n.uuid = grid_rows.uuid) \
-    RETURNING uuid";
+    RETURNING uuid"
+);
 
 /// The nodes of the JSON array `?` no document holds a row for, with what
 /// the document row of each one's newest account says of the source.
-pub(super) const WITHOUT_A_ROW: &str = "\
+pub(super) const WITHOUT_A_ROW: Sql = sql!(
+    "etl.render.grid.list_nodes_without_row",
+    "\
     SELECT n.*, d.provider, d.source_label \
     FROM json_each(?) CROSS JOIN nodes n ON n.uuid = json_each.value \
     LEFT JOIN grid_rows d INDEXED BY grid_rows_by_markdown \
@@ -93,7 +105,8 @@ pub(super) const WITHOUT_A_ROW: &str = "\
           (SELECT max(a.markdown_uuid) FROM data_nodes a INDEXED BY data_nodes_by_uuid \
            WHERE a.uuid = n.uuid) \
     WHERE NOT EXISTS (SELECT 1 FROM grid_rows g \
-                      WHERE g.uuid = n.uuid AND g.markdown_uuid IS NOT NULL)";
+                      WHERE g.uuid = n.uuid AND g.markdown_uuid IS NOT NULL)"
+);
 
 /// A node no document holds a row for. The source's facts are `None` while
 /// its newest account's document has lost its own row to another document
@@ -161,26 +174,30 @@ pub(super) async fn settle(
     for some in touched.chunks(AT_ONCE) {
         let set = serde_json::to_string(some)?;
         // Audited: built from `NodeRow`'s associated consts alone.
-        for sql in [SETTLE.as_str(), UNCARRIED] {
-            settled.changed += sqlx::query(sqlx::AssertSqlSafe(sql))
+        for sql in [SETTLE.clone(), UNCARRIED] {
+            settled.changed += sql
+                .query()
                 .bind(&set)
                 .execute(&mut **conn)
                 .await
                 .with_context(|| format!("settle {} nodes: {sql}", some.len()))?
                 .rows_affected();
         }
-        let dropped: Vec<String> = sqlx::query_scalar(ORPHANED)
+        let dropped: Vec<String> = ORPHANED
+            .query_scalar()
             .bind(&set)
             .fetch_all(&mut **conn)
             .await
             .context("drop the node rows no document carries")?;
         settled.rows_dropped += dropped.len();
         write_lock.note_changed(dropped);
-        let unrowed: Vec<Unrowed> = sqlx::query_as(WITHOUT_A_ROW)
+        let unrowed: Vec<Unrowed> = WITHOUT_A_ROW
+            .query_as()
             .bind(&set)
             .fetch_all(&mut **conn)
             .await
             .context("read the nodes that have no row")?;
+        let mut rows = Vec::with_capacity(unrowed.len());
         for node in &unrowed {
             let Some(row) = node_row(node) else {
                 tracing::warn!(
@@ -191,9 +208,10 @@ pub(super) async fn settle(
                 );
                 continue;
             };
-            put_grid_row(conn, write_lock, &row).await?;
-            settled.rows_kept += 1;
+            rows.push(row);
         }
+        super::page::write_grid_rows(conn, write_lock, &rows).await?;
+        settled.rows_kept += rows.len();
     }
     Ok(settled)
 }

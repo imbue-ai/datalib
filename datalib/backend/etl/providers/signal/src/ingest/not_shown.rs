@@ -1,6 +1,9 @@
-//! What a Signal backup holds that no page shows. Every chat item's frame is
-//! stored whole, so nothing here is lost from the mirror; it is absent from
-//! search and from the transcript. One row, since a real backup holds thousands.
+//! What a Signal backup holds that no page shows. A chat item's frame is
+//! stored whole, but only a plain message's attachments are decrypted: the
+//! rest of a long message, a sticker's or a link preview's image stay in the
+//! backup. The other frames counted here (sticker packs, call links,
+//! notification profiles, chat folders) are not stored at all. One row,
+//! since a real backup holds thousands.
 
 use std::collections::BTreeMap;
 

@@ -66,6 +66,13 @@ DOLTLITE_DEFINES = [
     # for nullability inference. They're only defined when SQLite
     # is built with this flag.
     "-DSQLITE_ENABLE_COLUMN_METADATA",
+    # Each loop of a statement reports the rows it visited and the table
+    # or index it read (`sqlite3_stmt_scanstatus_v2`), which
+    # `datalib_sql_work` counts under the statement's name. It times every
+    # opcode too: a scan bound by SQLite's own loop ran about 5% slower on
+    # an M-series mac, and the store's pages, which it does not touch, cost
+    # far more than the loop on any real statement.
+    "-DSQLITE_ENABLE_STMT_SCANSTATUS",
     "-DSQLITE_THREADSAFE=1",
     # Do NOT add `-DSQLITE_DEFAULT_FOREIGN_KEYS=1`: the upstream build
     # omits it, and sqlx sends `PRAGMA foreign_keys = ON` itself.

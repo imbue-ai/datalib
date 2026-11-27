@@ -11,6 +11,7 @@ use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
 use datalib_etl_sms_backup_restore::ingest::{self, db_path_for, FetchOptions, RawDb};
 use datalib_etl_sms_backup_restore_render::render;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 fn fixture_root() -> PathBuf {
     // Under Bazel the fixture is staged into runfiles and pointed at by
@@ -63,12 +64,13 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         assert_eq!(db.load_payloads("sms_calls").await?.len(), 3);
 
         // CAS edge rows carry a blake3, and the bytes are in cas_objects.
-        let edges: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM sms_attachments WHERE blake3 IS NOT NULL")
-                .fetch_one(db.pool())
-                .await?;
+        let edges: i64 = test_sql!("SELECT count(*) FROM sms_attachments WHERE blake3 IS NOT NULL")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await?;
         assert_eq!(edges, 3, "3 attachment edges with blake3");
-        let blobs: i64 = sqlx::query_scalar("SELECT count(*) FROM cas_objects")
+        let blobs: i64 = test_sql!("SELECT count(*) FROM cas_objects")
+            .query_scalar()
             .fetch_one(db.cas().pool())
             .await?;
         assert_eq!(blobs, 3, "3 blobs stored");
@@ -251,11 +253,10 @@ fn a_deleted_backup_takes_only_what_no_other_file_holds() -> Result<()> {
         let count = |db: &RawDb, table: &'static str| {
             let pool = db.pool().clone();
             async move {
-                sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
-                    "SELECT count(*) FROM {table}"
-                )))
-                .fetch_one(&pool)
-                .await
+                Sql::dynamic(test_sql_id!(), format!("SELECT count(*) FROM {table}"))
+                    .query_scalar::<i64>()
+                    .fetch_one(&pool)
+                    .await
             }
         };
         fetch(&db).await?;
@@ -332,7 +333,8 @@ fn a_walk_error_deletes_nothing() -> Result<()> {
         std::os::unix::fs::symlink(input.join("nowhere"), input.join("sms-dangling.xml"))?;
         let s = ingest::fetch(opts(&db, FingerprintCache::open(&cache).await?)).await?;
         assert_eq!(s.removed, 0);
-        let calls: i64 = sqlx::query_scalar("SELECT count(*) FROM sms_calls")
+        let calls: i64 = test_sql!("SELECT count(*) FROM sms_calls")
+            .query_scalar()
             .fetch_one(db.pool())
             .await?;
         assert_eq!(calls, 3);
@@ -358,7 +360,8 @@ async fn fetch_dir(
 
 async fn problems(db: &RawDb) -> Result<Vec<(String, String)>> {
     Ok(
-        sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await?,
     )
@@ -542,7 +545,8 @@ fn mms_parts_with_no_data_are_one_row_a_file() -> Result<()> {
         let rows = problems(&db).await?;
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].1, "warning");
-        let said: String = sqlx::query_scalar("SELECT sample FROM problems")
+        let said: String = test_sql!("SELECT sample FROM problems")
+            .query_scalar()
             .fetch_one(db.pool())
             .await?;
         assert!(said.starts_with("2 MMS part(s) "), "{said}");
@@ -572,7 +576,8 @@ fn deletions_held_back_are_made_once_every_file_reads() -> Result<()> {
     let messages = |db: &RawDb| {
         let pool = db.pool().clone();
         async move {
-            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sms_messages")
+            test_sql!("SELECT count(*) FROM sms_messages")
+                .query_scalar::<i64>()
                 .fetch_one(&pool)
                 .await
         }
@@ -637,7 +642,8 @@ fn a_backup_that_is_recognizably_nothing_deletes_nothing() -> Result<()> {
         let messages = |db: &RawDb| {
             let pool = db.pool().clone();
             async move {
-                sqlx::query_scalar::<_, i64>("SELECT count(*) FROM sms_messages")
+                test_sql!("SELECT count(*) FROM sms_messages")
+                    .query_scalar::<i64>()
                     .fetch_one(&pool)
                     .await
             }
@@ -706,19 +712,22 @@ fn a_run_that_fails_before_its_prune_prunes_on_the_next() -> Result<()> {
         fs::write(&sms, format!("{}{}", &xml[..first], &xml[end..]))?;
 
         // The run fails at its prune, the way a crash there would end it.
-        sqlx::query(
+        test_sql!(
             "CREATE TRIGGER refuse_prune BEFORE DELETE ON sms_messages \
-             BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END",
+             BEGIN SELECT RAISE(ABORT, 'crash at the prune'); END"
         )
+        .query()
         .execute(db.pool())
         .await?;
         assert!(fetch_dir(&db, &input, &cache).await.is_err());
-        sqlx::query("DROP TRIGGER refuse_prune")
+        test_sql!("DROP TRIGGER refuse_prune")
+            .query()
             .execute(db.pool())
             .await?;
 
         fetch_dir(&db, &input, &cache).await?;
-        let messages: i64 = sqlx::query_scalar("SELECT count(*) FROM sms_messages")
+        let messages: i64 = test_sql!("SELECT count(*) FROM sms_messages")
+            .query_scalar()
             .fetch_one(db.pool())
             .await?;
         assert_eq!(messages, 6, "the message the backup dropped is deleted");
@@ -765,23 +774,28 @@ fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
-        let sent_from = "SELECT json_extract(a.value, '$.address') FROM sms_messages, \
+        let sent_from = test_sql!(
+            "SELECT json_extract(a.value, '$.address') FROM sms_messages, \
                          json_each(json_extract(payload, '$.addrs')) a \
                          WHERE kind = 'mms' AND box_kind = 'sent' \
-                         AND json_extract(a.value, '$.type') = 137";
-        let without = "SELECT count(*) FROM sms_messages \
-                       WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL";
+                         AND json_extract(a.value, '$.type') = 137"
+        );
+        let without = test_sql!(
+            "SELECT count(*) FROM sms_messages \
+                       WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL"
+        );
 
         fetch_dir(&db, &fixture_root(), &cache).await?;
         datalib_etl::doltlite_raw::commit_run(db.pool(), "first").await?;
-        let senders: Vec<String> = sqlx::query_scalar(sent_from).fetch_all(db.pool()).await?;
+        let senders: Vec<String> = sent_from.query_scalar().fetch_all(db.pool()).await?;
         assert_eq!(senders, ["+12025550100"]);
 
-        sqlx::query("UPDATE sms_messages SET payload = jsonb_remove(payload, '$.addrs')")
+        test_sql!("UPDATE sms_messages SET payload = jsonb_remove(payload, '$.addrs')")
+            .query()
             .execute(db.pool())
             .await?;
         datalib_etl::doltlite_raw::commit_run(db.pool(), "a store from before").await?;
-        let lacking: i64 = sqlx::query_scalar(without).fetch_one(db.pool()).await?;
+        let lacking: i64 = without.query_scalar().fetch_one(db.pool()).await?;
         assert!(lacking > 0);
 
         let again = fetch_dir(&db, &fixture_root(), &cache).await?;
@@ -790,7 +804,7 @@ fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
             "the unchanged export is read again: {again:?}"
         );
         datalib_etl::doltlite_raw::commit_run(db.pool(), "again").await?;
-        let lacking: i64 = sqlx::query_scalar(without).fetch_one(db.pool()).await?;
+        let lacking: i64 = without.query_scalar().fetch_one(db.pool()).await?;
         assert_eq!(lacking, 0);
 
         let then = fetch_dir(&db, &fixture_root(), &cache).await?;
@@ -821,10 +835,14 @@ fn a_backup_that_will_not_open_holds_deletions_back() -> Result<()> {
     let count = |db: &RawDb, table: &'static str| {
         let pool = db.pool().clone();
         async move {
-            sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(format!(
-                // Audited: `table` is a literal at every call below.
-                "SELECT count(*) FROM {table}"
-            )))
+            Sql::dynamic(
+                test_sql_id!(),
+                format!(
+                    // Audited: `table` is a literal at every call below.
+                    "SELECT count(*) FROM {table}"
+                ),
+            )
+            .query_scalar::<i64>()
             .fetch_one(&pool)
             .await
         }
@@ -907,19 +925,21 @@ fn write_backup(dir: &std::path::Path, at: &str, xml: &str) -> Result<()> {
 
 /// Every mark, as `(the message's text, read)`.
 async fn marks(db: &RawDb) -> Result<Vec<(String, i64)>> {
-    Ok(sqlx::query_as(
+    Ok(test_sql!(
         "SELECT coalesce(json_extract(s.payload, '$.body'), json_extract(s.payload, '$.text')), \
                 m.read \
            FROM read_marks m JOIN sms_messages s ON s.id = m.id \
-          WHERE m.read_through IS NULL ORDER BY 1",
+          WHERE m.read_through IS NULL ORDER BY 1"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await?)
 }
 
 async fn payloads(db: &RawDb) -> Result<Vec<(String, String)>> {
     Ok(
-        sqlx::query_as("SELECT id, hex(payload) FROM sms_messages ORDER BY id")
+        test_sql!("SELECT id, hex(payload) FROM sms_messages ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await?,
     )
@@ -991,9 +1011,10 @@ fn a_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         fetch_dir(&db, &input, &cache).await?;
         datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?;
-        let flagged: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM sms_messages WHERE json_type(payload, '$.read') IS NOT NULL",
+        let flagged: i64 = test_sql!(
+            "SELECT count(*) FROM sms_messages WHERE json_type(payload, '$.read') IS NOT NULL"
         )
+        .query_scalar()
         .fetch_one(db.pool())
         .await?;
         assert_eq!(flagged, 0, "no payload keeps a read flag");
@@ -1027,9 +1048,10 @@ fn a_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         assert_eq!(fetch_dir(&db, &input, &cache).await?.removed, 1);
         let held = marks(&db).await?;
-        let orphans: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM read_marks WHERE id NOT IN (SELECT id FROM sms_messages)",
+        let orphans: i64 = test_sql!(
+            "SELECT count(*) FROM read_marks WHERE id NOT IN (SELECT id FROM sms_messages)"
         )
+        .query_scalar()
         .fetch_one(db.pool())
         .await?;
         db.close().await;
@@ -1075,9 +1097,10 @@ fn a_read_alone_moves_the_version_and_redraws_its_conversation() -> Result<()> {
     assert_ne!(version()?, before, "the read moved the store's version");
     rt.block_on(async {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
-        let moved: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM dolt_diff_sms_messages(?, 'HEAD') WHERE diff_type != 'unchanged'",
+        let moved: i64 = test_sql!(
+            "SELECT count(*) FROM dolt_diff_sms_messages(?, 'HEAD') WHERE diff_type != 'unchanged'"
         )
+        .query_scalar()
         .bind(&cursor)
         .fetch_one(db.pool())
         .await?;
@@ -1113,32 +1136,35 @@ fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> {
         datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?;
         let written = payloads(&db).await?;
         let held = marks(&db).await?;
-        let files: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_files")
+        let files: i64 = test_sql!("SELECT count(*) FROM ingested_files")
+            .query_scalar()
             .fetch_one(db.pool())
             .await?;
 
         // The shape the build before wrote: `read` in the payload, keys
         // in serde_json's order, and no `read_marks`.
-        let rows: Vec<(String, String, Option<i64>)> = sqlx::query_as(
+        let rows: Vec<(String, String, Option<i64>)> = test_sql!(
             "SELECT s.id, json(s.payload), m.read FROM sms_messages s \
-               LEFT JOIN read_marks m ON m.id = s.id",
+               LEFT JOIN read_marks m ON m.id = s.id"
         )
+        .query_as()
         .fetch_all(db.pool())
         .await?;
         for (id, payload, read) in rows {
             let mut v: serde_json::Value = serde_json::from_str(&payload)?;
             v["read"] = read.map(|r| r != 0).into();
-            sqlx::query("UPDATE sms_messages SET payload = jsonb(?) WHERE id = ?")
+            test_sql!("UPDATE sms_messages SET payload = jsonb(?) WHERE id = ?")
+                .query()
                 .bind(v.to_string())
                 .bind(&id)
                 .execute(db.pool())
                 .await?;
         }
         for sql in [
-            "DROP TABLE read_marks",
-            "UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'",
+            test_sql!("DROP TABLE read_marks"),
+            test_sql!("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'"),
         ] {
-            sqlx::query(sql).execute(db.pool()).await?;
+            sql.query().execute(db.pool()).await?;
         }
         let old = datalib_etl::doltlite_raw::commit_run(db.pool(), "a store from before")
             .await?
@@ -1153,20 +1179,23 @@ fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> {
             "each payload as ingest writes it"
         );
         assert_eq!(marks(&db).await?, held);
-        let files_now: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_files")
+        let files_now: i64 = test_sql!("SELECT count(*) FROM ingested_files")
+            .query_scalar()
             .fetch_one(db.pool())
             .await?;
         assert_eq!(files_now, files, "the file cursors are kept");
-        let changed: Vec<String> = sqlx::query_scalar(
+        let changed: Vec<String> = test_sql!(
             "SELECT DISTINCT coalesce(nullif(to_table_name, ''), from_table_name) \
                FROM dolt_diff_summary WHERE from_ref = ? AND to_ref = 'HEAD' \
-                AND to_table_name != '_datalib_meta' ORDER BY 1",
+                AND to_table_name != '_datalib_meta' ORDER BY 1"
         )
+        .query_scalar()
         .bind(&old)
         .fetch_all(db.pool())
         .await?;
         assert_eq!(changed, ["read_marks", "sms_messages"]);
-        let log: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+        let log: Vec<String> = test_sql!("SELECT message FROM dolt_log()")
+            .query_scalar()
             .fetch_all(db.pool())
             .await?;
         assert!(

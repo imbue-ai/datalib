@@ -2,7 +2,9 @@
 # Stage the demo data library's inputs into a docker build context.
 #
 # Copies the TNG fixtures the demo config names into `<ctx>/demo/`, one
-# directory per source, plus the config itself. The Dockerfile COPYs
+# directory per source, plus the config itself and Picard's curated
+# stores (`tests/fixtures/curated/datalib_curated/`), so the demo's
+# contacts app opens with people already linked. The Dockerfile COPYs
 # that directory to /opt/datalib/demo-sources and runs the pipeline over
 # it. Called by scripts/build_docker.sh and by release.yml's
 # docker-publish job, so the list of fixtures lives here and nowhere
@@ -36,4 +38,12 @@ pdfs                pdf/tests/fixtures/pdf_tng/.
 TABLE
 
 cp "${repo_root}/datalib/docker/demo/config.toml" "${dest}/config.toml"
+
+curated="${repo_root}/tests/fixtures/curated/datalib_curated"
+for store in "${curated}"/*/*.doltlite_db; do
+    [[ -f "${store}" ]] || { echo "stage_demo: no curated stores under ${curated}" >&2; exit 1; }
+    rel="${store#"${curated}"/}"
+    mkdir -p "${dest}/datalib_curated/$(dirname "${rel}")"
+    cp "${store}" "${dest}/datalib_curated/${rel}"
+done
 echo "stage_demo: staged $(find "${dest}" -type f | wc -l | tr -d ' ') files into ${dest}"

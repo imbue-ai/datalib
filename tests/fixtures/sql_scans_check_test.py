@@ -5,7 +5,7 @@ as statements are fixed.
 
 import unittest
 
-from sql_scans_test import check
+from sql_scans_test import check, unnamed_problems
 
 SCAN = "SELECT id FROM t WHERE v = ?"
 GONE = "SELECT id FROM t WHERE w = ?"
@@ -62,6 +62,23 @@ class Check(unittest.TestCase):
             self.assertEqual(check([row(statement)], {"scan": []}), [], statement)
         [error] = check([row('SELECT x FROM "main".t')], {"scan": []})
         self.assertIn("walks a whole table", error)
+
+    def test_a_statement_with_no_name_fails_unless_listed(self):
+        named = row("/* sql:runs.count_tables */ SELECT 1")
+        fts = row("DELETE FROM 'main'.'vals_fts_idx' WHERE segid=?")
+        [error] = unnamed_problems([named, fts], {})
+        self.assertIn("without a name", error)
+        listed: dict[str, object] = {
+            "unnamed": [
+                {"like": r"DELETE FROM 'main'\.'\w+_idx' WHERE segid=\?", "why": "FTS5"}
+            ]
+        }
+        self.assertEqual(unnamed_problems([named, fts], listed), [])
+
+    def test_an_unnamed_entry_nothing_matches_fails(self):
+        listed: dict[str, object] = {"unnamed": [{"like": "SELECT 2", "why": "gone"}]}
+        [error] = unnamed_problems([row("/* sql:a.b */ SELECT 1")], listed)
+        self.assertIn("matches nothing", error)
 
     def test_two_entries_for_one_statement_fail(self):
         """The run store's newest-run read was listed twice, with two

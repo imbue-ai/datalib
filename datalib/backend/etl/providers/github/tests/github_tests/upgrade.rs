@@ -17,6 +17,7 @@ use datalib_etl_web::owed;
 use serde_json::json;
 
 use crate::support::*;
+use datalib_sql::{test_sql, Sql};
 
 /// The sidecar as the build before `held_version` wrote it.
 fn old_bookkeeping_ddl(table: &str) -> String {
@@ -31,11 +32,8 @@ fn old_bookkeeping_ddl(table: &str) -> String {
 const T1: &str = "2369-04-10T00:00:00Z";
 const T2: &str = "2369-04-12T00:00:00Z";
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -99,13 +97,11 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had() {
         .await
         .unwrap();
     // The table an older build declared, and its record.
-    sqlx::query("CREATE TABLE IF NOT EXISTS sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)")
+    test_sql!("CREATE TABLE IF NOT EXISTS sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)").query()
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO sync_scope_config VALUES ('github:download', '{\"refresh_window_days\":30}', '2369-04-15T00:00:00Z', NULL)",
-    )
+    test_sql!("INSERT INTO sync_scope_config VALUES ('github:download', '{\"refresh_window_days\":30}', '2369-04-15T00:00:00Z', NULL)").query()
     .execute(&pool)
     .await
     .unwrap();
@@ -114,10 +110,11 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had() {
 
     let db = RawDb::open(&path).await.expect("the rung carries it");
     let pool = db.pool();
-    let held: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+    let held: Vec<(String, bool, Option<String>)> = test_sql!(
         "SELECT id, fetched_at_utc IS NOT NULL, held_version \
-         FROM pull_requests_bookkeeping ORDER BY id",
+         FROM pull_requests_bookkeeping ORDER BY id"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .unwrap();
@@ -132,7 +129,8 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had() {
         "a PR fetched whole is held at the updated_at its record carries; a stale one is not"
     );
     let listed: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, updated_at FROM listed_change_requests ORDER BY id")
+        test_sql!("SELECT id, updated_at FROM listed_change_requests ORDER BY id")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap();
@@ -161,7 +159,8 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had() {
     .collect();
     assert_eq!(owed, [key(2), key(3), key(4)]);
     let spans: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT scope, lo, hi FROM coverage ORDER BY scope")
+        test_sql!("SELECT scope, lo, hi FROM coverage ORDER BY scope")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap();
@@ -175,19 +174,26 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had() {
         "the cursor is the top of a span from the beginning of time"
     );
     assert_eq!(
-        strings(pool, "SELECT scope_key FROM problems ORDER BY scope_key").await,
+        strings(
+            pool,
+            test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        )
+        .await,
         [
             format!("pull_requests:{}", key(2)),
             format!("pull_requests:{}", key(3)),
         ],
         "what a cap left needs no row; what failed keeps its row"
     );
-    assert!(strings(pool, "SELECT scope FROM sync_scope_state")
-        .await
-        .is_empty());
-    let retired: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
+    assert!(
+        strings(pool, test_sql!("SELECT scope FROM sync_scope_state"))
+            .await
+            .is_empty()
+    );
+    let retired: i64 = test_sql!(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .unwrap();
@@ -195,7 +201,7 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had() {
     assert_eq!(
         strings(
             pool,
-            "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
         )
         .await,
         ["1"]

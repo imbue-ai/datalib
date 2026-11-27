@@ -17,7 +17,7 @@ use datalib_etl::progress::Progress;
 pub const RAW_GITHUB_BASE: &str =
     "https://raw.githubusercontent.com/PerseusDL/canonical-greekLit/refs/heads/master/data";
 
-/// Default fetch list when `sync.files` is empty/omitted: every
+/// Default fetch list when `github.files` is empty/omitted: every
 /// published edition/translation of Thucydides' Histories in
 /// PerseusDL's `tlg0003/tlg001/` tree, plus `__cts__.xml` (the CTS
 /// metadata the render path reads for human-readable edition
@@ -41,9 +41,9 @@ pub const DEFAULT_FILES: &[&str] = &[
 
 #[derive(Debug, Clone, Default)]
 pub struct FetchOptions {
-    /// Directory the basenames land in. Matches the source's
-    /// resolved `input_path` so Render finds them on the same
-    /// path on the next phase.
+    /// Directory the basenames land in: the source's ingest tree,
+    /// which the render step reads unless its `common.input_path`
+    /// names another.
     pub out_dir: PathBuf,
     /// Subpaths under `RAW_GITHUB_BASE`. Empty falls back to
     /// [`DEFAULT_FILES`].
@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn default_files_include_grc_eng_and_cts() {
-        // Spine-of-the-pipeline assertion: a default `sync: {}` block
+        // Spine-of-the-pipeline assertion: an empty `github` table
         // must fetch the Greek original, at least one English
         // translation, and the CTS metadata the render path reads
         // for edition titles.

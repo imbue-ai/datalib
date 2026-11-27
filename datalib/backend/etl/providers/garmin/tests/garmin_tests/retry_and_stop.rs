@@ -12,6 +12,7 @@ use datalib_etl::stop::StopFlag;
 use datalib_etl_garmin::ingest::daily_path;
 
 use crate::prune_gate::{status, Account, TODAY};
+use datalib_sql::test_sql;
 
 const DISPLAY_NAME: &str = "jean-luc.picard";
 
@@ -36,8 +37,10 @@ async fn a_failed_day_behind_the_resume_point_is_fetched_again_and_only_it() {
     assert_eq!(s2.errors, 0, "{}", s2.line());
     assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_daily WHERE id = 'sleep#2369-04-03'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_daily WHERE id = 'sleep#2369-04-03'"
+        ))
+        .await,
         1
     );
 
@@ -83,10 +86,10 @@ async fn the_default_window_stays_where_the_first_run_put_it() {
     assert_eq!(s2.errors, 0, "{}", s2.line());
     assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
     assert_eq!(
-        a.count(
+        a.count(test_sql!(
             "SELECT COUNT(*) FROM garmin_daily_bookkeeping \
              WHERE id = 'sleep#2369-04-03' AND last_error IS NULL AND fetched_at_utc IS NOT NULL"
-        )
+        ))
         .await,
         1,
         "the failed day was fetched again, not just forgotten"
@@ -187,28 +190,33 @@ async fn a_stop_is_no_problem_and_the_days_after_it_are_fetched_next_run() {
     assert_eq!(s.errors, 0, "{}", s.line());
     assert!(a.problems().await.is_empty(), "{:?}", a.problems().await);
     assert_eq!(
-        a.count(
+        a.count(test_sql!(
             "SELECT COUNT(*) FROM garmin_daily \
              WHERE metric = 'sleep' AND calendar_date <= '2369-04-04'"
-        )
+        ))
         .await,
         4,
         "the days fetched before the stop are stored"
     );
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_daily WHERE metric = 'sleep'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_daily WHERE metric = 'sleep'"
+        ))
+        .await,
         4,
         "and no day after it"
     );
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_daily WHERE metric = 'stress'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_daily WHERE metric = 'stress'"
+        ))
+        .await,
         0,
         "a metric after the stop is not walked"
     );
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_weigh_ins").await,
+        a.count(test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins"))
+            .await,
         0,
         "a phase after the stop is not started"
     );
@@ -217,8 +225,10 @@ async fn a_stop_is_no_problem_and_the_days_after_it_are_fetched_next_run() {
     assert_eq!(s.errors, 0, "{}", s.line());
     assert!(a.problems().await.is_empty());
     assert_eq!(
-        a.count("SELECT COUNT(*) FROM garmin_daily WHERE metric = 'sleep'")
-            .await,
+        a.count(test_sql!(
+            "SELECT COUNT(*) FROM garmin_daily WHERE metric = 'sleep'"
+        ))
+        .await,
         15
     );
 }
@@ -247,12 +257,12 @@ async fn a_changed_activity_whose_detail_refetch_fails_is_fetched_again() {
     assert_eq!((s3.errors, s3.activities_fetched), (0, 1), "{}", s3.line());
     assert_eq!(
         a.count(
-            "SELECT COUNT(*) FROM garmin_activity_details d \
+            test_sql!("SELECT COUNT(*) FROM garmin_activity_details d \
              JOIN garmin_activities a ON a.id = d.id \
              JOIN garmin_activity_details_bookkeeping b \
                ON b.id = d.id AND b.held_version = a.listing_hash \
              WHERE d.id = '17010413001' \
-               AND json_extract(json(d.payload), '$.activityName') = 'Holodeck run: Dixon Hill, again'"
+               AND json_extract(json(d.payload), '$.activityName') = 'Holodeck run: Dixon Hill, again'")
         )
         .await,
         1,
@@ -296,7 +306,11 @@ async fn a_widened_since_is_walked_once_though_one_day_keeps_failing() {
         "the listing reaches back to the new start: {}",
         s2.line()
     );
-    assert_eq!(a.count("SELECT COUNT(*) FROM garmin_weigh_ins").await, 4);
+    assert_eq!(
+        a.count(test_sql!("SELECT COUNT(*) FROM garmin_weigh_ins"))
+            .await,
+        4
+    );
 
     let s3 = a.run().await;
     assert_eq!(s3.errors, 1, "{}", s3.line());

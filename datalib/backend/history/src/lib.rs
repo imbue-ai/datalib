@@ -13,6 +13,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_pin::{head, is_missing_table, open_reader, Pin};
+use datalib_sql::{sql, sql_id, Sql};
 use serde::Serialize;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -105,10 +106,14 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
     };
 
     let mut log: BTreeMap<String, (String, String, String)> = BTreeMap::new();
-    for row in sqlx::query("SELECT commit_hash, committer, date, message FROM dolt_log()")
-        .fetch_all(pool)
-        .await
-        .context("dolt_log()")?
+    for row in sql!(
+        "history.list_commits",
+        "SELECT commit_hash, committer, date, message FROM dolt_log()"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("dolt_log()")?
     {
         log.insert(
             row.get("commit_hash"),
@@ -116,9 +121,11 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
         );
     }
     let mut parents: BTreeMap<String, String> = BTreeMap::new();
-    for row in sqlx::query(
-        "SELECT commit_hash, parent_hash FROM dolt_commit_ancestors WHERE parent_index = 0",
+    for row in sql!(
+        "history.list_first_parents",
+        "SELECT commit_hash, parent_hash FROM dolt_commit_ancestors WHERE parent_index = 0"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("dolt_commit_ancestors")?
@@ -188,9 +195,7 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
 /// Row count of every user table at the pinned commit. A table in
 /// `sqlite_master` that the commit does not have holds nothing there.
 async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i64>> {
-    let names: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%' ORDER BY name",
-    )
+    let names: Vec<String> = sql!("history.list_tables", "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite%' ORDER BY name").query_scalar()
     .fetch_all(pool)
     .await
     .context("sqlite_master")?;
@@ -199,11 +204,11 @@ async fn table_sizes(pool: &SqlitePool, pin: &Pin) -> Result<BTreeMap<String, i6
         // `Pin::table` quotes the name and splices a hash `Pin::at`
         // checked; there is nothing to bind in a table-valued function's
         // name.
-        let sql = format!("SELECT COUNT(*) FROM {}", pin.table(&name));
-        let rows: i64 = match sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-            .fetch_one(pool)
-            .await
-        {
+        let sql = Sql::dynamic(
+            sql_id!("history.count_table_rows"),
+            format!("SELECT COUNT(*) FROM {}", pin.table(&name)),
+        );
+        let rows: i64 = match sql.query_scalar().fetch_one(pool).await {
             Ok(n) => n,
             Err(e) if is_missing_table(&e, &name) => 0,
             Err(e) => return Err(e).with_context(|| format!("count {name} at {}", pin.commit())),
@@ -221,10 +226,12 @@ async fn table_changes(
     from: &str,
     to: &str,
 ) -> Result<BTreeMap<String, (i64, i64, i64)>> {
-    let changed: Vec<String> = sqlx::query(
+    let changed: Vec<String> = sql!(
+        "history.list_changed_tables",
         "SELECT from_table_name, to_table_name FROM dolt_diff_summary \
-          WHERE from_ref = ?1 AND to_ref = ?2 AND data_change = 1",
+          WHERE from_ref = ?1 AND to_ref = ?2 AND data_change = 1"
     )
+    .query()
     .bind(from)
     .bind(to)
     .fetch_all(pool)
@@ -243,9 +250,11 @@ async fn table_changes(
     .collect();
     let mut changes = BTreeMap::new();
     for table in changed {
-        let stat = sqlx::query(
-            "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?1, ?2, ?3)",
+        let stat = sql!(
+            "history.read_table_diff_stat",
+            "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?1, ?2, ?3)"
         )
+        .query()
         .bind(from)
         .bind(to)
         .bind(&table)
@@ -286,6 +295,7 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
+    use datalib_sql::{test_sql, Sql};
     async fn writer(path: &Path) -> SqlitePool {
         let opts = SqliteConnectOptions::from_str(&format!("sqlite://{}", path.display()))
             .unwrap()
@@ -300,17 +310,18 @@ mod tests {
     }
 
     async fn is_doltlite(pool: &SqlitePool) -> bool {
-        let n: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap();
+        let n: i64 =
+            test_sql!("SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'")
+                .query_scalar()
+                .fetch_one(pool)
+                .await
+                .unwrap();
         n > 0
     }
 
     async fn commit(pool: &SqlitePool, msg: &str) {
-        sqlx::query("SELECT dolt_commit('-Am', ?)")
+        test_sql!("SELECT dolt_commit('-Am', ?)")
+            .query()
             .bind(msg)
             .execute(pool)
             .await
@@ -335,36 +346,43 @@ mod tests {
         if !is_doltlite(&pool).await {
             return;
         }
-        sqlx::query("CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT)")
+        test_sql!("CREATE TABLE big (id INTEGER PRIMARY KEY, v TEXT)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE small (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE small (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         commit(&pool, "schema").await;
         for i in 0..5 {
-            sqlx::query("INSERT INTO big (id, v) VALUES (?, 'a')")
+            test_sql!("INSERT INTO big (id, v) VALUES (?, 'a')")
+                .query()
                 .bind(i)
                 .execute(&pool)
                 .await
                 .unwrap();
         }
-        sqlx::query("INSERT INTO small (id) VALUES (1)")
+        test_sql!("INSERT INTO small (id) VALUES (1)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         commit(&pool, "first load").await;
-        sqlx::query("DELETE FROM big WHERE id < 2")
+        test_sql!("DELETE FROM big WHERE id < 2")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("UPDATE big SET v = 'b' WHERE id = 4")
+        test_sql!("UPDATE big SET v = 'b' WHERE id = 4")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO big (id, v) VALUES (9, 'c')")
+        test_sql!("INSERT INTO big (id, v) VALUES (9, 'c')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -432,26 +450,31 @@ mod tests {
         if !is_doltlite(&pool).await {
             return;
         }
-        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO t (id) VALUES (1), (2)")
+        test_sql!("INSERT INTO t (id) VALUES (1), (2)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         commit(&pool, "two rows").await;
         // A sync in flight: three more rows and a new table, SQL-committed
         // but not doltlite-committed, with the writer still open.
-        sqlx::query("INSERT INTO t (id) VALUES (3), (4), (5)")
+        test_sql!("INSERT INTO t (id) VALUES (3), (4), (5)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE fresh (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE fresh (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO fresh (id) VALUES (1)")
+        test_sql!("INSERT INTO fresh (id) VALUES (1)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -476,12 +499,14 @@ mod tests {
         if !is_doltlite(&pool).await {
             return;
         }
-        sqlx::query("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         commit(&pool, "one").await;
-        sqlx::query("INSERT INTO t (id) VALUES (1)")
+        test_sql!("INSERT INTO t (id) VALUES (1)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -495,8 +520,8 @@ mod tests {
         assert_eq!(table(&h.commits[0], "t").rows, 1);
     }
 
-    async fn exec(pool: &SqlitePool, sql: &'static str) {
-        sqlx::query(sql).execute(pool).await.unwrap();
+    async fn exec(pool: &SqlitePool, sql: Sql) {
+        sql.query().execute(pool).await.unwrap();
     }
 
     /// Every table is listed, and each says whether it holds records:
@@ -509,16 +534,32 @@ mod tests {
         if !is_doltlite(&pool).await {
             return;
         }
-        exec(&pool, "CREATE TABLE contacts (id INTEGER PRIMARY KEY)").await;
         exec(
             &pool,
-            "CREATE TABLE contacts_bookkeeping (id INTEGER PRIMARY KEY)",
+            test_sql!("CREATE TABLE contacts (id INTEGER PRIMARY KEY)"),
         )
         .await;
-        exec(&pool, "CREATE TABLE ingested_files (path TEXT PRIMARY KEY)").await;
-        exec(&pool, "INSERT INTO contacts VALUES (1)").await;
-        exec(&pool, "INSERT INTO contacts_bookkeeping VALUES (1)").await;
-        exec(&pool, "INSERT INTO ingested_files VALUES ('x.vcf')").await;
+        exec(
+            &pool,
+            test_sql!("CREATE TABLE contacts_bookkeeping (id INTEGER PRIMARY KEY)"),
+        )
+        .await;
+        exec(
+            &pool,
+            test_sql!("CREATE TABLE ingested_files (path TEXT PRIMARY KEY)"),
+        )
+        .await;
+        exec(&pool, test_sql!("INSERT INTO contacts VALUES (1)")).await;
+        exec(
+            &pool,
+            test_sql!("INSERT INTO contacts_bookkeeping VALUES (1)"),
+        )
+        .await;
+        exec(
+            &pool,
+            test_sql!("INSERT INTO ingested_files VALUES ('x.vcf')"),
+        )
+        .await;
         commit(&pool, "load").await;
         pool.close().await;
 
@@ -543,21 +584,25 @@ mod tests {
         }
         exec(
             &pool,
-            "CREATE TABLE Adobe_AdditionalMetadata (id INTEGER PRIMARY KEY)",
+            test_sql!("CREATE TABLE Adobe_AdditionalMetadata (id INTEGER PRIMARY KEY)"),
         )
         .await;
         exec(
             &pool,
-            "CREATE TABLE \"odd \"\"name\"\"\" (id INTEGER PRIMARY KEY)",
+            test_sql!("CREATE TABLE \"odd \"\"name\"\"\" (id INTEGER PRIMARY KEY)"),
         )
         .await;
         commit(&pool, "schema").await;
         exec(
             &pool,
-            "INSERT INTO Adobe_AdditionalMetadata VALUES (1), (2)",
+            test_sql!("INSERT INTO Adobe_AdditionalMetadata VALUES (1), (2)"),
         )
         .await;
-        exec(&pool, "INSERT INTO \"odd \"\"name\"\"\" VALUES (1)").await;
+        exec(
+            &pool,
+            test_sql!("INSERT INTO \"odd \"\"name\"\"\" VALUES (1)"),
+        )
+        .await;
         commit(&pool, "load").await;
         pool.close().await;
 

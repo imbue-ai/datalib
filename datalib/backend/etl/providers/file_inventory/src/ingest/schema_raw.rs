@@ -192,7 +192,7 @@ pub fn full_ddl() -> Vec<String> {
         FILES_DDL.to_string(),
         DIRS_DDL.to_string(),
         SCAN_META_DDL.to_string(),
-        // When the root was last scanned is the row's bookkeeping, not
+        // When the root was first scanned is the row's bookkeeping, not
         // the row: the row says what the root is, and changes when that
         // does. The entry tables stay without a sidecar (see `db.rs`).
         datalib_etl::doltlite_raw::bookkeeping_ddl_for("scan_meta"),

@@ -10,6 +10,7 @@ use std::path::Path;
 use tower::ServiceExt;
 
 use crate::support::{state, TEST_TOKEN};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 pub(crate) const CONFIG: &str = r#"
 [[groups]]
@@ -36,16 +37,18 @@ pub(crate) async fn blob_store(tree: &Path, rows: &[(Option<&str>, &[u8])]) -> V
         )
         .await
         .unwrap();
-    sqlx::query(datalib_blob_store::CAS_OBJECTS_DDL)
+    Sql::ddl(test_sql_id!(), datalib_blob_store::CAS_OBJECTS_DDL)
+        .query()
         .execute(&pool)
         .await
         .unwrap();
     let mut hashes = Vec::new();
     for (content_type, bytes) in rows {
         let hash = blake3::hash(bytes).to_hex().to_string();
-        sqlx::query(
-            "INSERT INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES (?, ?, ?, ?)",
+        test_sql!(
+            "INSERT INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES (?, ?, ?, ?)"
         )
+        .query()
         .bind(&hash)
         .bind(bytes.len() as i64)
         .bind(content_type)

@@ -46,7 +46,7 @@ its vectors to the one cache in
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
 ├── <group>/render_markdown/        # per-source render store
 │   └── indexed_markdown.doltlite_db  #   its documents, rows, edges + render problems
-├── unified_grid_and_search_index/                  # derived; carries a CACHEDIR.TAG
+├── unified_grid_and_search_index/                  # derived; a sync rebuilds it
 │   ├── unified_grid_and_search_index/db.sqlite  # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
 │   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
 ├── datalib_curated/                # what a person curates, one directory per app; nothing rebuilds it
@@ -194,8 +194,9 @@ step's `PATH`, so a bare `command` like `datalib-step` resolves there;
 defaults to the config's `binary_dir`, else the directory
 `datalib-pipeline` itself is in). The other verbs that run steps are
 `reset <data_root> <step-id>…` (see **Resetting** below) and
-`free-disk-space` (see **Giving back disk** below); each is refused
-while the app is up. A sync that fails with "has a shape this build's
+`free-disk-space` (see **Giving back disk** below); like a sync, each
+is done by the app's loop when the app is up, and otherwise by one it
+runs itself. A sync that fails with "has a shape this build's
 DDL cannot be reached from by adding columns" is a raw store an older
 build wrote in a shape this one cannot keep; nothing was changed, and if
 upstream still has the data, `datalib-pipeline reset <data_root>
@@ -309,10 +310,11 @@ the step is stopped if it runs and emptied at once, and the request that
 carries the emptiness downstream is opened. It answers 204 once the
 store is empty, or 202 if the step had not stopped within ten seconds and
 is emptied once it has. The
-Manage screen's row menu offers the same. With no app up,
-`datalib-pipeline reset <data_root> slack/ingest` empties the store and
-nothing else; `datalib-pipeline sync <data_root> slack/ingest` then
-downloads it again.
+Manage screen's row menu offers the same, and so does
+`datalib-pipeline reset <data_root> slack/ingest`, with or without the
+app up: it waits until the store is emptied and what reads it has run.
+`datalib-pipeline sync <data_root> slack/ingest` then downloads it
+again.
 
 **Giving back disk.** A doltlite store never edits in place, so every
 sync leaves chunks behind that no commit reaches; a store that refills
@@ -330,7 +332,7 @@ loses their history, which nothing but the History card reads. The grid
 index is plain SQLite and is not touched.
 
 ```sh
-datalib-pipeline free-disk-space ~/datalib                      # app not running
+datalib-pipeline free-disk-space ~/datalib
 datalib-pipeline free-disk-space ~/datalib --drop-old-versions-on-derived-data
 ```
 
@@ -378,6 +380,53 @@ sqlite3 <data_root>/system/runs/runs.sqlite \
 `select run_id, step, state, attempt, error from step_runs where error
 is not null` lists the steps that failed. Every table and column is in
 [`docs/dev/logging.md`](dev/logging.md).
+
+## Before you answer from the copy
+
+The copy is only as good as what was synced into it, and an agent that
+answers from it without checking can be confidently wrong. Each time:
+
+1. **Search what is already there before syncing anything.** The person
+   may have mirrored the source already. An empty answer means nothing
+   matching is in the copy; it does not mean the service has no such
+   data. Check whether the source is configured at all (a `[[groups]]`
+   entry with its `type` in `<data_root>/config.toml`), and offer to
+   sync it.
+2. **A sync is over when its request ends, and not before.**
+   `datalib-pipeline sync` returns when its request closes, with its
+   outcome as the exit code; over HTTP, a request's `state` leaves
+   `open` (§ "Running a sync"). When the loop starts, it first runs a
+   pass of its own (a run of kind `migrate`) that asks each step to bring
+   what it stored up to date and downloads nothing; its steps end
+   `succeeded` within seconds, and that is not your sync finishing.
+3. **Check that the copy is complete.** A request that ended `failed`
+   left part of the copy unfinished, and one that ended `done` can still
+   hold records whose parts could not be read. Three checks, each of
+   which should come back empty before you build an answer on the copy:
+   - `datalib-pipeline status <config>`: a line `owed <step>  <n>` is work
+     a run saw waiting and did not get to.
+   - the source's `problems` table, which names each record a download
+     could not fetch or read whole ([reading the raw
+     stores](user/raw_stores.md) § "`problems`"):
+
+     ```sh
+     datalib-doltlite -readonly <data_root>/<source id>/ingest/entities.doltlite_db \
+       "SELECT severity, reason, scope_key, sample FROM problems WHERE severity IN ('error', 'warning')"
+     ```
+
+   - the source's own check for records it still owes, where it keeps
+     one, printed by `datalib-step help <type>` under "Is the copy
+     complete?".
+
+   When any is not empty, sync again first, and if the person has
+   already seen an answer, tell them what has changed.
+4. **Say what the copy covers.** Each source mirrors less than the whole
+   service by default (Slack: the channels the account is in, no DMs),
+   and some things it can never see. `datalib-step help <type>` lists
+   both under "Limitations". Say what the copy covers in your first
+   answer from it, or ask before the first sync when it would change the
+   answer. To ask a narrower question, query the copy; don't narrow the
+   copy with `since`, because anything older than `since` is never read.
 
 ## Reading the mirrored data
 

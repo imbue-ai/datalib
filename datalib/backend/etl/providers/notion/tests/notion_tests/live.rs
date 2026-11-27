@@ -14,6 +14,7 @@
 use datalib_etl_notion::ingest::{self as notion, FetchOptions};
 use datalib_etl_notion_render::render::parse_api_dir;
 use datalib_etl_render::inputs::RawRange;
+use datalib_sql::test_sql;
 use insta::assert_json_snapshot;
 use serde_json::json;
 
@@ -96,7 +97,8 @@ async fn notion_live_a_first_roots_sync_walks_down_from_the_root() {
         ..FetchOptions::new(db.clone())
     })
     .await;
-    let problems: Vec<String> = sqlx::query_scalar("SELECT scope_key FROM problems")
+    let problems: Vec<String> = test_sql!("SELECT scope_key FROM problems")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();

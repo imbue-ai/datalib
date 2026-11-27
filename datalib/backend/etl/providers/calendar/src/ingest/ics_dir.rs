@@ -17,7 +17,7 @@ use tracing::warn;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, IcsObjectRow};
-use super::{noting_how_it_ended, FetchSummary};
+use super::{recorded, FetchSummary};
 use crate::ical;
 
 pub struct FetchOptions {
@@ -34,8 +34,9 @@ const ACCOUNT_ID: &str = "ics";
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let config = serde_json::json!({"method": "ics", "path": opts.input_path});
     run_problems::collecting(&pool, &stop, |found| {
-        noting_how_it_ended(found.clone(), read_folder(opts, found))
+        recorded(found.clone(), &pool, &config, read_folder(opts, found))
     })
     .await
 }
@@ -260,6 +261,7 @@ fn relative(root: &Path, file: &Path) -> String {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     fn ics(uid: &str) -> String {
         format!(
             "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:{uid}\r\n\
@@ -310,21 +312,24 @@ mod tests {
         }
 
         async fn calendars(&self) -> Vec<String> {
-            sqlx::query_scalar("SELECT id FROM calendars ORDER BY id")
+            test_sql!("SELECT id FROM calendars ORDER BY id")
+                .query_scalar()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()
         }
 
         async fn problems(&self) -> Vec<(String, String)> {
-            sqlx::query_as("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+            test_sql!("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+                .query_as()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()
         }
 
         async fn uids(&self) -> Vec<String> {
-            sqlx::query_scalar("SELECT uid FROM ics_objects ORDER BY uid")
+            test_sql!("SELECT uid FROM ics_objects ORDER BY uid")
+                .query_scalar()
                 .fetch_all(self.db.pool())
                 .await
                 .unwrap()

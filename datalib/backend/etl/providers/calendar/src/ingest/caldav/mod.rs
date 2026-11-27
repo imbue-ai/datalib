@@ -19,7 +19,7 @@ use tracing::info;
 
 use super::db::RawDb;
 use super::schema_raw::{AccountRow, CalendarRow, IcsObjectRow};
-use super::{noting_how_it_ended, select_calendars, FetchSummary, Window};
+use super::{recorded, select_calendars, FetchSummary, Window};
 use crate::ical;
 use dav::{CalendarProps, Multistatus};
 
@@ -40,9 +40,18 @@ pub struct FetchOptions {
 
 pub async fn fetch(opts: FetchOptions) -> Result<FetchSummary> {
     let (pool, stop) = (opts.db.pool().clone(), opts.control.stop.clone());
+    let config = serde_json::json!({
+        "method": "caldav", "server_url": opts.server_url, "calendars": opts.calendars,
+        "window": opts.window
+    });
     let sealer = opts.sealer.clone();
     run_problems::collecting_sealed(&pool, &stop, sealer.as_ref(), |problems| {
-        noting_how_it_ended(problems.clone(), sync_account(opts, problems))
+        recorded(
+            problems.clone(),
+            &pool,
+            &config,
+            sync_account(opts, problems),
+        )
     })
     .await
 }

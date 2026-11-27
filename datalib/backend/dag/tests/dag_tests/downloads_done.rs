@@ -5,6 +5,7 @@
 //! That compares a step's stamps with the request's, so both must keep
 //! the same precision.
 
+use datalib_sql::{test_sql, Sql};
 use std::path::Path;
 use std::process::Command;
 
@@ -14,12 +15,14 @@ fn dag_bin() -> std::path::PathBuf {
 }
 
 /// The query the guide gives, for one request and one step.
-const DONE: &str = "
+const DONE: Sql = test_sql!(
+    "
   SELECT s.step, s.last_status
     FROM steps s, requests r
    WHERE r.id = ? AND s.step = ?
      AND s.last_started_at_utc > r.opened_at_utc
-     AND s.last_finished_at_utc >= s.last_started_at_utc";
+     AND s.last_finished_at_utc >= s.last_started_at_utc"
+);
 
 /// The step's stamps were cut to the second while the request's kept its
 /// microseconds, so a download that started in the second its request
@@ -49,18 +52,21 @@ async fn a_download_reads_as_done_for_the_request_that_ran_it() {
         ))
         .await
         .unwrap();
-    let request: String = sqlx::query_scalar("SELECT id FROM requests")
+    let request: String = test_sql!("SELECT id FROM requests")
+        .query_scalar()
         .fetch_one(&pool)
         .await
         .unwrap();
-    let done: Option<(String, String)> = sqlx::query_as(DONE)
+    let done: Option<(String, String)> = DONE
+        .query_as()
         .bind(&request)
         .bind("a/src")
         .fetch_optional(&pool)
         .await
         .unwrap();
     let stamps: Vec<(String, String)> =
-        sqlx::query_as("SELECT r.opened_at_utc, s.last_started_at_utc FROM requests r, steps s")
+        test_sql!("SELECT r.opened_at_utc, s.last_started_at_utc FROM requests r, steps s")
+            .query_as()
             .fetch_all(&pool)
             .await
             .unwrap();

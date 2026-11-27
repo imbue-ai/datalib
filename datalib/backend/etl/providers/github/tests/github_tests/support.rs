@@ -17,6 +17,7 @@ use datalib_etl_github::synthesize::GithubSynth;
 use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::{test_sql, Sql};
 use serde_json::{json, Map};
 
 pub const REPO: &str = "enterprise-d/holodeck";
@@ -91,9 +92,9 @@ pub async fn run(
     summary
 }
 
-pub async fn query(out: &Path, sql: &'static str) -> Vec<(String, String)> {
+pub async fn query(out: &Path, sql: Sql) -> Vec<(String, String)> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+    let rows = sql.query_as().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     rows
 }
@@ -101,20 +102,25 @@ pub async fn query(out: &Path, sql: &'static str) -> Vec<(String, String)> {
 pub async fn problems(out: &Path) -> Vec<(String, String)> {
     query(
         out,
-        "SELECT scope_key, severity FROM problems ORDER BY scope_key",
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key"),
     )
     .await
 }
 
 /// `(scope, hi)` of every span the searches have covered.
 pub async fn coverage(out: &Path) -> Vec<(String, String)> {
-    query(out, "SELECT scope, hi FROM coverage ORDER BY scope").await
+    query(
+        out,
+        test_sql!("SELECT scope, hi FROM coverage ORDER BY scope"),
+    )
+    .await
 }
 
 /// `(id, updated_at)` of every PR the searches have listed.
 pub async fn listed(out: &Path) -> Vec<(String, Option<String>)> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows = sqlx::query_as("SELECT id, updated_at FROM listed_change_requests ORDER BY id")
+    let rows = test_sql!("SELECT id, updated_at FROM listed_change_requests ORDER BY id")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap();

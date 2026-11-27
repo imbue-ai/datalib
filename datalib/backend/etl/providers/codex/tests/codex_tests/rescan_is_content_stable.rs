@@ -18,6 +18,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl_codex::ingest::{db_path_for, fetch, FetchOptions, RawDb};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_sql::test_sql;
 
 fn fixture_dir() -> PathBuf {
     if let Ok(d) = std::env::var("CODEX_FIXTURE_DIR") {
@@ -63,7 +64,8 @@ async fn a_second_scan_of_one_home_moves_no_content_table() {
     // Forget which files were read, so the second pass opens every one
     // of them again and rewrites every row from the same bytes.
     let db = RawDb::open(&db_path_for(&raw_path)).await.unwrap();
-    sqlx::query("DELETE FROM ingested_files")
+    test_sql!("DELETE FROM ingested_files")
+        .query()
         .execute(db.pool())
         .await
         .unwrap();
@@ -84,7 +86,8 @@ async fn a_second_scan_of_one_home_moves_no_content_table() {
     let changed = datalib_etl::doltlite_raw::content_tables_changed(db.pool(), &forgotten, &second)
         .await
         .unwrap();
-    let read_again: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ingested_files")
+    let read_again: i64 = test_sql!("SELECT COUNT(*) FROM ingested_files")
+        .query_scalar()
         .fetch_one(db.pool())
         .await
         .unwrap();

@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use datalib_dag::supervisor::announce::{Listener, UNANNOUNCED};
 use datalib_dag::supervisor::store::Store;
+use datalib_sql::test_sql;
 
 const N: usize = 150;
 
@@ -217,7 +218,8 @@ async fn a_listener_leaves_its_processs_write_lock_held() {
         datalib_runtime::plain_sqlite::uri(&datalib_runtime::layout::supervisor_db(root)),
     );
     let mut writer = sqlx::SqliteConnection::connect_with(&opts).await.unwrap();
-    sqlx::query("BEGIN IMMEDIATE")
+    test_sql!("BEGIN IMMEDIATE")
+        .query()
         .execute(&mut writer)
         .await
         .unwrap();
@@ -244,7 +246,11 @@ async fn a_listener_leaves_its_processs_write_lock_held() {
         "making a listener let the lock go"
     );
 
-    sqlx::query("ROLLBACK").execute(&mut writer).await.unwrap();
+    test_sql!("ROLLBACK")
+        .query()
+        .execute(&mut writer)
+        .await
+        .unwrap();
     writer.close().await.unwrap();
     store.close().await;
 }

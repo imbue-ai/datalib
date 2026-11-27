@@ -5,8 +5,10 @@
 # `//tests/fixtures:materialize_tng_root` script — the same script the
 # UI e2e test runs, so this command and the test stay byte-identical in
 # what they materialize; only the models differ (all three here, the
-# embedding model alone there), and this root adds the contacts app, so
-# a chip can be linked to a contact. The tmpdir is removed on exit.
+# embedding model alone there), and this root adds the contacts app with
+# Picard's curated contacts and mutes (tests/fixtures/curated/), so the
+# app opens with some people linked and many still to link. The tmpdir,
+# and every edit made in it, is removed on exit.
 #
 # Invoke via `bazelisk run //datalib:dev_tng`.
 
@@ -24,9 +26,12 @@ set -u
 MATERIALIZE="$(rlocation _main/tests/fixtures/materialize_tng_root)"
 SERVE_SH="$(rlocation _main/datalib/serve_dev.sh)"
 APPLET_BIN="$(rlocation _main/datalib/backend/applets/datalib_applet)"
+CURATED_CONTACTS="$(rlocation _main/tests/fixtures/curated/datalib_curated/datalib_contacts/contacts.doltlite_db)"
 [[ -x "$MATERIALIZE" ]] || { echo "ERROR: materialize_tng_root not found at $MATERIALIZE" >&2; exit 1; }
 [[ -x "$SERVE_SH" ]]    || { echo "ERROR: serve_dev.sh not found at $SERVE_SH" >&2; exit 1; }
 [[ -x "$APPLET_BIN" ]]  || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
+[[ -f "$CURATED_CONTACTS" ]] || { echo "ERROR: curated contacts not found at $CURATED_CONTACTS" >&2; exit 1; }
+CURATED="$(dirname "$(dirname "$CURATED_CONTACTS")")"
 
 ROOT="$(mktemp -d -t datalib-tng.XXXXXX)"
 trap 'rm -rf "$ROOT"' EXIT INT TERM
@@ -34,8 +39,17 @@ echo "TNG data root: $ROOT" >&2
 
 "$MATERIALIZE" "$ROOT" >/dev/null
 
-# The contacts app, as the e2e suite's `contacts` project adds it. Its
-# store starts empty and goes with the tmpdir.
+# The curated stores, laid over the root as
+# //datalib/backend/curated_overlay:tng_overlay_test lays them, which
+# checks they fit it. Writable copies: the runfiles are read-only.
+for store in "$CURATED"/*/*.doltlite_db; do
+  rel="${store#"$CURATED"/}"
+  mkdir -p "$ROOT/datalib_curated/$(dirname "$rel")"
+  cp -L "$store" "$ROOT/datalib_curated/$rel"
+  chmod u+w "$ROOT/datalib_curated/$rel"
+done
+
+# The contacts app, as the e2e suite's `contacts` project adds it.
 cat >> "$ROOT/config.toml" <<EOF
 
 [[applets]]

@@ -32,6 +32,7 @@ pub struct Doc {
 }
 
 pub const GETTING_YOUR_DATA: &str = "docs/user/getting_your_data.md";
+pub const RAW_STORES: &str = "docs/user/raw_stores.md";
 
 /// One applet, as `datalib-step help` lists it. `datalib-applet`'s tests
 /// hold this list to its subcommands.
@@ -101,8 +102,15 @@ pub const DOCS: &[Doc] = &[
         text: include_str!("../../../../docs/user/docker.md"),
     },
     Doc {
+        topic: "backing-up",
+        path: "docs/user/backing_up.md",
+        kind: Kind::Guide,
+        about: "backing up a library and putting it back: what to copy, and what a sync rebuilds",
+        text: include_str!("../../../../docs/user/backing_up.md"),
+    },
+    Doc {
         topic: "raw-stores",
-        path: "docs/user/raw_stores.md",
+        path: RAW_STORES,
         kind: Kind::Guide,
         about: "what each source's raw store holds, and how to read and follow it",
         text: include_str!("../../../../docs/user/raw_stores.md"),

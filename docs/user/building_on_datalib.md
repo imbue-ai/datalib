@@ -346,7 +346,8 @@ first either way, but a stage that ends gives your app a seal and a
 of guessing how far a long backfill has reached.
 
 This works for any source whose `since` backfills: Slack, Claude and
-ChatGPT, Gmail, Todoist and Garmin
+ChatGPT, Gmail, Todoist (its completed tasks only: open tasks, projects
+and comments always come whole) and Garmin
 ([config_model.md](../dev/config_model.md) § "Time windows"). A calendar
 is the exception: a windowed one is listed whole every run, and an event
 outside the window goes. The steps below use Gmail; for another source
@@ -704,8 +705,8 @@ service stops honouring the download's change token (Gmail's
 `historyId` has aged out, or a JMAP server answers
 `cannotCalculateChanges`), the next run lists the account again by
 itself. To start over on purpose, reset the source's ingest step: the
-app's Reset, `POST /api/reset`, or `datalib-pipeline reset <data_root> <source>/ingest`
-with no app up, then a sync of it. That empties the store and the sync
+app's Reset, `POST /api/reset`, or `datalib-pipeline reset <data_root> <source>/ingest`,
+then a sync of it. That empties the store and the sync
 downloads everything again.
 
 ## Your app's own writes

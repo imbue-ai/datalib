@@ -13,6 +13,7 @@ use datalib_etl_claude::ingest::schema_raw::{
 use datalib_etl_claude::ingest::{db, db_path_for, RawDb};
 use datalib_etl_web::owed::{self, Listed};
 use datalib_problems::Reason;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// The sidecar as the build before `held_version` wrote it.
 fn old_bookkeeping_ddl(table: &str) -> String {
@@ -24,11 +25,8 @@ fn old_bookkeeping_ddl(table: &str) -> String {
     )
 }
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 const T1: &str = "2369-01-01T00:00:00Z";
@@ -63,19 +61,21 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     // c-picard fetched, with one file landed, one claude.ai no longer
     // has and one that failed; c-riker never fetched. p-bridge's docs
     // were listed; p-holo's listing failed, so it has no marker.
-    sqlx::query(
+    test_sql!(
         "INSERT INTO conversations (id, org_uuid, updated_at, payload) \
-         VALUES ('c-picard', 'org-a', ?, jsonb('{}'))",
+         VALUES ('c-picard', 'org-a', ?, jsonb('{}'))"
     )
+    .query()
     .bind(T1)
     .execute(&pool)
     .await
     .unwrap();
     for project in ["p-bridge", "p-holo"] {
-        sqlx::query(
+        test_sql!(
             "INSERT INTO projects (id, org_uuid, updated_at, payload) \
-             VALUES (?, 'org-a', ?, jsonb('{}'))",
+             VALUES (?, 'org-a', ?, jsonb('{}'))"
         )
+        .query()
         .bind(project)
         .bind(T2)
         .execute(&pool)
@@ -87,10 +87,11 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
         ("f-lost", None),
         ("f-fail", None),
     ] {
-        sqlx::query(
+        test_sql!(
             "INSERT INTO claude_attachments (id, conversation_uuid, file_uuid, blake3) \
-             VALUES (?, 'c-picard', ?, ?)",
+             VALUES (?, 'c-picard', ?, ?)"
         )
+        .query()
         .bind(ConversationAttachmentRow::pk_recipe("c-picard", file))
         .bind(file)
         .bind(blake3)
@@ -192,15 +193,18 @@ async fn a_store_from_before_the_sidecar_held_anything_opens_holding_what_it_had
     // self-healing"): each listing is due once more, and the docs
     // listings stay held, as asserted above.
     assert!(
-        strings(pool, "SELECT scope FROM sync_scope_state ORDER BY scope")
-            .await
-            .is_empty(),
+        strings(
+            pool,
+            test_sql!("SELECT scope FROM sync_scope_state ORDER BY scope")
+        )
+        .await
+        .is_empty(),
         "the open that adds a table clears the sweep markers"
     );
     assert_eq!(
         strings(
             pool,
-            "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
         )
         .await,
         ["2"]
@@ -239,18 +243,20 @@ async fn cowork_events_keyed_by_id_open_keyed_by_session() {
     let ddl: Vec<&str> = ddl.iter().map(String::as_str).collect();
     let pool = dr::open(&path, &ddl).await.unwrap();
     for session in ["cse-picard", "cse-riker"] {
-        sqlx::query("INSERT INTO cowork_sessions (id, payload) VALUES (?, jsonb('{}'))")
+        test_sql!("INSERT INTO cowork_sessions (id, payload) VALUES (?, jsonb('{}'))")
+            .query()
             .bind(session)
             .execute(&pool)
             .await
             .unwrap();
     }
-    sqlx::query(
+    test_sql!(
         "INSERT INTO cowork_events (id, payload, session_id, sequence_num) VALUES \
          ('ev-9', jsonb('{\"text\": \"Engage.\"}'), 'cse-picard', 2), \
          ('ev-1', jsonb('{\"text\": \"Make it so.\"}'), 'cse-riker', 1), \
-         ('ev-3', jsonb('{\"text\": \"Set a course.\"}'), 'cse-picard', 1)",
+         ('ev-3', jsonb('{\"text\": \"Set a course.\"}'), 'cse-picard', 1)"
     )
+    .query()
     .execute(&pool)
     .await
     .unwrap();
@@ -268,8 +274,10 @@ async fn cowork_events_keyed_by_id_open_keyed_by_session() {
     assert_eq!(
         strings(
             pool,
-            "SELECT name || ':' || \"unique\" FROM pragma_index_list('cowork_events') \
-             WHERE origin = 'c' ORDER BY name",
+            test_sql!(
+                "SELECT name || ':' || \"unique\" FROM pragma_index_list('cowork_events') \
+             WHERE origin = 'c' ORDER BY name"
+            ),
         )
         .await,
         ["cowork_events_by_id:1"],
@@ -278,7 +286,7 @@ async fn cowork_events_keyed_by_id_open_keyed_by_session() {
     assert_eq!(
         strings(
             pool,
-            "SELECT session_id || '/' || id FROM cowork_events ORDER BY session_id, id"
+            test_sql!("SELECT session_id || '/' || id FROM cowork_events ORDER BY session_id, id")
         )
         .await,
         ["cse-picard/ev-3", "cse-picard/ev-9", "cse-riker/ev-1"]
@@ -301,8 +309,12 @@ async fn cowork_events_keyed_by_id_open_keyed_by_session() {
     assert_eq!(texts, ["Set a course.", "Engage."], "one log, in order");
 
     // Audited: a constant statement of the crate under test.
-    let explain = format!("EXPLAIN QUERY PLAN {}", db::LOAD_COWORK_EVENTS_SQL);
-    let plan: Vec<String> = sqlx::query(sqlx::AssertSqlSafe(explain))
+    let explain = Sql::dynamic(
+        test_sql_id!(),
+        format!("EXPLAIN QUERY PLAN {}", db::LOAD_COWORK_EVENTS_SQL),
+    );
+    let plan: Vec<String> = explain
+        .query()
         .bind("[]")
         .fetch_all(pool)
         .await
