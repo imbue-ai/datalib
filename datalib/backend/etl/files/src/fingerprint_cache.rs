@@ -395,7 +395,7 @@ impl FingerprintCache {
             return Ok(0);
         }
         let mut removed = 0u64;
-        let mut tx = self.pool.begin().await.context("begin forget tx")?;
+        let mut tx = self.pool.begin().await.context("begin the delete tx")?;
         for path in abs_paths {
             let r = sql!(
                 "etl.files.fingerprints.delete_by_path",
@@ -405,10 +405,10 @@ impl FingerprintCache {
             .bind(path)
             .execute(&mut *tx)
             .await
-            .context("forget fingerprint")?;
+            .context("delete fingerprint")?;
             removed += r.rows_affected();
         }
-        tx.commit().await.context("commit forget tx")?;
+        tx.commit().await.context("commit the delete tx")?;
         Ok(removed)
     }
 

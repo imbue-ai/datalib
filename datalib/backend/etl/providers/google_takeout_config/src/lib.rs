@@ -27,8 +27,8 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GoogleTakeoutConfig {
-    /// Shared per-source envelope (paths + cross-source tunables), resolved by
-    /// the orchestrator's `normalize()`.
+    /// Settings every download takes: the attachment size limit, when
+    /// to give up, the JSONL tape, and whether to download at all.
     #[serde(default)]
     pub common: SourceCommon,
     #[serde(default)]

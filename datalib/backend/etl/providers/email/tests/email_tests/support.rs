@@ -21,7 +21,6 @@ use datalib_etl_email::ingest::{db_path_for, RawDb};
 use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture};
-use datalib_obs::diagnostics::Diagnostics;
 use datalib_sql::test_sql;
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -107,7 +106,6 @@ impl Mirror {
             &progress,
             &control,
             DownloadMetrics::new(),
-            Diagnostics::new(),
         );
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
         let run = ctx.run_store(pool, Some(cas_pool), |sealer| async move {

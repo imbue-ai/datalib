@@ -19,7 +19,6 @@ use datalib_etl_slack::recorded::{
 };
 use datalib_etl_web::interrupt::{run, How};
 use datalib_etl_web::playback;
-use datalib_obs::diagnostics::Diagnostics;
 use serde_json::{json, Value};
 
 use crate::every_cut::ts;
@@ -121,7 +120,6 @@ async fn download(dir: &Path, at: Option<u64>) -> u64 {
         &progress,
         &control,
         DownloadMetrics::new(),
-        Diagnostics::new(),
     );
     let sealing = ctx.run_store(db.pool().clone(), None, |sealer| {
         let opts = FetchOptions {

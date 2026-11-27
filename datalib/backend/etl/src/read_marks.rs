@@ -98,7 +98,7 @@ pub async fn delete(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<
     .bind(ids)
     .execute(&mut **tx)
     .await
-    .context("forget read_marks")?;
+    .context("delete read_marks")?;
     Ok(())
 }
 

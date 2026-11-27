@@ -139,7 +139,7 @@ pub async fn unmember_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) ->
         .bind(id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget the thread of message {id}"))?;
+        .with_context(|| format!("delete the thread of message {id}"))?;
     }
     Ok(())
 }
@@ -630,7 +630,7 @@ pub async fn start_over(
     .query()
     .execute(&mut *tx)
     .await
-    .context("forget which scopes were listed whole")?;
+    .context("delete which scopes were listed whole")?;
     match token {
         Some(token) => save_token_in_tx(&mut tx, token_scope, token).await?,
         None => {
@@ -642,7 +642,7 @@ pub async fn start_over(
             .bind(token_scope)
             .execute(&mut *tx)
             .await
-            .context("forget the token")?;
+            .context("delete the token")?;
         }
     }
     if refetch {
@@ -689,7 +689,7 @@ pub async fn scopes_owed(pool: &SqlitePool, admitted: &BTreeSet<String>) -> Resu
         .bind(scope)
         .execute(pool)
         .await
-        .with_context(|| format!("forget scope {scope}"))?;
+        .with_context(|| format!("delete scope {scope}"))?;
     }
     Ok(admitted
         .iter()

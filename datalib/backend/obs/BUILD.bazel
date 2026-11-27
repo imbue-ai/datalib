@@ -26,7 +26,6 @@ rust_library(
         "@datalib_crates//:opentelemetry",
         "@datalib_crates//:opentelemetry-otlp",
         "@datalib_crates//:opentelemetry_sdk",
-        "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
         "@datalib_crates//:tracing-indicatif",
         "@datalib_crates//:tracing-opentelemetry",

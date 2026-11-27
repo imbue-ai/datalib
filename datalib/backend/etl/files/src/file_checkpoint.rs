@@ -129,7 +129,7 @@ pub async fn delete_file_stamp(
     .bind(rel)
     .execute(&mut **tx)
     .await
-    .with_context(|| format!("forget ingested_files {scope}={rel}"))?;
+    .with_context(|| format!("delete ingested_files {scope}={rel}"))?;
     Ok(())
 }
 

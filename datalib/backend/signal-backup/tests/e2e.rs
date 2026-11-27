@@ -1,8 +1,7 @@
-//! End-to-end test against a real Signal backup. Skipped silently if
-//! `SIGNAL_BACKUP_AEP` or `SIGNAL_BACKUP_SNAPSHOT` aren't in the env,
-//! so `bazel test //...` stays green for everyone. Under Bazel this
-//! test is also `tags = ["manual"]`, so that `//...` does not run it
-//! without the env set.
+//! End-to-end test against a real Signal backup. It fails unless
+//! `SIGNAL_BACKUP_AEP` and `SIGNAL_BACKUP_SNAPSHOT` are both set. Under
+//! Bazel the target is `tags = ["manual"]`, so `bazel test //...` leaves it
+//! out and it runs only when named.
 
 // Tests print diagnostics to stderr for the manual `bazel test
 // --test_output=streamed` flow; the workspace's library-level lint
@@ -20,10 +19,12 @@ fn open_real_snapshot_and_decrypt_one_attachment() {
         std::env::var("SIGNAL_BACKUP_SNAPSHOT").ok(),
     ) {
         (Some(a), Some(s)) if !a.is_empty() && !s.is_empty() => (a, s),
-        _ => {
-            eprintln!("SIGNAL_BACKUP_{{AEP,SNAPSHOT}} not set — skipping e2e");
-            return;
-        }
+        _ => panic!(
+            "this test reads a real Signal backup: set SIGNAL_BACKUP_AEP to the \
+             backup's AEP and SIGNAL_BACKUP_SNAPSHOT to the snapshot's path, e.g. \
+             bazelisk test //datalib/backend/signal-backup:signal_backup_e2e \
+             --test_env=SIGNAL_BACKUP_AEP=... --test_env=SIGNAL_BACKUP_SNAPSHOT=..."
+        ),
     };
     let snapshot_path = Path::new(&snapshot);
     let snap = Snapshot::open(snapshot_path, &aep).expect("open snapshot");

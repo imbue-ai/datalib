@@ -193,8 +193,8 @@ impl AppRepo for AppStore {
             .map_err(|e| RepoError::Internal(format!("commit disk_usage: {e}")))
     }
 
-    async fn forget_disk_stats_before(&self, before_utc: &str) -> Result<u64, RepoError> {
-        let internal = |e: sqlx::Error| RepoError::Internal(format!("forget disk stats: {e}"));
+    async fn delete_disk_stats_before(&self, before_utc: &str) -> Result<u64, RepoError> {
+        let internal = |e: sqlx::Error| RepoError::Internal(format!("delete disk stats: {e}"));
         let mut tx = self.disk_stats_pool.begin().await.map_err(internal)?;
         // A row before the cutoff goes only when a later row of its series
         // is also at or before it. That later one is the series' value from
@@ -404,7 +404,7 @@ impl AppRepo for AppStore {
         if done.rows_affected() == 0 {
             return Ok(false);
         }
-        let msg = format!("remote media: forget {allow_uuid}");
+        let msg = format!("remote media: remove allow rule {allow_uuid}");
         self.commit_version(&mut conn, &msg).await?;
         Ok(true)
     }
@@ -691,7 +691,7 @@ mod tests {
         }
 
         let gone = store
-            .forget_disk_stats_before("2026-09-01T00:00:00.000000+00:00")
+            .delete_disk_stats_before("2026-09-01T00:00:00.000000+00:00")
             .await
             .unwrap();
         assert_eq!(gone, 4);
@@ -723,7 +723,7 @@ mod tests {
         assert_eq!(free, [30, 40]);
 
         let again = store
-            .forget_disk_stats_before("2026-09-01T00:00:00.000000+00:00")
+            .delete_disk_stats_before("2026-09-01T00:00:00.000000+00:00")
             .await
             .unwrap();
         assert_eq!(again, 0, "a second pass over the same cutoff drops nothing");
@@ -750,7 +750,7 @@ mod tests {
             .await
             .unwrap();
             recording.take();
-            assert_eq!(store.forget_disk_stats_before(CUTOFF).await.unwrap(), 0);
+            assert_eq!(store.delete_disk_stats_before(CUTOFF).await.unwrap(), 0);
             assert_eq!(store.recent_disk_usage(50).await.unwrap().len(), 50);
             let ran: Vec<_> = recording
                 .take()

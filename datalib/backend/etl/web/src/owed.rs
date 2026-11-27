@@ -178,7 +178,7 @@ pub async fn delete_gone(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &st
         .bind(key)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget {table}={key}"))?;
+        .with_context(|| format!("delete {table}={key}"))?;
     datalib_etl::prune::delete_record_problems_in_tx(tx, table, key).await
 }
 

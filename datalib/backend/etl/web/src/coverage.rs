@@ -190,7 +190,7 @@ pub async fn delete_spans(tx: &mut Transaction<'_, Sqlite>, scope: &str) -> Resu
     .bind(scope)
     .execute(&mut **tx)
     .await
-    .with_context(|| format!("forget the coverage of {scope}"))?;
+    .with_context(|| format!("delete the coverage of {scope}"))?;
     Ok(())
 }
 

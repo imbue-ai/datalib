@@ -31,8 +31,7 @@ impl Default for EventTapeConfig {
 
 /// The shared tunables every source carries, composed (not flattened) into each
 /// provider's `*-config` crate as `common:`. After `resolve_paths()`
-/// [`Self::raw_path`] is always `Some` (absolute), and the knobs have the
-/// global [`Defaults`] folded in. Where a file-backed source reads *from*
+/// [`Self::raw_path`] is always `Some` (absolute). Where a file-backed source reads *from*
 /// is not here: that is the `path` of the method table that reads it
 /// (`[steps.params.export] path = …`), declared per provider. Strict: a
 /// misspelled knob is refused, not ignored.
@@ -80,34 +79,7 @@ impl Default for SourceCommon {
     }
 }
 
-/// Global base values for the propagatable [`SourceCommon`] knobs — the
-/// top-level `defaults:` block. Pure authoring sugar: `normalize()` folds these
-/// into every source's `common`, after which this block is spent and never read
-/// again. Note it carries no paths (those derive from `data_root`/`name`, not
-/// from a default).
-#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct Defaults {
-    #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
-    #[schemars(with = "Option<byte_size::ByteSize>")]
-    pub blob_size_limit_bytes: Option<u64>,
-    #[serde(default, alias = "extract_params")]
-    pub download_params: DownloadParams,
-    #[serde(default)]
-    pub event_tape: Option<EventTapeConfig>,
-}
-
 impl SourceCommon {
-    /// Fold the global [`Defaults`] base under this source's own values: the
-    /// source's `Some`/explicit value wins, an absent value falls through to
-    /// the default. Idempotent; run once in `normalize()`.
-    pub fn fold_defaults(&mut self, d: &Defaults) {
-        self.blob_size_limit_bytes = self.blob_size_limit_bytes.or(d.blob_size_limit_bytes);
-        // `merge(base, source)` lets the source win field-by-field.
-        self.download_params = d.download_params.merge(&self.download_params);
-        self.event_tape = self.event_tape.take().or_else(|| d.event_tape.clone());
-    }
-
     /// Fills [`Self::raw_path`] with the tree the ingest step writes,
     /// `<data_root>/<group>/ingest`. Run once, before anything reads it.
     pub fn resolve_paths(&mut self, raw: PathBuf) {
@@ -153,7 +125,7 @@ impl LatchkeySettings {
     }
 }
 
-/// The slim per-source envelope for the **render** wave. Render's only
+/// The slim per-source envelope for the **render** step. Render's only
 /// shared tunables are where the raw store lives ([`Self::raw_path`])
 /// and — for file-tree-backed sources like perseus that render straight
 /// from a staged tree — [`Self::input_path`]. Download-side knobs
@@ -562,47 +534,7 @@ mod tests {
         assert!(!p.w.keeps());
     }
 
-    #[test]
-    fn fold_defaults_source_wins_then_global_then_builtin() {
-        let defaults = Defaults {
-            blob_size_limit_bytes: Some(5_000_000),
-            download_params: DownloadParams {
-                maximum_time_without_progress_in_minutes: Some(30),
-                maximum_sequential_failed_requests: Some(50),
-                maximum_requests_at_once: Some(4),
-            },
-            event_tape: None,
-        };
-
-        // Source overrides one download knob + blob cap; the rest fall through.
-        let mut common = SourceCommon {
-            blob_size_limit_bytes: Some(1_000_000),
-            download_params: DownloadParams {
-                maximum_time_without_progress_in_minutes: None,
-                maximum_sequential_failed_requests: Some(100),
-                maximum_requests_at_once: None,
-            },
-            ..Default::default()
-        };
-        common.fold_defaults(&defaults);
-
-        assert_eq!(common.blob_size_limit_bytes, Some(1_000_000)); // source wins
-        assert_eq!(
-            common
-                .download_params
-                .maximum_time_without_progress_in_minutes,
-            Some(30) // fell through to global
-        );
-        assert_eq!(
-            common.download_params.maximum_sequential_failed_requests,
-            Some(100) // source wins
-        );
-        assert_eq!(common.download_params.max_requests_at_once(), 4); // global
-        assert!(!common.event_tape_enabled()); // None → off
-    }
-
-    /// An unset tape is off; a config that says what it wants, on the
-    /// source or in the defaults, gets it.
+    /// An unset tape is off; a config that says what it wants gets it.
     #[test]
     fn the_event_tape_is_off_unless_a_config_asks_for_it() {
         let parse = |json: &str| -> SourceCommon { serde_json::from_str(json).unwrap() };
@@ -610,13 +542,6 @@ mod tests {
         assert!(parse(r#"{"event_tape": {"enabled": true}}"#).event_tape_enabled());
         assert!(parse(r#"{"event_tape": {}}"#).event_tape_enabled());
         assert!(!parse(r#"{"event_tape": {"enabled": false}}"#).event_tape_enabled());
-
-        let mut from_defaults = SourceCommon::default();
-        from_defaults.fold_defaults(&Defaults {
-            event_tape: Some(EventTapeConfig { enabled: true }),
-            ..Default::default()
-        });
-        assert!(from_defaults.event_tape_enabled());
     }
 
     #[test]
