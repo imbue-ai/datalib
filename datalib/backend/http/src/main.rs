@@ -148,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
     }
     datalib_http::connect::log_latchkey_setup();
 
-    // Minted before the announcement below because the announced URL
+    // Minted before the URL is written out below, because the URL
     // carries it: the browser (and the Tauri webview) authenticate by
     // loading `<url>?token=…` once, then ride the session cookie.
     let api_token = ApiToken::mint(&root)?;
@@ -184,14 +184,14 @@ async fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Announce the bound URL to a waiting parent process as soon as it
-    // is known — before the (potentially slow) backend assembly below,
+    // Write the bound URL to `--url-file` or stdout, for a waiting parent
+    // process, as soon as it is known — before the (potentially slow) backend assembly below,
     // so the parent can point a webview/browser at it and let requests
     // queue in the listen backlog until `axum::serve` starts.
     if let Some(url_file) = &args.url_file {
         std::fs::write(url_file, &url)
             .map_err(|e| anyhow::anyhow!("write --url-file {}: {e}", url_file.display()))?;
-        // The URL now carries the API token, and this file usually
+        // The URL carries the API token, and this file usually
         // lands in a shared /tmp. Same 0600 the token file gets.
         datalib_http::auth::restrict_to_owner(url_file)?;
     }

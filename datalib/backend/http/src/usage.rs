@@ -39,7 +39,7 @@ use crate::watch::{RootEvent, RootFrame, Table};
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The floor on the spacing between two recorded samples of one series.
-/// Equal to [`SAMPLE_INTERVAL`] today, so in practice every changed
+/// Equal to [`SAMPLE_INTERVAL`], so in practice every changed
 /// measurement is recorded; it is stated separately because it is a
 /// rule about the *timeseries*, not about how often we happen to look.
 pub const MIN_SAMPLE_GAP: Duration = Duration::from_secs(5);

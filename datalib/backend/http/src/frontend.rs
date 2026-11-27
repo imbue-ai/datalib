@@ -12,7 +12,8 @@ pub fn frontend_dir(data_root: &Path) -> PathBuf {
 }
 
 /// The namespace holding components the app itself never regenerates.
-/// A refresh wipes every *other* namespace directory, so this name is
+/// A refresh deletes the *other* namespace directories no configured
+/// applet names, so this name is
 /// refused to applets at config load
 /// ([`datalib_dag::config::RESERVED_APPLET_ID`]).
 pub const USER_NAMESPACE: &str = "user";

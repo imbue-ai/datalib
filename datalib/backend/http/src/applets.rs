@@ -6,7 +6,7 @@
 //! and owes three things in that order: write its components, bind a port,
 //! then print `DATALIB_APPLET_PORT=<port>` to stdout. The gateway waits for
 //! that line and only then scans the store, so **the line is the signal that
-//! the write finished** — announcing first would race the scan.
+//! the write finished** — printing it first would race the scan.
 //!
 //! The port travels child→gateway because that is the only spelling that ties
 //! readiness to *this* child: picking one here means binding it, dropping it,
@@ -130,7 +130,7 @@ fn frontend_root(data_root: &Path) -> anyhow::Result<PathBuf> {
     std::fs::create_dir_all(&root)
         .map_err(|e| anyhow::anyhow!("create {}: {e}", root.display()))?;
     // `user/` below is what a person or an agent wrote, so nothing here
-    // may tell a backup to skip it; an earlier build did.
+    // may tell a backup to skip it.
     datalib_core::layout::unmark_cache(&root)
         .map_err(|e| anyhow::anyhow!("remove the cache tag in {}: {e}", root.display()))?;
     Ok(root)
@@ -249,8 +249,8 @@ fn mint_secret() -> String {
 }
 
 struct RegistryState {
-    /// The applet list as of the last start — the record a config
-    /// reload diffs against to decide what has to restart.
+    /// The applet list as of the last start — what a config reload
+    /// diffs against to decide what has to restart.
     entries: Vec<AppletEntry>,
     /// The directory the last start resolved commands against. Kept
     /// alongside `entries` because it is half of what an entry means:
@@ -269,7 +269,7 @@ struct RegistryState {
     /// the config stamp because the two trigger different work: a
     /// config change re-runs every applet, while a file appearing in
     /// the store only needs a rescan. Conflating them would make a
-    /// `PUT /api/lib` wipe and rewrite every applet namespace.
+    /// `PUT /api/lib` delete and rewrite every applet namespace.
     store_stamp: crate::frontend::StoreStamp,
 }
 
@@ -354,10 +354,10 @@ impl AppletRegistry {
         Self::from_data_root_bounded(data_root, binary_dir, START_TIMEOUT)
     }
 
-    /// [`from_data_root`](Self::from_data_root) with the start bound
-    /// named. A test that drives an applet which never announces should
-    /// pass a short one: the production bound is 20s, and waiting it out
-    /// proves nothing the short one does not.
+    /// [`from_data_root`](Self::from_data_root) with the start bound named.
+    /// A test that drives an applet which never prints its port should pass
+    /// a short one: the production bound is 20s, and waiting it out proves
+    /// nothing the short one does not.
     pub fn from_data_root_bounded(
         data_root: &Path,
         binary_dir: Option<PathBuf>,
@@ -488,7 +488,7 @@ impl AppletRegistry {
                 return Err(ProxyError::Failed(format!("applet {id:?}: {why}")));
             }
             // Not in the list. That has two very different causes, and
-            // they used to produce the same message: the applet really
+            // they must not produce the same message: the applet really
             // isn't configured, or the config could not be read at all
             // — which yields an empty list and so reports every applet
             // as missing. Saying "no applet \"unified_grid_and_search_index\"" when the
@@ -817,7 +817,7 @@ impl Supervisor {
 
         let port = match ready.recv_timeout(self.start_timeout) {
             Ok(Some(port)) => port,
-            // `None` is EOF with nothing announced — the applet
+            // `None` is EOF with no port line printed — the applet
             // exited, or closed stdout, before it was ready. Either
             // way it is not something this gateway can proxy to.
             // `Err` is the timeout, or the reader thread going away.
@@ -950,8 +950,13 @@ impl Drop for Supervisor {
     }
 }
 
-// `Drop` alone was never enough, and the two gaps needed different
-// answers (#238):
+// `Drop` alone does not stop the applets in two cases, each with its
+// own answer (#238):
+//
+// 1. a signal that ends the process without unwinding: the shutdown
+//    handler in `main` stops them;
+// 2. SIGKILL, which runs no code: each applet's stdin is a liveness
+//    pipe the kernel closes (see the spawn above).
 
 // The proxy
 
@@ -1467,7 +1472,7 @@ mod tests {
 
     /// A running applet's memory is read from its whole process tree:
     /// the shell here holds a megabyte or two, the `dd` below it a 64 MiB
-    /// buffer. Stopping the applet forgets its reading.
+    /// buffer. Stopping the applet drops its reading.
     #[cfg(unix)]
     #[test]
     fn a_running_applets_memory_counts_what_it_spawned() {

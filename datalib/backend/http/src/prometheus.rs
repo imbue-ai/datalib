@@ -554,8 +554,8 @@ mod tests {
         }
     }
 
-    /// The disk the root lives on, and the floor the loop holds steps
-    /// under, so an alert can fire before syncs stop rather than after.
+    /// The disk the root lives on, and the floor under which the loop
+    /// starts no step, so an alert can fire before syncs stop rather than after.
     #[test]
     fn the_disk_and_its_floor_are_gauges() {
         let text = scrape(&[]);

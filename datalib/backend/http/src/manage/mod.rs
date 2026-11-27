@@ -3,8 +3,8 @@
 //! under it — plus one for `system/`, which no config names but which
 //! is on disk like the rest; with the status, timestamps, sizes and
 //! actions the screen draws, joined here from the config, the loop's
-//! `steps` and `requests` tables, the run store, the usage sampler and the applet
-//! supervisor, and typed by the columns the response declares.
+//! `steps` and `requests` tables, the run store, the usage sampler and
+//! the applet supervisor, and typed by the columns the response declares.
 //! What stays in the browser is what needs the wizard's descriptors:
 //! whether the form can edit a row, what Browse opens, and an ingest
 //! step's Download/Import label.
@@ -261,9 +261,8 @@ pub struct ManageResponse {
     pub storage: RootStorage,
     pub rows: Vec<ManageRow>,
     /// Why no sync can be opened from this screen right now, when one
-    /// cannot: the launch is updating the stores for this build, or the
-    /// runner is missing or keeps stopping. Every row's Sync says the
-    /// same.
+    /// cannot: the runner is missing or keeps stopping. Every row's Sync
+    /// says the same.
     pub sync_paused: Option<String>,
 }
 
