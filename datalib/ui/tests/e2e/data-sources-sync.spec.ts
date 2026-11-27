@@ -331,6 +331,14 @@ ${applets()}`;
     expect(await statusOf(page, TAPED_UP), "the download finished while its tape was held").toBe(
       "Running",
     );
+    // The group's own row names the step it is running and how many of
+    // the two steps this sync reaches are done.
+    await expect
+      .poll(() => statusOf(page, `group:${TAPED}`), {
+        timeout: 10_000,
+        message: `${TAPED}'s row never named its running step`,
+      })
+      .toBe("Running: Download · 0/2 complete");
 
     release();
     // `untilRowFinishesNewRun`, not `untilRowFinishesAndSyncIdle`: the
