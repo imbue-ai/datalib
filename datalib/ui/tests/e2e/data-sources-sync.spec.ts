@@ -673,18 +673,16 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
     const dialog = shownCards(page).filter({ has: page.locator(".rl-panel") });
     await expect(dialog).toBeVisible();
     await expect(dialog.locator(".ct-card-title")).toHaveText("Log · flaky/ingest");
-    // Opened on the step's attempt — a process of the run, with how it
-    // ended in its name — and on the whole of it: the step's own words
-    // and the runner's about it.
-    const which = dialog.getByLabel("Which process of the run");
-    await expect(which.locator("option:checked")).toHaveText(
-      /^flaky\/ingest · attempt 1 · exited 1$/,
-    );
+    // Opened on the step's invocation in the sync — with how it ended in
+    // its name — and on the whole of it: the step's own words and the
+    // runner's about it.
+    const which = dialog.getByLabel("Which invocation of the run");
+    await expect(which.locator("option:checked")).toHaveText(/^flaky\/ingest · .+ · failed$/);
     // The pickers write what they pick into the query, which is the
     // whole of what the panel shows.
     await expect(dialog.locator(".rl-search")).toHaveAttribute(
       "data-query",
-      /(^| )run:\S+ step:flaky\/ingest attempt:1$/,
+      /(^| )run:\S+ invocation:\S+$/,
     );
     // The line the panel opened on is the runner's word on how the step
     // ended, marked, with the step's own last words above it.

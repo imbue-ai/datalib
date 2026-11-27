@@ -258,11 +258,11 @@ test("the grid menu puts back a column the log starts without", async ({ page })
   ]);
 
   await dialog.locator(".slick-grid-menu-button").click();
-  // The picker lists the hidden six as well, each with its box clear.
+  // The picker lists the hidden seven as well, each with its box clear.
   const picker = page.locator(".slick-grid-menu .slick-column-picker-list").filter({
     hasText: "Thread",
   });
-  for (const name of ["Run", "Process", "Commit", "Group", "Thread", "Target"]) {
+  for (const name of ["Invocation", "Run", "Process", "Commit", "Group", "Thread", "Target"]) {
     await expect(picker.getByLabel(name, { exact: true })).not.toBeChecked();
   }
   await expect(picker.getByLabel("Time", { exact: true })).toBeChecked();

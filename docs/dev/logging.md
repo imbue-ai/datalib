@@ -339,8 +339,9 @@ log goes into a public issue, the person reads it first.
 where a run is a request or a job (or a run an older build recorded).
 **Logs** in the status bar opens it on everything (the picker holds the
 runs, the runner, this server's launch and earlier ones, and the pages
-of the app); with a run picked, a second picker holds the processes of
-its invocations.
+of the app); with a run picked, a second picker holds its invocations
+(an older build's run: its processes), and a source's Sync tab lists
+each step's invocations in the run it shows.
 On the Manage screen, **Show step log** on a step's menu opens its
 newest invocation in the run it served, as does a double-click on a
 Failed row. A double-click,
