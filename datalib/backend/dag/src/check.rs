@@ -24,13 +24,13 @@ const AT_ONCE: usize = 8;
 
 /// What a step's `--check` process reported.
 #[derive(Debug, PartialEq)]
-enum Answer {
+enum CheckResult {
     /// It would run its params as written, warning about these.
     Accepted(Vec<String>),
     /// It would refuse them, saying why.
     Refused(String),
     /// It did not exit within [`TIMEOUT`], or could not be started.
-    Unanswered(String),
+    NoResult(String),
 }
 
 /// What every step of `checked` whose program takes `--check` says of its
@@ -44,14 +44,14 @@ pub async fn check_params(
     data_root: &Path,
     binary_dir: Option<&Path>,
 ) -> Vec<Diagnostic> {
-    let asked: Vec<String> = checked
+    let checked_steps: Vec<String> = checked
         .graph
         .steps
         .iter()
         .filter(|s| s.verbs.contains(&Verb::Check))
         .map(|s| s.id.to_string())
         .collect();
-    if asked.is_empty() {
+    if checked_steps.is_empty() {
         return Vec::new();
     }
     let now = datalib_time::IsoOffsetTimestamp::now_local().to_string();
@@ -68,18 +68,18 @@ pub async fn check_params(
     let runner = Runner::new(data_root).child_env(env.vars);
     // Collected first: a stream over a closure that borrows is not one an
     // axum handler's future can hold.
-    let mut asks = Vec::new();
-    for step in &asked {
-        asks.push(ask(&runner, &checked.graph, step));
+    let mut checks = Vec::new();
+    for step in &checked_steps {
+        checks.push(run_check(&runner, &checked.graph, step));
     }
-    let mut answers: Vec<(String, Answer)> = futures::stream::iter(asks)
+    let mut results: Vec<(String, CheckResult)> = futures::stream::iter(checks)
         .buffer_unordered(AT_ONCE)
         .collect()
         .await;
-    answers.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut found: Vec<Diagnostic> = answers
+    results.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut found: Vec<Diagnostic> = results
         .into_iter()
-        .flat_map(|(step, answer)| diagnostics(&checked.text, &step, answer))
+        .flat_map(|(step, result)| diagnostics(&checked.text, &step, result))
         .collect();
     // In file order, as the loader's are: the order someone fixing them
     // reads.
@@ -87,19 +87,23 @@ pub async fn check_params(
     found
 }
 
-async fn ask(runner: &Runner, graph: &crate::graph::Graph, step: &str) -> (String, Answer) {
+async fn run_check(
+    runner: &Runner,
+    graph: &crate::graph::Graph,
+    step: &str,
+) -> (String, CheckResult) {
     let step = step.to_string();
-    let asked = runner.invoke_verb(graph, &step, Verb::Check);
-    let answer = match tokio::time::timeout(TIMEOUT, asked).await {
-        Ok(Ok(Ok(warnings))) => Answer::Accepted(warnings),
-        Ok(Ok(Err(not_started))) => Answer::Unanswered(not_started),
-        Ok(Err(why)) => Answer::Refused(why),
-        Err(_) => Answer::Unanswered(format!("--check took over {TIMEOUT:?}")),
+    let check = runner.invoke_verb(graph, &step, Verb::Check);
+    let result = match tokio::time::timeout(TIMEOUT, check).await {
+        Ok(Ok(Ok(warnings))) => CheckResult::Accepted(warnings),
+        Ok(Ok(Err(not_started))) => CheckResult::NoResult(not_started),
+        Ok(Err(why)) => CheckResult::Refused(why),
+        Err(_) => CheckResult::NoResult(format!("--check took over {TIMEOUT:?}")),
     };
-    (step, answer)
+    (step, result)
 }
 
-fn diagnostics(text: &str, step: &str, answer: Answer) -> Vec<Diagnostic> {
+fn diagnostics(text: &str, step: &str, result: CheckResult) -> Vec<Diagnostic> {
     let header = crate::config::step_header_span(text, step);
     let place = |d: Diagnostic, span: Option<Range<usize>>| {
         let d = d.at_entry(EntryRef::step_id(step));
@@ -108,12 +112,12 @@ fn diagnostics(text: &str, step: &str, answer: Answer) -> Vec<Diagnostic> {
             None => d,
         }
     };
-    match answer {
-        Answer::Accepted(warnings) => warnings
+    match result {
+        CheckResult::Accepted(warnings) => warnings
             .into_iter()
             .map(|w| place(Diagnostic::new(Severity::Warning, w), header.clone()))
             .collect(),
-        Answer::Refused(why) => {
+        CheckResult::Refused(why) => {
             let span = header.map(|h| match unknown_key(&why) {
                 Some(key) => params_key_span(text, h, key),
                 None => h,
@@ -124,7 +128,7 @@ fn diagnostics(text: &str, step: &str, answer: Answer) -> Vec<Diagnostic> {
             );
             vec![place(d, span)]
         }
-        Answer::Unanswered(why) => vec![place(
+        CheckResult::NoResult(why) => vec![place(
             Diagnostic::new(
                 Severity::Warning,
                 format!("its params were not checked: {why}"),
@@ -180,7 +184,7 @@ mod tests {
                         [steps.params]\nstaton = \"KSFO\"\n\n\
                         [[steps]]\nid = \"weather/unasked\"\ncommand = \"true\"\n";
 
-    async fn ask_with(text: &str, script: &str) -> Vec<Diagnostic> {
+    async fn check_with(text: &str, script: &str) -> Vec<Diagnostic> {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("step.sh"), script).unwrap();
         let checked = crate::config::check_text(text);
@@ -190,7 +194,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_refusal_comes_back_at_the_key_it_names() {
-        let found = ask_with(
+        let found = check_with(
             TEXT,
             "[ \"$1\" = --check ] || exit 9\necho 'unknown field `staton`' >&2\nexit 1\n",
         )
@@ -204,7 +208,7 @@ mod tests {
 
     #[tokio::test]
     async fn warnings_in_the_outcome_come_back_as_warnings_and_params_reach_it() {
-        let found = ask_with(
+        let found = check_with(
             TEXT,
             "case \"$DATALIB_DAG_PARAMS\" in *KSFO*) ;; *) exit 9;; esac\n\
              echo '{\"event\":\"outcome\",\"warnings\":[\"staton does nothing\"]}'\n",
@@ -223,15 +227,15 @@ mod tests {
         let text = TEXT
             .replace("command = \"sh step.sh\"", "command = \"sh-is-not-here\"")
             .replace("command = \"sh\"", "command = \"sh-is-not-here\"");
-        let found = ask_with(&text, "").await;
+        let found = check_with(&text, "").await;
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(found[0].severity, Severity::Warning, "{found:?}");
         assert!(found[0].message.contains("not checked"), "{found:?}");
     }
 
     #[tokio::test]
-    async fn a_program_that_does_not_take_the_verb_is_not_asked() {
+    async fn a_program_that_does_not_take_the_verb_is_not_run_with_it() {
         let text = "[[steps]]\nid = \"a\"\ncommand = \"sh step.sh\"\n";
-        assert!(ask_with(text, "exit 1\n").await.is_empty());
+        assert!(check_with(text, "exit 1\n").await.is_empty());
     }
 }
