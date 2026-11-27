@@ -58,7 +58,7 @@ pub fn owed(from: NaiveDate, to: NaiveDate, held: &[Span]) -> Vec<NaiveDate> {
 /// Whether a day read whole may be recorded as read for good. The last
 /// two days may still be written to, by a parent who logs the night's
 /// feeds the next morning, so they are read again by every run.
-pub fn settled(d: NaiveDate, today: NaiveDate) -> bool {
+pub fn may_record_as_read(d: NaiveDate, today: NaiveDate) -> bool {
     d < today - Duration::days(1)
 }
 
@@ -166,11 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn the_last_two_days_are_never_settled() {
+    fn the_last_two_days_are_never_recorded_as_read() {
         let today = d("2031-03-10");
-        assert!(settled(d("2031-03-08"), today));
-        assert!(!settled(d("2031-03-09"), today));
-        assert!(!settled(today, today));
+        assert!(may_record_as_read(d("2031-03-08"), today));
+        assert!(!may_record_as_read(d("2031-03-09"), today));
+        assert!(!may_record_as_read(today, today));
     }
 
     #[test]

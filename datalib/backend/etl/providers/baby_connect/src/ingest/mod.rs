@@ -206,7 +206,8 @@ impl Ctx<'_> {
 
     /// One day's entries and the people who logged them, and the day
     /// recorded as read when it is more than a day old
-    /// (`days::settled`), in one transaction. Returns the span recorded.
+    /// (`days::may_record_as_read`), in one transaction. Returns the span
+    /// recorded.
     async fn store_day(
         &mut self,
         d: NaiveDate,
@@ -217,11 +218,11 @@ impl Ctx<'_> {
         let entries = days::entries_of(answer, d);
         let users = days::users_of(answer);
         let now = IsoOffsetTimestamp::now_local();
-        let settled = days::settled(d, self.today);
+        let recorded_as_read = days::may_record_as_read(d, self.today);
         let tx = self.writes.tx().await?;
         let mut n = db::write(tx, USERS, &users, &now).await?;
         n += db::write(tx, ENTRIES, &entries, &now).await?;
-        let span = settled.then(|| days::span_for(d, held));
+        let span = recorded_as_read.then(|| days::span_for(d, held));
         if let Some(span) = &span {
             coverage::cover(tx, DAYS_SCOPE, span.clone()).await?;
             s.days_settled += 1;
