@@ -1,4 +1,4 @@
-//! The doltlite behaviour datalib depends on, one test per fact, grouped
+//! The doltlite behaviour Datalib depends on, one test per fact, grouped
 //! by the section of `docs/dev/doltlite.md` that states it. A doltlite bump
 //! that moves a fact fails here by name: fix the fact in doltlite.md, then
 //! the test, then whatever in the tree leaned on it. Facts about a writer
@@ -18,7 +18,7 @@ use datalib_sql::{test_sql_id, Sql};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};
 
-// ── plumbing ────────────────────────────────────────────────────────
+// ── helpers ─────────────────────────────────────────────────────────
 
 struct Store {
     _dir: tempfile::TempDir,
@@ -2278,7 +2278,8 @@ mod trees {
     /// Doltlite has no verb that drops history: no `dolt_squash_history`
     /// (Dolt, a separate project, has one), no orphan branch, and
     /// `dolt_gc` takes no options.
-    /// A fold is the whole kit; this fails when that changes.
+    /// A fold is the only way to drop history; this fails when that
+    /// changes.
     #[tokio::test]
     async fn there_is_no_verb_that_drops_history() {
         let (s, _) = store_with_rows().await;
@@ -2402,7 +2403,7 @@ mod fts5 {
     }
 
     /// Replacing a document's terms: its `term_id`s come from the plain
-    /// table's index, and the FTS5 index forgets each one by rowid.
+    /// table's index, and the FTS5 index deletes each one by rowid.
     #[tokio::test]
     async fn a_contentless_delete_index_forgets_a_documents_terms_by_rowid() {
         let (_s, mut c) = two_documents().await;
@@ -2593,9 +2594,8 @@ mod compat {
 
     /// Doltlite reads a WAL another program wrote: a stock-SQLite file
     /// in WAL mode, between checkpoints, reads with the rows its `-wal`
-    /// holds. Without the `-wal` the same file holds only
-    /// what was checkpointed. `scripts/make_doltlite_wal_fixture.py` wrote the
-    /// pair.
+    /// holds. Without the `-wal` the same file holds only what was
+    /// checkpointed. `scripts/make_doltlite_wal_fixture.py` wrote the pair.
     #[tokio::test]
     async fn a_plain_sqlite_file_in_wal_mode_is_read_with_its_wal() {
         let fixture = |name: &str| {

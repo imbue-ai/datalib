@@ -119,9 +119,9 @@ mod tests {
         assert_eq!(entries(dir.path()), ["doc.json"]);
     }
 
-    /// Guards the fixed-temp-name copies this replaced: two writers on one
-    /// path shared a temp file, so one rename found it gone and a reader
-    /// could see one writer's bytes cut into the other's.
+    /// Guards against a fixed temp name: two writers on one path would
+    /// share a temp file, so one rename finds it gone and a reader can see
+    /// one writer's bytes cut into the other's.
     #[test]
     fn concurrent_writers_on_one_path_never_tear_it() {
         const WRITERS: u8 = 8;

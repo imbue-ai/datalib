@@ -40,7 +40,7 @@ pub const DDL: &str = "CREATE TABLE IF NOT EXISTS _datalib_meta (
 /// (a bare `bazel run` outside the dev launcher). Read back as `None`.
 const UNKNOWN: &str = "unknown";
 
-/// Which of datalib's stores a file is. Stored as the snake_case word.
+/// Which of Datalib's stores a file is. Stored as the snake_case word.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum StoreKind {
@@ -292,9 +292,10 @@ pub async fn read_in(conn: &mut sqlx::SqliteConnection) -> Result<Option<Meta>> 
 }
 
 /// Records the hash of each part of a store's tables, `(part, hash)`,
-/// and forgets any part not listed: what lets the owner of a store whose
-/// tables fall into parts empty only the parts that moved. Called after
-/// [`write`], which makes the table. Returns whether any row changed.
+/// and deletes the row of any part not listed: what lets the owner of a
+/// store whose tables fall into parts empty only the parts that moved.
+/// Called after [`write`], which makes the table. Returns whether any row
+/// changed.
 pub async fn write_parts(pool: &SqlitePool, parts: &[(&str, String)]) -> Result<bool> {
     let current = rows(pool).await?;
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
@@ -540,8 +541,8 @@ mod tests {
     }
 
     /// Each part's hash reads back under its own name, apart from the
-    /// store's own shape; a part no longer listed is forgotten, and a
-    /// write that moves nothing says so.
+    /// store's own shape; a part no longer listed has its row deleted, and
+    /// a write that moves nothing says so.
     #[tokio::test]
     async fn a_parts_hash_reads_back_and_a_part_dropped_is_forgotten() {
         let td = tempfile::tempdir().unwrap();

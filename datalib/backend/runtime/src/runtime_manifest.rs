@@ -1,8 +1,8 @@
 //! The `runtime.manifest` a release tarball carries beside its binaries:
 //! which assets of the same release to fetch on first use, each with its
-//! sha256, size and URL. The tarball's own sha256 is what the installer verifies, so
-//! the manifest is as pinned as the binaries, and the bytes it names are
-//! refused unless they hash as it says.
+//! sha256, size and URL. The installer verifies the tarball's own sha256,
+//! so the manifest is as pinned as the binaries, and the bytes it names
+//! are refused unless they hash as it says.
 //!
 //! One asset per line, whitespace-separated, `#` starts a comment:
 //!
@@ -13,8 +13,8 @@
 //!
 //! `cpu` is always there; `cuda` only in the x86_64 gnu tarball.
 //! `scripts/release/stage_tarball.sh` writes it; `scripts/stage_runtime.sh`
-//! and `scripts/release/stage_cuda.sh` say what each asset holds. A shipped binary reads only the manifest its own release
-//! put beside it.
+//! and `scripts/release/stage_cuda.sh` say what each asset holds. A
+//! shipped binary reads only the manifest its own release put beside it.
 
 use std::fmt;
 

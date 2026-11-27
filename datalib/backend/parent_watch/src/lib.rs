@@ -8,7 +8,7 @@
 //! so the child holds the read end of a pipe the parent never writes to,
 //! and treats EOF on it as "the parent is gone".
 //!
-//! Every long-running datalib process a datalib process starts uses this.
+//! Every long-running Datalib process a Datalib process starts uses this.
 //! The spawner puts a pipe on some descriptor (or a socket pair — that is
 //! what Node's `stdio: "pipe"` actually makes), sets [`ENV_VAR`] to that
 //! descriptor's number, and the child calls [`exit_with_parent`].
@@ -148,9 +148,9 @@ fn parse_fd(value: &str) -> Result<i32, NotAPipe> {
 ///
 /// By the time the callback runs, stderr is usually a pipe to the process
 /// that just died, so the write takes `EPIPE`. `eprintln!` *panics* on a
-/// failed write, and a panic on the watch thread leaves the process
-/// running — the leak being fixed, reintroduced one line from the exit
-/// that fixes it.
+/// failed write, and a panic on the watch thread would leave the process
+/// running: the leak this crate exists to prevent, one line before the
+/// exit.
 pub fn report(msg: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr(), "{msg}");

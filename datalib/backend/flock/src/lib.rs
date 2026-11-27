@@ -133,12 +133,12 @@ impl FileLock {
     /// that never ran sprout a lock file. Racy by nature: the holder may let
     /// go a microsecond later, so don't build an invariant on it.
     ///
-    /// **A probe that cannot get an answer says "held".** The one caller
-    /// is `GET /api/dag`, which turns a `false` here into "no runner
-    /// holds this root, so that open run record belongs to a run that
-    /// died" — and the UI paints the row `Interrupted`. Guessing `false`
-    /// on an errno we did not expect therefore declares a healthy run
-    /// dead; guessing `true` at worst delays that verdict by one poll.
+    /// **A probe that cannot get an answer says "held".** Production asks
+    /// it through `datalib_dag::lock::runner_is_held`, which the app
+    /// server reads as whether a sync is running on the root before its
+    /// own runner holds the lock. Guessing `false` on an errno we did not
+    /// expect would report no sync where one is running; guessing `true`
+    /// at worst delays the right answer to the next call.
     pub fn is_held(path: &Path) -> bool {
         let file = match File::open(path) {
             Ok(f) => f,
@@ -275,8 +275,8 @@ mod tests {
 
     /// A probe that cannot read the lock file must not answer "free".
     ///
-    /// The one caller turns `false` into "no runner holds this root",
-    /// and the UI turns that into `Interrupted` on a run that is fine.
+    /// Its caller reads `false` as "no runner holds this root", which
+    /// would be wrong about a run that is fine.
     /// Here the lock's parent directory is a regular file, so `open`
     /// fails `ENOTDIR` — a question we cannot answer, where the safe
     /// answer is "held".
