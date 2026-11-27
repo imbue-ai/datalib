@@ -14,9 +14,10 @@ import { filterToken } from "@/grid/query";
 import { handleNamedBy, uriFromHandle } from "./chipLinks";
 import { Resolver } from "./resolver";
 import { pushToast } from "@/toasts";
-import { UNIFIED_GRID_AND_SEARCH_INDEX, appletAbsent } from "@/api";
+import { UNIFIED_GRID_AND_SEARCH_INDEX, appletAbsent, type ColumnSpec } from "@/api";
 import { changed, subscribeLive, type RootEvent } from "@/live";
 import type { ContactEdit, DraftView, Saved } from "./contactEdit";
+import type { UnfiledRow, Wrote } from "./contactsTable";
 
 export const CONTACTS_APPLET = "/applet/datalib_contacts";
 
@@ -490,6 +491,26 @@ export async function peopleFor(handles: string[], pages: string[] = []): Promis
   });
   if (!r.ok) throw new Error(`people → ${r.status}: ${await r.text()}`);
   return (await r.json()) as PeopleAnswer;
+}
+
+/** How much each contact's handles wrote, by contact id, from the
+ *  grid's rows: what `from:contact:` finds. */
+export async function contactCounts(): Promise<Record<string, Wrote>> {
+  const r = await fetch(`${UNIFIED_GRID_AND_SEARCH_INDEX}/people/contacts`);
+  if (!r.ok) throw new Error(`counts → ${r.status}: ${await r.text()}`);
+  return ((await r.json()) as { counts: Record<string, Wrote> }).counts;
+}
+
+/** Everyone who wrote and is on no contact, most first, as a typed table;
+ *  with `notReal`, the senders marked not real too. */
+export async function unfiledPeople(
+  notReal: boolean,
+): Promise<{ columns: ColumnSpec[]; rows: UnfiledRow[] }> {
+  const r = await fetch(
+    `${UNIFIED_GRID_AND_SEARCH_INDEX}/people/unfiled${notReal ? "?not_real=true" : ""}`,
+  );
+  if (!r.ok) throw new Error(`unfiled → ${r.status}: ${await r.text()}`);
+  return (await r.json()) as { columns: ColumnSpec[]; rows: UnfiledRow[] };
 }
 
 export async function searchContacts(q: string): Promise<ContactSummary[]> {

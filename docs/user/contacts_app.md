@@ -114,6 +114,9 @@ datalib-applet search <data_root> 'with:email:riker@enterprise.org' --limit 20
 
 The same answer for a few handles at once, through the app, is `POST
 /applet/unified_grid_and_search_index/people` with `{"handles": […]}`.
+Who wrote something and is on no contact yet, the most first, is `GET
+/applet/unified_grid_and_search_index/people/unfiled`: what the contacts
+card's *Unfiled* tab lists.
 
 ## 2. See what is already decided
 
