@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn a_name_that_climbs_out_has_no_rel() {
+    fn a_name_that_resolves_outside_has_no_rel() {
         assert_eq!(
             safe_rel("Takeout/Mail/All mail.mbox").as_deref(),
             Some("Takeout/Mail/All mail.mbox")

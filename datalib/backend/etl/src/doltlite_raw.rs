@@ -3844,17 +3844,17 @@ mod tests {
         // one open that is supposed to write. Get it done before measuring.
         open_test(&db).await.close().await;
         open_test(&db).await.close().await;
-        let settled = std::fs::metadata(&db).unwrap().len();
+        let size_after_open = std::fs::metadata(&db).unwrap().len();
 
         for i in 0..3 {
             open_test(&db).await.close().await;
             let now = std::fs::metadata(&db).unwrap().len();
             assert_eq!(
                 now,
-                settled,
+                size_after_open,
                 "open #{} grew an untouched store by {} bytes",
                 i + 3,
-                now as i64 - settled as i64,
+                now as i64 - size_after_open as i64,
             );
         }
     }
@@ -5336,7 +5336,7 @@ mod tests {
     /// empty as a recreated one, so the cursors go; a store whose every
     /// table is new is a first open and has none to lose.
     #[tokio::test]
-    async fn a_new_table_forgets_the_stores_cursors() {
+    async fn a_new_table_clears_the_stores_cursors() {
         let d = tempdir().unwrap();
         let p = d.path().join("new_table.doltlite_db");
         store_with_cursors(&p, &[WIDGETS_DDL]).await;

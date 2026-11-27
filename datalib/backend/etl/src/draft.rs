@@ -741,7 +741,7 @@ mod tests {
     }
 
     #[test]
-    fn every_name_in_the_settling_sql_is_quoted() {
+    fn every_name_in_the_resolving_sql_is_quoted() {
         let sql = draft_wins_sql("p", &[("id".into(), true), ("a\"b".into(), false)]);
         assert!(sql.iter().any(|s| s.contains("\"a\"\"b\"")), "{sql:?}");
         assert!(sql.iter().all(|s| !s.contains(" a\"b")), "{sql:?}");

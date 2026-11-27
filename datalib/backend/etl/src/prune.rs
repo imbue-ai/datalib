@@ -153,7 +153,7 @@ async fn delete_ids_in_tx(
                 .await
                 .with_context(|| format!("prune {table}"))?;
         }
-        forget_problems_in_tx(tx, table, &placeholders, chunk).await?;
+        delete_problems_in_tx(tx, table, &placeholders, chunk).await?;
     }
     Ok(())
 }
@@ -164,12 +164,12 @@ pub async fn forget_record_problems_in_tx(
     table: &str,
     id: &str,
 ) -> Result<()> {
-    forget_problems_in_tx(tx, table, "?", std::slice::from_ref(&id.to_string())).await
+    delete_problems_in_tx(tx, table, "?", std::slice::from_ref(&id.to_string())).await
 }
 
 /// A record upstream no longer has cannot fail to fetch, so its problem
 /// goes with it rather than standing for good.
-pub(crate) async fn forget_problems_in_tx(
+pub(crate) async fn delete_problems_in_tx(
     tx: &mut Transaction<'_, Sqlite>,
     table: &str,
     placeholders: &str,

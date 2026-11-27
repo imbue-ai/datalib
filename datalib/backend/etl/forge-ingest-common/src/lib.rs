@@ -674,7 +674,7 @@ async fn store_listing<F: Forge>(
 
 /// Upstream no longer has `key`: it leaves the listing. A copy the
 /// store holds stays, as the last one there was.
-async fn forget_listed(tx: &mut Transaction<'_, Sqlite>, key: &str) -> Result<()> {
+async fn delete_listed(tx: &mut Transaction<'_, Sqlite>, key: &str) -> Result<()> {
     sql!(
         "etl.forge_ingest_common.delete_listed_change_request",
         "DELETE FROM listed_change_requests WHERE id = ?"
@@ -753,7 +753,7 @@ impl<F: Forge> Fetcher<F::Content> for ChangeRequests<'_, F> {
                         .store_one(tx, &container, number, content, &mut summary)
                         .await?;
                 }
-                Outcome::Gone => forget_listed(tx, &f.listed.key).await?,
+                Outcome::Gone => delete_listed(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }
