@@ -75,7 +75,7 @@ impl RawDb {
         SWEEPS.age(self.pool(), key, &stamp(now)?).await
     }
 
-    pub async fn forget_manifest_sweep(&self, key: &str) -> Result<()> {
+    pub async fn delete_manifest_sweep(&self, key: &str) -> Result<()> {
         SWEEPS.forget(self.pool(), key).await
     }
 
@@ -183,7 +183,10 @@ impl RawDb {
 
     /// Clears the failed lookup of each user a `users.list` has since
     /// returned. Returns how many.
-    pub async fn settle_listed_users(&self, tx: &mut Transaction<'_, Sqlite>) -> Result<usize> {
+    pub async fn clear_errors_of_listed_users(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+    ) -> Result<usize> {
         let ids: Vec<String> = sql!(
             "slack.list_listed_users_with_error",
             "SELECT u.id FROM users u JOIN users_bookkeeping b ON b.id = u.id \

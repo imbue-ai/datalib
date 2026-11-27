@@ -80,9 +80,9 @@ impl Recorder {
 
     /// The largest total the run ever reported, and everything it counted
     /// done.
-    fn announced_and_done(&self) -> (u64, u64) {
+    fn largest_total_and_done(&self) -> (u64, u64) {
         let events = self.events.lock().unwrap();
-        let announced = events
+        let largest_total = events
             .iter()
             .filter_map(|ev| match ev {
                 Ev::Length(t) => *t,
@@ -97,7 +97,7 @@ impl Recorder {
                 Ev::Length(_) => 0,
             })
             .sum();
-        (announced, done)
+        (largest_total, done)
     }
 }
 
@@ -153,7 +153,7 @@ async fn the_count_reaches_zero_once_at_the_end_not_after_the_first_channel() {
 async fn the_bar_counts_channels_threads_and_files_and_never_a_message() {
     let recorder = run().await;
     assert_eq!(
-        recorder.announced_and_done(),
+        recorder.largest_total_and_done(),
         (UNITS, UNITS),
         "one tick per channel walked, thread read and file fetched; \
          a message is none of them",

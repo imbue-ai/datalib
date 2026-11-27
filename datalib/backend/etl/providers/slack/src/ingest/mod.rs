@@ -365,7 +365,7 @@ async fn ask_unless_refused<T>(
     match ask.await {
         Ok(answer) => {
             if remembered.is_some() {
-                db.forget_manifest_sweep(&key).await?;
+                db.delete_manifest_sweep(&key).await?;
             }
             Ok(Optional::Answered(answer))
         }
@@ -1277,7 +1277,9 @@ impl Mirror<'_> {
     /// Every user [`RawDb::users_owed`] names, one `users.info` each. A
     /// lookup that fails is an attempt on the user's own row, owed still.
     async fn fetch_users_owed(&self, writes: &mut Batch<'_>) -> Result<owed::Drained> {
-        self.db.settle_listed_users(writes.tx().await?).await?;
+        self.db
+            .clear_errors_of_listed_users(writes.tx().await?)
+            .await?;
         let owed = self.db.users_owed(writes.tx().await?).await?;
         if owed.is_empty() {
             return Ok(owed::Drained::default());
@@ -2088,7 +2090,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
             if archived_read && !archived.contains(cid.as_str()) {
                 // Listed open again: if Slack archives it later, what was
                 // posted in between is read then.
-                db.forget_manifest_sweep(&archived_read_key(cid)).await?;
+                db.delete_manifest_sweep(&archived_read_key(cid)).await?;
             }
             let newest = match (&open_latest, target >= first_dm) {
                 _ if archived.contains(cid.as_str()) => {
