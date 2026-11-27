@@ -146,7 +146,7 @@ impl Playback {
 
     /// Like [`Playback::hold`], but a request waits only once its process
     /// has sealed a checkpoint, so a download publishes something before
-    /// it parks.
+    /// it waits.
     pub fn hold_sealed(mut self, file: impl Into<PathBuf>) -> Self {
         self.hold_sealed = Some(file.into());
         self

@@ -157,7 +157,7 @@ impl RetryGuard {
             .expect("the request semaphore is never closed")
     }
 
-    /// The source is done asking this run. The request that found out
+    /// The source sends no more requests this run. The request that found out
     /// still fails as itself, for its caller to report; the next one stops
     /// the source ([`RetryGuard::gave_up`]).
     pub fn give_up(&self, why: impl Into<String>) {
@@ -286,7 +286,7 @@ mod tests {
 
     /// A request handed back as failed must not reset the backoff for the
     /// next one, or an outage would use up the failure count in minutes
-    /// instead of riding out the guard's time.
+    /// instead of taking the guard's full time.
     #[test]
     fn the_next_request_backs_off_from_the_sources_streak() {
         let g = RetryGuard::new(

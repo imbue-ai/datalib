@@ -780,7 +780,7 @@ pub fn split_item_key(id: &str, sigil: char) -> Option<(String, u32)> {
 /// record's columns cannot be null — at none, so what was not fetched
 /// whole is owed. Each scope's cursor becomes the span from the
 /// beginning of time up to it, so the next run searches from there, and
-/// the rows a cap wrote as skipped go: owed needs no row.
+/// the rows a cap wrote as skipped are deleted: owed needs no row.
 pub async fn rung_listed_minus_held(
     conn: &mut SqliteConnection,
     table: &'static str,

@@ -237,8 +237,8 @@ pub struct HttpRequest {
     pub max_bytes: u64,
     /// The source's latchkey knobs, forwarded whole from its config's
     /// `latchkey_settings:` block (see
-    /// [`datalib_source_common::LatchkeySettings`]) — today just which
-    /// stored account to run as, but providers pass the struct rather
+    /// [`datalib_source_common::LatchkeySettings`]) — only which stored
+    /// account to run as, but providers pass the struct rather
     /// than the field so a new knob reaches all of them at once.
     pub latchkey: LatchkeySettings,
     /// How many times this request is sent while it fails by itself (no
@@ -1597,7 +1597,7 @@ mod tests {
 
     /// What the lines come to is only true if a root logging at `info` sees
     /// them: it never makes the per-request `debug` line, and the count must
-    /// not hang off it. A played-back request left nothing to count.
+    /// not depend on it. A played-back request left nothing to count.
     #[test]
     fn a_root_at_info_still_hears_who_a_step_reached() {
         use std::sync::{Arc, Mutex};
@@ -1796,7 +1796,7 @@ mod tests {
     /// A laptop waking from sleep has no DNS for a few seconds, and curl
     /// says exit 6. That failed the request at once, so a source failed
     /// each of its units in turn and still ended `succeeded`. It is
-    /// retried now, and a network that comes back is ridden through.
+    /// retried now, and succeeds once the network comes back.
     #[tokio::test]
     async fn a_host_that_does_not_resolve_yet_is_retried() {
         let dir = tempfile::tempdir().unwrap();
@@ -2151,7 +2151,7 @@ mod tests {
         );
     }
 
-    /// Once the process has sealed, the after-seal hold parks a request
+    /// Once the process has sealed, the after-seal hold holds a request
     /// exactly like the plain one. The streaming e2e relies on it to keep
     /// a download in flight after its first checkpoint.
     #[tokio::test]
