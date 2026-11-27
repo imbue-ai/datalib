@@ -393,7 +393,7 @@ export async function allowRemote(scope: AllowScope, key: string): Promise<Remot
   return (await r.json()) as RemoteAllow;
 }
 
-export async function forgetRemoteAllow(allowUuid: string): Promise<void> {
+export async function deleteRemoteAllow(allowUuid: string): Promise<void> {
   const r = await fetch(`${REMOTE_ALLOW_TABLE}/${encodeURIComponent(allowUuid)}`, {
     method: "DELETE",
   });
