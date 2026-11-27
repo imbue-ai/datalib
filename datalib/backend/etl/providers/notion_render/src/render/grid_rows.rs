@@ -548,8 +548,8 @@ mod tests {
                 .into_iter()
                 .collect(),
             comments: vec![
-                comment("c2", "p1", "d1", "Cathy Zhao", "2026-01-02T00:00:00.000Z"),
-                comment("c1", "p1", "d1", "Cathy Zhao", "2026-01-01T00:00:00.000Z"),
+                comment("c2", "p1", "d1", "Beverly Crusher", "2026-01-02T00:00:00.000Z"),
+                comment("c1", "p1", "d1", "Beverly Crusher", "2026-01-01T00:00:00.000Z"),
             ],
             ..Default::default()
         };
@@ -632,7 +632,7 @@ mod tests {
         p["created_by"] = json!({"object": "user", "id": "47b71049-b1e7-4fc2-9d1e-4528dd803a62"});
         let names: HashMap<String, String> = [(
             "47b71049-b1e7-4fc2-9d1e-4528dd803a62".to_string(),
-            "Nayana Bannur".to_string(),
+            "Deanna Troi".to_string(),
         )]
         .into_iter()
         .collect();
@@ -644,7 +644,7 @@ mod tests {
         let docs = gather_documents(&parsed, "notion").unwrap();
         assert_eq!(
             docs.pages[0].rows[0].author.as_deref(),
-            Some("Nayana Bannur")
+            Some("Deanna Troi")
         );
     }
 
@@ -697,8 +697,8 @@ mod tests {
     /// truncated uuid.
     #[test]
     fn comment_authors_use_the_name_notion_resolved() {
-        let c = comment("c1", "p1", "d1", "Cathy Zhao", "2026-01-01T00:00:00.000Z");
-        assert_eq!(comment_author(&c).as_deref(), Some("Cathy Zhao"));
+        let c = comment("c1", "p1", "d1", "Beverly Crusher", "2026-01-01T00:00:00.000Z");
+        assert_eq!(comment_author(&c).as_deref(), Some("Beverly Crusher"));
         let mut anon = c.clone();
         anon["display_name"] = json!({"type": "user"});
         assert_eq!(comment_author(&anon).as_deref(), Some("47b71049"));
