@@ -41,7 +41,9 @@ export type NormalizedContact = {
   details?: { label: string; value: string }[];
   /** The person's own page at the source, where it has one. */
   source_url?: string | null;
-  seen: { items: number; last_at: string | null } | null;
+  /** How much of this source they wrote: its rows by their handles,
+   *  what `from:` finds there. Only the index's answer has it. */
+  seen?: { items: number; last_at: string | null } | null;
   /** A photo the app serves, app-relative, where the source has one and
    *  the server can serve it; absent or null otherwise. The chip's lead. */
   photo_url?: string | null;

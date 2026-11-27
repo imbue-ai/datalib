@@ -21,12 +21,6 @@ pub struct SourceContactRow {
     /// The name the source prefers, for a reader that wants only that.
     #[col(sql = "TEXT")]
     pub name: Option<String>,
-    /// How many items in this document the person wrote, and the newest
-    /// one's stamp; zero and null for a source that is not a chat.
-    #[col(sql = "INTEGER")]
-    pub seen_items: i64,
-    #[col(sql = "VARCHAR(64)")]
-    pub last_seen_at: Option<String>,
     /// The whole `NormalizedContact`, as JSON, so the type can grow without
     /// a column per field.
     #[col(sql = "TEXT")]
