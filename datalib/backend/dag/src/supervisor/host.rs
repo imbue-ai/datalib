@@ -84,7 +84,7 @@ const REASON_NAMES: usize = 3;
 /// Why a run started, from the requests and wipes open as it did. A run
 /// with nothing but compactions and collections to do is a shrink; any
 /// other is a sync.
-pub fn period_start(requests: &[RequestRow], wipes: &[JobRow]) -> RunStart {
+pub fn run_start(requests: &[RequestRow], wipes: &[JobRow]) -> RunStart {
     let mut parts = Vec::new();
     if !requests.is_empty() {
         let roots: Vec<&str> = requests
@@ -229,10 +229,10 @@ mod tests {
             closed: None,
             failed_step: None,
         };
-        let one = period_start(&[request("ui", &["gmail/ingest"])], &[]);
+        let one = run_start(&[request("ui", &["gmail/ingest"])], &[]);
         assert_eq!(one.kind, RunKind::Sync);
         assert_eq!(one.reason, "a sync asked for by ui: gmail/ingest");
-        let many = period_start(
+        let many = run_start(
             &[
                 request("ui", &["a/ingest", "b/ingest"]),
                 request("upgrade", &["c/render_markdown", "d/render_markdown"]),
@@ -245,7 +245,7 @@ mod tests {
             "a sync asked for by ui, upgrade: a/ingest, b/ingest, c/render_markdown and 2 more"
         );
         assert_eq!(
-            period_start(&[], &[]).reason,
+            run_start(&[], &[]).reason,
             "the loop found work with no sync request open"
         );
     }
@@ -254,7 +254,7 @@ mod tests {
     /// request open": a run that only frees disk says so, and is a
     /// shrink.
     #[test]
-    fn a_period_that_only_frees_disk_is_a_shrink_and_says_who_asked() {
+    fn a_run_that_only_frees_disk_is_a_shrink_and_says_who_asked() {
         let wipe = |kind: JobKind, targets: &[&str]| JobRow {
             id: "w".into(),
             kind: Some(kind),
@@ -262,13 +262,13 @@ mod tests {
             opened_by: "ui".into(),
             closed: None,
         };
-        let collect = period_start(&[], &[wipe(JobKind::Collect, &[])]);
+        let collect = run_start(&[], &[wipe(JobKind::Collect, &[])]);
         assert_eq!(collect.kind, RunKind::Shrink);
         assert_eq!(
             collect.reason,
             "freeing disk space, asked for by ui: every step"
         );
-        let reset = period_start(&[], &[wipe(JobKind::Reset, &["slack/ingest"])]);
+        let reset = run_start(&[], &[wipe(JobKind::Reset, &["slack/ingest"])]);
         assert_eq!(reset.kind, RunKind::Sync);
         assert_eq!(reset.reason, "a reset asked for by ui: slack/ingest");
     }

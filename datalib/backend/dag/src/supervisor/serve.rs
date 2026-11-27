@@ -17,7 +17,7 @@ use crate::lock::RunnerLock;
 use crate::scheduler::Runner;
 use crate::supervisor::announce::Listener;
 use crate::supervisor::host;
-use crate::supervisor::loop_host::{LoopHost, PeriodSink};
+use crate::supervisor::loop_host::{LoopHost, OpenRunSink};
 use crate::supervisor::reload::ConfigFile;
 use crate::supervisor::store::{RequestOutcome, Store};
 
@@ -144,17 +144,17 @@ async fn hold(
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
-    let periods = Periods {
+    let run_host = RunHost {
         opts,
         emit,
-        record: Arc::new(PeriodSink::default()),
+        run_sink: Arc::new(OpenRunSink::default()),
         open: Mutex::new(None),
         first_run_id: Mutex::new(opts.run_id.clone()),
     };
     let mut said_no_pass = false;
     loop {
         let ran = match load_config_at(&opts.root, &opts.config_path()) {
-            Ok(checked) => run_the_loop(opts, &checked, store, &periods, stop, until).await,
+            Ok(checked) => run_the_loop(opts, &checked, store, &run_host, stop, until).await,
             Err(why) => {
                 // With no config there is no step to run `--prepare` for: the pass is over,
                 // and a root waiting for its first config is not waiting
@@ -174,7 +174,7 @@ async fn hold(
         // Its requests would otherwise be served again at once, and fail the
         // same way; the next change to the store or the config is the
         // next try.
-        periods.close_any();
+        run_host.close_any();
         fail_open_requests(store, &why).await;
         if let Err(e) = host::take_over(store, root).await {
             tracing::error!("supervisor: could not close the failed run: {e:#}");
@@ -211,12 +211,12 @@ async fn run_the_loop(
     opts: &ServeOptions,
     checked: &ConfigCheck,
     store: &Store,
-    periods: &Periods<'_>,
+    run_host: &RunHost<'_>,
     stop: &watch::Receiver<bool>,
     until: Until,
 ) -> Result<Option<crate::scheduler::RunReport>, String> {
     let root = opts.root.as_path();
-    let record: Arc<dyn crate::events::EventSink> = periods.record.clone();
+    let record: Arc<dyn crate::events::EventSink> = run_host.run_sink.clone();
     let sink: Arc<dyn crate::events::EventSink> = match &opts.events {
         Some(events) => Arc::new(crate::events::FanOutSink(vec![events.clone(), record])),
         None => record,
@@ -230,10 +230,10 @@ async fn run_the_loop(
     }
     let ran = match until {
         Until::Stopped => runner
-            .run_forever(&checked.graph, store, periods)
+            .run_forever(&checked.graph, store, run_host)
             .await
             .map(|()| None),
-        Until::Idle => runner.run_until_idle(&checked.graph, store, periods).await,
+        Until::Idle => runner.run_until_idle(&checked.graph, store, run_host).await,
     };
     ran.map_err(|e| {
         tracing::error!("supervisor: the loop failed: {e:#}");
@@ -336,19 +336,19 @@ fn now(opts: &ServeOptions) -> String {
 }
 
 /// Each run recorded in the run store, and said to the parent.
-struct Periods<'a> {
+struct RunHost<'a> {
     opts: &'a ServeOptions,
     emit: Emit,
     /// The runner's sink: the open run's sink in the run store, or
     /// nothing.
-    record: Arc<PeriodSink>,
+    run_sink: Arc<OpenRunSink>,
     /// The id of the run open now.
     open: Mutex<Option<String>>,
     /// [`ServeOptions::run_id`], until the first run takes it.
     first_run_id: Mutex<Option<String>>,
 }
 
-impl Periods<'_> {
+impl RunHost<'_> {
     /// A loop that failed may have left its run open.
     fn close_any(&self) {
         let open = self.open.lock().expect("the open period's lock").clone();
@@ -358,7 +358,7 @@ impl Periods<'_> {
     }
 }
 
-impl LoopHost for Periods<'_> {
+impl LoopHost for RunHost<'_> {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let root = self.opts.root.as_path();
         let checked = load_config_at(&self.opts.root, &self.opts.config_path())?;
@@ -372,7 +372,7 @@ impl LoopHost for Periods<'_> {
         let env =
             steps_env(self.opts, &checked.cfg, &now, &run_id).map_err(|e| format!("{e:#}"))?;
         match host::start_record(root, &checked.cfg, &run_id, &now, start) {
-            Some(record) => drop(self.record.point_at(Some(Arc::new(record)))),
+            Some(record) => drop(self.run_sink.point_at(Some(Arc::new(record)))),
             None => tracing::warn!(
                 run = %run_id,
                 "supervisor: run store unavailable; nothing recorded this run"
@@ -390,7 +390,7 @@ impl LoopHost for Periods<'_> {
     /// before the loop says the sync is over, so no one reads "over"
     /// before it is.
     fn close(&self, run_id: &str) {
-        drop(self.record.point_at(None));
+        drop(self.run_sink.point_at(None));
         *self.open.lock().expect("the open period's lock") = None;
         (self.emit)(ServeEvent::SyncOver {
             run_id: run_id.to_string(),

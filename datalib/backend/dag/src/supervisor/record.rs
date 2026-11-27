@@ -105,7 +105,7 @@ pub enum Change<'a> {
     Step(&'a str, &'a StepRecord),
     /// A step whose entry was removed, by a purge: its `steps` and
     /// `sinks` rows are deleted.
-    Forget(&'a str),
+    Remove(&'a str),
 }
 
 /// What changed between two [`Record`]s, so a save writes that and nothing
@@ -124,7 +124,7 @@ pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     }
     for id in prev.steps.keys() {
         if !next.steps.contains_key(id) {
-            out.push(Change::Forget(id));
+            out.push(Change::Remove(id));
         }
     }
     out
@@ -464,7 +464,7 @@ impl Store {
                         }
                     }
                 }
-                Change::Forget(id) => {
+                Change::Remove(id) => {
                     for stmt in [
                         sql!(
                             "dag.save_record.delete_steps",
@@ -699,7 +699,7 @@ mod tests {
             [
                 Change::Run(next.current_run.as_ref().unwrap()),
                 Change::Step("b/raw", &next.steps["b/raw"]),
-                Change::Forget("c/raw"),
+                Change::Remove("c/raw"),
             ]
         );
     }
@@ -719,7 +719,7 @@ mod tests {
     /// are deleted, so a step of that id later does its work from the
     /// start.
     #[tokio::test]
-    async fn a_forgotten_step_leaves_nothing_behind() {
+    async fn a_removed_step_leaves_nothing_behind() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();

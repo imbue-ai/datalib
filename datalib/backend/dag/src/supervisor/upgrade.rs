@@ -10,7 +10,7 @@ use crate::step::StepId;
 /// The steps a prepare pass runs with `--prepare`, producers before what
 /// reads them, so a render's `--prepare` runs after its raw store has
 /// been brought up to date.
-pub fn steps_to_ask(graph: &Graph) -> Vec<StepId> {
+pub fn steps_to_prepare(graph: &Graph) -> Vec<StepId> {
     graph
         .topo
         .iter()
@@ -42,7 +42,7 @@ mod tests {
     /// Only steps that take the verb are run with it, and a reader after
     /// what it reads.
     #[test]
-    fn a_pass_asks_the_steps_that_prepare_in_graph_order() {
+    fn a_pass_prepares_the_steps_that_take_the_verb_in_graph_order() {
         let graph = Graph::build(vec![
             step("mail/render_markdown", &["mail/ingest"], true),
             step("custom/out", &["mail/ingest"], false),
@@ -50,7 +50,7 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            steps_to_ask(&graph),
+            steps_to_prepare(&graph),
             ["mail/ingest", "mail/render_markdown"]
         );
     }

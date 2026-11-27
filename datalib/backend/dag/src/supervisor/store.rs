@@ -327,7 +327,7 @@ impl Store {
                 NEXT_STORE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ),
         };
-        store.climb(&path).await?;
+        store.run_ladder(&path).await?;
         let ddl = || {
             DDL.into_iter()
                 .chain(super::record::DDL)
@@ -362,7 +362,7 @@ impl Store {
     /// transaction, taken for writing first, so two processes opening at
     /// once run them once. A new store has no rung to run: the DDL makes
     /// it in this build's shape.
-    async fn climb(&self, path: &Path) -> Result<()> {
+    async fn run_ladder(&self, path: &Path) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let Some(meta) = datalib_store_meta::read_in(&mut tx).await? else {
             return Ok(());
@@ -506,7 +506,9 @@ impl Store {
     /// as one commit left them. Read apart, a stop and then a turn-on
     /// landing between the two reads looked like a request still open for
     /// a step turned back on, and the loop ran a stopped sync's step again.
-    pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
+    pub async fn requests_and_turned_off(
+        &self,
+    ) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
         let mut tx = self.pool.begin().await?;
         let rows = OPEN_REQUESTS.query().fetch_all(&mut *tx).await?;
         let turned_off = sql!(

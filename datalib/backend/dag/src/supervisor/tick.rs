@@ -679,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn a_request_starts_its_source_and_holds_the_rest_until_it_lands() {
+    fn a_request_starts_its_source_and_the_rest_wait_until_it_lands() {
         let s = chain();
         let facts = all_fresh(&s, 1);
         let t = tick(&s, &request(&[0], 5), &facts);
@@ -803,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn a_seal_during_a_pass_owes_exactly_one_more() {
+    fn a_seal_during_an_invocation_owes_exactly_one_more() {
         let s = chain();
         let mut facts = all_fresh(&s, 1);
         facts.steps[0].streams_output = true;
@@ -965,7 +965,7 @@ mod tests {
     /// A render that is about to start will rewrite what the index would
     /// read, so the index lets it go first rather than running twice.
     #[test]
-    fn a_consumer_waits_for_a_producer_held_only_by_a_lock() {
+    fn a_consumer_waits_for_a_producer_waiting_only_for_a_lock() {
         let mut s = chain();
         s.steps[1].locks = vec![(CPU, Hold::Shared)];
         let mut facts = all_fresh(&s, 1);

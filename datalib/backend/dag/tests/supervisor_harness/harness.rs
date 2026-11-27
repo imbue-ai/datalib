@@ -19,7 +19,7 @@ use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
 use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::loop_host::{LoopHost, PeriodSink};
+use datalib_dag::supervisor::loop_host::{LoopHost, OpenRunSink};
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
@@ -307,19 +307,19 @@ impl Harness {
         let root = self.root.path().to_path_buf();
         let stop = self.stop.subscribe();
         let store = Store::open(&root).await.unwrap();
-        let periods = Periods {
+        let run_host = RunHost {
             root,
             report: tx.clone(),
-            record: Arc::new(PeriodSink::default()),
+            run_sink: Arc::new(OpenRunSink::default()),
             write_run_store: record,
         };
         let sink: Arc<dyn EventSink> = Arc::new(FanOutSink(vec![
             Arc::new(ChannelSink(tx)),
-            periods.record.clone(),
+            run_host.run_sink.clone(),
         ]));
         self.host = Some(tokio::spawn(async move {
-            if let Some((checked, path)) = periods.graph() {
-                let mut runner = Runner::new(&periods.root)
+            if let Some((checked, path)) = run_host.graph() {
+                let mut runner = Runner::new(&run_host.root)
                     .sink(sink)
                     .stop_on(stop.clone())
                     .retry(RetryPolicy {
@@ -329,8 +329,8 @@ impl Harness {
                     .reload_from(Arc::new(ConfigFile::new(path)));
                 runner.stop_grace = clocks.stop_grace;
                 runner.backstop = clocks.backstop;
-                if let Err(e) = runner.run_forever(&checked.graph, &store, &periods).await {
-                    let _ = periods.report.send(Seen::Broke(format!("{e:#}")));
+                if let Err(e) = runner.run_forever(&checked.graph, &store, &run_host).await {
+                    let _ = run_host.report.send(Seen::Broke(format!("{e:#}")));
                 }
             }
             store.close().await;
@@ -480,7 +480,7 @@ impl Harness {
     }
 
     /// Wait for the loop's run to end, as the host says.
-    pub async fn period_over(&mut self) {
+    pub async fn run_over(&mut self) {
         self.wait("the busy period to end", |s| {
             matches!(s, Seen::Host(l) if l == "busy period over").then_some(())
         })
@@ -774,16 +774,16 @@ impl Harness {
     }
 }
 
-struct Periods {
+struct RunHost {
     root: PathBuf,
     report: mpsc::UnboundedSender<Seen>,
     /// The run store writer for the open run, when it writes one.
-    record: Arc<PeriodSink>,
+    run_sink: Arc<OpenRunSink>,
     /// Whether a run writes the run store too.
     write_run_store: bool,
 }
 
-impl Periods {
+impl RunHost {
     fn graph(&self) -> Option<(config::ConfigCheck, PathBuf)> {
         let path = config::root_config_path(&self.root);
         match config::load_graded(&path) {
@@ -800,7 +800,7 @@ impl Periods {
     }
 }
 
-impl LoopHost for Periods {
+impl LoopHost for RunHost {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let _ = self.report.send(Seen::Host("busy period".into()));
         let (checked, _) = self.graph().ok_or("the config does not load")?;
@@ -810,7 +810,7 @@ impl LoopHost for Periods {
         if self.write_run_store {
             let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, start)
                 .expect("open the run store");
-            self.record.point_at(Some(Arc::new(store)));
+            self.run_sink.point_at(Some(Arc::new(store)));
         }
         Ok(env.vars)
     }
@@ -818,7 +818,7 @@ impl LoopHost for Periods {
     /// Dropping the run store's writer flushes and joins: the run is
     /// over once what it wrote can be read.
     fn close(&self, _run_id: &str) {
-        drop(self.record.point_at(None));
+        drop(self.run_sink.point_at(None));
         let _ = self.report.send(Seen::Host("busy period over".into()));
     }
 }

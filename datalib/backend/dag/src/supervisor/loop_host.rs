@@ -26,9 +26,9 @@ pub trait LoopHost: Send + Sync {
 /// is open, and at nothing between: the run store closes the run when its
 /// sink is dropped.
 #[derive(Default)]
-pub struct PeriodSink(Mutex<Option<Arc<dyn EventSink>>>);
+pub struct OpenRunSink(Mutex<Option<Arc<dyn EventSink>>>);
 
-impl PeriodSink {
+impl OpenRunSink {
     /// Point at `to`, handing back what it pointed at: dropping that is
     /// what closes the run in the run store.
     pub fn point_at(&self, to: Option<Arc<dyn EventSink>>) -> Option<Arc<dyn EventSink>> {
@@ -36,7 +36,7 @@ impl PeriodSink {
     }
 }
 
-impl EventSink for PeriodSink {
+impl EventSink for OpenRunSink {
     fn emit(&self, event: &Event) {
         if let Some(sink) = self.0.lock().expect("a period sink's lock").as_ref() {
             sink.emit(event);

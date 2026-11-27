@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn a_producer_that_failed_or_stopped_this_period_ended_short() {
+    fn a_producer_that_failed_or_stopped_this_run_ended_short() {
         let mut f = StepFacts {
             last_attempt: Some(attempt(true, false)),
             ..Default::default()
@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn a_producer_this_period_has_not_run_is_read_from_the_record() {
+    fn a_producer_this_run_has_not_run_is_read_from_its_steps_row() {
         let f = StepFacts::default();
         for (recorded, short) in [
             (Some(RunState::Failed), true),
