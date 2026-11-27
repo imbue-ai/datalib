@@ -1,7 +1,7 @@
-//! A pass: the steps one verb is asked of, one at a time, and how each
-//! stands. The launch's migrate pass and a wipe that frees disk are both
-//! one (`dag/README.md` §"Upgrading a root", §"Resets and purges"), and
-//! the app draws either the same way.
+//! A pass: the steps one verb is run for, and how each stands. The
+//! launch's prepare pass and a wipe that frees disk are both one
+//! (`dag/README.md` §"Upgrading a root", §"Resets and purges"), and the
+//! app draws either the same way.
 
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantArray};

@@ -526,9 +526,10 @@ now outside the loop.
    to know which one people look at.
 3. **Does the prepare pass block every request, or only the steps it
    has not reached? (answered: only those.)** The pass runs inside a
-   host's loop, one step at a time beside everything else. A step it has
-   not asked, and what reads one, waits (`Wait::Prepare`), and Sync stays
-   offered. The CLI's sync still asks every step first, until it becomes
+   host's loop beside everything else, up to four `--prepare` processes
+   at once, each started after those of the steps upstream of it have
+   exited. A step whose `--prepare` has not exited, and every step
+   downstream of one, waits (`Wait::Prepare`), and Sync stays offered. The CLI's sync still asks every step first, until it becomes
    a client.
 4. **Retries and locks.** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it

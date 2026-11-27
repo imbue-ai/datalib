@@ -232,9 +232,10 @@ async fn until_caught_up(state: &AppState) -> serde_json::Value {
     }
 }
 
-/// While the first step is still preparing, the run's record already lists
-/// every step the pass will ask, the rest as pending, so a person can see
-/// how many are left (#1678: the pass's run listed only the steps reached).
+/// While the downloads' `--prepare`s are still running, the run's record
+/// already lists every step the pass will run `--prepare` for, the rest as
+/// pending, so a person can see how many are left (#1678: the pass's run
+/// listed only the steps reached).
 #[tokio::test]
 async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     let td = tempfile::tempdir().unwrap();
@@ -249,27 +250,13 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
     std::fs::write(root.join("hold"), "").unwrap();
 
     let state = boot(&root, &bin).await;
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let first = loop {
-        if let Some(line) = invoked(&root).first() {
-            break line.trim_start_matches("prepare ").to_string();
-        }
-        assert!(Instant::now() < deadline, "no step was asked to prepare");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    let steps = [
-        "a/ingest",
-        "a/render_markdown",
-        "b/ingest",
-        "b/render_markdown",
+    let want: Vec<(String, &str)> = vec![
+        ("a/ingest".into(), "running"),
+        ("a/render_markdown".into(), "pending"),
+        ("b/ingest".into(), "running"),
+        ("b/render_markdown".into(), "pending"),
     ];
-    let want: Vec<(String, &str)> = steps
-        .iter()
-        .map(|s| {
-            let state = if *s == first { "running" } else { "pending" };
-            (s.to_string(), state)
-        })
-        .collect();
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let snap = datalib_runs::snapshot(&root).await.unwrap();
         let mut got: Vec<(String, &str)> = snap
@@ -283,7 +270,7 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
         }
         assert!(
             Instant::now() < deadline,
-            "while {first} prepares, the run's rows never read {want:?}: {:?} {got:?}",
+            "while the downloads prepare, the run's rows never read {want:?}: {:?} {got:?}",
             snap.kind
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -354,6 +341,38 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
     std::fs::remove_file(root.join("hold")).unwrap();
     until_invoked(&root, "sync a/ingest").await;
     mailbox.close().await;
+    state.sync.shutdown(Duration::from_secs(10)).await;
+}
+
+/// Two sources have no path between them, so their `--prepare`s run at
+/// the same time: with every `--prepare` held, both downloads' have
+/// started, and neither render's has. The pass once ran one at a time, so
+/// `b`'s waited for `a`'s and everything downstream of it.
+#[tokio::test]
+async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
+    let td = tempfile::tempdir().unwrap();
+    let root = td.path().join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    let bin = bin_dir_with_fake_step(td.path());
+    std::fs::write(
+        root.join("config.toml"),
+        PROGRAMS.to_string() + &source("a") + &source("b"),
+    )
+    .unwrap();
+    std::fs::write(root.join("hold"), "").unwrap();
+    let state = boot(&root, &bin).await;
+    until_invoked(&root, "prepare a/ingest").await;
+    until_invoked(&root, "prepare b/ingest").await;
+    let started = invoked(&root);
+    for render in ["prepare a/render_markdown", "prepare b/render_markdown"] {
+        assert!(
+            !started.iter().any(|l| l == render),
+            "a render's --prepare started before its download's exited: {started:?}"
+        );
+    }
+    std::fs::remove_file(root.join("hold")).unwrap();
+    until_invoked(&root, "prepare a/render_markdown").await;
+    until_invoked(&root, "prepare b/render_markdown").await;
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
