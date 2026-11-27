@@ -370,7 +370,7 @@ pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse,
     let metrics = datalib_runs::latest_metrics(&s.root)
         .await
         .map_err(crate::unread)?;
-    let records = match s.sync.mailbox().await {
+    let records = match s.sync.supervisor_store().await {
         Ok(store) => store
             .load_record()
             .await

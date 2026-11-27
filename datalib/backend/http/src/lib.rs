@@ -996,7 +996,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
 }
 
 async fn rerun_offer(graph: &datalib_dag::Graph, sync: &supervisor::SyncControl) -> Vec<String> {
-    let record = match sync.mailbox().await {
+    let record = match sync.supervisor_store().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
     };
@@ -1412,7 +1412,7 @@ pub async fn dag_record(
     sync: &supervisor::SyncControl,
 ) -> anyhow::Result<DagRecord> {
     let started = std::time::Instant::now();
-    let loaded = match sync.mailbox().await {
+    let loaded = match sync.supervisor_store().await {
         Ok(store) => store.load_record().await,
         Err(e) => Err(e),
     };
@@ -1745,13 +1745,13 @@ fn internal(e: anyhow::Error) -> Refusal {
     (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}"))
 }
 
-async fn mailbox(s: &AppState) -> Result<&datalib_dag::supervisor::store::Store, Refusal> {
-    s.sync.mailbox().await.map_err(internal)
+async fn supervisor_store(s: &AppState) -> Result<&datalib_dag::supervisor::store::Store, Refusal> {
+    s.sync.supervisor_store().await.map_err(internal)
 }
 
 /// `GET /api/requests` — the open requests, then the newest closed ones.
 async fn requests_list(State(s): State<AppState>) -> Result<Json<Vec<RequestView>>, Refusal> {
-    let rows = mailbox(&s)
+    let rows = supervisor_store(&s)
         .await?
         .recent_requests(100)
         .await
@@ -1779,7 +1779,7 @@ async fn request_open(
             format!("the config has no step {unknown:?}"),
         ));
     }
-    let store = mailbox(&s).await?;
+    let store = supervisor_store(&s).await?;
     let by = req.by.unwrap_or_else(|| "ui".to_string());
     let open = store.open_requests().await.map_err(internal)?;
     let mut listener =
@@ -1854,7 +1854,7 @@ async fn request_stop(
     Path(id): Path<String>,
     body: axum::body::Bytes,
 ) -> Result<StatusCode, Refusal> {
-    let store = mailbox(&s).await?;
+    let store = supervisor_store(&s).await?;
     if store.request(&id).await.map_err(internal)?.is_none() {
         return Err((StatusCode::NOT_FOUND, format!("no request {id}")));
     }
@@ -1878,7 +1878,7 @@ async fn step_turn_off(
         ));
     }
     let by = by_of(&body)?;
-    mailbox(&s)
+    supervisor_store(&s)
         .await?
         .turn_off(&id, &by)
         .await
@@ -1892,7 +1892,11 @@ async fn step_turn_on(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, Refusal> {
-    mailbox(&s).await?.turn_on(&id).await.map_err(internal)?;
+    supervisor_store(&s)
+        .await?
+        .turn_on(&id)
+        .await
+        .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

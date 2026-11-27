@@ -81,7 +81,7 @@ pub struct SyncControl {
     /// server's to report.
     started_at_utc: Arc<String>,
     /// The handlers' own connection, beside the loop's.
-    mailbox: Arc<OnceCell<Store>>,
+    supervisor_store: Arc<OnceCell<Store>>,
     stop: Arc<watch::Sender<bool>>,
     exited: Arc<watch::Sender<bool>>,
 }
@@ -96,7 +96,7 @@ impl SyncControl {
             upgrade: Arc::new(Mutex::new(Upgrade::default())),
             trouble: Arc::new(Mutex::new(None)),
             started_at_utc: Arc::new(datalib_dag::supervisor::store::now_utc()),
-            mailbox: Arc::new(OnceCell::new()),
+            supervisor_store: Arc::new(OnceCell::new()),
             stop: Arc::new(watch::channel(false).0),
             exited: Arc::new(watch::channel(false).0),
         }
@@ -139,7 +139,7 @@ impl SyncControl {
     /// The newest compaction or collection opened since this server
     /// started, with how each of its steps stands.
     pub async fn free_space(&self) -> anyhow::Result<Option<FreeSpace>> {
-        let store = self.mailbox().await?;
+        let store = self.supervisor_store().await?;
         let Some(wipe) = store.latest_shrink_since(&self.started_at_utc).await? else {
             return Ok(None);
         };
@@ -155,8 +155,8 @@ impl SyncControl {
         }))
     }
 
-    pub async fn mailbox(&self) -> anyhow::Result<&Store> {
-        self.mailbox
+    pub async fn supervisor_store(&self) -> anyhow::Result<&Store> {
+        self.supervisor_store
             .get_or_try_init(|| Store::open(&self.root))
             .await
     }
@@ -217,7 +217,10 @@ impl SyncControl {
         by: &str,
         wait: Duration,
     ) -> Result<WipeAnswer, String> {
-        let store = self.mailbox().await.map_err(|e| format!("{e:#}"))?;
+        let store = self
+            .supervisor_store()
+            .await
+            .map_err(|e| format!("{e:#}"))?;
         // Made before the row, so the loop's close is not missed.
         let mut listener = Listener::new(store, "a wipe's answer");
         let id = store
@@ -566,7 +569,7 @@ mod tests {
             )
             .await;
         assert_eq!(answer, Ok(WipeAnswer::Queued));
-        let store = control.mailbox().await.unwrap();
+        let store = control.supervisor_store().await.unwrap();
         let open = store.open_wipes().await.unwrap();
         assert_eq!(open.len(), 1, "{open:?}");
         drop(held);

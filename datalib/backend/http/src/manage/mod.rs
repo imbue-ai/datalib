@@ -513,7 +513,7 @@ fn raw_stores(outputs: &[OutputStorage]) -> HashMap<String, String> {
 
 /// The requests `record`'s steps are being run for, by id.
 async fn requests_named(s: &AppState, record: &DagRecord) -> HashMap<String, RequestRow> {
-    let Ok(store) = s.sync.mailbox().await else {
+    let Ok(store) = s.sync.supervisor_store().await else {
         return HashMap::new();
     };
     let mut out = HashMap::new();

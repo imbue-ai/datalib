@@ -76,12 +76,12 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
 
 /// A sync of `groups`' downloads, opened before the server is up.
 async fn sync_before_boot(root: &Path, groups: &[&str]) {
-    let mailbox = datalib_dag::supervisor::store::Store::open(root)
+    let supervisor_store = datalib_dag::supervisor::store::Store::open(root)
         .await
         .unwrap();
     let roots: Vec<String> = groups.iter().map(|g| format!("{g}/ingest")).collect();
-    mailbox.open_request(&roots, "ui").await.unwrap();
-    mailbox.close().await;
+    supervisor_store.open_request(&roots, "ui").await.unwrap();
+    supervisor_store.close().await;
 }
 
 async fn sync_a_and_wait(root: &Path) {
@@ -309,10 +309,10 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
     let rows = get(&state, "/api/manage/rows").await;
     assert_eq!(rows["sync_paused"], serde_json::Value::Null, "{rows}");
 
-    let mailbox = datalib_dag::supervisor::store::Store::open(&root)
+    let supervisor_store = datalib_dag::supervisor::store::Store::open(&root)
         .await
         .unwrap();
-    let id = mailbox
+    let id = supervisor_store
         .open_request(&["a/ingest".into(), "c/out".into()], "ui")
         .await
         .unwrap();
@@ -324,7 +324,7 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    while mailbox.load_record().await.unwrap().steps["a/ingest"].waiting_for
+    while supervisor_store.load_record().await.unwrap().steps["a/ingest"].waiting_for
         != Some(WaitKind::Prepare)
     {
         assert!(
@@ -338,11 +338,14 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
         "{:?}",
         invoked(&root)
     );
-    assert_eq!(mailbox.request(&id).await.unwrap().unwrap().closed, None);
+    assert_eq!(
+        supervisor_store.request(&id).await.unwrap().unwrap().closed,
+        None
+    );
 
     std::fs::remove_file(root.join("hold")).unwrap();
     until_invoked(&root, "sync a/ingest").await;
-    mailbox.close().await;
+    supervisor_store.close().await;
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 

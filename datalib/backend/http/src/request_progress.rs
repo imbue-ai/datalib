@@ -13,8 +13,8 @@ use serde::Serialize;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 use crate::{
-    internal, live_progress, mailbox, supervisor, AppState, DagStepProgress, DagStepRun, Refusal,
-    RequestView,
+    internal, live_progress, supervisor, supervisor_store, AppState, DagStepProgress, DagStepRun,
+    Refusal, RequestView,
 };
 
 /// Where a step stands for one request.
@@ -113,7 +113,7 @@ pub async fn get(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<RequestProgress>, Refusal> {
-    let store = mailbox(&s).await?;
+    let store = supervisor_store(&s).await?;
     let Some(request) = store.request(&id).await.map_err(internal)? else {
         return Err((StatusCode::NOT_FOUND, format!("no request {id}")));
     };

@@ -151,7 +151,7 @@ pub async fn build_state(
     // Made here, before the runner starts and before any handler reads
     // them: two processes making one of these files at once can leave
     // it unreadable.
-    if let Err(e) = sync.mailbox().await {
+    if let Err(e) = sync.supervisor_store().await {
         tracing::error!("supervisor: cannot open the request store: {e:#}");
     }
     if let Err(e) = datalib_runs::prepare_store(&root).await {
