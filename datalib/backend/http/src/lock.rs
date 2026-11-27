@@ -77,7 +77,7 @@ impl DataRootLock {
     /// Record where this server can be reached, so a later would-be
     /// owner's refusal can point at it. Called once the listener has a
     /// port; failure to write is not worth failing a boot over.
-    pub fn announce(&mut self, base_url: &str) {
+    pub fn write_url(&mut self, base_url: &str) {
         self.0.describe(&format!(
             "served at {base_url} by pid {}",
             std::process::id()
@@ -100,7 +100,7 @@ mod tests {
     fn a_second_claim_on_one_root_is_refused() {
         let tmp = tempfile::tempdir().unwrap();
         let mut first = DataRootLock::acquire(tmp.path()).expect("first claim");
-        first.announce("http://127.0.0.1:8731");
+        first.write_url("http://127.0.0.1:8731");
 
         let err = DataRootLock::acquire(tmp.path()).expect_err("second claim must fail");
         let msg = err.to_string();

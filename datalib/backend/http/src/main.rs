@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
     let url = format!("{base_url}/?token={}", api_token.value());
     // Record where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
-    root_lock.announce(&base_url);
+    root_lock.write_url(&base_url);
     tracing::info!("datalib-http listening on {base_url}");
     tracing::info!("api token: {}", api_token.token_file().display());
     // Only to a terminal, for a person to click. Stderr anywhere else may be
