@@ -161,6 +161,13 @@ In docs — and in the few comments you keep — be clear and unhurried,
 explain a term the first time it appears, and don't assume the reader
 already shares your context. Plainspoken means *clear*, not *long*.
 
+**Name the operation the code performs, not a higher-level stand-in.**
+Say "runs the step's command with `--prepare` appended" and "when that
+process exits", not "asks the step" and "the step answers". The
+stand-in saves a few words, and the reader then has to work out what it
+maps to. Someone reading an explanation, a review or a doc usually wants
+the lower level; write that, even when it is longer.
+
 ## Explain a change by what it does, before and after
 
 **A PR description, a review, or any explanation of a change says what
