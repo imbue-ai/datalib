@@ -69,7 +69,12 @@ async fn the_first_run_reads_every_day_since_the_eldest_birthday() {
     )
     .await;
     let s = r.unwrap();
-    assert_eq!((s.kids, s.days, s.days_recorded_read), (1, 5, 3), "{}", s.line());
+    assert_eq!(
+        (s.kids, s.days, s.days_recorded_read),
+        (1, 5, 3),
+        "{}",
+        s.line()
+    );
     assert_eq!(asked.count("StatusList"), 5);
     let ids: Vec<(String, String)> = rows(
         store.path(),
@@ -133,7 +138,12 @@ async fn later_runs_read_only_the_days_not_yet_recorded_as_read() {
 
     let (later, asked) = run(store.path(), after.path(), Edition::After, sync).await;
     let later = later.unwrap();
-    assert_eq!((later.days, later.days_recorded_read), (4, 2), "{}", later.line());
+    assert_eq!(
+        (later.days, later.days_recorded_read),
+        (4, 2),
+        "{}",
+        later.line()
+    );
     assert_eq!(asked.count("StatusList"), 4);
     let edited = entry(store.path(), tape::EDITED).await.unwrap();
     assert_eq!(edited["Txt"], "Wesley slept 3 hrs");

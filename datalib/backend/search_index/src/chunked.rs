@@ -173,9 +173,7 @@ impl InferenceCache {
             .bind(&uuids)
             .execute(&mut *tx)
             .await?;
-            tx.commit()
-                .await
-                .context("commit the deleted documents")?;
+            tx.commit().await.context("commit the deleted documents")?;
         }
         Ok(())
     }
