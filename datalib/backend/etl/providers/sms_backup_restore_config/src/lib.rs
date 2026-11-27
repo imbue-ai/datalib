@@ -1,5 +1,5 @@
-//! Provider-owned config schema for the `sms_backup_restore` source (Program A
-//! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
+//! Provider-owned config schema for the `sms_backup_restore` source.
+//! Schema-only (serde + anyhow), so the orchestrator can name
 //! `SmsBackupRestoreConfig` without linking the provider.
 
 use datalib_source_common::{LocalPath, SourceCommon};

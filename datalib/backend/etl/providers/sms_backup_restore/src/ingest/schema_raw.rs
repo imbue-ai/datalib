@@ -10,12 +10,12 @@ use uuid::Uuid;
 /// Entity tables — each gets a paired `<table>_bookkeeping` sidecar.
 pub const DATA_TABLES: &[&str] = &["sms_messages", "sms_calls"];
 
-/// Per-provider CAS edge tables. Wiped by reset alongside
+/// Per-provider CAS edge tables. Emptied by a reset alongside
 /// [`DATA_TABLES`] (CAS bytes survive).
 pub const EDGE_TABLES: &[&str] = &["sms_attachments"];
 
-/// Every file-cursor scope this provider owns; reset wipes them in one
-/// go via `clear_scope_prefix`.
+/// The prefix of every file-cursor scope this provider owns
+/// (`ingest::SCOPE`).
 pub const CURSOR_SCOPE_PREFIX: &str = "sms_backup_restore/";
 
 fn sms_ns() -> Uuid {
