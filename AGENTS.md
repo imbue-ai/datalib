@@ -165,19 +165,26 @@ is the literal description.
 
 **Words: say what happens.**
 
-- **Prefer the operation itself to a higher-level word for it.** "Runs
-  the step's command with `--prepare` appended" and "when that process
-  exits" say what happens; "asks the step" and "the step answers" make
-  the reader work it out. A higher-level word is justified only when
-  all of these hold:
-  1. **A reader understands it without context.** "Ask" fails: nothing
-     in it says a `--prepare` invocation is meant. "The step's
-     `--prepare` run" passes, though it does not spell out the exact
-     operation.
+- **Prefer the operation itself to a higher-level word for it.** Write
+  "sends SIGINT to the step's process group", not "pokes the step";
+  "deletes the request's row", not "the loop forgets the request". A
+  longer example: each time the runner starts, it runs every step whose
+  program takes the `prepare` verb with `--prepare` appended to its
+  command, and the program exits once it has brought what it stored to
+  this build's shape. Write "runs the step's command with `--prepare`
+  appended" and "when that process exits", not "asks the step" and "the
+  step answers". A higher-level word is justified only when all of
+  these hold:
+  1. **A reader understands it without context.** "Asks the step"
+     fails: nothing in it says a `--prepare` invocation is meant. "The
+     step's `--prepare` run" passes, though it does not spell out the
+     exact operation.
   2. **It saves more than it costs.** It earns its place when it stands
      for a series of connected operations that cannot be described more
-     briefly. As a stand-in for one operation it almost never does:
-     name the operation, or abbreviate it transparently.
+     briefly: "a sync" for downloading, rendering and indexing a source.
+     As a stand-in for one operation, like "pokes" for one signal, it
+     almost never does: name the operation, or abbreviate it
+     transparently.
   3. **It needs no definition.** Defining a word first is one more
      thing the reader has to hold. Where the plain description is
      available, use it instead of defining a word for it.
