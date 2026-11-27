@@ -62,7 +62,10 @@ renders and the search index are rebuilt. On a large library that takes
 a while, longer still for a source searched by meaning, since every
 passage is embedded again. A source whose upstream is gone, such as an
 export you no longer have, fails its download on each sync and keeps
-what it has, and everything that reads it still works.
+what it has, and everything that reads it still works. To stop the
+failures, set `download = false` under the download step's
+`[steps.params.common]`; the source then keeps what it has without
+trying ([A source that no longer downloads](../dev/config_model.md#a-source-that-no-longer-downloads)).
 
 ## What is tested
 

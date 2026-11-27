@@ -39,6 +39,9 @@ pub struct PlannedSource {
 /// longer share a run context.
 pub enum Wave {
     Ingest(Vec<Box<dyn DataProcessor>>),
+    /// A download whose params say `common.download = false`: nothing to
+    /// run, and the raw store it has is what it publishes.
+    Kept,
     Render(Vec<Box<dyn RenderProcessor>>),
 }
 
@@ -46,9 +49,22 @@ impl Wave {
     pub fn len(&self) -> usize {
         match self {
             Wave::Ingest(p) => p.len(),
+            Wave::Kept => 0,
             Wave::Render(p) => p.len(),
         }
     }
+}
+
+/// The wave of a download that no longer runs, or why `source_type`
+/// cannot keep what it has without its inputs.
+fn kept(source_type: SourceType) -> Result<Wave> {
+    anyhow::ensure!(
+        !source_type.renders_files_where_they_lie(),
+        "a {source_type} source keeps a fingerprint of each file, not its bytes, and reads \
+         the file itself when it renders, so `common.download = false` cannot keep it without \
+         its folder; leave the download on and keep the folder"
+    );
+    Ok(Wave::Kept)
 }
 
 impl std::fmt::Debug for PlannedSource {
@@ -127,7 +143,11 @@ pub fn plan(
                         raw_path,
                         reach: Some(reach),
                         download_params,
-                        processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
+                        processors: if cfg.common.download {
+                            Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?)
+                        } else {
+                            kept(source_type)?
+                        },
                     }
                 }
                 Phase::Render => {
@@ -177,7 +197,11 @@ pub fn plan(
                         raw_path: cfg.common.raw_path().to_path_buf(),
                         reach: Some(crate::methods::reach_or_refuse(source_type, &held)?),
                         download_params: cfg.common.download_params.clone(),
-                        processors: Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?),
+                        processors: if cfg.common.download {
+                            Wave::Ingest($dlp::processor::plan_ingest(ctx, cfg)?)
+                        } else {
+                            kept(source_type)?
+                        },
                     }
                 }
                 Phase::Render => {
@@ -765,6 +789,52 @@ mod tests {
         let err = format!("{err:#}");
         assert!(err.contains("unknown field"), "{err}");
         assert!(!err.contains("where the pdf data comes from"), "{err}");
+    }
+
+    /// `common.download = false` plans a download with nothing to run,
+    /// whatever its method names; left out, the download runs. A PDF
+    /// source, whose render reads its files where they lie, is refused.
+    #[test]
+    fn a_download_turned_off_in_its_params_plans_nothing_to_run() {
+        let td = tempfile::tempdir().unwrap();
+        let wave = |ty: &str, params| {
+            plan(
+                ty,
+                Phase::Ingest,
+                "s",
+                raw_dir(td.path(), "s", Phase::Ingest),
+                params,
+            )
+            .map(|p| p.processors)
+        };
+        let export = serde_json::json!({"path": "/gone"});
+        assert!(matches!(
+            wave("linkedin", serde_json::json!({"export": export})).unwrap(),
+            Wave::Ingest(_)
+        ));
+        assert!(matches!(
+            wave(
+                "linkedin",
+                serde_json::json!({"export": export, "common": {"download": true}})
+            )
+            .unwrap(),
+            Wave::Ingest(_)
+        ));
+        assert!(matches!(
+            wave(
+                "linkedin",
+                serde_json::json!({"export": export, "common": {"download": false}})
+            )
+            .unwrap(),
+            Wave::Kept
+        ));
+        let Err(err) = wave(
+            "pdf",
+            serde_json::json!({"fswalk": export, "common": {"download": false}}),
+        ) else {
+            panic!("a pdf source that does not download was planned");
+        };
+        assert!(format!("{err:#}").contains("keep the folder"), "{err:#}");
     }
 
     /// A config in the shape written before method tables — `sync`, or
