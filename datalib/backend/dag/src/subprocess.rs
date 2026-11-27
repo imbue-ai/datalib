@@ -1863,7 +1863,7 @@ mod tests {
     #[tokio::test]
     async fn a_launch_records_each_prepare_outcome_and_reruns_what_needs_it() {
         let root = tempfile::tempdir().unwrap();
-        let answering = |id: &'static str, input: Option<&str>, answer: &'static str| {
+        let reporting = |id: &'static str, input: Option<&str>, outcome: &'static str| {
             let mut spec = StepSpec::new(
                 id,
                 sh(&format!(
@@ -1871,7 +1871,7 @@ mod tests {
                     mkdir -p {id}
                     if [ "$0" = --prepare ]; then
                         echo prepare >> {id}/log.txt
-                        echo '{answer}'
+                        echo '{outcome}'
                     else
                         echo run >> {id}/log.txt
                         echo '{{"event":"outcome","outputs":[{{"path":"{id}","version":"v1"}}]}}'
