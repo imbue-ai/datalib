@@ -15,8 +15,8 @@ use super::{applet_command, seed_doc};
 use crate::support::{get_json, state_with_applets, TEST_TOKEN};
 
 async fn state_with(root: &Path, config_toml: &str) -> AppState {
-    let cfg = datalib_dag::config::parse(config_toml).expect("fixture config parses");
-    datalib_dag::config::validate_applets(&cfg).expect("fixture config is valid");
+    let cfg = datalib_config::parse(config_toml).expect("fixture config parses");
+    datalib_config::validate_applets(&cfg).expect("fixture config is valid");
     let applets = AppletRegistry::build(cfg.applets, root.to_path_buf(), None);
     state_with_applets(root, applets).await
 }

@@ -4,7 +4,7 @@
 // trailing comma and the comments and blank lines between the ids. An
 // edit is refused unless it reads back as the ids asked for. The server's
 // config upgrade edits an array the same way, in Rust
-// (`datalib/backend/dag/src/config_array.rs`, over `config_lex.rs`).
+// (`datalib/backend/config/src/array.rs`, over `lex.rs`).
 
 import { parseTOML, getStaticTOMLValue } from "toml-eslint-parser";
 

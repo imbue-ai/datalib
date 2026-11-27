@@ -30,11 +30,11 @@ use axum::Json;
 use datalib_columns::{
     source_catalog, Action, Chip, ColumnSpec, ColumnType, Identity, Quantity, Sample, Timeseries,
 };
+use datalib_config::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
+use datalib_config::{Diagnostic, EntryKind, Severity};
 use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::store::RequestRow;
 use datalib_dag::supervisor::tick::StateKind;
-use datalib_dag::written::{WrittenApplet, WrittenEntries, WrittenGroup, WrittenStep};
-use datalib_dag::{Diagnostic, EntryKind, Severity};
 use serde::{Deserialize, Serialize};
 
 use crate::usage::OutputStorage;
@@ -372,7 +372,7 @@ async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refu
         window_secs: storage.window_secs,
         measured_at_utc: storage.measured_at_utc.clone(),
     };
-    let written = match datalib_dag::written::entries_as_written(&text) {
+    let written = match datalib_config::written::entries_as_written(&text) {
         Ok(w) => w,
         Err(e) => {
             took.assembly = assembly_started.elapsed();
@@ -389,7 +389,7 @@ async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refu
             return Ok((response, took));
         }
     };
-    let diagnostics = datalib_dag::config::check_text(&text).diagnostics;
+    let diagnostics = datalib_dag::config_check::check_text(&text).diagnostics;
     let applet_errors = s.applets.frontend_view().applet_errors;
 
     let raw_stores = raw_stores(&storage.outputs);

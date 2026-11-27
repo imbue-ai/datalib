@@ -14,8 +14,8 @@ use std::collections::BTreeMap;
 use std::ops::Range;
 
 use anyhow::{Context as _, Result};
-use datalib_dag::config_array::edit_string_array;
-use datalib_dag::config_order::entry_ranges;
+use datalib_config::array::edit_string_array;
+use datalib_config::order::entry_ranges;
 use serde::Deserialize;
 use toml::Spanned;
 

@@ -40,10 +40,10 @@ pub(crate) fn assert_current_shape(name: &str, path: &std::path::Path) {
 
 /// `name` is only used for panic messages.
 pub(crate) fn validate_config(name: &str, path: &std::path::Path) {
-    let (cfg, _data_root) = datalib_dag::config::load(path)
+    let (cfg, _data_root) = datalib_config::load(path)
         .unwrap_or_else(|e| panic!("{name}: failed to load as a DAG config: {e:#}"));
-    let specs =
-        datalib_dag::config::to_specs(&cfg).unwrap_or_else(|e| panic!("{name}: to_specs: {e:#}"));
+    let specs = datalib_dag::config_check::to_specs(&cfg)
+        .unwrap_or_else(|e| panic!("{name}: to_specs: {e:#}"));
     datalib_dag::Graph::build(specs).unwrap_or_else(|e| panic!("{name}: graph build: {e:#}"));
 
     let data_root = tempfile::tempdir().expect("tempdir");
@@ -94,7 +94,7 @@ fn the_agent_config_guides_example_loads_and_plans() {
     std::fs::write(&path, toml).expect("write the example");
     validate_config("agent_config_guide.md", &path);
     assert_current_shape("agent_config_guide.md", &path);
-    let check = datalib_dag::config::check_text(toml);
+    let check = datalib_dag::config_check::check_text(toml);
     assert!(
         !check
             .diagnostics

@@ -19,6 +19,7 @@ rust_library(
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
+        "//datalib/backend/config:datalib_config",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/env:datalib_env",
         "@datalib_crates//:anyhow",

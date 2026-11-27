@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
-use crate::config::ConfigCheck;
+use crate::config_check::ConfigCheck;
 use crate::lock::RunnerLock;
 use crate::scheduler::Runner;
 use crate::supervisor::announce::Listener;
@@ -47,7 +47,7 @@ impl ServeOptions {
     fn config_path(&self) -> PathBuf {
         self.config
             .clone()
-            .unwrap_or_else(|| crate::config::root_config_path(&self.root))
+            .unwrap_or_else(|| datalib_config::root_config_path(&self.root))
     }
 }
 
@@ -243,7 +243,7 @@ async fn run_the_loop(
 
 /// The config as the loop would run it, or why it cannot.
 pub fn load_config(root: &Path) -> Result<ConfigCheck, String> {
-    load_config_at(root, &crate::config::root_config_path(root))
+    load_config_at(root, &datalib_config::root_config_path(root))
 }
 
 /// The config at `path`, for the library at `root`, as the loop would run it, or why it cannot.
@@ -256,7 +256,7 @@ fn load_config_at(root: &Path, path: &Path) -> Result<ConfigCheck, String> {
             root.display()
         ));
     }
-    let (checked, _) = crate::config::load_graded(path).map_err(|e| format!("{e:#}"))?;
+    let (checked, _) = crate::config_check::load_graded(path).map_err(|e| format!("{e:#}"))?;
     if checked.is_fatal() {
         return Err(format!(
             "{} is not a config: nothing in it could be read\n{}",
@@ -309,7 +309,7 @@ pub const UPGRADE_REQUESTER: &str = "upgrade";
 /// The environment every step of one run gets.
 fn steps_env(
     opts: &ServeOptions,
-    cfg: &crate::config::DagConfig,
+    cfg: &datalib_config::DagConfig,
     now: &str,
     run_id: &str,
 ) -> anyhow::Result<host::StepEnv> {

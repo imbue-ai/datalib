@@ -11,10 +11,10 @@ use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
 
-use datalib_dag::config::DagConfig;
-use datalib_dag::config_array::edit_string_array;
-use datalib_dag::config_order::entry_ranges;
-use datalib_dag::input_pattern::names;
+use datalib_config::array::edit_string_array;
+use datalib_config::input_pattern::names;
+use datalib_config::order::entry_ranges;
+use datalib_config::DagConfig;
 use datalib_obs::status_line;
 use datalib_runtime::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
 use datalib_source_common::ExampleKind;
@@ -464,13 +464,13 @@ fn is_index_entry(entry: &str) -> bool {
 /// refuse in `before`: an entry it drops, or a step of `group` whose
 /// params a sync would refuse. Rendered against `path`, one per line.
 pub fn new_problems(path: &Path, before: &str, after: &str, group: &str) -> Vec<String> {
-    let was = datalib_dag::config::check_text(before);
-    let now = datalib_dag::config::check_text(after);
+    let was = datalib_dag::config_check::check_text(before);
+    let now = datalib_dag::config_check::check_text(after);
     let mut out = Vec::new();
     if now.is_fatal() || now.dropped() > was.dropped() {
         out.push(now.render(path));
     }
-    let data_root = datalib_dag::config::data_root_of(path, &now.cfg);
+    let data_root = datalib_config::data_root_of(path, &now.cfg);
     out.extend(
         params_problems(&now.cfg, &data_root, group)
             .into_iter()
@@ -601,21 +601,17 @@ mod tests {
     /// Loads with nothing to report, and reads in data-flow order: the
     /// stanza went where `topo-sort-config` would leave it.
     fn checks_clean(text: &str) {
-        let checked = datalib_dag::config::check_text(text);
+        let checked = datalib_dag::config_check::check_text(text);
         assert!(
             checked.is_clean(),
             "{}\n---\n{text}",
             checked.render(Path::new("config.toml"))
         );
-        assert_eq!(
-            datalib_dag::config_order::sort_config(text),
-            Ok(None),
-            "{text}"
-        );
+        assert_eq!(datalib_config::order::sort_config(text), Ok(None), "{text}");
     }
 
     fn inputs_of(text: &str, step: &str) -> Vec<String> {
-        let checked = datalib_dag::config::check_text(text);
+        let checked = datalib_dag::config_check::check_text(text);
         let s = checked
             .cfg
             .steps
@@ -661,7 +657,7 @@ mod tests {
                 "unified_grid_and_search_index/unified_grid_and_search_index".to_string()
             )]
         );
-        let cfg = datalib_dag::config::check_text(&appended.text).cfg;
+        let cfg = datalib_dag::config_check::check_text(&appended.text).cfg;
         assert_eq!(cfg.programs.len(), 1);
         assert_eq!(cfg.programs[0].command, "datalib-step");
         let locks: Vec<&str> = cfg.locks.iter().map(|l| l.name.as_str()).collect();

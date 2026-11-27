@@ -69,7 +69,7 @@ pub fn refusal(latest: &Graph, kind: JobKind, targets: &[String]) -> Option<Stri
             .find(|t| !latest.by_id.contains_key(*t))
             .map(|t| format!("the config has no step {t:?}")),
         JobKind::Purge => {
-            if let Some(bad) = targets.iter().find(|g| !crate::config::usable_group_id(g)) {
+            if let Some(bad) = targets.iter().find(|g| !datalib_config::usable_group_id(g)) {
                 return Some(format!("{bad:?} is not a group id"));
             }
             let named: BTreeSet<&str> = latest.steps.iter().map(|s| tree_group(&s.id)).collect();
@@ -251,9 +251,9 @@ mod tests {
         ]);
         for id in ["a/ingest", "a/render", "b/render", "idx/grid"] {
             let i = g.by_id[id];
-            g.steps[i].verbs.insert(crate::step::Verb::Compact);
+            g.steps[i].verbs.insert(datalib_config::Verb::Compact);
             if id != "b/render" {
-                g.steps[i].verbs.insert(crate::step::Verb::Collect);
+                g.steps[i].verbs.insert(datalib_config::Verb::Collect);
             }
         }
         let names = |ix: Vec<usize>| -> Vec<String> {

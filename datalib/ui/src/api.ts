@@ -861,7 +861,7 @@ export async function fetchChatBody(markdownUuid: string, signal?: AbortSignal):
 // --- Config / setup API ----------------------------------------------------
 
 // One thing wrong with the config, and how much of it that costs.
-// Mirrors `datalib_dag::diagnostics` — see that module for why there
+// Mirrors `datalib_config::diagnostics` — see that module for why there
 // are four severities and not two. In short:
 export type Severity = "fatal" | "rejected" | "blocked" | "warning";
 

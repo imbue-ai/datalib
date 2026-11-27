@@ -54,7 +54,7 @@ artifact path, and nothing has to be matched against anything.
 
 One input may name many steps: `*/render_markdown` is every step whose id has
 two parts, the second `render_markdown`. The loader expands it to those ids before anything
-else sees the step (`src/input_pattern.rs`), so the graph, the fingerprint and
+else sees the step (`datalib/backend/config/src/input_pattern.rs`), so the graph, the fingerprint and
 the step's `DATALIB_DAG_INPUTS` hold ids only, and a source added to the file is read
 without its readers being edited. A pattern is still written in the config:
 the edges stay where a person can read them, and `check` prints what each
@@ -83,7 +83,7 @@ was rejected for a bad key.
 A pattern does not cascade. It stands for the steps that can run, so a step
 dropped for its own reasons, or for an input it names by id, falls out of
 every pattern that would have named it (`without_broken_matches` in
-`src/config.rs`). One broken source then costs its own steps and not the grid
+`src/config_check.rs`). One broken source then costs its own steps and not the grid
 that reads every render by pattern; named by id, it still blocks the step
 that names it.
 
@@ -556,7 +556,10 @@ colon (`<fingerprint>:<version>`) and never equals `UNKNOWN`.
 
 The loader returns a list of diagnostics rather than an `Err`, so that one
 stray key in one step cannot take down the grid, search, the document view
-and every applet — the applets are declared in the same file.
+and every applet — the applets are declared in the same file. The loader is
+two parts: `datalib_config` (`datalib/backend/config/`) reads the file and
+checks each entry, and `src/config_check.rs` builds the graph from what it
+kept and adds what the graph drops.
 
 The four severities say what a problem *costs*:
 
@@ -578,7 +581,7 @@ is filed under, and an applet filed under a group that does not exist.
 The Manage screen's System row counts the warnings and shows their
 words on hover. A config in the shape from before the runner stopped
 knowing `datalib-step` is refused entry by entry, each refusal naming
-the rewrite (`config::RETIRED_SHAPE_HELP`): a step that writes `group`
+the rewrite (`datalib_config::RETIRED_SHAPE_HELP`): a step that writes `group`
 or `function`, or has no `command`, is `Rejected`, and so is a
 `[[groups]]` entry with `source`; a top-level `checkpoint_cadence`,
 `render_pages`, `[modal]`, `embed_contexts` or `embed_search_index` is
@@ -588,7 +591,7 @@ or `function`, or has no `command`, is `Rejected`, and so is a
 shapes").
 The full list of what the loader drops is in
 [`config_model.md`](../../../docs/dev/config_model.md) § "What the loader checks". A warning passes the strict door too
-(`config::parse`, and the `PUT /api/config` behind the editor): it
+(`datalib_config::parse`, and the `PUT /api/config` behind the editor): it
 changes nothing about what runs, and refusing it would make the editor
 unable to save a config the app is happily running on.
 

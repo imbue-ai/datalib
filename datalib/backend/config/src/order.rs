@@ -8,7 +8,7 @@
 //! The file is cut into entries as text, never re-serialized, and the
 //! result is refused unless it parses to the same entries as the input.
 
-use crate::config_lex::Kind;
+use crate::lex::Kind;
 
 /// The config text in data-flow order, or `None` when it already is.
 /// `Err` when the text is not TOML, or when the reordered text would not
@@ -96,7 +96,7 @@ impl Entry {
             };
             let group = step
                 .as_deref()
-                .and_then(crate::config::group_of)
+                .and_then(crate::group_of)
                 .map(str::to_string);
             let inputs = s
                 .get("inputs")
@@ -343,7 +343,7 @@ struct Line<'a> {
 /// Each line, told apart from a `[` inside a multi-line string or array
 /// by the tokens around it.
 fn lines(text: &str) -> Vec<Line<'_>> {
-    let tokens = crate::config_lex::tokens(text);
+    let tokens = crate::lex::tokens(text);
     let mut out = Vec::new();
     let mut depth = 0usize;
     let mut next = 0;

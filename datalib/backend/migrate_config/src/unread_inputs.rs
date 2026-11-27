@@ -11,7 +11,7 @@
 
 use crate::retired::names_datalib_step;
 use anyhow::{Context as _, Result};
-use datalib_dag::config_array::edit_string_array;
+use datalib_config::array::edit_string_array;
 use serde::Deserialize;
 
 use crate::index_name::NEW as UNIFIED_GRID_AND_SEARCH_INDEX_DIR;
@@ -167,13 +167,13 @@ command = "datalib-step"
 inputs = ["*/render_time_series"]
 "#;
 
-    fn check(text: &str) -> datalib_dag::config::ConfigCheck {
+    fn check(text: &str) -> datalib_dag::config_check::ConfigCheck {
         let check = crate::check_as_current(text);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
     }
 
-    fn inputs_of(check: &datalib_dag::config::ConfigCheck, id: &str) -> Vec<String> {
+    fn inputs_of(check: &datalib_dag::config_check::ConfigCheck, id: &str) -> Vec<String> {
         let step = check.cfg.steps.iter().find(|s| s.id == id).unwrap();
         step.inputs.clone()
     }

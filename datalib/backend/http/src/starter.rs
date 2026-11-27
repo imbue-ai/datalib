@@ -6,7 +6,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use datalib_dag::config::{owner_only_options, root_config_path};
+use datalib_config::{owner_only_options, root_config_path};
 
 /// Non-empty on purpose: the index step is source-independent and belongs
 /// in every pipeline. It reads every source by pattern, so adding a source

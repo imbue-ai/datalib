@@ -4,46 +4,14 @@
 //! so `slots = 1` is a mutex and `slots = N` lets N run at once. The
 //! config declares them (`[[locks]]`) and a step names the ones it holds
 //! (`locks = [...]`); a step that names none holds one default lock
-//! ([`default_for`]). The tick does the accounting (`tick.rs`); this is
-//! the vocabulary. `dag/README.md` § "What keeps steps apart: locks".
+//! ([`default_for`]). The tick does the accounting (`tick.rs`); the words
+//! a config uses are `datalib_config::locks`. `dag/README.md` § "What
+//! keeps steps apart: locks".
 
-use serde::{Deserialize, Serialize};
-use strum::{EnumString, IntoStaticStr, VariantArray};
+use datalib_config::locks::{Hold, CPU, DEFAULT_LOCKS, NETWORK};
+use datalib_config::LockEntry;
 
 use crate::step::StepSpec;
-
-/// How a step holds a lock.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    EnumString,
-    IntoStaticStr,
-    VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum Hold {
-    /// One slot.
-    Shared,
-    /// Every slot: nobody else holds it at the same time.
-    Exclusive,
-}
-
-impl Hold {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-}
 
 /// A declared lock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,25 +20,34 @@ pub struct LockSpec {
     pub slots: usize,
 }
 
-/// The budget a step that declares no inputs holds when it names no lock:
-/// in practice a download, so a rate limit on one keeps no render from
-/// starting.
-pub const NETWORK: &str = "network";
-/// The budget a step that reads something holds when it names no lock.
-pub const CPU: &str = "cpu";
-
 /// The locks every config has, whether or not it declares them: the two
 /// budgets, as `--parallelism 4` sizes them. A config's `[[locks]]` entry
 /// of the same name resizes one; `--parallelism N` sets both to N, over
 /// the config. Any other lock a step holds, the config declares.
 pub fn defaults() -> Vec<LockSpec> {
-    [(NETWORK, 4), (CPU, 4)]
+    DEFAULT_LOCKS
         .into_iter()
-        .map(|(name, slots)| LockSpec {
+        .map(|name| LockSpec {
             name: name.to_string(),
-            slots,
+            slots: 4,
         })
         .collect()
+}
+
+/// Every lock a step may hold: the defaults, resized or joined by what the
+/// config declares.
+pub fn declared(locks: &[LockEntry]) -> Vec<LockSpec> {
+    let mut specs = defaults();
+    for l in locks {
+        match specs.iter_mut().find(|s| s.name == l.name) {
+            Some(default) => default.slots = l.slots,
+            None => specs.push(LockSpec {
+                name: l.name.clone(),
+                slots: l.slots,
+            }),
+        }
+    }
+    specs
 }
 
 /// The lock a step holds when it names none: `network` for a step that
@@ -89,21 +66,5 @@ pub fn held_by(spec: &StepSpec) -> Vec<(String, Hold)> {
     match &spec.locks {
         Some(locks) => locks.clone(),
         None => vec![(default_for(spec).to_string(), Hold::Shared)],
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// strum and serde spell these independently; the config is read with
-    /// serde and a step's `state_detail` is written with strum.
-    #[test]
-    fn hold_as_str_matches_the_serde_spelling() {
-        for &v in Hold::VARIANTS {
-            let json = serde_json::to_string(&v).unwrap();
-            assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
-            assert_eq!(Hold::parse(v.as_str()), Some(v));
-        }
     }
 }

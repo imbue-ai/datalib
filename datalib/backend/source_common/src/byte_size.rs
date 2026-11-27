@@ -57,6 +57,23 @@ fn unit_multiplier(unit: &str) -> Option<u64> {
     Some(base.pow(power))
 }
 
+/// A byte count in decimal units, the ones [`parse`] reads, so a line
+/// quotes a size the way it was likely written.
+pub fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1000.0 && unit < UNITS.len() - 1 {
+        value /= 1000.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 /// A size: an integer of bytes, or a number and a unit. Named in
 /// `#[schemars(with = "Option<byte_size::ByteSize>")]` beside a
 /// `deserialize_opt` field, which is what reads the value; this type is
@@ -91,6 +108,12 @@ pub fn deserialize_opt<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_size_reads_back_in_decimal_units() {
+        assert_eq!(human_bytes(999), "999 B");
+        assert_eq!(human_bytes(3_200_000_000), "3.2 GB");
+    }
 
     #[test]
     fn parses_every_spelling() {

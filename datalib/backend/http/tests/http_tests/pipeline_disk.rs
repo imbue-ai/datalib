@@ -54,7 +54,7 @@ async fn the_answer_names_the_floor_and_says_when_the_disk_is_under_it() {
         available: 3_000_000_000,
         total: 500_000_000_000,
     };
-    let floor = datalib_dag::disk_space::DiskFloor {
+    let floor = datalib_config::disk_floor::DiskFloor {
         pause_below: 10_000_000_000,
         resume_at: 15_000_000_000,
     };

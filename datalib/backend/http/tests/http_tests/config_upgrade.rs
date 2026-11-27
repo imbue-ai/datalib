@@ -124,7 +124,7 @@ async fn boot_brings_an_old_index_root_forward(old: &str) {
     let text = std::fs::read_to_string(root.join("config.toml")).unwrap();
     assert!(text.starts_with("# my sources"), "{text}");
     assert!(!text.contains(&format!("\"{old}")), "{text}");
-    let check = datalib_dag::config::check_text(&text);
+    let check = datalib_dag::config_check::check_text(&text);
     assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
     assert!(check
         .cfg
@@ -232,7 +232,7 @@ async fn boot_moves_the_index_steps_tree_to_its_new_name() {
     let text = std::fs::read_to_string(root.join("config.toml")).unwrap();
     assert!(text.starts_with("# my sources"), "{text}");
     assert!(!text.contains("grid_index"), "{text}");
-    let check = datalib_dag::config::check_text(&text);
+    let check = datalib_dag::config_check::check_text(&text);
     assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
     let step = |id: &str| check.cfg.steps.iter().find(|s| s.id == id).unwrap();
     assert_eq!(step("mail/embed").inputs, [new_id]);
@@ -267,7 +267,7 @@ async fn boot_upgrades_the_config_and_keeps_the_old_one() {
         text.starts_with("# my sources"),
         "a text edit keeps the file: {text}"
     );
-    let check = datalib_dag::config::check_text(&text);
+    let check = datalib_dag::config_check::check_text(&text);
     assert!(check.is_clean(), "{:?}\n{text}", check.diagnostics);
     assert_eq!(
         std::fs::read_to_string(tmp.path().join("config.toml.bak")).unwrap(),

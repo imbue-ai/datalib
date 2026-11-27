@@ -29,7 +29,7 @@ fn writing() -> MutexGuard<'static, ()> {
 /// Write `text` as the root's config, already brought forward.
 pub fn save(root: &Path, text: &str) -> std::io::Result<()> {
     let _turn = writing();
-    let path = datalib_dag::config::root_config_path(root);
+    let path = datalib_config::root_config_path(root);
     datalib_runtime::atomic::write_owner_only(&path, text.as_bytes())?;
     upgrade_in_turn(root);
     Ok(())
@@ -51,7 +51,7 @@ pub fn upgrade(root: &Path) -> Option<PathBuf> {
 }
 
 fn upgrade_in_turn(root: &Path) -> Option<PathBuf> {
-    let path = datalib_dag::config::root_config_path(root);
+    let path = datalib_config::root_config_path(root);
     let text = std::fs::read_to_string(&path).ok()?;
     let datalib_migrate_config::Unattended {
         text: upgraded,
@@ -70,7 +70,7 @@ fn upgrade_in_turn(root: &Path) -> Option<PathBuf> {
         return None;
     }
     let bak = path.with_extension("toml.bak");
-    let written = datalib_dag::config::write_owner_only(&bak, text.as_bytes())
+    let written = datalib_config::write_owner_only(&bak, text.as_bytes())
         .and_then(|()| datalib_runtime::atomic::write_owner_only(&path, upgraded.as_bytes()));
     if let Err(e) = written {
         tracing::error!("config: could not migrate {}: {e}", path.display());
@@ -113,11 +113,11 @@ pub fn index_dir_plan(old_exists: bool, new_exists: bool, config_uses_old: bool)
 /// nothing may have either open.
 pub async fn move_index_dir(root: &Path) {
     use datalib_core::layout::{RETIRED_INDEX_DIRS, UNIFIED_GRID_AND_SEARCH_INDEX_DIR as NEW};
-    let config = datalib_dag::config::root_config_path(root);
+    let config = datalib_config::root_config_path(root);
     let text = std::fs::read_to_string(&config).unwrap_or_default();
     // As written, not as loaded: a source the loader refuses for taking
     // the old id still owns the tree under it.
-    let Ok(written) = datalib_dag::written::entries_as_written(&text) else {
+    let Ok(written) = datalib_config::written::entries_as_written(&text) else {
         return;
     };
     for old in RETIRED_INDEX_DIRS {
@@ -127,7 +127,7 @@ pub async fn move_index_dir(root: &Path) {
 
 async fn move_one_index_dir(
     root: &Path,
-    written: &datalib_dag::written::WrittenEntries,
+    written: &datalib_config::written::WrittenEntries,
     old_id: &str,
     new_id: &str,
 ) {
@@ -182,9 +182,9 @@ pub async fn move_index_step_dir(root: &Path) {
     use datalib_core::layout::{
         INDEX_STEP_DIR, RETIRED_INDEX_STEP_DIR, UNIFIED_GRID_AND_SEARCH_INDEX_DIR as GROUP,
     };
-    let config = datalib_dag::config::root_config_path(root);
+    let config = datalib_config::root_config_path(root);
     let text = std::fs::read_to_string(&config).unwrap_or_default();
-    let Ok(written) = datalib_dag::written::entries_as_written(&text) else {
+    let Ok(written) = datalib_config::written::entries_as_written(&text) else {
         return;
     };
     let old_id = format!("{GROUP}/{RETIRED_INDEX_STEP_DIR}");
@@ -269,9 +269,9 @@ fn names_in(dir: &Path) -> Vec<String> {
 /// grid and the search index take the source under its new id. Before
 /// the loop starts: nothing may have a store open.
 pub async fn move_case_folders(root: &Path) {
-    let config = datalib_dag::config::root_config_path(root);
+    let config = datalib_config::root_config_path(root);
     let text = std::fs::read_to_string(&config).unwrap_or_default();
-    let Ok(written) = datalib_dag::written::entries_as_written(&text) else {
+    let Ok(written) = datalib_config::written::entries_as_written(&text) else {
         return;
     };
     let trees: std::collections::BTreeSet<&str> = written
@@ -392,7 +392,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         std::fs::write(
-            datalib_dag::config::root_config_path(root),
+            datalib_config::root_config_path(root),
             "[[groups]]\nid = \"email\"\n\n\
              [[steps]]\ngroup = \"email\"\nfunction = \"ingest\"\ncommand = \"x\"\n\n\
              [[steps]]\nid = \"g/raw\"\ncommand = \"y\"\n",

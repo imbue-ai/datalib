@@ -1,14 +1,13 @@
 //! How much room is left on the volume a data root lives on, and whether
-//! the config's `[disk_space]` floor pauses the steps. While it does, the
-//! loop starts no step (`supervisor/tick.rs`, `Wait::DiskSpace`); the
-//! app's server samples the same number for the status bar.
+//! the config's `[disk_space]` floor (`datalib_config::disk_floor`) pauses
+//! the steps. While it does, the loop starts no step
+//! (`supervisor/tick.rs`, `Wait::DiskSpace`); the app's server samples
+//! the same number for the status bar.
 
 use std::path::Path;
 
-use datalib_source_common::byte_size;
-use serde::Deserialize;
-
-const GB: u64 = 1_000_000_000;
+use datalib_config::disk_floor::DiskFloor;
+use datalib_source_common::byte_size::human_bytes;
 
 /// One look at a volume.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,76 +16,6 @@ pub struct Space {
     /// out purgeable space, so it can read lower than Finder's "available".
     pub available: u64,
     pub total: u64,
-}
-
-/// The config's `[disk_space]`: under `pause_below` free bytes the loop
-/// starts no step and stops every running one, and once paused the steps
-/// stay paused until `resume_at`. The gap keeps
-/// a disk hovering at the line from stopping and restarting the same
-/// steps over and over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "RawFloor")]
-pub struct DiskFloor {
-    pub pause_below: u64,
-    pub resume_at: u64,
-}
-
-impl Default for DiskFloor {
-    fn default() -> Self {
-        DiskFloor {
-            pause_below: 10 * GB,
-            resume_at: 15 * GB,
-        }
-    }
-}
-
-/// The table as written. `resume_at_bytes` left out sits as far above
-/// the pause as the defaults do.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawFloor {
-    #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
-    pause_below_bytes: Option<u64>,
-    #[serde(default, deserialize_with = "byte_size::deserialize_opt")]
-    resume_at_bytes: Option<u64>,
-}
-
-impl TryFrom<RawFloor> for DiskFloor {
-    type Error = String;
-
-    fn try_from(raw: RawFloor) -> Result<Self, String> {
-        let default = DiskFloor::default();
-        let pause_below = raw.pause_below_bytes.unwrap_or(default.pause_below);
-        let gap = default.resume_at - default.pause_below;
-        let resume_at = raw
-            .resume_at_bytes
-            .unwrap_or(pause_below.saturating_add(gap));
-        if resume_at < pause_below {
-            return Err(format!(
-                "disk_space.resume_at_bytes ({}) is under pause_below_bytes ({}): steps would \
-                 start again before the disk had the room they paused for",
-                human_bytes(resume_at),
-                human_bytes(pause_below)
-            ));
-        }
-        Ok(DiskFloor {
-            pause_below,
-            resume_at,
-        })
-    }
-}
-
-impl DiskFloor {
-    /// Whether the steps are paused after a look that found `available`,
-    /// given whether they were paused before it.
-    pub fn pauses(&self, was_paused: bool, available: u64) -> bool {
-        available
-            < if was_paused {
-                self.resume_at
-            } else {
-                self.pause_below
-            }
-    }
 }
 
 /// The steps are paused for want of space: what the loop logs and a
@@ -138,77 +67,9 @@ pub fn space(_path: &Path) -> std::io::Result<Space> {
     ))
 }
 
-/// Decimal units, the ones `byte_size` reads, so a log line quotes the
-/// floor the way it was likely written.
-pub fn human_bytes(bytes: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-    let mut value = bytes as f64;
-    let mut unit = 0;
-    while value >= 1000.0 && unit < UNITS.len() - 1 {
-        value /= 1000.0;
-        unit += 1;
-    }
-    if unit == 0 {
-        format!("{bytes} B")
-    } else {
-        format!("{value:.1} {}", UNITS[unit])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The gap between the two lines is the whole point: a disk that
-    /// went under the pause and rose back a little stays paused, and a
-    /// disk that never went under is not paused anywhere above the pause.
-    #[test]
-    fn paused_steps_wait_for_the_resume_line_and_others_for_the_pause() {
-        let floor = DiskFloor::default();
-        assert!(
-            !floor.pauses(false, 12 * GB),
-            "between the lines, not held yet"
-        );
-        assert!(floor.pauses(false, 9 * GB), "under the pause");
-        assert!(floor.pauses(true, 12 * GB), "between the lines, still held");
-        assert!(!floor.pauses(true, 15 * GB), "at the resume line");
-        assert!(!floor.pauses(false, 10 * GB), "at the pause line is enough");
-    }
-
-    #[test]
-    fn the_table_reads_human_units_and_fills_in_what_it_leaves_out() {
-        let read = |text: &str| toml::from_str::<DiskFloor>(text).map_err(|e| e.to_string());
-        assert_eq!(read(""), Ok(DiskFloor::default()));
-        assert_eq!(
-            read("pause_below_bytes = \"20 GB\""),
-            Ok(DiskFloor {
-                pause_below: 20 * GB,
-                resume_at: 25 * GB
-            }),
-            "the resume line keeps the default gap above a pause that moved"
-        );
-        assert_eq!(
-            read("pause_below_bytes = \"5000 MB\"\nresume_at_bytes = \"8 GB\""),
-            Ok(DiskFloor {
-                pause_below: 5 * GB,
-                resume_at: 8 * GB
-            })
-        );
-        assert_eq!(
-            read("pause_below_bytes = 0"),
-            Ok(DiskFloor {
-                pause_below: 0,
-                resume_at: 5 * GB
-            }),
-            "a zero pause never holds anything"
-        );
-        let err = read("pause_below_bytes = \"20 GB\"\nresume_at_bytes = \"15 GB\"").unwrap_err();
-        assert!(err.contains("resume_at_bytes (15.0 GB) is under"), "{err}");
-        assert!(
-            read("pause_below = \"20 GB\"").is_err(),
-            "unknown keys refuse"
-        );
-    }
 
     #[test]
     fn the_description_quotes_every_number_in_decimal_units() {
@@ -221,7 +82,6 @@ mod tests {
             "3.2 GB free on the data root's disk; steps pause under 10.0 GB and run again \
              from 15.0 GB"
         );
-        assert_eq!(human_bytes(999), "999 B");
     }
 
     #[cfg(unix)]

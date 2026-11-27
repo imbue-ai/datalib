@@ -66,7 +66,7 @@ shape.
 | `select_targets` in `slack/src/ingest/mod.rs` | `fetch` | which conversations to walk |
 | `coverage::gaps(want, held)` in `etl/web/src/coverage.rs` | each provider's walk | which stretches of a range are still owed |
 | `Scan::changes_since(prev) -> Changes` in `etl/files/src/file_changes_scan.rs` | `scan` | which files were added, modified, moved, removed |
-| `config::check_text(text) -> ConfigCheck` in `dag/src/config.rs` | `load_graded` | what a config means and every problem in it |
+| `config_check::check_text(text) -> ConfigCheck` in `dag/src/config_check.rs` | `load_graded` | what a config means and every problem in it |
 | `ui/src/config/{rowMenu,sourceSteps,browsePresets}.ts` | the Vue components | which menu entries, which steps, which columns a Browse card opens with |
 
 Every one of these has synchronous tests, and the tick's tests walk a

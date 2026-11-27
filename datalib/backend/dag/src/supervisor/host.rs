@@ -9,11 +9,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_runs::{RunKind, RunStart};
 
-use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
 use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
 use crate::supervisor::store::{JobKind, JobRow, RequestRow, Store};
+use datalib_config::DagConfig;
 use strum::VariantArray;
 
 /// The environment every step of one run gets on top of the
@@ -36,7 +36,7 @@ pub fn step_env(
 ) -> Result<StepEnv> {
     let mut vars = BTreeMap::new();
     // So a `command` can name a program in the binary directory bare.
-    let dirs: Vec<PathBuf> = crate::config::resolve_binary_dir(cfg, binary_dir)
+    let dirs: Vec<PathBuf> = datalib_config::resolve_binary_dir(cfg, binary_dir)
         .into_iter()
         .chain(extra_path.iter().cloned())
         .collect();
@@ -320,11 +320,11 @@ mod tests {
     /// nothing.
     #[test]
     fn the_configs_env_reaches_every_step() {
-        let with = crate::config::parse("[env]\nSOME_KNOB = \"8,256\"\n").unwrap();
+        let with = datalib_config::parse("[env]\nSOME_KNOB = \"8,256\"\n").unwrap();
         let env = step_env(&with, None, &[], "now", "run").unwrap();
         assert_eq!(env.vars["SOME_KNOB"], "8,256");
 
-        let without = crate::config::parse("").unwrap();
+        let without = datalib_config::parse("").unwrap();
         let env = step_env(&without, None, &[], "now", "run").unwrap();
         assert!(!env.vars.contains_key("SOME_KNOB"));
     }

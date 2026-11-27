@@ -83,7 +83,7 @@ pub use convert::Retired as LegacyFormat;
 /// both errors rather than silent no-ops: running the tool on the wrong
 /// file is the likeliest mistake, and the message should say so.
 pub fn detect(text: &str) -> Result<LegacyFormat> {
-    if text.trim().is_empty() || !datalib_dag::config::is_toml(text) {
+    if text.trim().is_empty() || !datalib_config::is_toml(text) {
         bail!(
             "this is not a TOML config. Pre-TOML `config.yaml` roots are no longer \
              convertible — set the root up again from the app, then delete the old file."
@@ -342,8 +342,8 @@ pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
     }
     let out = explicit_steps::rewrite(text)?;
     refuse_a_loss_between(
-        datalib_dag::config::check_text(text),
-        datalib_dag::config::check_text(&out),
+        datalib_dag::config_check::check_text(text),
+        datalib_dag::config_check::check_text(&out),
         str::to_string,
         &[],
     )?;
@@ -353,13 +353,13 @@ pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
 /// What the loader makes of `text` once [`folded`] and then
 /// `explicit_steps.rs` have brought it to the shape the runner reads,
 /// which every other rewrite's text is a step or more short of.
-pub(crate) fn check_as_current(text: &str) -> datalib_dag::config::ConfigCheck {
+pub(crate) fn check_as_current(text: &str) -> datalib_dag::config_check::ConfigCheck {
     let folded = folded(text);
     let current = match explicit_steps::is_retired(&folded) {
         Ok(true) => explicit_steps::rewrite(&folded).ok(),
         _ => None,
     };
-    datalib_dag::config::check_text(current.as_deref().unwrap_or(&folded))
+    datalib_dag::config_check::check_text(current.as_deref().unwrap_or(&folded))
 }
 
 /// Fold each source's `keyword_index` into `grid_index`
@@ -634,8 +634,8 @@ fn refuse_a_loss_but(
 }
 
 fn refuse_a_loss_between(
-    before: datalib_dag::config::ConfigCheck,
-    after: datalib_dag::config::ConfigCheck,
+    before: datalib_dag::config_check::ConfigCheck,
+    after: datalib_dag::config_check::ConfigCheck,
     follow: impl Fn(&str) -> String,
     meant: &[String],
 ) -> Result<()> {
@@ -660,14 +660,14 @@ fn refuse_a_loss_between(
             } else {
                 format!(" ({})", lost.join(", "))
             },
-            after.render(std::path::Path::new(datalib_dag::config::CONFIG_FILE_NAME))
+            after.render(std::path::Path::new(datalib_config::CONFIG_FILE_NAME))
         );
     }
     Ok(())
 }
 
 /// Every entry that reached the graph, by kind and id.
-fn loaded(cfg: &datalib_dag::config::DagConfig) -> Vec<String> {
+fn loaded(cfg: &datalib_config::DagConfig) -> Vec<String> {
     let groups = cfg.groups.iter().map(|g| format!("group {}", g.id));
     let steps = cfg.steps.iter().map(|s| format!("step {}", s.id));
     let applets = cfg.applets.iter().map(|a| format!("applet {}", a.id));
@@ -676,22 +676,22 @@ fn loaded(cfg: &datalib_dag::config::DagConfig) -> Vec<String> {
 }
 
 fn verify(toml_text: &str) -> Result<()> {
-    let cfg = datalib_dag::config::parse(toml_text)?;
-    let specs = datalib_dag::config::to_specs(&cfg)?;
+    let cfg = datalib_config::parse(toml_text)?;
+    let specs = datalib_dag::config_check::to_specs(&cfg)?;
     datalib_dag::Graph::build(specs)?;
     Ok(())
 }
 
 pub fn resolve_input(arg: &Path) -> PathBuf {
     if arg.is_dir() {
-        arg.join(datalib_dag::config::CONFIG_FILE_NAME)
+        arg.join(datalib_config::CONFIG_FILE_NAME)
     } else {
         arg.to_path_buf()
     }
 }
 
 pub fn default_output(input: &Path) -> PathBuf {
-    input.with_file_name(datalib_dag::config::CONFIG_FILE_NAME)
+    input.with_file_name(datalib_config::CONFIG_FILE_NAME)
 }
 
 #[cfg(test)]
@@ -910,13 +910,13 @@ inputs = ["slack/render_markdown"]
             "{UNGROUPED}\n[checkpoint_cadence]\nat_most_every_secs = 30.0\n\n[run_history]\nmax_runs = 7\nmax_age_days = 3\n"
         );
         let out = convert(&text).unwrap();
-        let cfg: datalib_dag::config::DagConfig = toml::from_str(&out).unwrap();
+        let cfg: datalib_config::DagConfig = toml::from_str(&out).unwrap();
         assert_eq!(
             cfg.run_history,
-            Some(datalib_dag::config::RunHistory {
+            Some(datalib_config::RunHistory {
                 max_runs: 7,
                 max_age_days: 3,
-                ..datalib_dag::config::RunHistory::default()
+                ..datalib_config::RunHistory::default()
             })
         );
         assert_eq!(
@@ -998,7 +998,7 @@ inputs = ["slack/render_markdown"]
             out.contains("[steps.params.fswalk]\npath = \"~/Documents\""),
             "{out}"
         );
-        let (cfg, diags) = datalib_dag::config::parse_graded(&out);
+        let (cfg, diags) = datalib_config::parse_graded(&out);
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         assert!(!out.contains("gmail_api"), "{out}");
         assert!(
@@ -1102,7 +1102,7 @@ inputs = ["slack/render_markdown"]
         assert!(out.contains("id = \"exports/csv\""), "{out}");
         assert!(out.contains("command = \"my-exporter --flag\""), "{out}");
         // Applets are filed under the group their tree or id names.
-        let (cfg, diags) = datalib_dag::config::parse_graded(&out);
+        let (cfg, diags) = datalib_config::parse_graded(&out);
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         let by_id = |id: &str| cfg.applets.iter().find(|a| a.id == id).unwrap().clone();
         assert_eq!(
@@ -1131,7 +1131,7 @@ inputs = ["slack/render_markdown"]
         assert!(!out.contains("qmd_aggregator"), "{out}");
         assert!(out.contains("\"*/render_markdown\""), "{out}");
         assert!(!out.contains("keyword_index"), "{out}");
-        let (cfg, diags) = datalib_dag::config::parse_graded(&out);
+        let (cfg, diags) = datalib_config::parse_graded(&out);
         assert!(diags.is_empty(), "{diags:?}\n{out}");
         assert_eq!(cfg.groups.len(), 2);
         assert_eq!(cfg.groups[0].name.as_deref(), Some("Work Slack"));
@@ -1321,7 +1321,10 @@ inputs = ["mail/render_markdown"]
         assert_eq!(upgrade_index_name("not [ toml").unwrap(), None);
         let out = upgrade_explicit_steps(&out).unwrap().unwrap();
         assert_eq!(upgrade_explicit_steps(&out).unwrap(), None);
-        assert!(datalib_dag::config::check_text(&out).is_clean(), "{out}");
+        assert!(
+            datalib_dag::config_check::check_text(&out).is_clean(),
+            "{out}"
+        );
         assert_eq!(convert(SHARED_QMD_INDEX).unwrap(), out);
     }
 

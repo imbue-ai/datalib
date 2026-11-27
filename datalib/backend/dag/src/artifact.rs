@@ -12,19 +12,8 @@ pub struct ArtifactPath {
 
 impl ArtifactPath {
     pub fn parse(raw: &str) -> anyhow::Result<Self> {
-        let raw = raw.trim_matches('/');
-        if raw.is_empty() {
-            anyhow::bail!("artifact path must be a non-empty relative path");
-        }
-        for s in raw.split('/') {
-            match s {
-                "" => anyhow::bail!("artifact path {raw:?} has an empty segment"),
-                "." | ".." => anyhow::bail!("artifact path {raw:?} may not contain `.`/`..`"),
-                _ => {}
-            }
-        }
         Ok(Self {
-            raw: raw.to_string(),
+            raw: datalib_config::artifact_path(raw)?.to_string(),
         })
     }
 

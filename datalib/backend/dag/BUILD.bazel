@@ -27,6 +27,7 @@ rust_library(
         # the tree's logs; the binary already depended on it.
         "//datalib/backend/app_schema:app_schema",
         "//datalib/backend/cli_help:datalib_cli_help",
+        "//datalib/backend/config:datalib_config",
         "//datalib/backend/flock:datalib_flock",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
@@ -48,12 +49,10 @@ rust_library(
         "@datalib_crates//:process-wrap",
         "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
-        "@datalib_crates//:shlex",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",
         "@datalib_crates//:sysinfo",
         "@datalib_crates//:tokio",
-        "@datalib_crates//:toml",
         "@datalib_crates//:tracing",
         "@datalib_crates//:uuid",
     ],
@@ -67,6 +66,7 @@ rust_test(
     deps = [
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
+        "@datalib_crates//:toml",
         "@datalib_crates//:walkdir",
     ],
 )
@@ -94,9 +94,11 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_dag",
+        "//datalib/backend/config:datalib_config",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/sql_work:datalib_sql_work",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
@@ -310,6 +312,7 @@ rust_test(
     env = {"PUPPET": "$(rootpath :puppet)"},
     deps = [
         ":datalib_dag",
+        "//datalib/backend/config:datalib_config",
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/time:datalib_time",

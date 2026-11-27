@@ -15,7 +15,7 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 use toml::Spanned;
 
-use datalib_dag::config_array::edit_string_array;
+use datalib_config::array::edit_string_array;
 
 #[derive(Deserialize)]
 struct View {

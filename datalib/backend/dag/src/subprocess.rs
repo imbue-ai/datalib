@@ -55,10 +55,10 @@ pub enum Shrink {
 }
 
 impl Shrink {
-    pub fn verb(self) -> crate::step::Verb {
+    pub fn verb(self) -> datalib_config::Verb {
         match self {
-            Shrink::Collect => crate::step::Verb::Collect,
-            Shrink::Compact => crate::step::Verb::Compact,
+            Shrink::Collect => datalib_config::Verb::Collect,
+            Shrink::Compact => datalib_config::Verb::Compact,
         }
     }
 }
@@ -844,7 +844,8 @@ mod tests {
     use super::*;
     use crate::graph::Graph;
     use crate::scheduler::{Runner, StepStatus};
-    use crate::step::{StepRun, StepSpec, Verb};
+    use crate::step::{StepRun, StepSpec};
+    use datalib_config::Verb;
 
     #[derive(Default)]
     struct Recorder(Mutex<Vec<Event>>);
@@ -1077,7 +1078,7 @@ mod tests {
         let mut runner = Runner::new(root.path()).stop_on(stop_rx);
         runner
             .lock_slots
-            .insert(crate::supervisor::locks::NETWORK.into(), 1);
+            .insert(datalib_config::locks::NETWORK.into(), 1);
         let round = tokio::spawn(async move { runner.run(&g).await });
 
         let count = || std::fs::read_dir(&started).unwrap().count();

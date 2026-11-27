@@ -58,7 +58,7 @@ pub struct PackagesResponse {
 /// config edited by hand — so looking is enough to bring it in.
 pub async fn list(State(s): State<AppState>) -> Json<PackagesResponse> {
     let text = std::fs::read_to_string(s.config_path()).unwrap_or_default();
-    let cfg = datalib_dag::config::check_text(&text).cfg;
+    let cfg = datalib_dag::config_check::check_text(&text).cfg;
     let mut packages = Vec::with_capacity(cfg.packages.len());
     for p in &cfg.packages {
         let manifest = datalib_packages::installed(&s.root, &p.sha256);

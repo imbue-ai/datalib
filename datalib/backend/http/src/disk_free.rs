@@ -8,9 +8,9 @@
 //! `system/disk_stats.sqlite`, which seeds the line again after a restart.
 //!
 //! The loop starts no step, and stops the running ones, while the disk is
-//! under the config's `[disk_space]` floor (`datalib_dag::disk_space`); this module only
-//! reports it, and says `low` by the same two-line rule so the UI can say
-//! why.
+//! under the config's `[disk_space]` floor (`datalib_config::disk_floor`);
+//! this module only reports it, and says `low` by the same two-line rule
+//! so the UI can say why.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -18,8 +18,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use app_schema::disk_free::DiskFreeRow;
+use datalib_config::disk_floor::DiskFloor;
 use datalib_core::repo::DynAppRepo;
-use datalib_dag::disk_space::{self, DiskFloor, Space};
+use datalib_dag::disk_space::{self, Space};
 use serde::Serialize;
 use tokio::sync::RwLock;
 
@@ -154,7 +155,7 @@ impl DiskFreeMonitor {
 pub fn floor_of(config_path: &Path) -> DiskFloor {
     std::fs::read_to_string(config_path)
         .ok()
-        .and_then(|text| datalib_dag::config::parse_graded(&text).0.disk_space)
+        .and_then(|text| datalib_config::parse_graded(&text).0.disk_space)
         .unwrap_or_default()
 }
 
@@ -168,7 +169,7 @@ pub async fn run(
         Ok(rows) => monitor.free.seed(rows).await,
         Err(e) => tracing::warn!("disk: could not read the recorded free space: {e}"),
     }
-    let config_path = datalib_dag::config::root_config_path(&root);
+    let config_path = datalib_config::root_config_path(&root);
     let mut said_unmeasured = false;
     let mut every = tokio::time::interval(SAMPLE_EVERY);
     every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

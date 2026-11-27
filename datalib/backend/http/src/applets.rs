@@ -32,7 +32,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datalib_dag::config::AppletEntry;
+use datalib_config::AppletEntry;
 use serde::Serialize;
 use tokio::sync::broadcast;
 
@@ -146,7 +146,7 @@ fn prune_namespaces(root: &Path, keep: &BTreeSet<String>) {
             continue;
         }
         match path.file_name().and_then(|s| s.to_str()) {
-            Some(crate::frontend::USER_NAMESPACE) | None => continue,
+            Some(datalib_config::RESERVED_APPLET_ID) | None => continue,
             Some(name) if keep.contains(name) => continue,
             Some(_) => {
                 let _ = std::fs::remove_dir_all(&path);
@@ -277,7 +277,7 @@ struct RegistryState {
 /// Size *and* mtime, because a same-size same-second rewrite is
 /// plausible for a small hand-edited file.
 fn config_stamp_of(data_root: &Path) -> Option<(u64, std::time::SystemTime)> {
-    let path = datalib_dag::config::root_config_path(data_root);
+    let path = datalib_config::root_config_path(data_root);
     let md = std::fs::metadata(path).ok()?;
     Some((md.len(), md.modified().ok()?))
 }
@@ -499,7 +499,7 @@ impl AppletRegistry {
                     match config_load_error(&self.data_root, id) {
                         Some(why) => format!(
                             "applet {id:?} is unavailable because {} could not be loaded: {why}",
-                            datalib_dag::config::root_config_path(&self.data_root).display()
+                            datalib_config::root_config_path(&self.data_root).display()
                         ),
                         None => format!("no applet {id:?}"),
                     },
@@ -613,11 +613,11 @@ fn reconcile(
 /// isn't there yet, which is the normal state of a fresh root rather
 /// than an error.
 fn config_load_error(data_root: &Path, id: &str) -> Option<String> {
-    let path = datalib_dag::config::root_config_path(data_root);
+    let path = datalib_config::root_config_path(data_root);
     if !path.exists() {
         return None;
     }
-    let (checked, _) = datalib_dag::config::load_graded(&path).ok()?;
+    let (checked, _) = datalib_dag::config_check::load_graded(&path).ok()?;
     if let Some(d) = checked
         .diagnostics
         .iter()
@@ -637,18 +637,18 @@ fn load_entries(
     data_root: &Path,
     binary_dir: Option<PathBuf>,
 ) -> (Vec<AppletEntry>, Option<PathBuf>) {
-    let cfg_path = datalib_dag::config::root_config_path(data_root);
-    match datalib_dag::config::load_graded(&cfg_path) {
+    let cfg_path = datalib_config::root_config_path(data_root);
+    match datalib_dag::config_check::load_graded(&cfg_path) {
         Ok((checked, _)) => {
             // Resolve `binary_dir` exactly the way the DAG runner does,
             // so `command = "datalib-applet slack"` finds the same binary
             // whether a step or an applet names it.
-            let dir = datalib_dag::config::resolve_binary_dir(&checked.cfg, binary_dir.as_deref());
+            let dir = datalib_config::resolve_binary_dir(&checked.cfg, binary_dir.as_deref());
             // `checked.cfg.applets` is already only the entries that
             // loaded: a bad entry costs its own applet and no other.
             for d in checked.diagnostics.iter().filter(|d| {
-                d.entry.as_ref().map(|e| e.kind) == Some(datalib_dag::EntryKind::Applet)
-                    || d.severity == datalib_dag::Severity::Fatal
+                d.entry.as_ref().map(|e| e.kind) == Some(datalib_config::EntryKind::Applet)
+                    || d.severity == datalib_config::Severity::Fatal
             }) {
                 tracing::warn!("applets: {}", d.describe());
             }

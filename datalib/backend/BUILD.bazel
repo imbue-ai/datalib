@@ -118,7 +118,7 @@ filegroup(
 #   * `datalib-pipeline` resolves a step's `command:` (`datalib-step download
 #     slack_api`) against PATH, falling back to its own directory when no
 #     `--binary-dir` flag or config `binary_dir` is given
-#     (`resolve_binary_dir` in dag/src/config.rs).
+#     (`resolve_binary_dir` in config/src/lib.rs).
 #   * `datalib-step` finds the router curl as a sibling of itself
 #     (`datalib_etl_web::latchkey::ensure_curl_router`).
 #   * the router curl finds the impersonator the same way.

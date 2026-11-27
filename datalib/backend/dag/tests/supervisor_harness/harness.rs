@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use datalib_dag::config;
+use datalib_dag::config_check;
 use datalib_dag::events::FanOutSink;
 use datalib_dag::scheduler::RetryPolicy;
 use datalib_dag::supervisor::announce::{
@@ -373,7 +373,7 @@ impl Harness {
         for s in steps {
             self.fifo(&s.id);
         }
-        let path = config::root_config_path(self.root.path());
+        let path = datalib_config::root_config_path(self.root.path());
         let tmp = path.with_extension("tmp");
         let text = self.config_text(steps, &self.locks);
         std::fs::write(&tmp, text).unwrap();
@@ -690,8 +690,8 @@ impl Harness {
     /// A sync of everything, with the roots the server's Sync all opens
     /// one on: the config's steps with no declared inputs.
     pub async fn sync_all(&mut self) -> String {
-        let path = config::root_config_path(self.root.path());
-        let (checked, _) = config::load_graded(&path).unwrap();
+        let path = datalib_config::root_config_path(self.root.path());
+        let (checked, _) = config_check::load_graded(&path).unwrap();
         let roots = checked.graph.ids_without_inputs();
         self.sync(&roots).await
     }
@@ -784,9 +784,9 @@ struct RunHost {
 }
 
 impl RunHost {
-    fn graph(&self) -> Option<(config::ConfigCheck, PathBuf)> {
-        let path = config::root_config_path(&self.root);
-        match config::load_graded(&path) {
+    fn graph(&self) -> Option<(config_check::ConfigCheck, PathBuf)> {
+        let path = datalib_config::root_config_path(&self.root);
+        match config_check::load_graded(&path) {
             Ok((checked, _)) if !checked.is_fatal() => Some((checked, path)),
             Ok((checked, _)) => {
                 let _ = self.report.send(Seen::Broke(checked.render(&path)));

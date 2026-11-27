@@ -11,13 +11,6 @@ pub fn frontend_dir(data_root: &Path) -> PathBuf {
     datalib_core::layout::system_dir(data_root).join("frontend")
 }
 
-/// The namespace holding components the app itself never regenerates.
-/// A refresh deletes the *other* namespace directories no configured
-/// applet names, so this name is
-/// refused to applets at config load
-/// ([`datalib_dag::config::RESERVED_APPLET_ID`]).
-pub const USER_NAMESPACE: &str = "user";
-
 // On-disk metadata
 
 /// What a `<name>.json` says.

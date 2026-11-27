@@ -22,6 +22,7 @@ rust_binary(
         "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/core:datalib_core",
+        "//datalib/backend/config:datalib_config",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/etl/time_series:datalib_etl_time_series",

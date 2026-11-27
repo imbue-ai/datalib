@@ -10,8 +10,8 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::{bail, Result};
 
 use crate::artifact::ArtifactPath;
-use crate::diagnostics::{Diagnostic, EntryRef, Severity};
 use crate::step::{StepId, StepSpec};
+use datalib_config::{Diagnostic, EntryRef, Severity};
 
 #[derive(Debug, Clone)]
 pub struct Graph {
@@ -42,7 +42,7 @@ pub struct Graph {
     /// The config's `[disk_space]`, here so a loop that re-reads its graph
     /// mid-sync uses an edit to it. `None` only for a graph built
     /// without a config, as tests build them: no floor at all.
-    pub disk_floor: Option<crate::disk_space::DiskFloor>,
+    pub disk_floor: Option<datalib_config::disk_floor::DiskFloor>,
 }
 
 impl Graph {

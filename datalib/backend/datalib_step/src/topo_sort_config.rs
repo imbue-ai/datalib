@@ -1,5 +1,5 @@
 //! `datalib-step topo-sort-config <config.toml>`: put a config file in the
-//! order data flows (`datalib_dag::config_order`), keeping the text it
+//! order data flows (`datalib_config::order`), keeping the text it
 //! replaced beside it as `<file>.<UTC time>.bak`.
 
 use std::path::Path;
@@ -18,7 +18,7 @@ pub fn run_cli(path: &Path, check: bool) -> i32 {
             return 1;
         }
     };
-    let sorted = match datalib_dag::config_order::sort_config(&text) {
+    let sorted = match datalib_config::order::sort_config(&text) {
         Ok(Some(sorted)) => sorted,
         Ok(None) => {
             status_line!("{shown} is already in data-flow order.");

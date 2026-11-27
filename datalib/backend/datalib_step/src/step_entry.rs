@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn the_verbs_are_the_runners() {
         for v in VERBS {
-            assert!(datalib_dag::step::Verb::parse(v).is_some(), "{v}");
+            assert!(datalib_config::Verb::parse(v).is_some(), "{v}");
         }
     }
 }

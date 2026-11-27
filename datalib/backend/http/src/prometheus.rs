@@ -356,7 +356,7 @@ pub fn render(families: &[Family]) -> String {
 pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse, crate::Refusal> {
     let config_path = s.config_path();
     let text = std::fs::read_to_string(&config_path).unwrap_or_default();
-    let steps: Vec<StepEntry> = datalib_dag::written::entries_as_written(&text)
+    let steps: Vec<StepEntry> = datalib_config::written::entries_as_written(&text)
         .map(|w| {
             w.steps
                 .into_iter()

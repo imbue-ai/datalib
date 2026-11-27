@@ -13,9 +13,9 @@ use std::ops::Range;
 
 use crate::retired::names_datalib_step;
 use anyhow::{bail, Context as _, Result};
-use datalib_dag::config_array::edit_string_array;
-use datalib_dag::config_order::entry_ranges;
-use datalib_dag::input_pattern::names;
+use datalib_config::array::edit_string_array;
+use datalib_config::input_pattern::names;
+use datalib_config::order::entry_ranges;
 use serde::Deserialize;
 
 use crate::index_name::{NEW as INDEX_GROUP, OLD as OLD_INDEX_GROUPS};
@@ -278,13 +278,13 @@ command = "datalib-step"
 inputs = ["*/keyword_index", "*/embed"]
 "#;
 
-    fn check(text: &str) -> datalib_dag::config::ConfigCheck {
+    fn check(text: &str) -> datalib_dag::config_check::ConfigCheck {
         let check = crate::check_as_current(text);
         assert_eq!(check.dropped(), 0, "{}", check.render("c.toml".as_ref()));
         check
     }
 
-    fn inputs_of(check: &datalib_dag::config::ConfigCheck, id: &str) -> Vec<String> {
+    fn inputs_of(check: &datalib_dag::config_check::ConfigCheck, id: &str) -> Vec<String> {
         check
             .cfg
             .steps

@@ -17,7 +17,7 @@ pub fn keep(path: &Path, text: &str) -> std::io::Result<PathBuf> {
         }
         name.push(".bak");
         let bak = PathBuf::from(name);
-        match datalib_dag::config::owner_only_options()
+        match datalib_config::owner_only_options()
             .create_new(true)
             .open(&bak)
         {

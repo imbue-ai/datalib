@@ -107,7 +107,7 @@ pub fn package_dir_rel(manifest_sha256: &str) -> String {
 }
 
 // The top-level directories no step may write live with the code that
-// enforces them: `datalib_dag::config::RESERVED_DIRS`, checked on the
+// enforces them: `datalib_config::RESERVED_DIRS`, checked on the
 // path every entry point already takes. `datalib-pipeline` deliberately
 // doesn't depend on this crate, so the policy lives where it is applied
 // and the path constants stay here.

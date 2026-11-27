@@ -3,8 +3,8 @@
 //! *file*, because the file is what a person edits, and a row that
 //! reads "Not loaded" is how a dropped entry gets fixed. So this reads
 //! leniently: an entry is listed if it is a table with an id, whatever
-//! else is wrong with it. `config::check_text` is what says whether it
-//! runs.
+//! else is wrong with it. `datalib_dag::config_check::check_text` says
+//! whether it runs.
 
 use serde::Serialize;
 

@@ -6,9 +6,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use datalib_config::{Diagnostic, Severity};
 use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::tick::StateKind;
-use datalib_dag::{Diagnostic, Severity};
 
 /// One row's status, in the shape the Status column draws. The rules
 /// here fill `key`, `label`, `at`, `last_success_at` and `detail`.

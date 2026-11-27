@@ -43,7 +43,7 @@ pub async fn get_data(
 /// can be render-only, its render reading an `ingest` tree no step of
 /// this config writes.
 fn is_a_groups_tree(s: &AppState, group: &str, function: &str) -> bool {
-    datalib_dag::config::usable_function(function)
+    datalib_config::usable_function(function)
         && crate::supervisor::load_config(&s.root)
             .is_ok_and(|c| c.cfg.groups.iter().any(|g| g.id == group))
 }

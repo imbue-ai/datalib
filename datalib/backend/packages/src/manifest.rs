@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
-use datalib_dag::config::Reads;
+use datalib_config::Reads;
 use serde::{Deserialize, Serialize};
 
 use crate::platform::{ANY, TARGETS};

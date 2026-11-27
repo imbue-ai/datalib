@@ -10,10 +10,10 @@ use std::time::Duration;
 
 use futures::StreamExt as _;
 
-use crate::config::ConfigCheck;
-use crate::diagnostics::{Diagnostic, EntryRef, Severity};
+use datalib_config::{Diagnostic, EntryRef, Severity, Verb};
+
+use crate::config_check::ConfigCheck;
 use crate::scheduler::Runner;
-use crate::step::Verb;
 
 /// How long one step's `--check` process may take to exit. A check reads
 /// its params and opens nothing, so one still running by then is stuck.
@@ -104,7 +104,7 @@ async fn run_check(
 }
 
 fn diagnostics(text: &str, step: &str, result: CheckResult) -> Vec<Diagnostic> {
-    let header = crate::config::step_header_span(text, step);
+    let header = datalib_config::step_header_span(text, step);
     let place = |d: Diagnostic, span: Option<Range<usize>>| {
         let d = d.at_entry(EntryRef::step_id(step));
         match span {
@@ -187,7 +187,7 @@ mod tests {
     async fn check_with(text: &str, script: &str) -> Vec<Diagnostic> {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("step.sh"), script).unwrap();
-        let checked = crate::config::check_text(text);
+        let checked = crate::config_check::check_text(text);
         assert!(checked.is_clean(), "{:?}", checked.diagnostics);
         check_params(&checked, root.path(), None).await
     }
