@@ -44,7 +44,8 @@ fn search_command(root: &std::path::Path, q: &str) -> Command {
     cmd
 }
 
-/// The port the applet announces on stdout, once it is listening.
+/// The port the applet prints on stdout (`DATALIB_APPLET_PORT=`), once it
+/// is listening.
 fn announced_port(child: &mut Child) -> u16 {
     let stdout = child.stdout.take().expect("piped stdout");
     let (tx, rx) = mpsc::channel();
@@ -125,7 +126,7 @@ fn exit_code_within_deadline(child: &mut Child) -> Option<i32> {
     }
 }
 
-/// Started the way the gateway starts it, the applet announces the port it
+/// Started the way the gateway starts it, the applet prints the port it
 /// bound, answers a search that carries the secret, refuses one that does
 /// not, and exits cleanly when its parent's pipe closes.
 #[test]

@@ -171,8 +171,9 @@ fn run(cli: Cli) -> Result<()> {
         _ => serde_json::Value::Null,
     };
     // Write, then serve. The order is the contract: the gateway waits
-    // for `announce_port` and then scans the store, so announcing
-    // early would race the scan.
+    // for the `DATALIB_APPLET_PORT=` line `announce_port` prints on
+    // stdout and then scans the store, so printing it early would race
+    // the scan.
     match cli.applet {
         Which::Slack => {
             if let Some(dir) = &cli.frontend_dir {

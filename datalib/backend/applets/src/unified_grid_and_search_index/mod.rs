@@ -144,9 +144,9 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
 /// Nothing warms the model for a one-off search, so one that embeds its
 /// text waits for it here, however long a first download takes, rather
 /// than at the embedder's deadline. The tests open this way too, so they
-/// cannot drift from what the applet does: before this they built the
-/// gate themselves and left it `Idle`, which made their *first search*
-/// the thing that verified a 300 MB model inside `EMBED_DEADLINE`.
+/// cannot drift from what the applet does: a test that built the gate
+/// itself and left it `Idle` would make its *first search* the thing that
+/// verified a 300 MB model inside `EMBED_DEADLINE`.
 async fn open_with_models_verified(root: PathBuf) -> Result<Index> {
     let models = models::ModelGate::new(&root);
     let gate = models.clone();

@@ -794,7 +794,7 @@ mod tests {
     /// told so rather than handed a short list that looks whole.
     #[tokio::test(flavor = "multi_thread")]
     async fn unreadable_input_is_reported_not_swallowed() {
-        // The store is one file now, so "unreadable input" is a store
+        // The store is one file, so "unreadable input" is a store
         // that will not open rather than one bad document among many.
         // The card must say the listing is empty *because something
         // broke* — an empty listing with no warning reads as
