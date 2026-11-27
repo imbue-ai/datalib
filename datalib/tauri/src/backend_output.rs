@@ -20,7 +20,7 @@ const TAIL_LINES: usize = 20;
 const POLL: Duration = Duration::from_millis(50);
 /// How long the pipe is still read after the server exits, for its last
 /// lines. A program it started can hold the pipe open after it exits.
-const LAST_WORDS: Duration = Duration::from_secs(1);
+const READ_AFTER_EXIT: Duration = Duration::from_secs(1);
 
 pub fn output_file(root: &Path) -> PathBuf {
     root.join("system").join("server-output.log")
@@ -106,7 +106,7 @@ fn read_stdout(
 }
 
 fn wait_for_last_words(stderr: &JoinHandle<()>) {
-    let deadline = Instant::now() + LAST_WORDS;
+    let deadline = Instant::now() + READ_AFTER_EXIT;
     while !stderr.is_finished() && Instant::now() < deadline {
         std::thread::sleep(POLL);
     }
