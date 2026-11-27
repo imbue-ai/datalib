@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use datalib_etl_slack::ingest::{db_path_for, FetchOptions, RawDb};
 
 use crate::support::{fetch_into, serve, stored_ts};
+use datalib_sql::{test_sql, Sql};
 
 fn first_capture() -> PathBuf {
     match std::env::var("SLACK_FIXTURE_DIR") {
@@ -30,15 +31,19 @@ async fn sync(playback: &Path, out: &Path) {
     .unwrap();
 }
 
-async fn column(out: &Path, sql: &'static str) -> Vec<String> {
+async fn column(out: &Path, sql: Sql) -> Vec<String> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows = sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap();
+    let rows = sql.query_scalar().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     rows
 }
 
 async fn problems(out: &Path) -> Vec<String> {
-    column(out, "SELECT scope_key FROM problems ORDER BY scope_key").await
+    column(
+        out,
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key"),
+    )
+    .await
 }
 
 const WORFS_FOURTH_REPLY: &str = "12604001100.001100";
@@ -83,7 +88,7 @@ async fn both_captures_answer_every_request_the_pipelines_syncs_make() {
     assert_eq!(
         column(
             &out,
-            "SELECT scope || ' ' || hi FROM coverage ORDER BY scope"
+            test_sql!("SELECT scope || ' ' || hi FROM coverage ORDER BY scope")
         )
         .await,
         [
@@ -98,7 +103,7 @@ async fn both_captures_answer_every_request_the_pipelines_syncs_make() {
     assert_eq!(
         column(
             &out,
-            "SELECT id || ' ' || held_version FROM threads_bookkeeping ORDER BY id"
+            test_sql!("SELECT id || ' ' || held_version FROM threads_bookkeeping ORDER BY id")
         )
         .await,
         [
@@ -109,7 +114,9 @@ async fn both_captures_answer_every_request_the_pipelines_syncs_make() {
     assert_eq!(
         column(
             &out,
-            "SELECT file_id || ' ' || COALESCE(blake3, 'no bytes') FROM slack_attachments"
+            test_sql!(
+                "SELECT file_id || ' ' || COALESCE(blake3, 'no bytes') FROM slack_attachments"
+            )
         )
         .await,
         ["F_DELTA_SHIELD no bytes"]

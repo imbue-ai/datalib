@@ -27,6 +27,7 @@ rust_library(
         "//datalib/backend/photo_schema:datalib_photo_schema",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/uuid_text:datalib_uuid_text",
@@ -37,6 +38,7 @@ rust_library(
         "@datalib_crates//:serde_json",
         "@datalib_crates//:similar",
         "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
         "@datalib_crates//:tokio",
         "@datalib_crates//:tracing",
     ],
@@ -49,6 +51,7 @@ rust_test(
     edition = "2021",
     deps = [
         "//datalib/backend/sql_work:datalib_sql_work",
+        "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:tempfile",
     ],
 )

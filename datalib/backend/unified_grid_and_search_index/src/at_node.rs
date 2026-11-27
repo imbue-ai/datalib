@@ -6,6 +6,7 @@
 //! read each row's table page.
 
 /// What puts a row directly under a node.
+use datalib_sql::{sql, Sql};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Arms {
     /// It lives there: a channel's threads and their messages.
@@ -26,10 +27,13 @@ impl Arms {
 }
 
 /// [`Arms`] of the node bound as `?1`.
-pub const FACTS_SQL: &str = "SELECT \
+pub const FACTS_SQL: Sql = sql!(
+    "unified_grid_and_search_index.find_node_arms",
+    "SELECT \
      EXISTS (SELECT 1 FROM grid_rows INDEXED BY grid_rows_by_place WHERE place_uuid = ?1), \
      EXISTS (SELECT 1 FROM filings INDEXED BY filings_by_under WHERE under_uuid = ?1), \
-     EXISTS (SELECT 1 FROM grid_rows WHERE uuid = ?1 AND is_document = 1)";
+     EXISTS (SELECT 1 FROM grid_rows WHERE uuid = ?1 AND is_document = 1)"
+);
 
 /// The rows at `node`, as one clause over `grid_rows` and the values it
 /// binds.

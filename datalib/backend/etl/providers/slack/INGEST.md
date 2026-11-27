@@ -353,7 +353,9 @@ the stretch the page settles, from its
 oldest message up to where the page before left off (the last page
 reaches the bottom of the stretch). A walk cut off after its first page
 has covered the top, and the next run walks what is under it. The spans
-are over top-level messages only; a reply's `ts` never moves them. The
+are over what history lists: top-level messages, and the replies also
+sent to the channel (`thread_broadcast`); any other reply's `ts` never
+moves them. The
 newest message stored is never read as "fetched up to here".
 
 The range wanted has no top. A walk covers up to the newest message it
@@ -564,15 +566,21 @@ from last year stays in our copy indefinitely.
 
 ### Thread replies: when the thread is re-fetched anyway
 
-A thread is read again when its root lists a newer reply than the one
-it is held at. `conversations.replies` hands back the whole thread, so
+A thread is read again when its root lists a `latest_reply` other than
+the one it is held at (`owed` compares them for equality).
+`conversations.replies` hands back the whole thread, so
 a reply we hold that is missing from it was deleted, and we drop it in
 the transaction that stores the thread.
 
-The catch: **deleting a reply does not make a thread look stale.** The
-newest reply either stays where it was or moves *backwards*, and neither
-reads as "something new here". So a deleted reply is noticed the next
-time somebody posts in that thread, and not before.
+The catch: **deleting a reply other than the newest does not make a
+thread look stale.** The root's `latest_reply` stays where it was. So
+such a deletion is noticed the next time somebody posts in that thread,
+and not before. Deleting the newest reply moves `latest_reply`
+*backwards*, which no longer equals the held version, so the thread is
+read again once history lists the root again: inside the refresh window,
+at its next re-read. Outside the window nothing lists the root, and the
+reply search looks only for replies newer than the stored
+`latest_reply`, so there too it waits for the next post.
 
 ### A page that claims more and gives no cursor
 

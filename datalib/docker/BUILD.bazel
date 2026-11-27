@@ -13,6 +13,9 @@ exports_files([
     # schemas by //datalib/backend/datalib_step:datalib_step_unittests
     # alongside the docs' example configs.
     "demo/config.toml",
+    # Lays out the demo's inputs; the image build runs it, and so does
+    # //datalib/backend/dag:copy_restore_test.
+    "stage_demo.sh",
 ])
 
 # Runs docs/user/docker.md's marked shell blocks against a published

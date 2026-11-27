@@ -29,6 +29,7 @@ use self::parse::{CallRecord, MmsRecord, RootKind, SmsRecord};
 use self::schema_raw::{
     full_ddl, ns_id, sha8, SmsAttachmentRow, SmsCallRow, SmsMessageRow, LADDER,
 };
+use datalib_sql::sql;
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -303,21 +304,23 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     Ok(summary)
 }
 
-/// Delete the messages and calls no file holds, with their attachment
-/// edges. Only right after reading every file. Returns how
-/// many records went.
 /// An MMS stored before its `addrs` were kept: every file is read again,
 /// once, so a root from before has them too.
 async fn an_mms_lacks_its_addrs(pool: &sqlx::SqlitePool) -> Result<bool> {
-    sqlx::query_scalar(
+    sql!(
+        "sms_backup_restore.find_mms_without_addrs",
         "SELECT EXISTS (SELECT 1 FROM sms_messages \
-         WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL)",
+         WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL)"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .context("look for an MMS stored without its addrs")
 }
 
+/// Delete the messages and calls no file holds, with their attachment
+/// edges and read marks. Only right after reading every file. Returns how
+/// many records went.
 async fn prune_unseen(
     tx: &mut Transaction<'_, Sqlite>,
     messages: &[SmsMessageRow],

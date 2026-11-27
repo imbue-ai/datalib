@@ -4,9 +4,10 @@
 
 use std::path::Path;
 
+use datalib_sql::{sql, sql_id, Sql};
 use serde_json::{Map, Value};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
-use sqlx::{AssertSqlSafe, Column, Row, TypeInfo, ValueRef};
+use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 /// TEXT columns holding JSON, dumped as the value it is.
 const JSON_TEXT_COLUMNS: &[&str] = &[
@@ -29,10 +30,12 @@ pub enum Keep {
 /// Each table of the store at `path` by name, its rows in key order.
 pub async fn dump(path: &Path, keep: impl Fn(&str) -> Keep) -> Value {
     let pool = open_readonly(path).await;
-    let tables: Vec<String> = sqlx::query_scalar(
+    let tables: Vec<String> = sql!(
+        "store_dump.list_tables",
         "SELECT name FROM sqlite_master \
-         WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+         WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
     )
+    .query_scalar()
     .fetch_all(&pool)
     .await
     .expect("list tables");
@@ -42,8 +45,12 @@ pub async fn dump(path: &Path, keep: impl Fn(&str) -> Keep) -> Value {
             Keep::Nothing => {}
             Keep::Count => {
                 // Audited: `t` is a table name just read out of the store.
-                let sql = AssertSqlSafe(format!("SELECT COUNT(*) FROM \"{t}\""));
-                let n: i64 = sqlx::query_scalar(sql)
+                let sql = Sql::dynamic(
+                    sql_id!("store_dump.count_table_rows"),
+                    format!("SELECT COUNT(*) FROM \"{t}\""),
+                );
+                let n: i64 = sql
+                    .query_scalar()
                     .fetch_one(&pool)
                     .await
                     .unwrap_or_else(|e| panic!("count {t}: {e}"));
@@ -62,10 +69,14 @@ pub async fn dump(path: &Path, keep: impl Fn(&str) -> Keep) -> Value {
 async fn table_rows(pool: &SqlitePool, t: &str) -> Vec<Value> {
     // Audited, here and below: `t` is a table name just read out of the
     // store, and the columns are the ones it declares.
-    let info = sqlx::query(AssertSqlSafe(format!("PRAGMA table_info(\"{t}\")")))
-        .fetch_all(pool)
-        .await
-        .expect("table_info");
+    let info = Sql::dynamic(
+        sql_id!("store_dump.read_table_info"),
+        format!("PRAGMA table_info(\"{t}\")"),
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .expect("table_info");
     let mut columns: Vec<String> = Vec::new();
     let mut key: Vec<(i64, String)> = Vec::new();
     for r in &info {
@@ -103,8 +114,12 @@ async fn table_rows(pool: &SqlitePool, t: &str) -> Vec<Value> {
         true => String::new(),
         false => format!("ORDER BY {}", by.join(", ")),
     };
-    let sql = format!("SELECT {} FROM \"{t}\" {order}", select.join(", "));
-    let rows = sqlx::query(AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("store_dump.list_table_rows"),
+        format!("SELECT {} FROM \"{t}\" {order}", select.join(", ")),
+    );
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .unwrap_or_else(|e| panic!("select {t}: {e}"));

@@ -6,6 +6,7 @@ use std::borrow::Cow;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_sql::sql;
 use mail_parser::{MessageParser, PartKind};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Row, SqlitePool};
@@ -70,11 +71,15 @@ pub struct Stored {
 }
 
 pub async fn get(pool: &SqlitePool, blake3: &str) -> Result<Option<Stored>> {
-    let row = sqlx::query("SELECT content_type, bytes FROM cas_objects WHERE blake3 = ?")
-        .bind(blake3)
-        .fetch_optional(pool)
-        .await
-        .with_context(|| format!("read blob {blake3}"))?;
+    let row = sql!(
+        "blob_store.read_blob",
+        "SELECT content_type, bytes FROM cas_objects WHERE blake3 = ?"
+    )
+    .query()
+    .bind(blake3)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("read blob {blake3}"))?;
     row.map(|r| {
         Ok(Stored {
             content_type: r.try_get("content_type")?,
@@ -167,6 +172,7 @@ fn is_a_message(content_type: Option<&str>, has_headers: bool) -> bool {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     async fn store_with(path: &Path, rows: &[(&str, Option<&str>, &[u8])]) {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -179,11 +185,13 @@ mod tests {
             )
             .await
             .unwrap();
-        sqlx::query(CAS_OBJECTS_DDL).execute(&pool).await.unwrap();
+        Sql::ddl(test_sql_id!(), CAS_OBJECTS_DDL)
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
         for (hash, ct, bytes) in rows {
-            sqlx::query(
-                "INSERT INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES (?, ?, ?, ?)",
-            )
+            test_sql!("INSERT INTO cas_objects (blake3, byte_len, content_type, bytes) VALUES (?, ?, ?, ?)").query()
             .bind(hash)
             .bind(bytes.len() as i64)
             .bind(ct)

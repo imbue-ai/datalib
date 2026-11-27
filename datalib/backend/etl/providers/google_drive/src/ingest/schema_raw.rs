@@ -126,7 +126,9 @@ impl CaptureRow {
 ///   points at, by where it points from.
 ///
 /// `blake3` is NULL for an export Google declined to make (over its
-/// 10 MB limit); the capture carries a warning saying so.
+/// 10 MB limit, or download turned off for this account) and for an
+/// image larger than one plain download takes; the capture carries a
+/// warning saying so.
 #[derive(Debug, Clone, CasEdgeRow)]
 #[cas_edge_row(table = "capture_parts")]
 pub struct CapturePartRow {

@@ -5,6 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use datalib_sql::sql;
 
 /// Every handle a source says is its account's own, each once. `None`
 /// when the root has no grid index yet.
@@ -13,10 +14,14 @@ pub async fn account_handles(root: &Path) -> Result<Option<Vec<String>>> {
     let Some(pool) = datalib_etl_render::grid_index::open_for_reading(&path).await? else {
         return Ok(None);
     };
-    let handles = sqlx::query_scalar("SELECT DISTINCT handle FROM account_handles ORDER BY handle")
-        .fetch_all(&pool)
-        .await
-        .context("read the account handles");
+    let handles = sql!(
+        "applets.search.list_account_handles",
+        "SELECT DISTINCT handle FROM account_handles ORDER BY handle"
+    )
+    .query_scalar()
+    .fetch_all(&pool)
+    .await
+    .context("read the account handles");
     pool.close().await;
     Ok(Some(handles?))
 }
@@ -25,6 +30,7 @@ pub async fn account_handles(root: &Path) -> Result<Option<Vec<String>>> {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// The handles are read from an index in this build's shape; one an
     /// older build left is refused, saying so, rather than read as holding
     /// none.
@@ -38,7 +44,8 @@ mod tests {
             .await
             .unwrap();
         for (handle, source) in [("slack:T/U1", "slack"), ("slack:T/U1", "beeper")] {
-            sqlx::query("INSERT INTO account_handles (handle, source_id) VALUES (?, ?)")
+            test_sql!("INSERT INTO account_handles (handle, source_id) VALUES (?, ?)")
+                .query()
                 .bind(handle)
                 .bind(source)
                 .execute(&pool)
@@ -50,7 +57,8 @@ mod tests {
             Some(vec!["slack:T/U1".to_string()])
         );
 
-        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .query()
             .execute(&pool)
             .await
             .unwrap();

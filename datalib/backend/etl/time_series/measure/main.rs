@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::{self, StoreKind};
 use datalib_etl_time_series::chunk::{self, Compression, Floats};
 use datalib_etl_time_series::store;
+use datalib_sql::sql;
 use datalib_time_series_schema::{Points, TimeSeriesChunkRow};
 use serde::Deserialize;
 
@@ -60,7 +61,13 @@ async fn on_disk(chunks: &[TimeSeriesChunkRow], dir: &Path) -> Result<u64> {
     }
     tx.commit().await?;
     doltlite_raw::commit_run(&pool, "measure").await?;
-    sqlx::query("SELECT dolt_gc()").fetch_all(&pool).await?;
+    sql!(
+        "etl.time_series.measure.collect_garbage",
+        "SELECT dolt_gc()"
+    )
+    .query()
+    .fetch_all(&pool)
+    .await?;
     pool.close().await;
     dir_size(dir)
 }

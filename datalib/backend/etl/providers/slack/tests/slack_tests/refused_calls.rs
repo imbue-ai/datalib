@@ -21,6 +21,7 @@ use datalib_etl_web::synthesize::write_fixture;
 use serde_json::{json, Value};
 
 use crate::support::{msg, serve, stored_ts};
+use datalib_sql::test_sql;
 
 const A: &str = "1735689600.000100";
 
@@ -165,18 +166,19 @@ async fn sync(out: &Path, on: i64, call: &Call, answer: Answer) -> Asked {
 /// `(scope_key, severity, sample)` of every `problems` row.
 async fn problems(out: &Path) -> Vec<(String, String, String)> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows =
-        sqlx::query_as("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
-            .fetch_all(db.pool())
-            .await
-            .unwrap();
+    let rows = test_sql!("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+        .query_as()
+        .fetch_all(db.pool())
+        .await
+        .unwrap();
     db.close().await;
     rows
 }
 
 async fn remembered(out: &Path, call: &Call) -> bool {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_scope_state WHERE scope = ?")
+    let n: i64 = test_sql!("SELECT COUNT(*) FROM sync_scope_state WHERE scope = ?")
+        .query_scalar()
         .bind(format!("slack:sweep:refused:{}", call.method))
         .fetch_one(db.pool())
         .await

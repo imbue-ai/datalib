@@ -14,6 +14,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, Mirror, GMAIL,
 };
+use datalib_sql::test_sql;
 
 const PICARD: &str = "18c9f2a1b2c3d801";
 const RIKER: &str = "18c9f2a1b2c3d802";
@@ -103,7 +104,8 @@ async fn a_deleted_message_goes_with_its_mapping_and_leaves_its_thread() {
     assert_eq!(thread_sizes(&m).await, [1]);
     let emails: i64 = m
         .read(|db: RawDb| async move {
-            sqlx::query_scalar("SELECT count(*) FROM emails")
+            test_sql!("SELECT count(*) FROM emails")
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap()
@@ -122,20 +124,20 @@ async fn run(m: &Mirror) -> FetchSummary {
 /// ids here are sixteen hex digits, so the email row's id is the same.
 async fn filed(m: &Mirror, gmail_id: &'static str) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar(
-            "SELECT mailbox_id FROM email_mailboxes WHERE email_id = ? ORDER BY mailbox_id",
-        )
-        .bind(gmail_id)
-        .fetch_all(db.pool())
-        .await
-        .unwrap()
+        test_sql!("SELECT mailbox_id FROM email_mailboxes WHERE email_id = ? ORDER BY mailbox_id")
+            .query_scalar()
+            .bind(gmail_id)
+            .fetch_all(db.pool())
+            .await
+            .unwrap()
     })
     .await
 }
 
 async fn thread_sizes(m: &Mirror) -> Vec<i64> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT email_count FROM threads ORDER BY id")
+        test_sql!("SELECT email_count FROM threads ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()

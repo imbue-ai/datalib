@@ -11,6 +11,7 @@ use sqlx::pool::PoolConnection;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool};
 
 use crate::doltlite_raw::{self, quote_ident, WRITER_BRANCH};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// The branch the draft of `key` lives on.
 pub fn branch_of(key: &str) -> String {
@@ -18,20 +19,28 @@ pub fn branch_of(key: &str) -> String {
 }
 
 pub async fn exists(pool: &SqlitePool, branch: &str) -> Result<bool> {
-    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_branches WHERE name = ?")
-        .bind(branch)
-        .fetch_one(pool)
-        .await
-        .context("list the store's branches")?;
+    let n: i64 = sql!(
+        "etl.draft.count_branches_named",
+        "SELECT count(*) FROM dolt_branches WHERE name = ?"
+    )
+    .query_scalar()
+    .bind(branch)
+    .fetch_one(pool)
+    .await
+    .context("list the store's branches")?;
     Ok(n > 0)
 }
 
 /// Every draft branch in the store.
 pub async fn all(pool: &SqlitePool) -> Result<Vec<String>> {
-    sqlx::query_scalar("SELECT name FROM dolt_branches WHERE name LIKE 'draft/%' ORDER BY name")
-        .fetch_all(pool)
-        .await
-        .context("list the store's drafts")
+    sql!(
+        "etl.draft.list_draft_branches",
+        "SELECT name FROM dolt_branches WHERE name LIKE 'draft/%' ORDER BY name"
+    )
+    .query_scalar()
+    .fetch_all(pool)
+    .await
+    .context("list the store's drafts")
 }
 
 /// Cut `branch` from the writer's last seal, unless it is there already.
@@ -40,7 +49,8 @@ pub async fn cut(pool: &SqlitePool, branch: &str) -> Result<bool> {
     if exists(pool, branch).await? {
         return Ok(false);
     }
-    sqlx::query("SELECT dolt_branch(?)")
+    sql!("etl.draft.create_draft_branch", "SELECT dolt_branch(?)")
+        .query()
         .bind(branch)
         .execute(pool)
         .await
@@ -50,17 +60,22 @@ pub async fn cut(pool: &SqlitePool, branch: &str) -> Result<bool> {
 
 /// The commit `branch` was cut from, or last took the writer's work at.
 pub async fn base(pool: &SqlitePool, branch: &str) -> Result<String> {
-    sqlx::query_scalar("SELECT dolt_merge_base(?, ?)")
-        .bind(branch)
-        .bind(WRITER_BRANCH)
-        .fetch_one(pool)
-        .await
-        .with_context(|| format!("find where the draft {branch} was cut"))
+    sql!(
+        "etl.draft.find_draft_merge_base",
+        "SELECT dolt_merge_base(?, ?)"
+    )
+    .query_scalar()
+    .bind(branch)
+    .bind(WRITER_BRANCH)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("find where the draft {branch} was cut"))
 }
 
 /// The writer's last seal: what every reader sees.
 pub async fn published(pool: &SqlitePool) -> Result<String> {
-    sqlx::query_scalar("SELECT dolt_hashof(?)")
+    sql!("etl.draft.read_writer_head", "SELECT dolt_hashof(?)")
+        .query_scalar()
         .bind(WRITER_BRANCH)
         .fetch_one(pool)
         .await
@@ -85,11 +100,15 @@ impl OnDraft {
             .await
             .context("take the store's connection")?;
         let mut on = OnDraft { conn, left: false };
-        sqlx::query("SELECT dolt_connect_branch(?)")
-            .bind(branch)
-            .execute(&mut *on.conn)
-            .await
-            .with_context(|| format!("move onto the draft {branch}"))?;
+        sql!(
+            "etl.draft.connect_draft_branch",
+            "SELECT dolt_connect_branch(?)"
+        )
+        .query()
+        .bind(branch)
+        .execute(&mut *on.conn)
+        .await
+        .with_context(|| format!("move onto the draft {branch}"))?;
         Ok(on)
     }
 
@@ -98,12 +117,17 @@ impl OnDraft {
     }
 
     pub async fn leave(mut self) -> Result<()> {
-        sqlx::query("SELECT dolt_connect_branch(?)")
-            .bind(WRITER_BRANCH)
-            .execute(&mut *self.conn)
-            .await
-            .context("move back onto the writer's branch")?;
-        let active: String = sqlx::query_scalar("SELECT active_branch()")
+        sql!(
+            "etl.draft.connect_back_to_writer",
+            "SELECT dolt_connect_branch(?)"
+        )
+        .query()
+        .bind(WRITER_BRANCH)
+        .execute(&mut *self.conn)
+        .await
+        .context("move back onto the writer's branch")?;
+        let active: String = sql!("etl.draft.verify_back_on_writer", "SELECT active_branch()")
+            .query_scalar()
             .fetch_one(&mut *self.conn)
             .await
             .context("read the branch back")?;
@@ -144,7 +168,10 @@ pub async fn save(pool: &SqlitePool, branch: &str, message: &str) -> Result<Opti
     if saved.is_err() {
         // Best effort: a failure before the commit leaves the merge's
         // transaction open, and the next statement must not land in it.
-        let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+        let _ = sql!("etl.draft.rollback_failed_save", "ROLLBACK")
+            .query()
+            .execute(&mut *conn)
+            .await;
     }
     drop(conn);
     let saved = saved?;
@@ -157,19 +184,27 @@ pub async fn discard(pool: &SqlitePool, branch: &str) -> Result<()> {
     if !exists(pool, branch).await? {
         return Ok(());
     }
-    sqlx::query("SELECT dolt_branch('-D', ?)")
-        .bind(branch)
-        .execute(pool)
-        .await
-        .with_context(|| format!("delete the draft {branch}"))?;
+    sql!(
+        "etl.draft.delete_draft_branch",
+        "SELECT dolt_branch('-D', ?)"
+    )
+    .query()
+    .bind(branch)
+    .execute(pool)
+    .await
+    .with_context(|| format!("delete the draft {branch}"))?;
     Ok(())
 }
 
 async fn commit_quietly(conn: &mut SqliteConnection, message: &str) -> Result<()> {
-    match sqlx::query("SELECT dolt_commit('-Am', ?)")
-        .bind(message)
-        .execute(&mut *conn)
-        .await
+    match sql!(
+        "etl.draft.commit_draft_work",
+        "SELECT dolt_commit('-Am', ?)"
+    )
+    .query()
+    .bind(message)
+    .execute(&mut *conn)
+    .await
     {
         Ok(_) => Ok(()),
         Err(e) if e.to_string().contains("nothing to commit") => Ok(()),
@@ -183,17 +218,22 @@ async fn merge_draft_wins(
     branch: &str,
     message: &str,
 ) -> Result<Option<String>> {
-    sqlx::query("BEGIN")
+    sql!("etl.draft.begin_save", "BEGIN")
+        .query()
         .execute(&mut *conn)
         .await
         .context("begin the save")?;
     // `--no-commit` so every case ends uncommitted — a fast-forward, a
     // clean merge, a conflicted one — and the one commit below carries
     // our message.
-    match sqlx::query("SELECT dolt_merge('--squash', '--no-commit', ?)")
-        .bind(branch)
-        .execute(&mut *conn)
-        .await
+    match sql!(
+        "etl.draft.squash_merge_draft",
+        "SELECT dolt_merge('--squash', '--no-commit', ?)"
+    )
+    .query()
+    .bind(branch)
+    .execute(&mut *conn)
+    .await
     {
         Ok(_) => {}
         Err(e) if e.to_string().contains("conflict") => draft_wins(conn).await?,
@@ -201,7 +241,8 @@ async fn merge_draft_wins(
     }
     let saved = doltlite_raw::commit_on(conn, store, message, None).await?;
     // `dolt_commit` leaves the transaction open, committed or not.
-    sqlx::query("COMMIT")
+    sql!("etl.draft.commit_save", "COMMIT")
+        .query()
         .execute(&mut *conn)
         .await
         .context("end the save's transaction")?;
@@ -213,22 +254,30 @@ async fn merge_draft_wins(
 /// `dolt_conflicts_resolve('--theirs')`, which takes the draft's whole
 /// row and loses the writer's change to its other cells.
 async fn draft_wins(conn: &mut SqliteConnection) -> Result<()> {
-    let tables: Vec<String> = sqlx::query_scalar("SELECT \"table\" FROM dolt_conflicts")
+    let tables: Vec<String> = sql!(
+        "etl.draft.list_conflicted_tables",
+        "SELECT \"table\" FROM dolt_conflicts"
+    )
+    .query_scalar()
+    .fetch_all(&mut *conn)
+    .await
+    .context("list the tables in conflict")?;
+    for table in tables {
+        let columns: Vec<(String, i64)> = sql!(
+            "etl.draft.list_conflicted_table_columns",
+            "SELECT name, pk FROM pragma_table_info(?) ORDER BY cid"
+        )
+        .query_as()
+        .bind(&table)
         .fetch_all(&mut *conn)
         .await
-        .context("list the tables in conflict")?;
-    for table in tables {
-        let columns: Vec<(String, i64)> =
-            sqlx::query_as("SELECT name, pk FROM pragma_table_info(?) ORDER BY cid")
-                .bind(&table)
-                .fetch_all(&mut *conn)
-                .await
-                .with_context(|| format!("read the columns of {table}"))?;
+        .with_context(|| format!("read the columns of {table}"))?;
         let columns: Vec<(String, bool)> = columns.into_iter().map(|(c, pk)| (c, pk > 0)).collect();
         for stmt in draft_wins_sql(&table, &columns) {
             // Audited: every name is quoted, and every one came from the
             // store's own catalog, not from a row.
-            sqlx::query(sqlx::AssertSqlSafe(stmt.clone()))
+            Sql::dynamic(sql_id!("etl.draft.resolve_conflict_draft_wins"), &stmt)
+                .query()
                 .execute(&mut *conn)
                 .await
                 .with_context(|| format!("settle a conflict in {table}: {stmt}"))?;
@@ -294,6 +343,7 @@ fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     const DDL: &[&str] = &[
         "CREATE TABLE IF NOT EXISTS people (id TEXT PRIMARY KEY, name TEXT, note TEXT)",
         "CREATE TABLE IF NOT EXISTS members (
@@ -316,10 +366,10 @@ mod tests {
         let path = dir.path().join("store.doltlite_db");
         let pool = doltlite_raw::open(&path, DDL).await.unwrap();
         for sql in [
-            "INSERT INTO people VALUES ('r', 'Riker', 'x'), ('w', 'Worf', 'y')",
-            "INSERT INTO members VALUES ('away', 'r', x'00'), ('away', 'w', x'01')",
+            test_sql!("INSERT INTO people VALUES ('r', 'Riker', 'x'), ('w', 'Worf', 'y')"),
+            test_sql!("INSERT INTO members VALUES ('away', 'r', x'00'), ('away', 'w', x'01')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         doltlite_raw::commit_run(&pool, "seed").await.unwrap();
         Fixture {
@@ -332,7 +382,8 @@ mod tests {
     async fn on_draft(pool: &SqlitePool, sql: &[&str]) {
         let mut on = OnDraft::enter(pool, "draft/r").await.unwrap();
         for s in sql {
-            sqlx::query(sqlx::AssertSqlSafe(s.to_string()))
+            Sql::dynamic(test_sql_id!(), s)
+                .query()
                 .execute(on.conn())
                 .await
                 .unwrap();
@@ -341,7 +392,8 @@ mod tests {
     }
 
     async fn sealed(pool: &SqlitePool, sql: &str) {
-        sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+        Sql::dynamic(test_sql_id!(), sql)
+            .query()
             .execute(pool)
             .await
             .unwrap();
@@ -349,7 +401,8 @@ mod tests {
     }
 
     async fn people(pool: &SqlitePool) -> Vec<(String, Option<String>, Option<String>)> {
-        sqlx::query_as("SELECT id, name, note FROM people ORDER BY id")
+        test_sql!("SELECT id, name, note FROM people ORDER BY id")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap()
@@ -360,18 +413,17 @@ mod tests {
     }
 
     async fn head(pool: &SqlitePool) -> (String, String, i64) {
-        sqlx::query_as(
-            "SELECT l.commit_hash, l.message,
+        test_sql!("SELECT l.commit_hash, l.message,
                     (SELECT count(*) FROM dolt_commit_ancestors a WHERE a.commit_hash = l.commit_hash)
-               FROM dolt_log() l LIMIT 1",
-        )
+               FROM dolt_log() l LIMIT 1").query_as()
         .fetch_one(pool)
         .await
         .unwrap()
     }
 
     async fn main_head(pool: &SqlitePool) -> String {
-        sqlx::query_scalar("SELECT dolt_hashof('main')")
+        test_sql!("SELECT dolt_hashof('main')")
+            .query_scalar()
             .fetch_one(pool)
             .await
             .unwrap()
@@ -393,7 +445,8 @@ mod tests {
         // A writer's open resets its own branch's working set.
         let pool = doltlite_raw::open(&f.path, DDL).await.unwrap();
         let mut on = OnDraft::enter(&pool, "draft/r").await.unwrap();
-        let name: String = sqlx::query_scalar("SELECT name FROM people WHERE id = 'r'")
+        let name: String = test_sql!("SELECT name FROM people WHERE id = 'r'")
+            .query_scalar()
             .fetch_one(on.conn())
             .await
             .unwrap();
@@ -434,7 +487,7 @@ mod tests {
             cut(&f.pool, "draft/r").await.unwrap();
             on_draft(&f.pool, edits).await;
             save(&f.pool, "draft/r", "saved Riker").await.unwrap();
-            let rollback = sqlx::query("ROLLBACK").execute(&f.pool).await;
+            let rollback = test_sql!("ROLLBACK").query().execute(&f.pool).await;
             assert!(
                 rollback.is_err_and(|e| e.to_string().contains("no transaction is active")),
                 "{edits:?}: the save left its transaction open"
@@ -470,7 +523,8 @@ mod tests {
         let (hash, message, parents) = head(&f.pool).await;
         assert_eq!((message.as_str(), parents), ("saved Riker", 1));
         assert_eq!(main_head(&f.pool).await, hash);
-        let status: i64 = sqlx::query_scalar("SELECT count(*) FROM dolt_status")
+        let status: i64 = test_sql!("SELECT count(*) FROM dolt_status")
+            .query_scalar()
             .fetch_one(&f.pool)
             .await
             .unwrap();
@@ -537,7 +591,8 @@ mod tests {
         save(&f.pool, "draft/r", "saved").await.unwrap();
 
         let photos: Vec<(String, Vec<u8>)> =
-            sqlx::query_as("SELECT member_id, photo FROM members ORDER BY member_id")
+            test_sql!("SELECT member_id, photo FROM members ORDER BY member_id")
+                .query_as()
                 .fetch_all(&f.pool)
                 .await
                 .unwrap();
@@ -581,7 +636,8 @@ mod tests {
         assert!(!exists(&f.pool, "draft/r").await.unwrap());
         cut(&f.pool, "draft/r").await.unwrap();
         let mut on = OnDraft::enter(&f.pool, "draft/r").await.unwrap();
-        let name: String = sqlx::query_scalar("SELECT name FROM people WHERE id = 'r'")
+        let name: String = test_sql!("SELECT name FROM people WHERE id = 'r'")
+            .query_scalar()
             .fetch_one(on.conn())
             .await
             .unwrap();
@@ -596,7 +652,8 @@ mod tests {
         let f = store().await;
         cut(&f.pool, "draft/r").await.unwrap();
         drop(OnDraft::enter(&f.pool, "draft/r").await.unwrap());
-        let active: String = sqlx::query_scalar("SELECT active_branch()")
+        let active: String = test_sql!("SELECT active_branch()")
+            .query_scalar()
             .fetch_one(&f.pool)
             .await
             .unwrap();

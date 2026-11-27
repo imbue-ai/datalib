@@ -44,6 +44,7 @@ use super::listed::{self, Keeps, Named, WHOLE_ACCOUNT};
 use super::mbox;
 use super::schema_raw::{EmlBlobRow, FetchedEmail, GMAIL_API_VIA};
 use api::{Client, GmailMessage, QuotaThrottle};
+use datalib_sql::{sql, sql_id, Sql};
 use ingest::{Ingested, LabelIndex};
 
 /// `messages.list` page size. Google's maximum is 500; ids are tiny, so
@@ -307,6 +308,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // skipping this would make a Gmail incrementality regression
     // invisible to the golden whose whole job is catching one.
     let run = DownloadRun::start(
+        &found,
         db.pool(),
         &json!({
             "user_id": opts.config.user_id(),
@@ -322,8 +324,7 @@ async fn sync_account(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // fields a successful one does — the defaults populated as far as
     // the run got. Mirrors the JMAP path.
     let summary_for_bookkeeping = result.as_ref().cloned().unwrap_or_default();
-    run.finish(found.ended_early(), &result, &summary_for_bookkeeping)
-        .await;
+    run.summarize(&summary_for_bookkeeping);
     result
 }
 
@@ -833,11 +834,15 @@ impl Run<'_> {
         match self.plan.since(scope) {
             Some(since) => self.db.save_scope(&key, &since.to_rfc3339()).await,
             None => {
-                sqlx::query("DELETE FROM sync_scope_state WHERE scope = ?")
-                    .bind(&key)
-                    .execute(self.db.pool())
-                    .await
-                    .with_context(|| format!("forget {key}"))?;
+                sql!(
+                    "email.gmail.forget_listed_since_token",
+                    "DELETE FROM sync_scope_state WHERE scope = ?"
+                )
+                .query()
+                .bind(&key)
+                .execute(self.db.pool())
+                .await
+                .with_context(|| format!("forget {key}"))?;
                 Ok(())
             }
         }
@@ -1076,21 +1081,29 @@ async fn seed_from_takeout(
     only_labels: Vec<String>,
 ) -> Result<mbox::SeedSummary> {
     let pool = db.pool();
-    let held: HashSet<String> = sqlx::query_scalar("SELECT id FROM emails")
-        .fetch_all(pool)
-        .await
-        .context("select the emails held")?
-        .into_iter()
-        .collect();
+    let held: HashSet<String> = sql!(
+        "email.gmail.seed.list_held_email_ids",
+        "SELECT id FROM emails"
+    )
+    .query_scalar()
+    .fetch_all(pool)
+    .await
+    .context("select the emails held")?
+    .into_iter()
+    .collect();
     let listed = if listed::scopes_owed(pool, &plan.wanted())
         .await?
         .iter()
         .all(|scope| scope == listed::THREAD_INDEX)
     {
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM listed_messages")
-            .fetch_all(pool)
-            .await
-            .context("select the listed messages")?;
+        let ids: Vec<String> = sql!(
+            "email.gmail.seed.list_listed_message_ids",
+            "SELECT id FROM listed_messages"
+        )
+        .query_scalar()
+        .fetch_all(pool)
+        .await
+        .context("select the listed messages")?;
         Some(ids.iter().map(|id| email_id_of(id)).collect())
     } else {
         None
@@ -1132,11 +1145,13 @@ struct HeldBytes {
 
 /// Every email whose `.eml` the store holds.
 async fn held_bytes(pool: &sqlx::SqlitePool) -> Result<HashMap<String, HeldBytes>> {
-    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(String, String, String, Option<String>)> = sql!(
+        "email.gmail.list_held_emails_with_bytes",
         "SELECT e.id, b.blake3, e.thread_id, e.preview FROM emails e
          JOIN email_blobs b ON b.blob_id = e.blob_id AND b.email_id = e.id
-         WHERE b.blake3 IS NOT NULL",
+         WHERE b.blake3 IS NOT NULL"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .context("select the emails held with their bytes")?;
@@ -1159,10 +1174,12 @@ async fn held_bytes(pool: &sqlx::SqlitePool) -> Result<HashMap<String, HeldBytes
 /// that differ. Returns how many did.
 async fn mark_muted(pool: &sqlx::SqlitePool, muted: &HashSet<String>) -> Result<u64> {
     let ids = serde_json::to_string(muted).context("serialize the muted ids")?;
-    let done = sqlx::query(
+    let done = sql!(
+        "email.gmail.mark_muted_emails",
         "UPDATE read_marks SET muted = (id IN (SELECT value FROM json_each(?1)))
-          WHERE muted IS NOT (id IN (SELECT value FROM json_each(?1)))",
+          WHERE muted IS NOT (id IN (SELECT value FROM json_each(?1)))"
     )
+    .query()
     .bind(ids)
     .execute(pool)
     .await
@@ -1466,15 +1483,19 @@ const EMAIL_ID_OF_SQL: &str = "substr('0000000000000000' || lower(l.id), -16)";
 /// under `cap`. Its listing says nothing about its bytes, so the loop
 /// alone would not ask for it again once the cap allows it.
 async fn held_without_bytes(pool: &sqlx::SqlitePool, cap: Option<u64>) -> Result<Vec<Listed>> {
-    let rows: Vec<(String, Option<String>)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        // Audited: a constant expression over the row; the cap is bound.
-        "SELECT l.id, l.stamp FROM listed_messages l
+    let rows: Vec<(String, Option<String>)> = Sql::dynamic(
+        sql_id!("email.gmail.list_listed_without_bytes"),
+        format!(
+            // Audited: a constant expression over the row; the cap is bound.
+            "SELECT l.id, l.stamp FROM listed_messages l
          JOIN emails e ON e.id = {EMAIL_ID_OF_SQL}
          WHERE (?1 IS NULL OR e.size <= ?1)
            AND NOT EXISTS (SELECT 1 FROM email_blobs b
                            WHERE b.blob_id = e.blob_id AND b.blake3 IS NOT NULL)
          ORDER BY l.id DESC"
-    )))
+        ),
+    )
+    .query_as()
     .bind(cap.map(|c| c as i64))
     .fetch_all(pool)
     .await
@@ -1545,6 +1566,7 @@ async fn collect_history(
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql_id, Sql};
     fn plan(sections: &[Section]) -> Plan {
         Plan::new(sections, |name| match name {
             "Inbox" => Some("INBOX".into()),
@@ -1678,13 +1700,12 @@ mod tests {
             .await
             .unwrap();
         for id in ["18c9f2a1b2c3d601", "18C9F2A1B2C3D601", "ab", "0"] {
-            let sql = format!("SELECT {}", EMAIL_ID_OF_SQL.replace("l.id", "?"));
+            let sql = Sql::dynamic(
+                test_sql_id!(),
+                format!("SELECT {}", EMAIL_ID_OF_SQL.replace("l.id", "?")),
+            );
             // Audited: a constant expression; the id is bound.
-            let in_sql: String = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+            let in_sql: String = sql.query_scalar().bind(id).fetch_one(&pool).await.unwrap();
             assert_eq!(in_sql, email_id_of(id), "{id}");
         }
         pool.close().await;

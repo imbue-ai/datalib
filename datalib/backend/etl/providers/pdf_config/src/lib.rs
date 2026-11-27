@@ -34,7 +34,8 @@ pub struct PdfConfig {
     pub fswalk: Option<LocalPath>,
 
     /// Gitignore-shaped patterns pruned from the scan, in addition to
-    /// any `.gitignore` files found in the tree. Matched the way ripgrep
+    /// the `.gitignore` files inside a git repository and any `.ignore`
+    /// files in the tree. Matched the way ripgrep
     /// matches them, so `**`, anchored `/`, and character classes all
     /// behave as expected.
     #[serde(default)]

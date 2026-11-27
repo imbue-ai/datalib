@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
+use datalib_sql::test_sql;
 use serde_json::Value;
 use sqlx::{Connection, Row};
 
@@ -40,7 +41,8 @@ fn fixture_prompts() -> Vec<(String, String)> {
 async fn cached_vector(cache: &mut sqlx::SqliteConnection, hash: &str) -> Vec<f32> {
     let model = &datalib_runtime::models::EMBED_MODELS[0];
     let key = format!("{}@{}", model.file, model.sha256);
-    let row = sqlx::query("SELECT vector FROM vectors WHERE model = ? AND hash = ?")
+    let row = test_sql!("SELECT vector FROM vectors WHERE model = ? AND hash = ?")
+        .query()
         .bind(key)
         .bind(hash)
         .fetch_one(cache)

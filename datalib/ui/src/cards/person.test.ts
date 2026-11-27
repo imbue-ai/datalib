@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { NormalizedContact, Who } from "./contacts";
 import type { PageAnswer } from "./contactPages";
 import {
+  handleMenu,
   linkableHandles,
   linkState,
   offerNote,
@@ -67,7 +68,7 @@ describe("personModel", () => {
     const m = personModel(
       by(TEL),
       null,
-      answers({ [TEL]: { mine: null, sourceContacts: [whatsapp, sms] } }),
+      answers({ [TEL]: { mine: [], sourceContacts: [whatsapp, sms] } }),
     );
     expect(m.title).toBe("Riker");
     expect(m.mine).toBeNull();
@@ -81,7 +82,7 @@ describe("personModel", () => {
     const m = personModel(
       by(TEL),
       "sms_backup",
-      answers({ [TEL]: { mine: null, sourceContacts: [whatsapp, sms] } }),
+      answers({ [TEL]: { mine: [], sourceContacts: [whatsapp, sms] } }),
     );
     expect(m.sections.map((s) => [s.sourceId, s.seenHere])).toEqual([
       ["sms_backup", true],
@@ -95,8 +96,8 @@ describe("personModel", () => {
       by(EMAIL),
       null,
       answers({
-        [EMAIL]: { mine, sourceContacts: [slack] },
-        [TEL]: { mine, sourceContacts: [whatsapp, sms] },
+        [EMAIL]: { mine: [mine], sourceContacts: [slack] },
+        [TEL]: { mine: [mine], sourceContacts: [whatsapp, sms] },
       }),
     );
     expect(m.title).toBe("William Riker");
@@ -111,10 +112,10 @@ describe("personModel", () => {
       null,
       answers({
         [EMAIL]: {
-          mine: { ...mine, handles: [...mine.handles, ...slack.handles] },
+          mine: [{ ...mine, handles: [...mine.handles, ...slack.handles] }],
           sourceContacts: [slack],
         },
-        "slack:T1/U2": { mine, sourceContacts: [slack] },
+        "slack:T1/U2": { mine: [mine], sourceContacts: [slack] },
       }),
     );
     expect(m.sections.map((s) => s.sourceId)).toEqual(["slack"]);
@@ -125,6 +126,7 @@ describe("personModel", () => {
     expect(m).toEqual({
       title: "+15550100",
       mine: null,
+      sharedBy: [],
       handles: [TEL],
       sections: [],
       fullNumbers: {},
@@ -176,9 +178,9 @@ describe("why a source is on the card, and what is linked", () => {
   const linkedByEmail = contact("datalib_contacts", "c-1", ["William Riker"], [EMAIL]);
   const other = contact("datalib_contacts", "c-2", ["Thomas Riker"], ["slack:T1/U9"]);
   const all = answers({
-    [EMAIL]: { mine: linkedByEmail, sourceContacts: [slack] },
-    "slack:T1/U2": { mine: null, sourceContacts: [slack] },
-    "slack:T1/U9": { mine: other, sourceContacts: [] },
+    [EMAIL]: { mine: [linkedByEmail], sourceContacts: [slack] },
+    "slack:T1/U2": { mine: [], sourceContacts: [slack] },
+    "slack:T1/U9": { mine: [other], sourceContacts: [] },
   });
 
   const whoOf = all.who;
@@ -240,7 +242,7 @@ const HOME = "(202) 555-0147";
 
 describe("the handles adding someone takes", () => {
   const SLACK = "slack:T1/U2";
-  const unfiled = { mine: null, sourceContacts: [] };
+  const unfiled = { mine: [], sourceContacts: [] };
   const offered = (subject: Subject, a: Answers) =>
     offers(subject, personModel(subject, null, a), a);
   const line = (o: { handle: string; ticked: boolean }) => [o.handle, o.ticked];
@@ -248,7 +250,7 @@ describe("the handles adding someone takes", () => {
   it("is the one opened, then every other on a record that holds it, all ticked", () => {
     const book = contact("book", "riker", ["William Riker"], [EMAIL, TEL]);
     const a = answers({
-      [EMAIL]: { mine: null, sourceContacts: [book, slack] },
+      [EMAIL]: { mine: [], sourceContacts: [book, slack] },
       [TEL]: unfiled,
       [SLACK]: unfiled,
     });
@@ -265,8 +267,8 @@ describe("the handles adding someone takes", () => {
   it("does not follow a handle on to further records", () => {
     const book = contact("book", "riker", ["William Riker"], [EMAIL, TEL]);
     const a = answers({
-      [EMAIL]: { mine: null, sourceContacts: [slack] },
-      [SLACK]: { mine: null, sourceContacts: [slack, book] },
+      [EMAIL]: { mine: [], sourceContacts: [slack] },
+      [SLACK]: { mine: [], sourceContacts: [slack, book] },
     });
     expect(offered(by(EMAIL), a).map((o) => o.handle)).toEqual([EMAIL, SLACK]);
   });
@@ -274,8 +276,8 @@ describe("the handles adding someone takes", () => {
   it("offers one another contact has unticked, saying whose it is", () => {
     const worf = contact("datalib_contacts", "c-9", ["Worf"], [SLACK]);
     const a = answers({
-      [EMAIL]: { mine: null, sourceContacts: [slack] },
-      [SLACK]: { mine: worf, sourceContacts: [slack] },
+      [EMAIL]: { mine: [], sourceContacts: [slack] },
+      [SLACK]: { mine: [worf], sourceContacts: [slack] },
     });
     const got = offered(by(EMAIL), a);
     expect(got.map(line)).toEqual([
@@ -288,12 +290,12 @@ describe("the handles adding someone takes", () => {
   it("leaves out a group's addresses, the library's own stand-in and a model", () => {
     const crew = { ...contact("book", "crew", ["Crew"], [EMAIL, TEL]), kind: "group" as const };
     const owner = contact("sms", "me", ["Me"], [EMAIL, "me:self", "ai_model:lcars"]);
-    const a = answers({ [EMAIL]: { mine: null, sourceContacts: [crew, owner] } });
+    const a = answers({ [EMAIL]: { mine: [], sourceContacts: [crew, owner] } });
     expect(offered(by(EMAIL), a).map((o) => o.handle)).toEqual([EMAIL]);
   });
 
   it("offers nothing for someone who is in your contacts", () => {
-    const a = answers({ [EMAIL]: { mine, sourceContacts: [slack] } });
+    const a = answers({ [EMAIL]: { mine: [mine], sourceContacts: [slack] } });
     expect(offered(by(EMAIL), a)).toEqual([]);
   });
 
@@ -303,7 +305,7 @@ describe("the handles adding someone takes", () => {
     const geordi = withHomeNumber(contact("book", "g", ["Geordi"], [EMAIL]), HOME);
     const asked = (numbers: string[]) =>
       answers({
-        [EMAIL]: { mine: null, sourceContacts: [geordi], fullNumbers: { [HOME]: numbers } },
+        [EMAIL]: { mine: [], sourceContacts: [geordi], fullNumbers: { [HOME]: numbers } },
       });
     const one = offered(by(EMAIL), asked([FULL]));
     expect(one.map(line)).toEqual([
@@ -326,7 +328,7 @@ describe("the handles adding someone takes", () => {
     const asked = (numbers: string[]) =>
       answers({
         [FULL]: {
-          mine: null,
+          mine: [],
           sourceContacts: [caller],
           sameDigits: [gomez],
           fullNumbers: { [HOME]: numbers },
@@ -367,7 +369,7 @@ describe("a card with no handle", () => {
   });
 
   it("is headed by its own name, and offers its number where the library knows it", () => {
-    const a = answers({ [FULL]: { mine: null, sourceContacts: [] } }, page([FULL]));
+    const a = answers({ [FULL]: { mine: [], sourceContacts: [] } }, page([FULL]));
     const m = personModel(PAGE, null, a);
     expect([m.title, m.mine, m.sections.length]).toEqual(["Sonya Gomez", null, 1]);
     expect(offers(PAGE, m, a).map((o) => o.handle)).toEqual([FULL]);
@@ -382,7 +384,7 @@ describe("a card with no handle", () => {
    *  one of two numbers on a contact does not make the card theirs. */
   it("is its contact once its one number is on one", () => {
     const sonya = contact("datalib_contacts", "c-3", ["Sonya"], [FULL]);
-    const who = { [FULL]: { mine: sonya, sourceContacts: [] } };
+    const who = { [FULL]: { mine: [sonya], sourceContacts: [] } };
     expect(personModel(PAGE, null, answers(who, page([FULL]))).mine).toBe(sonya);
     const two = answers(who, page([FULL, "tel:+442025550147"]));
     expect(personModel(PAGE, null, two).mine).toBeNull();
@@ -400,7 +402,10 @@ describe("a contact by its id", () => {
 
   it("shows every source that knows its handles", () => {
     const a = answers(
-      { [TEL]: { mine, sourceContacts: [sms] }, [EMAIL]: { mine, sourceContacts: [slack] } },
+      {
+        [TEL]: { mine: [mine], sourceContacts: [sms] },
+        [EMAIL]: { mine: [mine], sourceContacts: [slack] },
+      },
       {},
       { "c-1": mine },
     );
@@ -427,6 +432,60 @@ describe("recordHandles", () => {
     const c = withHomeNumber(contact("book", "s", ["Sonya"], [FULL]), HOME);
     expect(recordHandles(c, { [HOME]: [FULL] }).map((h) => [h.handle, h.written])).toEqual([
       [FULL, null],
+    ]);
+  });
+});
+
+/** Robert and Marie Picard share an address. Its page is its own, with
+ *  both on it; Marie's page has it as hers; and adding someone else with
+ *  it asks rather than ticking it. */
+describe("an address two contacts share", () => {
+  const VINEYARD = "email:vineyard@labarre.earth";
+  const MARIE = "email:marie@labarre.earth";
+  const robert = contact("datalib_contacts", "c-r", ["Robert Picard"], [VINEYARD]);
+  const marie = contact("datalib_contacts", "c-m", ["Marie Picard"], [VINEYARD, MARIE]);
+  const book = contact("tng_contacts", "rene", ["René Picard"], [VINEYARD, "tel:+33555010199"]);
+  const a = answers({
+    [VINEYARD]: { mine: [marie, robert], sourceContacts: [book] },
+    [MARIE]: { mine: [marie], sourceContacts: [] },
+    "tel:+33555010199": { mine: [], sourceContacts: [book] },
+  });
+
+  it("opened by the address, is the address's page, with both on it and nothing to add", () => {
+    const m = personModel(by(VINEYARD), null, a);
+    expect([m.title, m.mine, m.sharedBy]).toEqual([
+      "Marie Picard & Robert Picard",
+      null,
+      [marie, robert],
+    ]);
+    expect(offers(by(VINEYARD), m, a)).toEqual([]);
+  });
+
+  it("is hers on her page, and his too", () => {
+    const m = personModel(by(MARIE), null, a);
+    expect([m.mine, m.sharedBy]).toEqual([marie, []]);
+    expect(linkState(VINEYARD, marie, a.who)).toBe("this");
+    expect(handleMenu(VINEYARD, m, a.who).map((e) => e.id)).toContain("handle-remove");
+  });
+
+  it("is offered unticked, naming who has it, when adding someone else", () => {
+    const tel = by("tel:+33555010199");
+    const m = personModel(tel, null, a);
+    const held = offers(tel, m, a).find((o) => o.handle === VINEYARD)!;
+    expect([held.ticked, held.owners]).toEqual([false, [marie, robert]]);
+    expect(offerNote(held, (id) => id)).toBe("on Marie Picard and Robert Picard");
+  });
+
+  it("on another contact's page, can go on it beside them or move to it", () => {
+    const rene = contact("datalib_contacts", "c-n", ["René Picard"], ["tel:+33555010199"]);
+    const withRene = answers({
+      [VINEYARD]: { mine: [marie, robert], sourceContacts: [book] },
+      "tel:+33555010199": { mine: [rene], sourceContacts: [book] },
+    });
+    const m = personModel(by("tel:+33555010199"), null, withRene);
+    expect(handleMenu(VINEYARD, m, withRene.who).map((e) => e.label)).toEqual([
+      "Add to René Picard too",
+      "Move from Marie Picard and Robert Picard to René Picard",
     ]);
   });
 });

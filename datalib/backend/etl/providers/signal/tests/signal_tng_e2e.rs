@@ -19,6 +19,7 @@ use datalib_signal_backup::{
     backup, encrypt_attachment, local_media_name,
     write::{write_snapshot, SnapshotInput},
 };
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use sha2::{Digest, Sha256};
 
 /// The raw store's keys for the bridge crew: Picard is the account, the
@@ -141,10 +142,10 @@ async fn extract_then_translate_against_tng_fixture() -> Result<()> {
     // Self-skips on stock libsqlite3.
     {
         for q in [
-            "SELECT dolt_config('user.name', 'datalib-test')",
-            "SELECT dolt_config('user.email', 'test@datalib.local')",
+            test_sql!("SELECT dolt_config('user.name', 'datalib-test')"),
+            test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')"),
         ] {
-            let _ = sqlx::query(q).execute(db.pool()).await;
+            let _ = q.query().execute(db.pool()).await;
         }
         let _ = datalib_etl::store_handle::RawStoreHandle::commit_all(&db, "test download").await;
     }
@@ -490,7 +491,8 @@ async fn fetch_summary(
 }
 
 async fn head(pool: &sqlx::SqlitePool) -> String {
-    sqlx::query_scalar("SELECT commit_hash FROM dolt_log LIMIT 1")
+    test_sql!("SELECT commit_hash FROM dolt_log LIMIT 1")
+        .query_scalar()
         .fetch_one(pool)
         .await
         .unwrap_or_default()
@@ -498,7 +500,8 @@ async fn head(pool: &sqlx::SqlitePool) -> String {
 
 async fn problems(store: &Path) -> Result<Vec<(String, String)>> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
-    let rows = sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+    let rows = test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        .query_as()
         .fetch_all(db.pool())
         .await?;
     db.close().await;
@@ -576,7 +579,8 @@ async fn what_no_page_shows_is_one_row_with_counts() -> Result<()> {
     assert_eq!(rows[0].1, "warning");
 
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    let said: String = sqlx::query_scalar("SELECT sample FROM problems")
+    let said: String = test_sql!("SELECT sample FROM problems")
+        .query_scalar()
         .fetch_one(db.pool())
         .await?;
     db.close().await;
@@ -705,18 +709,23 @@ async fn a_phone_switch_keeps_every_message_and_its_bytes() -> Result<()> {
     let item = ingest::schema_raw::chat_item_id_recipe(BRIDGE, PICARD, 12442118940000);
     let edge = ingest::schema_raw::chat_item_attachment_id_recipe(&item, 0);
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    let hashes: Vec<String> = sqlx::query_scalar(
+    let hashes: Vec<String> = test_sql!(
         "SELECT commit_hash FROM dolt_log WHERE message LIKE 'download signal: backup %' \
-          ORDER BY date",
+          ORDER BY date"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await?;
     let mut came_and_went = Vec::new();
     for table in ["recipients", "chats", "chat_items", "chat_item_attachments"] {
-        let rows: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_{table}(?, ?) \
+        let rows: Vec<(String, String)> = Sql::dynamic(
+            test_sql_id!(),
+            format!(
+                "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_{table}(?, ?) \
               WHERE diff_type <> 'modified'"
-        )))
+            ),
+        )
+        .query_as()
         .bind(&hashes[0])
         .bind(&hashes[1])
         .fetch_all(db.pool())
@@ -725,7 +734,8 @@ async fn a_phone_switch_keeps_every_message_and_its_bytes() -> Result<()> {
     }
     assert_eq!(came_and_went, [], "the switch added or removed rows");
     let (ref_id, blake3): (String, Option<String>) =
-        sqlx::query_as("SELECT ref_id, blake3 FROM chat_item_attachments WHERE id = ?")
+        test_sql!("SELECT ref_id, blake3 FROM chat_item_attachments WHERE id = ?")
+            .query_as()
             .bind(&edge)
             .fetch_one(db.pool())
             .await?;
@@ -809,9 +819,11 @@ async fn a_stopped_run_still_reports_what_did_not_decode() -> Result<()> {
 
 async fn ids(store: &Path, table: &str) -> Result<Vec<String>> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
-    let rows = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT id FROM {table} ORDER BY id"
-    )))
+    let rows = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT id FROM {table} ORDER BY id"),
+    )
+    .query_scalar()
     .fetch_all(db.pool())
     .await?;
     db.close().await;
@@ -1010,9 +1022,10 @@ fn bridge_crew() -> Vec<backup::Frame> {
 /// `(first line of message, date)` of every snapshot commit, oldest first.
 async fn backup_log(store: &Path) -> Result<Vec<(String, String)>> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
-    let mut rows: Vec<(String, String)> = sqlx::query_as(
-        "SELECT message, date FROM dolt_log WHERE message LIKE 'download signal: backup %'",
+    let mut rows: Vec<(String, String)> = test_sql!(
+        "SELECT message, date FROM dolt_log WHERE message LIKE 'download signal: backup %'"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await?;
     db.close().await;
@@ -1025,9 +1038,7 @@ async fn backup_log(store: &Path) -> Result<Vec<(String, String)>> {
 
 async fn texts(store: &Path) -> Result<Vec<String>> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
-    let rows: Vec<String> = sqlx::query_scalar(
-        "SELECT (SELECT value FROM json_tree(payload) WHERE key = 'body') FROM chat_items ORDER BY date_sent",
-    )
+    let rows: Vec<String> = test_sql!("SELECT (SELECT value FROM json_tree(payload) WHERE key = 'body') FROM chat_items ORDER BY date_sent").query_scalar()
     .fetch_all(db.pool())
     .await?;
     db.close().await;
@@ -1108,28 +1119,30 @@ async fn each_backup_is_a_commit_and_two_diff_to_show_what_was_lost() -> Result<
     );
 
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    let hashes: Vec<String> = sqlx::query_scalar(
+    let hashes: Vec<String> = test_sql!(
         "SELECT commit_hash FROM dolt_log WHERE message LIKE 'download signal: backup %' \
-          ORDER BY date",
+          ORDER BY date"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await?;
-    let diff: Vec<(String, String)> = sqlx::query_as(
+    let diff: Vec<(String, String)> = test_sql!(
         "SELECT diff_type, coalesce(to_id, from_id) FROM dolt_diff_chat_items(?, ?) \
-          ORDER BY 2",
+          ORDER BY 2"
     )
+    .query_as()
     .bind(&hashes[1])
     .bind(&hashes[2])
     .fetch_all(db.pool())
     .await?;
     // The bookkeeping of a row a day did not change is not written again,
     // so the day's commit holds only what changed.
-    let restamped: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM dolt_diff_chat_items_bookkeeping(?, ?)")
-            .bind(&hashes[0])
-            .bind(&hashes[1])
-            .fetch_one(db.pool())
-            .await?;
+    let restamped: i64 = test_sql!("SELECT count(*) FROM dolt_diff_chat_items_bookkeeping(?, ?)")
+        .query_scalar()
+        .bind(&hashes[0])
+        .bind(&hashes[1])
+        .fetch_one(db.pool())
+        .await?;
     db.close().await;
     let id =
         |author: &str, sent: i64| ingest::schema_raw::chat_item_id_recipe(BRIDGE, author, sent);
@@ -1341,10 +1354,10 @@ fn two_chats(riker_read: bool) -> Vec<backup::Frame> {
 /// Every mark, as `(item id, read)`.
 async fn read_marks(store: &Path) -> Result<Vec<(String, i64)>> {
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(store)).await?;
-    let rows =
-        sqlx::query_as("SELECT id, read FROM read_marks WHERE read_through IS NULL ORDER BY id")
-            .fetch_all(db.pool())
-            .await?;
+    let rows = test_sql!("SELECT id, read FROM read_marks WHERE read_through IS NULL ORDER BY id")
+        .query_as()
+        .fetch_all(db.pool())
+        .await?;
     db.close().await;
     Ok(rows)
 }
@@ -1422,16 +1435,18 @@ async fn an_incoming_messages_read_flag_is_a_mark_of_its_own() -> Result<()> {
         "one mark per incoming message, none on Picard's own"
     );
     let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
-    let flagged: i64 = sqlx::query_scalar(
+    let flagged: i64 = test_sql!(
         "SELECT count(*) FROM chat_items \
-          WHERE json_type(payload, '$.directional_details.Incoming.read') IS NOT NULL",
+          WHERE json_type(payload, '$.directional_details.Incoming.read') IS NOT NULL"
     )
+    .query_scalar()
     .fetch_one(db.pool())
     .await?;
-    let incoming: i64 = sqlx::query_scalar(
+    let incoming: i64 = test_sql!(
         "SELECT count(*) FROM chat_items \
-          WHERE json_type(payload, '$.directional_details.Incoming') = 'object'",
+          WHERE json_type(payload, '$.directional_details.Incoming') = 'object'"
     )
+    .query_scalar()
     .fetch_one(db.pool())
     .await?;
     db.close().await;
@@ -1479,9 +1494,10 @@ async fn a_read_alone_moves_the_version_and_redraws_its_chat() -> Result<()> {
         "the read moved the store's version"
     );
     let db = ingest::RawDb::open(&db_path).await?;
-    let moved: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM dolt_diff_chat_items(?, 'HEAD') WHERE diff_type != 'unchanged'",
+    let moved: i64 = test_sql!(
+        "SELECT count(*) FROM dolt_diff_chat_items(?, 'HEAD') WHERE diff_type != 'unchanged'"
     )
+    .query_scalar()
     .bind(&cursor)
     .fetch_one(db.pool())
     .await?;
@@ -1513,24 +1529,28 @@ async fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> 
 
     let payloads = |db: ingest::RawDb| async move {
         let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT id, hex(payload) FROM chat_items ORDER BY id")
+            test_sql!("SELECT id, hex(payload) FROM chat_items ORDER BY id")
+                .query_as()
                 .fetch_all(db.pool())
                 .await?;
         anyhow::Ok(rows)
     };
     let db = ingest::RawDb::open(&db_path).await?;
     let written = payloads(db.clone()).await?;
-    let marks: Vec<(String, i64)> = sqlx::query_as("SELECT id, read FROM read_marks ORDER BY id")
+    let marks: Vec<(String, i64)> = test_sql!("SELECT id, read FROM read_marks ORDER BY id")
+        .query_as()
         .fetch_all(db.pool())
         .await?;
-    let ledger: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_backups")
+    let ledger: i64 = test_sql!("SELECT count(*) FROM ingested_backups")
+        .query_scalar()
         .fetch_one(db.pool())
         .await?;
 
     // The frame as the build before serialized it: `read` in its place
     // between `date_server_sent` and `sealed_sender`, and no `read_marks`.
     for (id, read) in &marks {
-        let frame: String = sqlx::query_scalar("SELECT json(payload) FROM chat_items WHERE id = ?")
+        let frame: String = test_sql!("SELECT json(payload) FROM chat_items WHERE id = ?")
+            .query_scalar()
             .bind(id)
             .fetch_one(db.pool())
             .await?;
@@ -1540,17 +1560,18 @@ async fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> 
             1,
         );
         assert_ne!(old, frame);
-        sqlx::query("UPDATE chat_items SET payload = jsonb(?) WHERE id = ?")
+        test_sql!("UPDATE chat_items SET payload = jsonb(?) WHERE id = ?")
+            .query()
             .bind(old)
             .bind(id)
             .execute(db.pool())
             .await?;
     }
     for sql in [
-        "DROP TABLE read_marks",
-        "UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'",
+        test_sql!("DROP TABLE read_marks"),
+        test_sql!("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'"),
     ] {
-        sqlx::query(sql).execute(db.pool()).await?;
+        sql.query().execute(db.pool()).await?;
     }
     let old = datalib_etl::doltlite_raw::commit_run(db.pool(), "a store from before")
         .await?
@@ -1564,20 +1585,22 @@ async fn a_store_from_before_read_marks_moves_its_flags_on_open() -> Result<()> 
         written,
         "each frame as ingest writes it"
     );
-    let marks_now: Vec<(String, i64)> =
-        sqlx::query_as("SELECT id, read FROM read_marks ORDER BY id")
-            .fetch_all(db.pool())
-            .await?;
+    let marks_now: Vec<(String, i64)> = test_sql!("SELECT id, read FROM read_marks ORDER BY id")
+        .query_as()
+        .fetch_all(db.pool())
+        .await?;
     assert_eq!(marks_now, marks);
-    let ledger_now: i64 = sqlx::query_scalar("SELECT count(*) FROM ingested_backups")
+    let ledger_now: i64 = test_sql!("SELECT count(*) FROM ingested_backups")
+        .query_scalar()
         .fetch_one(db.pool())
         .await?;
     assert_eq!(ledger_now, ledger, "the snapshot ledger is kept");
-    let changed: Vec<String> = sqlx::query_scalar(
+    let changed: Vec<String> = test_sql!(
         "SELECT DISTINCT coalesce(nullif(to_table_name, ''), from_table_name) \
            FROM dolt_diff_summary WHERE from_ref = ? AND to_ref = 'HEAD' \
-            AND to_table_name != '_datalib_meta' ORDER BY 1",
+            AND to_table_name != '_datalib_meta' ORDER BY 1"
     )
+    .query_scalar()
     .bind(&old)
     .fetch_all(db.pool())
     .await?;

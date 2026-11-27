@@ -14,6 +14,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, Mirror,
 };
+use datalib_sql::test_sql;
 
 const OLDER: &str = "18c9f2a1b2c3d601";
 const NEWER: &str = "18c9f2a1b2c3d602";
@@ -67,7 +68,8 @@ async fn the_account_row_carries_the_profiles_address() {
     h.run(&[], None).await;
     let address: Option<String> =
         h.0.read(|db| async move {
-            sqlx::query_scalar("SELECT email_address FROM accounts")
+            test_sql!("SELECT email_address FROM accounts")
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap()
@@ -108,7 +110,8 @@ async fn a_message_the_filter_dropped_is_listed_again_after_the_upgrade() {
 
     // A store that build left is one rung below this one's top.
     h.0.read(|db| async move {
-        sqlx::query("UPDATE _datalib_meta SET value = '4' WHERE key = 'schema_version'")
+        test_sql!("UPDATE _datalib_meta SET value = '4' WHERE key = 'schema_version'")
+            .query()
             .execute(db.pool())
             .await
             .unwrap();

@@ -12,6 +12,7 @@ use datalib_etl_macros::RawTable;
 use sqlx::{Sqlite, Transaction};
 
 use super::parse::Sample;
+use datalib_sql::{sql, sql_id, Sql};
 
 pub const DATA_TABLES: &[&str] = &[
     "airvisual_devices",
@@ -88,16 +89,22 @@ pub async fn replace_clock_changes(
     device: &str,
     changes: &[super::clock::ClockChange],
 ) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM airvisual_clock_changes WHERE device_id = ?")
-        .bind(device)
-        .execute(&mut **tx)
-        .await?;
+    sql!(
+        "airvisual.delete_device_clock_changes",
+        "DELETE FROM airvisual_clock_changes WHERE device_id = ?"
+    )
+    .query()
+    .bind(device)
+    .execute(&mut **tx)
+    .await?;
     for c in changes {
-        sqlx::query(
+        sql!(
+            "airvisual.upsert_clock_change",
             "INSERT OR REPLACE INTO airvisual_clock_changes \
              (device_id, archive, previous_wall_s, after_wall_s, after_timezone) \
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?)"
         )
+        .query()
         .bind(device)
         .bind(c.archive)
         .bind(c.previous_wall_s)
@@ -117,10 +124,12 @@ pub async fn load_clock_changes<'e, E>(
 where
     E: sqlx::Executor<'e, Database = Sqlite>,
 {
-    let rows: Vec<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(i64, i64, i64, Option<String>)> = sql!(
+        "airvisual.list_device_clock_changes",
         "SELECT archive, previous_wall_s, after_wall_s, after_timezone \
-         FROM airvisual_clock_changes WHERE device_id = ? ORDER BY archive",
+         FROM airvisual_clock_changes WHERE device_id = ? ORDER BY archive"
     )
+    .query_as()
     .bind(device)
     .fetch_all(db)
     .await?;
@@ -188,7 +197,7 @@ pub async fn upsert_samples(
         // Audited: the column names are the `&'static str` list above, and the
         // VALUES run is `push_placeholders` over `chunk.len()`; every value is
         // bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("airvisual.upsert_samples"), sql).query();
         for r in chunk {
             q = q
                 .bind(&r.device_id)

@@ -55,8 +55,9 @@ pub fn to_chats(parsed: &ParsedSignal, source_id: &str) -> (Vec<NormalizedChat>,
             .filter_map(|r| Some((r.aci.as_deref()?, r.id.as_str())))
             .collect();
 
-        // An item with neither text nor an attachment is a ChatUpdate or
-        // a sticker: nothing a transcript can show.
+        // An item with neither text nor an attachment (a chat update, a
+        // call, a sticker, a deleted message, a payload that would not
+        // decode, …) is nothing a transcript can show.
         let shown: Vec<&ParsedChatItem> = doc
             .items
             .iter()

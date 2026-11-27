@@ -8,6 +8,7 @@ use datalib_etl::doltlite_raw as dr;
 use datalib_etl_calendar::ingest::schema_raw::{full_ddl, IcsObjectRow};
 use datalib_etl_calendar::ingest::{db_path_for, RawDb};
 use datalib_etl_web::dav::state;
+use datalib_sql::{test_sql, Sql};
 
 const OLD_UNSTORED_DDL: &str = "CREATE TABLE IF NOT EXISTS dav_unstored (
     collection TEXT NOT NULL, href TEXT NOT NULL, detail TEXT NOT NULL,
@@ -16,11 +17,8 @@ const OLD_UNSTORED_DDL: &str = "CREATE TABLE IF NOT EXISTS dav_unstored (
 const ICS: &str =
     "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:tng-staff\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -55,7 +53,8 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
         )
         .await
         .unwrap();
-        sqlx::query("INSERT INTO dav_unstored (collection, href, detail) VALUES (?, ?, ?)")
+        test_sql!("INSERT INTO dav_unstored (collection, href, detail) VALUES (?, ?, ?)")
+            .query()
             .bind("bridge")
             .bind("/c/bridge/reception.ics")
             .bind("the calendar listed this object, but did not return it when asked")
@@ -70,7 +69,8 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
     let db = RawDb::open(&path).await.expect("the rung carries it");
     let pool = db.pool();
     let listed: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT collection, href, etag FROM dav_resources ORDER BY href")
+        test_sql!("SELECT collection, href, etag FROM dav_resources ORDER BY href")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap();
@@ -86,10 +86,11 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
         ],
         "a server's objects are listed; a file's is not"
     );
-    let held: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+    let held: Vec<(String, bool, Option<String>)> = test_sql!(
         "SELECT id, fetched_at_utc IS NOT NULL, held_version \
-         FROM dav_resources_bookkeeping ORDER BY id",
+         FROM dav_resources_bookkeeping ORDER BY id"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .unwrap();
@@ -117,14 +118,14 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
     assert_eq!(owed, ["/c/bridge/reception.ics"]);
     assert!(strings(
         pool,
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dav_unstored'"
+        test_sql!("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dav_unstored'")
     )
     .await
     .is_empty());
     assert_eq!(
         strings(
             pool,
-            "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
         )
         .await,
         ["1"]

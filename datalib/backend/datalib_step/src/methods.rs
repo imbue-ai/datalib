@@ -173,9 +173,9 @@ pub fn reach_or_refuse(source_type: SourceType, held: &[&IngestMethod]) -> Resul
             .join(", ");
         anyhow::anyhow!(
             "this `ingest` step's params do not say where the {source_type} data comes from: \
-             none of {known} is set. An ingest step needs one of them; a store that is \
-             already filled and should not be ingested into again keeps only its render \
-             step, which reads the tree as it is."
+             none of {known} is set. An ingest step needs one of them; to keep a filled \
+             store without downloading again, keep its method and set \
+             `common.download = false`."
         )
     })
 }

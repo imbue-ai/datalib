@@ -9,6 +9,7 @@ use std::str::FromStr;
 use tower::ServiceExt;
 
 use crate::support::{state, TEST_TOKEN};
+use datalib_sql::test_sql;
 
 const CONFIG: &str = r#"
 [[groups]]
@@ -62,7 +63,8 @@ async fn write_store(path: &Path) -> bool {
         .await
         .unwrap();
     let dolt: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'")
+        test_sql!("SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -70,22 +72,26 @@ async fn write_store(path: &Path) -> bool {
         pool.close().await;
         return false;
     }
-    sqlx::query("CREATE TABLE pdf_files (id INTEGER PRIMARY KEY, name TEXT)")
+    test_sql!("CREATE TABLE pdf_files (id INTEGER PRIMARY KEY, name TEXT)")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("SELECT dolt_commit('-Am', 'schema: apply DDL')")
+    test_sql!("SELECT dolt_commit('-Am', 'schema: apply DDL')")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
     for i in 0..3 {
-        sqlx::query("INSERT INTO pdf_files (id, name) VALUES (?, 'x')")
+        test_sql!("INSERT INTO pdf_files (id, name) VALUES (?, 'x')")
+            .query()
             .bind(i)
             .execute(&pool)
             .await
             .unwrap();
     }
-    sqlx::query("SELECT dolt_commit('-Am', 'download pdfs: files=3')")
+    test_sql!("SELECT dolt_commit('-Am', 'download pdfs: files=3')")
+        .query()
         .execute(&pool)
         .await
         .unwrap();

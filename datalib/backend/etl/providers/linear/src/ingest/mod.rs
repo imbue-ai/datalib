@@ -2,10 +2,10 @@
 //! API answers them, into one raw table per kind.
 //!
 //! A run is two parts. The workspace's small lists — teams, people,
-//! states, labels, cycles, projects, milestones, initiatives — are read
-//! whole every run: a few requests, and the only way to see the
-//! progress series Linear recomputes without moving a record's
-//! `updatedAt`. Then the big ones — issues with their history,
+//! states, labels, project statuses, cycles, projects, milestones,
+//! initiatives — are read whole every run: a few requests, and the only
+//! way to see the progress series Linear recomputes without moving a
+//! record's `updatedAt`. Then the big ones — issues with their history,
 //! comments, documents, project updates, attachments — are each walked
 //! newest first over what no earlier run has covered (`walk`), so a run
 //! after the first reads only what changed. INGEST.md has the whole
@@ -529,7 +529,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({ "teams": opts.sync.teams, "projects": opts.sync.projects });
-    let run = DownloadRun::start(db.pool(), &run_config).await?;
+    let run = DownloadRun::start(&found, db.pool(), &run_config).await?;
     let mut ctx = Ctx {
         api,
         opts: &opts,
@@ -540,7 +540,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     let result = phases(&mut ctx, &mut s).await;
     let result = ctx.writes.settle(result).await;
     s.requests = api.requests();
-    run.finish(found.ended_early(), &result, &s).await;
+    run.summarize(&s);
     result.map(|()| s)
 }
 

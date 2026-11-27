@@ -10,12 +10,20 @@ use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 
 use crate::review::Skipped;
-use crate::{holder, insert_contact, insert_handle, name_of, ContactKind, Maker, Store};
+use crate::{
+    holders, insert_contact, insert_handle, link_in, name_of, names_of, ContactKind, Maker, Store,
+    WhenHeld,
+};
+use datalib_sql::sql;
 
 #[derive(Debug, Clone)]
 pub struct NewPerson {
     pub name: String,
     pub handles: Vec<Handle>,
+    /// Handles other contacts have, which the person said are this one's
+    /// too or this one's alone. They never make the person one of those
+    /// contacts, as one in `handles` would.
+    pub held: Vec<(Handle, WhenHeld)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -39,6 +47,12 @@ enum Plan {
     OnSeveral(Vec<String>),
 }
 
+/// Whether a card's name and a contact's are one name, as a person would
+/// read them: case and the spaces around it aside.
+fn same_name(a: &str, b: &str) -> bool {
+    a.trim().to_lowercase() == b.trim().to_lowercase()
+}
+
 fn plan(holders: BTreeSet<String>) -> Plan {
     let mut holders: Vec<String> = holders.into_iter().collect();
     match holders.len() {
@@ -50,9 +64,11 @@ fn plan(holders: BTreeSet<String>) -> Plan {
 
 impl Store {
     /// Each of `people` a contact, with the handles nobody has. One whose
-    /// handle a contact has is that contact, and gets the rest of their
-    /// handles, less any taken off it as not theirs. One with no handle
-    /// is told apart by name alone.
+    /// handle a contact of the same name has is that contact, and gets the
+    /// rest of their handles, less any taken off it as not theirs. One
+    /// whose handle is on a contact of another name is skipped: it may be
+    /// an address two people share, which only the person can say. One
+    /// with no handle is told apart by name alone.
     pub async fn add_people(&self, people: &[NewPerson]) -> Result<AddedPeople> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut out = AddedPeople::default();
@@ -60,25 +76,19 @@ impl Store {
         for person in people {
             let name = person.name.trim();
             let mut free: Vec<&Handle> = Vec::new();
-            let mut holders = BTreeSet::new();
+            let mut holders_of_theirs = BTreeSet::new();
             for h in &person.handles {
-                match holder(&mut tx, h).await? {
-                    Some(id) => {
-                        holders.insert(id);
-                    }
-                    None if !free.contains(&h) => free.push(h),
-                    None => {}
+                let held = holders(&mut *tx, h).await?;
+                if held.is_empty() && !free.contains(&h) {
+                    free.push(h);
                 }
+                holders_of_theirs.extend(held);
             }
-            let into = match plan(holders) {
+            let into = match plan(holders_of_theirs) {
                 Plan::OnSeveral(ids) => {
-                    let mut names = Vec::new();
-                    for id in &ids {
-                        names.push(name_of(&mut tx, id).await?);
-                    }
                     out.skipped.push(Skipped {
                         what: name.to_string(),
-                        why: format!("their handles are on {}", names.join(" and ")),
+                        why: format!("their handles are on {}", names_of(&mut tx, &ids).await?),
                     });
                     continue;
                 }
@@ -90,8 +100,19 @@ impl Store {
                         }
                     }
                     free = theirs;
-                    if free.is_empty() {
+                    if free.is_empty() && person.held.is_empty() {
                         out.already += 1;
+                        continue;
+                    }
+                    let holder = name_of(&mut tx, &id).await?;
+                    if !name.is_empty() && !same_name(name, &holder) {
+                        out.skipped.push(Skipped {
+                            what: name.to_string(),
+                            why: format!(
+                                "a handle of theirs is on {holder}; add them from their page \
+                                 to say whether they share it"
+                            ),
+                        });
                         continue;
                     }
                     out.added_to += 1;
@@ -104,7 +125,11 @@ impl Store {
                     });
                     continue;
                 }
-                Plan::Create if free.is_empty() && is_a_name(&mut tx, name).await? => {
+                Plan::Create
+                    if free.is_empty()
+                        && person.held.is_empty()
+                        && is_a_name(&mut tx, name).await? =>
+                {
                     out.already += 1;
                     continue;
                 }
@@ -116,6 +141,9 @@ impl Store {
             };
             for h in free {
                 insert_handle(&mut tx, h, &into, Maker::Person, &now, &tz).await?;
+            }
+            for (h, when) in &person.held {
+                link_in(&mut tx, h, &into, name, *when, &now, &tz).await?;
             }
         }
         tx.commit().await?;
@@ -136,20 +164,25 @@ async fn turned_down(
     handle: &Handle,
     contact_id: &str,
 ) -> Result<bool> {
-    let row: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM not_linked WHERE handle = ? AND contact_id = ?")
-            .bind(handle.as_str())
-            .bind(contact_id)
-            .fetch_optional(&mut *conn)
-            .await
-            .context("read whether a handle was taken off")?;
+    let row: Option<i64> = sql!(
+        "contacts_app.is_handle_turned_down",
+        "SELECT 1 FROM not_linked WHERE handle = ? AND contact_id = ?"
+    )
+    .query_scalar()
+    .bind(handle.as_str())
+    .bind(contact_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read whether a handle was taken off")?;
     Ok(row.is_some())
 }
 
 async fn is_a_name(conn: &mut sqlx::SqliteConnection, name: &str) -> Result<bool> {
-    let row: Option<i64> = sqlx::query_scalar(
-        "SELECT 1 FROM contacts WHERE merged_into IS NULL AND name = ? COLLATE NOCASE LIMIT 1",
+    let row: Option<i64> = sql!(
+        "contacts_app.find_contact_by_name",
+        "SELECT 1 FROM contacts WHERE merged_into IS NULL AND name = ? COLLATE NOCASE LIMIT 1"
     )
+    .query_scalar()
     .bind(name)
     .fetch_optional(&mut *conn)
     .await
@@ -166,12 +199,14 @@ mod tests {
         NewPerson {
             name: name.into(),
             handles: handles.iter().map(|h| Handle::parse(h).unwrap()).collect(),
+            held: Vec::new(),
         }
     }
 
     /// Many people in one go, and in one commit: a new one is a contact
-    /// with every handle given; one a contact already has gives it the
-    /// rest; adding the same people again changes nothing.
+    /// with every handle given; one a contact of their name already has
+    /// gives it the rest, and one a contact of another name has is left
+    /// out and named; adding the same people again changes nothing.
     #[tokio::test]
     async fn adding_many_people_adds_each_once() {
         let dir = tempfile::tempdir().unwrap();
@@ -185,12 +220,12 @@ mod tests {
             .await
             .unwrap();
         let spam = Handle::parse("email:will@risa.test").unwrap();
-        store.link(&spam, &riker).await.unwrap();
-        store.unlink(&spam).await.unwrap();
+        store.link(&spam, &riker, WhenHeld::Refuse).await.unwrap();
+        store.unlink(&spam, &riker).await.unwrap();
 
         let people = [
             person(
-                "William T. Riker",
+                "will riker",
                 &[
                     "email:riker@enterprise.org",
                     "tel:+12025550102",
@@ -203,8 +238,14 @@ mod tests {
             ),
             // The second address book's card for him.
             person(
-                "Captain Picard",
+                "Jean-Luc Picard",
                 &["tel:+12025550101", "email:jean-luc@labarre.test"],
+            ),
+            // His number under another name: whether it is him is the
+            // person's to say.
+            person(
+                "Captain Picard",
+                &["tel:+12025550101", "email:captain@enterprise.test"],
             ),
             person("Kalita", &[]),
             person("", &["email:drone@borg.test"]),
@@ -220,13 +261,15 @@ mod tests {
             .iter()
             .map(|s| (s.what.as_str(), s.why.as_str()))
             .collect();
+        assert_eq!(skipped[0].0, "Captain Picard");
+        assert!(skipped[0].1.contains("on Jean-Luc Picard"), "{skipped:?}");
         assert_eq!(
-            skipped[0],
+            skipped[1],
             ("email:drone@borg.test", "a contact needs a name")
         );
-        assert_eq!(skipped[1].0, "The Captains");
+        assert_eq!(skipped[2].0, "The Captains");
         assert!(
-            skipped[1].1.contains("Will Riker") && skipped[1].1.contains("Jean-Luc Picard"),
+            skipped[2].1.contains("Will Riker") && skipped[2].1.contains("Jean-Luc Picard"),
             "{skipped:?}"
         );
 
@@ -261,6 +304,50 @@ mod tests {
         let again = store.add_people(&people).await.unwrap();
         assert_eq!((again.created, again.added_to, again.already), (0, 0, 4));
         assert_eq!(store.list().await.unwrap(), listed);
+        store.close().await;
+    }
+
+    /// Marie's card has the address Robert has. Added with an address
+    /// book's rows, it is left out rather than put on Robert; added from
+    /// her page, where the person said they share it, she is a new contact
+    /// beside him.
+    #[tokio::test]
+    async fn a_shared_handle_adds_a_new_person_beside_its_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let vineyard = Handle::parse("email:vineyard@labarre.earth").unwrap();
+        let robert = store
+            .create(
+                "Robert Picard",
+                ContactKind::Person,
+                std::slice::from_ref(&vineyard),
+            )
+            .await
+            .unwrap();
+        let card = person(
+            "Marie Picard",
+            &["email:vineyard@labarre.earth", "email:marie@labarre.earth"],
+        );
+        let got = store.add_people(&[card]).await.unwrap();
+        assert_eq!(
+            (got.created, got.added_to, got.skipped.len()),
+            (0, 0, 1),
+            "her card, added with the address book's rows, is not taken for Robert: {got:?}"
+        );
+        let mut marie = person("Marie Picard", &["email:marie@labarre.earth"]);
+        marie.held = vec![(vineyard.clone(), WhenHeld::Share)];
+        let got = store.add_people(&[marie]).await.unwrap();
+        assert_eq!((got.created, got.added_to), (1, 0), "{got:?}");
+        let names: Vec<Vec<String>> = store
+            .resolve(&[vineyard])
+            .await
+            .unwrap()
+            .into_values()
+            .map(|cs| cs.into_iter().map(|c| c.names[0].clone()).collect())
+            .collect();
+        assert_eq!(names, [["Marie Picard", "Robert Picard"]]);
+        let robert = store.contact(&robert).await.unwrap().unwrap();
+        assert_eq!(robert.handles.len(), 1, "Marie's own address is hers");
         store.close().await;
     }
 }

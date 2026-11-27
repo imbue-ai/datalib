@@ -24,6 +24,7 @@ rust_library(
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/probe:datalib_probe",
         "//datalib/backend/problems:datalib_problems",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:chrono",
@@ -59,6 +60,7 @@ rust_test(
         "@datalib_crates//:async-trait",
     ],
     deps = [
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "//datalib/backend/etl/providers/garmin_config:datalib_etl_garmin_config",
         "//datalib/backend/etl:datalib_etl",

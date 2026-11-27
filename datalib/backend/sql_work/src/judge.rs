@@ -14,6 +14,9 @@ pub struct Work {
     pub sorts: u64,
     /// Rows returned, or for a write, the rows it changed if more.
     pub rows: u64,
+    /// Values handed in as a set (`json_each(?)`, `json_tree(?)`): each is
+    /// a key the statement was asked to look up, found or not.
+    pub inputs: u64,
     pub nanos: u64,
 }
 
@@ -26,11 +29,13 @@ pub const HEAVY_VM_STEPS: u64 = 100_000;
 pub const STEPS_PER_ROW: u64 = 100;
 
 impl Work {
-    /// Much work for what it answered: the shape of every missing or
-    /// mispicked index, scan or search alike. A statement that answers with
-    /// a million rows reads a million rows and is not heavy.
+    /// Much work for what it was asked and answered: the shape of every
+    /// missing or mispicked index, scan or search alike. A statement that
+    /// answers with a million rows reads a million rows and is not heavy,
+    /// and nor is one that looks up a million keys and finds none.
     pub fn is_heavy(&self) -> bool {
-        self.vm_steps >= HEAVY_VM_STEPS && self.vm_steps / self.rows.max(1) >= STEPS_PER_ROW
+        let asked_or_answered = (self.rows + self.inputs).max(1);
+        self.vm_steps >= HEAVY_VM_STEPS && self.vm_steps / asked_or_answered >= STEPS_PER_ROW
     }
 }
 
@@ -47,16 +52,29 @@ pub fn walks_by_design(sql: &str) -> bool {
 /// Whether a statement's work says anything about how it reads. A
 /// `CREATE INDEX` or a `PRAGMA` does its work by design.
 pub fn reads_or_writes_rows(sql: &str) -> bool {
-    let first: String = sql
+    matches!(
+        first_word(sql).as_str(),
+        "SELECT" | "WITH" | "INSERT" | "REPLACE" | "UPDATE" | "DELETE" | "VALUES"
+    )
+}
+
+/// Whether a statement can change rows, so the connection's count of
+/// changes is its own.
+pub fn changes_rows(sql: &str) -> bool {
+    matches!(
+        first_word(sql).as_str(),
+        "WITH" | "INSERT" | "REPLACE" | "UPDATE" | "DELETE"
+    )
+}
+
+/// The statement's first word, after its name, uppercased.
+fn first_word(sql: &str) -> String {
+    datalib_sql::tag::after_name(sql)
         .trim_start_matches(|c: char| c.is_whitespace() || c == '(')
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .collect::<String>()
-        .to_ascii_uppercase();
-    matches!(
-        first.as_str(),
-        "SELECT" | "WITH" | "INSERT" | "REPLACE" | "UPDATE" | "DELETE" | "VALUES"
-    )
+        .to_ascii_uppercase()
 }
 
 #[cfg(test)]
@@ -87,15 +105,43 @@ mod tests {
         assert!(!work(99_999, 0).is_heavy(), "cheap whatever it answered");
     }
 
+    /// Guards the grid index's `read_back_*` reads: one key at a time out
+    /// of 61k bound uuids, eight steps each, for a table holding none of
+    /// them. Each key is one index probe.
+    #[test]
+    fn looking_up_a_large_set_and_finding_none_is_not_heavy() {
+        let lookup = Work {
+            inputs: 60_967,
+            ..work(487_756, 0)
+        };
+        assert!(!lookup.is_heavy());
+        let walks_per_key = Work {
+            inputs: 1_563,
+            ..work(603_811, 296)
+        };
+        assert!(walks_per_key.is_heavy(), "hundreds of steps for each key");
+    }
+
     #[test]
     fn only_statements_over_rows_are_judged() {
         assert!(reads_or_writes_rows("\n  SELECT 1"));
         assert!(reads_or_writes_rows("with m as (select 1) select * from m"));
         assert!(reads_or_writes_rows("(SELECT 1) UNION SELECT 2"));
         assert!(reads_or_writes_rows("DELETE FROM t"));
+        assert!(reads_or_writes_rows("/* sql:runs.count_tables */ SELECT 1"));
         assert!(!reads_or_writes_rows("CREATE INDEX i ON t (a)"));
         assert!(!reads_or_writes_rows("PRAGMA incremental_vacuum"));
         assert!(!reads_or_writes_rows("COMMIT"));
+    }
+
+    #[test]
+    fn only_a_write_takes_the_connections_count_of_changes() {
+        assert!(changes_rows("/* sql:a.b */ DELETE FROM t"));
+        assert!(changes_rows("INSERT INTO t VALUES (1)"));
+        assert!(!changes_rows(
+            "/* sql:a.b */ SELECT 1 FROM sqlite_master LIMIT 1"
+        ));
+        assert!(!changes_rows("PRAGMA user_version"));
     }
 
     #[test]

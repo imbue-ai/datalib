@@ -10,6 +10,7 @@ use strum::VariantArray;
 
 use crate::store::{log_line_from, open_reader, LogLine, LOG_LINE_COLUMNS};
 use anyhow::Context;
+use datalib_sql::{sql_id, Sql};
 
 /// Which lines of the log a read wants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -223,14 +224,17 @@ pub async fn log_query(data_root: &Path, q: &LogQuery<'_>) -> anyhow::Result<Vec
     } else {
         format!("WHERE {}", compiled.clauses.join(" AND "))
     };
-    let sql = format!(
-        "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
+    let sql = Sql::dynamic(
+        sql_id!("runs.query_log_lines"),
+        format!(
+            "SELECT {LOG_LINE_COLUMNS} FROM log l LEFT JOIN processes p USING (process_id) \
          {filter} ORDER BY l.seq {order} LIMIT ?"
+        ),
     );
     // Audited: every clause is assembled from the `&'static str` column
     // names in KEYS and FREE_TEXT_COLUMNS with `?` placeholders; every
     // value the user typed is bound below, never interpolated.
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    let mut query = sql.query();
     for b in &compiled.binds {
         query = match b {
             Bound::Text(s) => query.bind(s),
@@ -292,14 +296,17 @@ pub async fn log_values(
     let Some(pool) = open_reader(data_root).await? else {
         return Ok(Vec::new());
     };
-    let sql = format!(
+    let sql = Sql::dynamic(
+        sql_id!("runs.count_log_values"),
+        format!(
         "SELECT CAST({col} AS TEXT), count(*) FROM log l LEFT JOIN processes p USING (process_id) \
          WHERE {col} IS NOT NULL AND {col} != '' AND {} GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT ?",
         compiled.clauses.join(" AND ")
+    ),
     );
     // Audited: as `log_query`; `col` is one of the `&'static str` names
     // in KEYS.
-    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql));
+    let mut query = sql.query();
     for b in &compiled.binds {
         query = match b {
             Bound::Text(s) => query.bind(s),

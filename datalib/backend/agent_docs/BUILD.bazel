@@ -20,6 +20,7 @@ rust_library(
         "//docs/dev:logging.md",
         "//docs/dev:step_protocol.md",
         "//docs/user:applets.md",
+        "//docs/user:backing_up.md",
         "//docs/user:building_on_datalib.md",
         "//docs/user:contacts_app.md",
         "//docs/user:docker.md",

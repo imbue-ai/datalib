@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use datalib_sql::{test_sql_id, Sql};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};
 
@@ -82,7 +83,8 @@ async fn try_connect(
 // Every statement below is written by this file with literal values, so
 // splicing it is safe.
 async fn exec(c: &mut SqliteConnection, sql: &str) -> Result<(), String> {
-    sqlx::query(sqlx::AssertSqlSafe(sql.to_string()))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .execute(&mut *c)
         .await
         .map(|_| ())
@@ -94,21 +96,24 @@ async fn ok(c: &mut SqliteConnection, sql: &str) {
 }
 
 async fn text(c: &mut SqliteConnection, sql: &str) -> Option<String> {
-    sqlx::query_scalar::<_, Option<String>>(sqlx::AssertSqlSafe(sql.to_string()))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query_scalar::<Option<String>>()
         .fetch_one(&mut *c)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
 }
 
 async fn int(c: &mut SqliteConnection, sql: &str) -> i64 {
-    sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql.to_string()))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query_scalar::<i64>()
         .fetch_one(&mut *c)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
 }
 
 async fn texts(c: &mut SqliteConnection, sql: &str) -> Vec<String> {
-    let mut v: Vec<String> = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql.to_string()))
+    let mut v: Vec<String> = Sql::dynamic(test_sql_id!(), sql)
+        .query_scalar::<String>()
         .fetch_all(&mut *c)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"));
@@ -117,8 +122,9 @@ async fn texts(c: &mut SqliteConnection, sql: &str) -> Vec<String> {
 }
 
 async fn plan(c: &mut SqliteConnection, sql: &str) -> String {
-    let explain = format!("EXPLAIN QUERY PLAN {sql}");
-    sqlx::query(sqlx::AssertSqlSafe(explain))
+    let explain = Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"));
+    explain
+        .query()
         .fetch_all(&mut *c)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -1074,6 +1080,7 @@ mod revert {
 mod drafts {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// `p(id TEXT PRIMARY KEY, name TEXT, note TEXT)` holding Riker and
     /// Worf, committed, with a branch `draft` cut there:
     /// `(store, hash of the cut)`.
@@ -1175,9 +1182,11 @@ mod drafts {
         let (s, cut) = store_with_draft().await;
         let mut d = on_draft(&s).await;
         ok(&mut d, "UPDATE p SET name = 'Will Riker' WHERE id = 'r'").await;
-        let rows: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT from_name, to_name, diff_type FROM dolt_diff_p('{cut}', 'WORKING')"
-        )))
+        let rows: Vec<(String, String, String)> = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT from_name, to_name, diff_type FROM dolt_diff_p('{cut}', 'WORKING')"),
+        )
+        .query_as()
         .fetch_all(&mut d)
         .await
         .unwrap();
@@ -1235,7 +1244,8 @@ mod drafts {
         both_edit_riker(&s, "note", "first officer").await;
         let mut m = s.rw().await;
         ok(&mut m, "SELECT dolt_merge('draft')").await;
-        let row: (String, String) = sqlx::query_as("SELECT name, note FROM p WHERE id = 'r'")
+        let row: (String, String) = test_sql!("SELECT name, note FROM p WHERE id = 'r'")
+            .query_as()
             .fetch_one(&mut m)
             .await
             .unwrap();
@@ -1290,7 +1300,8 @@ mod drafts {
             "Merge has 1 conflict(s)",
         );
         let sides: (String, String, String) =
-            sqlx::query_as("SELECT base_name, our_name, their_name FROM dolt_conflicts_p")
+            test_sql!("SELECT base_name, our_name, their_name FROM dolt_conflicts_p")
+                .query_as()
                 .fetch_one(&mut m)
                 .await
                 .unwrap();
@@ -1351,7 +1362,8 @@ mod drafts {
             ok(&mut m, &format!("SELECT dolt_merge({how})")).await;
             let save = head(&mut m).await;
             ok(&mut m, &format!("SELECT dolt_revert('{save}')")).await;
-            let row: (String, String) = sqlx::query_as("SELECT name, note FROM p WHERE id = 'r'")
+            let row: (String, String) = test_sql!("SELECT name, note FROM p WHERE id = 'r'")
+                .query_as()
                 .fetch_one(&mut m)
                 .await
                 .unwrap();
@@ -1425,7 +1437,8 @@ mod drafts {
     }
 
     async fn riker(c: &mut SqliteConnection) -> (String, String) {
-        sqlx::query_as("SELECT name, note FROM p WHERE id = 'r'")
+        test_sql!("SELECT name, note FROM p WHERE id = 'r'")
+            .query_as()
             .fetch_one(c)
             .await
             .unwrap()
@@ -1461,10 +1474,11 @@ mod drafts {
             riker(&mut m).await,
             ("Number One".into(), "first officer".into())
         );
-        let sides: (String, String, String, String, String, String) = sqlx::query_as(
+        let sides: (String, String, String, String, String, String) = test_sql!(
             "SELECT base_name, base_note, our_name, our_note, their_name, their_note
-               FROM dolt_conflicts_p",
+               FROM dolt_conflicts_p"
         )
+        .query_as()
         .fetch_one(&mut m)
         .await
         .unwrap();
@@ -1527,7 +1541,8 @@ mod drafts {
         ok(&mut d, "UPDATE p SET note = 'dirty' WHERE id = 'w'").await;
 
         let at_main: Vec<(String, String)> =
-            sqlx::query_as("SELECT id, note FROM dolt_at_p('main') ORDER BY id")
+            test_sql!("SELECT id, note FROM dolt_at_p('main') ORDER BY id")
+                .query_as()
                 .fetch_all(&mut d)
                 .await
                 .unwrap();
@@ -1542,16 +1557,20 @@ mod drafts {
             text(&mut d, "SELECT dolt_merge_base('draft', 'main')").await,
             Some(cut.clone())
         );
-        let theirs: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT to_id, to_note FROM dolt_diff_p('{cut}', 'main')"
-        )))
+        let theirs: Vec<(String, String)> = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT to_id, to_note FROM dolt_diff_p('{cut}', 'main')"),
+        )
+        .query_as()
         .fetch_all(&mut d)
         .await
         .unwrap();
         assert_eq!(theirs, [("r".to_string(), "first officer".to_string())]);
-        let mine: Vec<(String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "SELECT to_id, to_name FROM dolt_diff_p('{cut}', 'WORKING') ORDER BY to_id"
-        )))
+        let mine: Vec<(String, String)> = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT to_id, to_name FROM dolt_diff_p('{cut}', 'WORKING') ORDER BY to_id"),
+        )
+        .query_as()
         .fetch_all(&mut d)
         .await
         .unwrap();
@@ -1642,6 +1661,7 @@ mod drafts {
 mod plans {
     use super::*;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn dolt_at_seeks_the_key_and_ignores_secondary_indexes() {
         let (s, _) = store_with_rows().await;
@@ -1734,9 +1754,12 @@ mod plans {
                 "{sql}: {p}"
             );
         }
-        let guarded = "INSERT INTO g VALUES ('d2', 'a', 'z') ON CONFLICT (id) \
-                       DO UPDATE SET v = excluded.v WHERE g.doc IS excluded.doc";
-        let written = sqlx::query(guarded)
+        let guarded = test_sql!(
+            "INSERT INTO g VALUES ('d2', 'a', 'z') ON CONFLICT (id) \
+                       DO UPDATE SET v = excluded.v WHERE g.doc IS excluded.doc"
+        );
+        let written = guarded
+            .query()
             .execute(&mut w)
             .await
             .expect("guarded upsert")
@@ -2523,6 +2546,7 @@ mod fts5 {
 mod compat {
     use super::*;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn the_file_is_chunk_store_format_12() {
         let (s, _) = store_with_rows().await;
@@ -2664,7 +2688,8 @@ mod compat {
             )
             .await;
         }
-        let row = sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
+        let row = test_sql!("PRAGMA wal_checkpoint(PASSIVE)")
+            .query_as::<(i64, i64, i64)>()
             .fetch_one(&mut c)
             .await
             .unwrap();
@@ -2705,11 +2730,11 @@ mod compat {
         assert!(out.status.success(), "{out:?}");
 
         assert_eq!(int(&mut c, "SELECT COUNT(*) FROM a").await, 3000);
-        let (busy, frames, _) =
-            sqlx::query_as::<_, (i64, i64, i64)>("PRAGMA wal_checkpoint(PASSIVE)")
-                .fetch_one(&mut c)
-                .await
-                .unwrap();
+        let (busy, frames, _) = test_sql!("PRAGMA wal_checkpoint(PASSIVE)")
+            .query_as::<(i64, i64, i64)>()
+            .fetch_one(&mut c)
+            .await
+            .unwrap();
         assert_eq!(busy, 0);
         assert!(
             frames < 1100,
@@ -2919,7 +2944,8 @@ mod compat {
         )
         .await;
         ok(&mut w, "INSERT INTO t VALUES (1, NULL, NULL), (2, '', 0)").await;
-        let rows = sqlx::query("SELECT s, n FROM t ORDER BY k")
+        let rows = test_sql!("SELECT s, n FROM t ORDER BY k")
+            .query()
             .fetch_all(&mut w)
             .await
             .unwrap();

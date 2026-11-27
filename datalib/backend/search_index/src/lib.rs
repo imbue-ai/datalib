@@ -28,8 +28,9 @@ pub use read::{Held, HeldChunk, HeldDoc, KeptRows, MessageHit, Reader};
 pub use store::{Index, DDL as KEYWORD_DDL};
 
 /// What every table of the index starts with. The index shares the grid
-/// index's file, and each of the two empties only its own tables when its
-/// shape moves.
+/// index's file as one of its parts, and the grid index's writer knows its
+/// tables by this, to empty them alone when their shape moves
+/// (`grid_index::Part`).
 pub const TABLE_PREFIX: &str = "search_";
 
 /// What the inference cache files a vector under: the pinned embedding

@@ -16,6 +16,7 @@
 use datalib_etl_todoist::ingest::{self, db_path_for, FetchSummary, RawDb};
 use datalib_etl_todoist_config::TodoistSync;
 use datalib_etl_web::http::LatchkeySettings;
+use datalib_sql::test_sql;
 
 async fn run(store: &std::path::Path, sync: &TodoistSync) -> FetchSummary {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
@@ -52,12 +53,12 @@ async fn a_full_sync_then_a_second_run_that_reads_almost_nothing() {
     assert!(first.synced > 0, "{first:?}");
 
     let db = RawDb::open(&db_path_for(&store)).await.unwrap();
-    let with_token: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM user WHERE json_extract(payload, '$.token') IS NOT NULL",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let with_token: i64 =
+        test_sql!("SELECT COUNT(*) FROM user WHERE json_extract(payload, '$.token') IS NOT NULL")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     assert_eq!(with_token, 0, "the account's API token was stored");
     db.close().await;
 
