@@ -124,10 +124,12 @@ test("two handles from two sources on one contact show it in documents and the g
   });
   expect(resolved.ok()).toBeTruthy();
   const who = (
-    (await resolved.json()) as { resolved: Record<string, { key: string; names: string[] }> }
+    (await resolved.json()) as { resolved: Record<string, { key: string; names: string[] }[]> }
   ).resolved;
-  expect(who[SLACK]?.names[0]).toBe(CONTACT);
-  expect(who[EMAIL]?.key, "both handles belong to the same contact").toBe(who[SLACK]?.key);
+  expect(who[SLACK]?.map((c) => c.names[0])).toEqual([CONTACT]);
+  expect(who[EMAIL]?.[0]?.key, "both handles belong to the same contact").toBe(
+    who[SLACK]?.[0]?.key,
+  );
 
   // 4. A page loaded afresh asks the store again and shows the same.
   for (const handle of [SLACK, EMAIL]) {
@@ -141,7 +143,7 @@ test("two handles from two sources on one contact show it in documents and the g
   //    the chips already drawn, without a reload: the server sees the
   //    contacts store publish and tells every page to ask again.
   const renamed = await request.post("/applet/datalib_contacts/rename", {
-    data: { contact_id: who[SLACK]?.key, name: "Will Riker" },
+    data: { contact_id: who[SLACK]?.[0]?.key, name: "Will Riker" },
   });
   expect(renamed.ok()).toBeTruthy();
   await expect(gridChip(page, EMAIL)).toHaveText(/Will Riker$/, { timeout: 15_000 });
@@ -167,7 +169,8 @@ test("a handle's menu on its contact's page takes it off and marks it as old", a
       data: { handles: [home, school] },
     });
     type Who = { handles: { handle: string; stopped_working_by: string | null }[] };
-    return ((await r.json()) as { resolved: Record<string, Who> }).resolved;
+    const { resolved } = (await r.json()) as { resolved: Record<string, Who[]> };
+    return Object.fromEntries(Object.entries(resolved).map(([h, [c]]) => [h, c!]));
   };
 
   await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(home)}, {})`)}`);
@@ -495,8 +498,9 @@ test("a source's values copy into the contact, and a copied address is added in 
       const r = await request.post("/applet/datalib_contacts/resolve", {
         data: { handles: [other] },
       });
-      return ((await r.json()) as { resolved: Record<string, { key: string }> }).resolved[other]
-        ?.key;
+      return ((await r.json()) as { resolved: Record<string, { key: string }[]> }).resolved[
+        other
+      ]?.[0]?.key;
     })
     .toBe(id);
   await expect(card.getByRole("button", { name: "Add it", exact: true })).toHaveCount(0);
@@ -516,18 +520,32 @@ test("a source's values copy into the contact, and a copied address is added in 
   ]);
 });
 
-/// The handles each of `handles`' contacts holds, by handle.
-async function heldWith(request: APIRequestContext, handles: string[]) {
+type Held = { id: string; name: string; handles: (string | null)[] };
+
+/// Every contact each of `handles` is on, by handle, by name.
+async function holdersOf(request: APIRequestContext, handles: string[]) {
   const r = await request.post("/applet/datalib_contacts/resolve", { data: { handles } });
   expect(r.ok()).toBeTruthy();
   type Contact = { key: string; names: string[]; handles: { handle: string | null }[] };
-  const { resolved } = (await r.json()) as { resolved: Record<string, Contact> };
+  const { resolved } = (await r.json()) as { resolved: Record<string, Contact[]> };
   return Object.fromEntries(
-    Object.entries(resolved).map(([h, c]) => [
+    Object.entries(resolved).map(([h, cs]) => [
       h,
-      { id: c.key, name: c.names[0], handles: c.handles.map((x) => x.handle).sort() },
+      cs.map((c): Held => ({
+        id: c.key,
+        name: c.names[0]!,
+        handles: c.handles.map((x) => x.handle).sort(),
+      })),
     ]),
   );
+}
+
+/// The contact each of `handles` is on, by handle, where it is on one.
+async function heldWith(request: APIRequestContext, handles: string[]) {
+  const all = await holdersOf(request, handles);
+  return Object.fromEntries(
+    Object.entries(all).flatMap(([h, cs]) => (cs.length === 1 ? [[h, cs[0]!]] : [])),
+  ) as Record<string, Held>;
 }
 
 async function deleteContacts(request: APIRequestContext, ids: string[]) {
@@ -683,4 +701,55 @@ test("a contact with no handle has a page", async ({ page, request }) => {
 
   await deleteContacts(request, [id]);
   await expect(card).toContainText("This contact is no longer in your contacts.");
+});
+
+/// Robert and Marie Picard share the vineyard's address. With Robert in
+/// your contacts, Marie's page offers it unticked as his; ticked, both
+/// have it. Its chip then names them both, and its page is its own, with
+/// each of them on it.
+test("an address two people share is on both, and its chip names them", async ({
+  page,
+  request,
+}) => {
+  const vineyard = "email:vineyard@labarre.earth";
+  const marie = "email:marie@labarre.earth";
+  const made = await request.post("/applet/datalib_contacts/contacts", {
+    data: { name: "Robert Picard", handles: [vineyard] },
+  });
+  expect(made.ok(), await made.text()).toBeTruthy();
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(marie)}, {})`)}`);
+  const card = page.locator(".person");
+  const offers = card.getByRole("list", { name: "Handles to add" });
+  const shared = offers.getByRole("checkbox", { name: "vineyard@labarre.earth" });
+  await expect(offers.getByRole("checkbox", { name: "marie@labarre.earth" })).toBeChecked({
+    timeout: 15_000,
+  });
+  await expect(shared).not.toBeChecked();
+  await expect(offers).toContainText("on Robert Picard");
+  await shared.check();
+  await expect(offers.getByRole("radio", { name: "Both" })).toBeChecked();
+  await expect(card.getByLabel("Name for a new contact")).toHaveValue("Marie Picard");
+  await card.getByRole("button", { name: "Add to contacts" }).click();
+  await expect(card.locator(".person-about")).toContainText("In your contacts");
+  await expect(card.locator(".person-mine")).toContainText("shared with Robert Picard");
+
+  const holders = await holdersOf(request, [vineyard, marie]);
+  expect(holders[vineyard]?.map((c) => c.name)).toEqual(["Marie Picard", "Robert Picard"]);
+  expect(holders[marie]?.map((c) => c.name)).toEqual(["Marie Picard"]);
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(vineyard)}, {})`)}`);
+  const heading = card.locator(".person-name a.chip");
+  await expect(heading).toHaveText(/Marie Picard & Robert Picard$/, { timeout: 15_000 });
+  await expect(heading).toHaveClass(/handle-resolved/);
+  await expect(heading).toHaveAttribute("title", /Shared by Marie Picard, Robert Picard/);
+  await expect(card.locator(".person-about")).toContainText("Shared by 2 of your contacts");
+  const who = card.getByRole("list", { name: "Who has it" });
+  await expect(who.locator("a.chip[data-contact]")).toHaveText([/Marie Picard$/, /Robert Picard$/]);
+  await expect(card.getByRole("button", { name: "Add to contacts" })).toHaveCount(0);
+
+  await deleteContacts(
+    request,
+    (holders[vineyard] ?? []).map((c) => c.id),
+  );
 });

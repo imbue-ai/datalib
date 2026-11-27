@@ -855,6 +855,7 @@ upstream (block types, MIME types), free-form display text
 | which picture of a photo the applet serves | `Size` | `applets/src/photos/pictures.rs` |
 | what a call to a contacts-app route means | `RouteKind` | `applets/src/datalib_contacts/api.rs` |
 | who made a link or a label: a person, or an agent waiting for one | `DecidedHow` | `contacts/src/lib.rs` (`datalib_contacts`) |
+| what linking a handle another contact has does: refuse, share it, or move it | `WhenHeld` | `contacts/src/lib.rs` (`datalib_contacts`) |
 | who muted a problem row: a person, or an agent | `MutedHow` | `problem_mutes/src/lib.rs` (`datalib_problem_mutes`) |
 | what a contact's field says | `FieldKind` | `contacts/src/lib.rs` (`datalib_contacts`) |
 

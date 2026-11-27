@@ -305,9 +305,13 @@ Each step stands alone; the first two change no stored data.
    for a contact with no handle and for a card with none. A handle
    another contact has cannot be ticked yet (step 3), and the search
    finds a number however it is written, which was not in this plan.
-3. **Shared handles**, with the store's rung, then **one line per
-   address** in the editor, which needs them. The rung is also where a
-   handle added from a card keeps its label and which card it came from.
+3. **Shared handles**, with the store's rung: built. Then **one line per
+   address** in the editor, which needs them. A handle added from a card
+   keeping its label and which card it came from goes with that: the
+   columns are new, so the open adds them and no rung is needed. Adding
+   many rows from an address book still treats a card whose handle is on
+   a contact as that contact: once Robert has the shared address,
+   adding Marie's card that way puts her own address on Robert.
 4. **The list**: the three sorts, and *Unfiled*.
 5. **Suggestions.**
 6. **What goes, goes**, with the store's rung, the routes and

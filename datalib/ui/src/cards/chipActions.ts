@@ -240,9 +240,10 @@ function contactQuery(id: string): string {
 }
 
 /** "Everything with" a person: the contact their handle is linked to,
- *  which reaches every handle they used, else the handle alone. */
-export function everythingWith(handle: string, mine: NormalizedContact | null): string {
-  return mine ? contactQuery(mine.key) : searchQueryFor(handle);
+ *  which reaches every handle they used, else the handle alone. An address
+ *  several contacts share is itself: none of them is everyone who used it. */
+export function everythingWith(handle: string, mine: NormalizedContact[]): string {
+  return mine.length === 1 ? contactQuery(mine[0]!.key) : searchQueryFor(handle);
 }
 
 /** A chip's right-click menu. */
@@ -292,7 +293,7 @@ export function chipDragQuery(ref: AnyChipRef): string | null {
     case "entity":
       return browseQuery(ref.uri);
     case "person":
-      return everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null);
+      return everythingWith(ref.handle, people.get(ref.handle)?.mine ?? []);
     case "contact":
       return contactQuery(ref.id);
     case "page":
@@ -474,7 +475,7 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
       return;
     case "search":
       if (ref.kind === "person") {
-        search(everythingWith(ref.handle, people.get(ref.handle)?.mine ?? null), "narrow");
+        search(everythingWith(ref.handle, people.get(ref.handle)?.mine ?? []), "narrow");
       }
       if (ref.kind === "contact") search(contactQuery(ref.id), "narrow");
       if (ref.kind === "date" || ref.kind === "label") {

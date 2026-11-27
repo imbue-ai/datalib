@@ -2152,6 +2152,10 @@ mod tests {
             assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
             assert_eq!(DecidedHow::parse(k.as_str()), Some(*k));
         }
+        for k in WhenHeld::VARIANTS {
+            assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
+            assert_eq!(WhenHeld::parse(k.as_str()), Some(*k));
+        }
     }
 
     /// The contacts app's own table: every contact by name whatever its
