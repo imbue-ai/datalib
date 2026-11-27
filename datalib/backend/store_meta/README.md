@@ -27,10 +27,11 @@ fallbacks, no workarounds: one way to do it" is the rule this serves.
 The last five make a store's **shape** (`Shape`: its tables, its
 indexes and its two ladder positions). A file has one shape, and its
 `schema_hash` covers every table in it. The grid index's tables also fall
-into parts (`grid_index::Part`): the grid's own, and the keyword index's
-`search_*` tables. Its writer empties only the parts whose hash moved,
-and keyword search requires only its part's, so it reads while the
-grid's tables are rebuilt. The inference cache's chunk tables are part
+into parts (`grid_index::Part`): the grid's own, the contacts', and the
+keyword index's `search_*` tables. Its writer empties only the parts
+whose hash moved (the contacts with the grid's), and keyword search
+requires only its part's, so it reads while the grid's tables are
+rebuilt. The inference cache's chunk tables are part
 of the cache's `index_hash`, so a change to them drops the chunks, which
 are cut again, and keeps the vectors.
 

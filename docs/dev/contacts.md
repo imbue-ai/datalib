@@ -352,6 +352,14 @@ counts nothing). In a library of 309,481 rows there were 2,081 distinct
 records. A re-render replaces its document's `document_contacts` rows,
 and a record no document carries goes at the end of the pass.
 
+These tables are a part of the grid index's file of their own
+(`grid_index::Part::Contacts`), with a cursor per source
+(`contact_cursors`, written beside the grid's). A build that changes
+them empties only them, and the step's next pass fills them from each
+source's `source_contacts` alone, a page of documents at a time, without
+reading or writing the rest of the grid. A build that changes the grid's
+own tables empties these with it.
+
 **`POST /people` on the `unified_grid_and_search_index` applet** takes
 `{"handles": […], "pages": […]}` and answers `{"people": {<handle>:
 [NormalizedContact, …]}, "pages": {<page>: NormalizedContact},

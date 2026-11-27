@@ -26,7 +26,67 @@ pub(super) const DDL: &[&str] = &[
     // handle: its digits (`datalib_handle::home_digits`).
     "CREATE TABLE IF NOT EXISTS contact_record_numbers (record_id INTEGER NOT NULL, \
      digits TEXT NOT NULL, PRIMARY KEY (record_id, digits)) WITHOUT ROWID",
+    // The render commit each source's contacts are in line with: the
+    // grid's cursor's, written with it, or absent when these tables were
+    // made new and the source's contacts are owed (`grid_index::Part`).
+    "CREATE TABLE IF NOT EXISTS contact_cursors (source_id TEXT PRIMARY KEY, \
+     store_commit TEXT NOT NULL)",
 ];
+
+/// Whether `table` is one of these: an older build's included, by name.
+pub(super) fn holds(table: &str) -> bool {
+    table.starts_with("contact_") || table == "document_contacts"
+}
+
+/// The commit each source's contacts were last brought in line with.
+pub(super) async fn cursors(
+    pool: &sqlx::SqlitePool,
+) -> Result<std::collections::HashMap<String, String>> {
+    let rows: Vec<(String, String)> = sql!(
+        "etl.render.grid.list_contact_cursors",
+        "SELECT source_id, store_commit FROM contact_cursors"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("read where each source's contacts stand")?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Records that `source_id`'s contacts are in line with `commit`; `None`
+/// forgets it.
+pub(super) async fn set_cursor(
+    conn: &mut SqliteConnection,
+    source_id: &str,
+    commit: Option<&str>,
+) -> Result<()> {
+    let done = match commit {
+        Some(commit) => {
+            sql!(
+                "etl.render.grid.upsert_contact_cursor",
+                "INSERT INTO contact_cursors (source_id, store_commit) VALUES (?, ?) \
+                 ON CONFLICT (source_id) DO UPDATE SET store_commit = excluded.store_commit"
+            )
+            .query()
+            .bind(source_id)
+            .bind(commit)
+            .execute(&mut *conn)
+            .await
+        }
+        None => {
+            sql!(
+                "etl.render.grid.delete_contact_cursor",
+                "DELETE FROM contact_cursors WHERE source_id = ?"
+            )
+            .query()
+            .bind(source_id)
+            .execute(&mut *conn)
+            .await
+        }
+    };
+    done.with_context(|| format!("record where {source_id}'s contacts stand"))?;
+    Ok(())
+}
 
 pub(super) const INDEXES: &[&str] = &[
     // A chip asks who a handle is.

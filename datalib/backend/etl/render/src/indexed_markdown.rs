@@ -19,6 +19,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use datalib_contact_schema::NormalizedContact;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
@@ -1389,6 +1390,40 @@ fn index_facts(row: &datalib_schema::markdowns::MarkdownRow) -> datalib_search_i
 }
 
 // `wanted` is a JSON array of document ids, bound as `?1`.
+/// The people each of the documents in the JSON array `wanted` carries,
+/// by document.
+async fn contacts_of(
+    pool: &SqlitePool,
+    wanted: &str,
+) -> Result<HashMap<String, Vec<NormalizedContact>>> {
+    let rows = group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
+        pool,
+        sql!(
+            "etl.render.store.read_back_source_contacts",
+            "SELECT * FROM source_contacts \
+              WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
+              ORDER BY markdown_uuid, contact_key"
+        ),
+        "markdown_uuid",
+        wanted,
+    )
+    .await
+    .context("read source contacts")?;
+    rows.into_iter()
+        .map(|(md, rows)| {
+            let contacts = rows
+                .into_iter()
+                .map(|r| {
+                    serde_json::from_str(&r.contact_json).with_context(|| {
+                        format!("source contact {} of {}", r.contact_key, r.markdown_uuid)
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok((md, contacts))
+        })
+        .collect()
+}
+
 async fn group_by_document<T>(
     pool: &SqlitePool,
     sql: Sql,
@@ -1878,20 +1913,7 @@ impl IndexedMarkdownStore {
             )
             .await
             .context("read filings")?;
-            let mut contacts_by_doc =
-                group_by_document::<datalib_schema::source_contacts::SourceContactRow>(
-                    &self.pool,
-                    sql!(
-                        "etl.render.store.read_back_source_contacts",
-                        "SELECT * FROM source_contacts \
-                      WHERE markdown_uuid IN (SELECT value FROM json_each(?1)) \
-                      ORDER BY markdown_uuid, contact_key"
-                    ),
-                    "markdown_uuid",
-                    &wanted,
-                )
-                .await
-                .context("read source contacts")?;
+            let mut contacts_by_doc = contacts_of(&self.pool, &wanted).await?;
             let mut photos_by_doc =
                 group_by_document::<datalib_schema::source_photos::SourcePhotoRow>(
                     &self.pool,
@@ -1914,14 +1936,7 @@ impl IndexedMarkdownStore {
                 let filings = filings_by_doc.remove(&md.markdown_uuid).unwrap_or_default();
                 let contacts = contacts_by_doc
                     .remove(&md.markdown_uuid)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|r| {
-                        serde_json::from_str(&r.contact_json).with_context(|| {
-                            format!("source contact {} of {}", r.contact_key, r.markdown_uuid)
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?;
+                    .unwrap_or_default();
                 let photos = photos_by_doc
                     .remove(&md.markdown_uuid)
                     .unwrap_or_default()
@@ -1965,6 +1980,15 @@ impl IndexedMarkdownStore {
             }
             Ok(out)
         })
+    }
+
+    /// The people each of `documents` carries, by document, and nothing
+    /// else of them: what the grid index reads to fill its contacts alone.
+    pub fn contacts_matching(
+        &self,
+        documents: &[String],
+    ) -> Result<HashMap<String, Vec<NormalizedContact>>> {
+        blocking(contacts_of(&self.pool, &serde_json::to_string(documents)?))
     }
 
     /// Every problem the store holds at the reader's pin — the whole
