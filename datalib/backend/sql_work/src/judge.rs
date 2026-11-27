@@ -14,6 +14,9 @@ pub struct Work {
     pub sorts: u64,
     /// Rows returned, or for a write, the rows it changed if more.
     pub rows: u64,
+    /// Values handed in as a set (`json_each(?)`, `json_tree(?)`): each is
+    /// a key the statement was asked to look up, found or not.
+    pub inputs: u64,
     pub nanos: u64,
 }
 
@@ -26,11 +29,13 @@ pub const HEAVY_VM_STEPS: u64 = 100_000;
 pub const STEPS_PER_ROW: u64 = 100;
 
 impl Work {
-    /// Much work for what it answered: the shape of every missing or
-    /// mispicked index, scan or search alike. A statement that answers with
-    /// a million rows reads a million rows and is not heavy.
+    /// Much work for what it was asked and answered: the shape of every
+    /// missing or mispicked index, scan or search alike. A statement that
+    /// answers with a million rows reads a million rows and is not heavy,
+    /// and nor is one that looks up a million keys and finds none.
     pub fn is_heavy(&self) -> bool {
-        self.vm_steps >= HEAVY_VM_STEPS && self.vm_steps / self.rows.max(1) >= STEPS_PER_ROW
+        let asked_or_answered = (self.rows + self.inputs).max(1);
+        self.vm_steps >= HEAVY_VM_STEPS && self.vm_steps / asked_or_answered >= STEPS_PER_ROW
     }
 }
 
@@ -98,6 +103,23 @@ mod tests {
     fn reading_many_rows_to_return_them_is_not_heavy() {
         assert!(!work(30_000_000, 1_000_000).is_heavy());
         assert!(!work(99_999, 0).is_heavy(), "cheap whatever it answered");
+    }
+
+    /// Guards the grid index's `read_back_*` reads: one key at a time out
+    /// of 61k bound uuids, eight steps each, for a table holding none of
+    /// them. Each key is one index probe.
+    #[test]
+    fn looking_up_a_large_set_and_finding_none_is_not_heavy() {
+        let lookup = Work {
+            inputs: 60_967,
+            ..work(487_756, 0)
+        };
+        assert!(!lookup.is_heavy());
+        let walks_per_key = Work {
+            inputs: 1_563,
+            ..work(603_811, 296)
+        };
+        assert!(walks_per_key.is_heavy(), "hundreds of steps for each key");
     }
 
     #[test]

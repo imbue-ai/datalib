@@ -131,6 +131,11 @@ async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
         line["fullscan_steps"].parse::<u64>().unwrap() >= ROWS - 1,
         "{line:#?}"
     );
+    assert_eq!(
+        line["loops"],
+        format!("SCAN t: {ROWS}"),
+        "which loop walked"
+    );
 
     test_sql!("CREATE INDEX t_by_k ON t (k)")
         .query()
@@ -145,6 +150,49 @@ async fn a_lookup_that_reads_the_table_is_logged_and_one_by_index_is_not() {
         .unwrap();
     assert_eq!(v, format!("v{}", ROWS - 2));
     assert_eq!(lines_about(&path).len(), 1, "a lookup by index is cheap");
+    pool.close().await;
+}
+
+/// Guards the grid index's `read_back_*` reads, logged as heavy for every
+/// source: a set of keys looked up one by one, by index, found nowhere.
+/// The work follows the keys it was handed, aliased or not, and the same
+/// set walked against a table with no index is still logged.
+#[tokio::test]
+async fn looking_up_a_set_of_keys_by_index_is_not_logged_however_few_it_finds() {
+    let dir = tempfile::tempdir().unwrap();
+    let (path, pool) = store(dir.path()).await;
+    let missing = |n: u64| format!("{:?}", (ROWS + 1..=ROWS + n).collect::<Vec<_>>());
+    let by_set = test_sql!("SELECT v FROM t WHERE k IN (SELECT value FROM json_each(?))");
+    let by_alias = test_sql!("SELECT v FROM json_each(?) j JOIN t ON t.k = j.value");
+
+    // A few keys against every row: well over a hundred steps a key.
+    let found: Vec<String> = by_set
+        .query_scalar()
+        .bind(missing(2_000))
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(found.is_empty());
+    let unindexed = lines_about(&path);
+    assert_eq!(unindexed.len(), 1, "a scan of the table: {unindexed:#?}");
+    assert_eq!(unindexed[0]["inputs"], "2000", "{unindexed:#?}");
+
+    test_sql!("CREATE INDEX t_by_k ON t (k)")
+        .query()
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Enough keys that the probes alone come to a heavy statement's steps.
+    for lookup in [by_set, by_alias] {
+        let found: Vec<String> = lookup
+            .query_scalar()
+            .bind(missing(50_000))
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(found.is_empty());
+    }
+    assert_eq!(lines_about(&path).len(), 1, "{:#?}", lines_about(&path));
     pool.close().await;
 }
 
