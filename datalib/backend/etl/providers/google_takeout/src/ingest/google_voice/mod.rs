@@ -275,7 +275,7 @@ pub async fn ingest(
     // would not be seen rewritten again, and what it dropped would stay.
     if deletes {
         for f in &incomplete {
-            file_checkpoint::forget_file(&mut tx, SCOPE, &f.rel).await?;
+            file_checkpoint::delete_file_stamp(&mut tx, SCOPE, &f.rel).await?;
         }
         let kept = Kept {
             messages: message_rows
@@ -295,7 +295,7 @@ pub async fn ingest(
         let gone = changes.gone();
         summary.files_removed = gone.len();
         for rel in gone {
-            file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
+            file_checkpoint::delete_file_stamp(&mut tx, SCOPE, rel).await?;
         }
     } else if failed + unread_voice > 0 && changes.may_have_dropped_records() {
         summary.held_back = Some(file_changes_scan::Scan::deletions_held_back(

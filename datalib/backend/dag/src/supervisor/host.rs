@@ -191,7 +191,7 @@ pub struct TakenOver {
 /// a thing a dead loop left.
 pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
     let why = "the loop running this ended without closing it; the next to take the lock did";
-    let saved = store.load_record().await.context("load the record")?;
+    let saved = store.load_state().await.context("load the record")?;
     let mut state = saved.clone();
     let closed_run = match state.current_run.as_mut() {
         Some(run) if run.finished_at.is_none() => {
@@ -200,7 +200,7 @@ pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
         }
         _ => None,
     };
-    store.save_record(&saved, &state).await?;
+    store.save_state(&saved, &state).await?;
     if let Some(run_id) = &closed_run {
         datalib_runs::close_abandoned_run(data_root, run_id, RunState::Stopped.as_str(), why)
             .await
@@ -217,7 +217,7 @@ pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
 mod tests {
     use super::*;
     use crate::supervisor::record::InvocationRow;
-    use crate::supervisor::record::{CurrentRun, Record};
+    use crate::supervisor::record::{CurrentRun, LoopState};
 
     /// Guards reading a run's cause off a server log line and the absence
     /// of a request: a sync names who asked and for what.
@@ -279,7 +279,7 @@ mod tests {
     async fn what_a_dead_loop_left_open_is_closed_and_nothing_else() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        let open = Record {
+        let open = LoopState {
             current_run: Some(CurrentRun {
                 run_id: "r1".into(),
                 started_at: "2026-09-23T10:00:00+00:00".into(),
@@ -287,7 +287,10 @@ mod tests {
             }),
             ..Default::default()
         };
-        store.save_record(&Record::default(), &open).await.unwrap();
+        store
+            .save_state(&LoopState::default(), &open)
+            .await
+            .unwrap();
         store
             .open_invocation(&InvocationRow {
                 id: "i1".into(),
@@ -306,7 +309,7 @@ mod tests {
                 closed_invocations: 1
             }
         );
-        let after = store.load_record().await.unwrap();
+        let after = store.load_state().await.unwrap();
         assert!(after.current_run.unwrap().finished_at.is_some());
         assert!(store.running_invocations().await.unwrap().is_empty());
         assert_eq!(

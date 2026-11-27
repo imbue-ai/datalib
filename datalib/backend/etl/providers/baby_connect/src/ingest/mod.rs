@@ -263,9 +263,9 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     };
     let mut s = FetchSummary::default();
     let result = run_phases(&mut ctx, &mut s).await;
-    let result = run_ended::settle(result, "Baby Connect", s.days > 0, &found);
+    let result = run_ended::record_run_ended(result, "Baby Connect", s.days > 0, &found);
     s.requests = ctx.requests;
-    let result = ctx.writes.settle(result).await;
+    let result = ctx.writes.finish_or_roll_back(result).await;
     run.summarize(&s);
     result.map(|()| s)
 }

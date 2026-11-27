@@ -136,7 +136,7 @@ async fn delete_gone_cache_entries(
             _ => still_present += 1,
         }
     }
-    let removed = cache.forget(&gone).await?;
+    let removed = cache.delete_paths(&gone).await?;
     Ok((removed, still_present))
 }
 

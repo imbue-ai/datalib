@@ -375,7 +375,7 @@ pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String
                 .with_context(|| format!("delete email {id}"))?;
         }
     }
-    datalib_etl::read_marks::forget(tx, ids).await
+    datalib_etl::read_marks::delete(tx, ids).await
 }
 
 /// Write `.eml` edges. One that holds bytes is upserted; one without (a

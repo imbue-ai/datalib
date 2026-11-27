@@ -400,10 +400,11 @@ outcome line, such as one of the keys below that no longer do anything, is a
 Every method a provider accepts declares itself `Origin` (fetches from
 a live service) or `Local` (reads files already on this machine). A
 step's reach is `Origin` if anything it holds reaches one, else
-`Local`. The UI reads the same declarations: a Manage row labels an
-ingest step "Download" for an origin method and "Import" for a local
-one, and the wizard shows a source's sign-in controls only while the
-params it would write reach an origin.
+`Local`. The server and the UI read the same declarations: a Sources
+row labels an ingest step "Download" for an origin method and "Import"
+for a local one (`http/src/manage/ingest_word.rs`), and the wizard
+shows a source's sign-in controls only while the params it would
+write reach an origin.
 
 `datalib-pipeline reset` is *not* gated on it: it empties the step's store
 whatever the method, and the next sync reads its files or its origin in

@@ -95,7 +95,7 @@ impl std::error::Error for AheadOfLadder {}
 /// The version one store's migrations start from and end at, which a
 /// rung's report names so a person can tell how much is left.
 #[derive(Debug, Clone, Copy)]
-pub struct Climb {
+pub struct MigrationRange {
     pub ladder: Ladder,
     /// The version the store was at before its first migration ran.
     pub from: u32,
@@ -104,7 +104,7 @@ pub struct Climb {
     pub store_bytes: Option<u64>,
 }
 
-impl Climb {
+impl MigrationRange {
     /// What a person reads while `m` runs, in the log and on the step's
     /// row.
     pub fn describe(&self, m: &Migration) -> String {
@@ -174,16 +174,16 @@ pub async fn run_statements(
 /// Run one rung: its body and the version bump, in one transaction.
 /// The owner commits after, so a crash between the two leaves the
 /// working set for the next open to discard and the rung to run again.
-pub async fn apply(pool: &SqlitePool, m: &Migration, climb: &Climb) -> Result<()> {
-    let ladder = climb.ladder;
-    let said = climb.describe(m);
+pub async fn apply(pool: &SqlitePool, m: &Migration, range: &MigrationRange) -> Result<()> {
+    let ladder = range.ladder;
+    let said = range.describe(m);
     tracing::info!(
         version = m.version,
         name = m.name,
         ladder = ladder.key(),
-        from = climb.from,
-        top = climb.top,
-        store_bytes = climb.store_bytes,
+        from = range.from,
+        top = range.top,
+        store_bytes = range.store_bytes,
         "{said}"
     );
     report(&said);
@@ -304,13 +304,13 @@ mod tests {
                 })
             },
         };
-        let climb = Climb {
+        let range = MigrationRange {
             ladder: Ladder::Own,
             from: 7,
             top: 9,
             store_bytes: Some(13_046_000_000),
         };
-        apply(&pool, &two_statements, &climb).await.unwrap();
+        apply(&pool, &two_statements, &range).await.unwrap();
         pool.close().await;
 
         let start = "migrating the store (13.0 GB) from version 7 to 9, now version 8: \
@@ -328,22 +328,22 @@ mod tests {
 
     #[test]
     fn a_migration_report_names_the_shared_tables_and_a_small_store_in_megabytes() {
-        let climb = Climb {
+        let range = MigrationRange {
             ladder: Ladder::Shared,
             from: 0,
             top: 2,
             store_bytes: Some(4_500_000),
         };
         assert_eq!(
-            climb.describe(&rung(1)),
+            range.describe(&rung(1)),
             "migrating the store's shared tables (4 MB) from version 0 to 2, now version 1: test"
         );
-        let unsized_climb = Climb {
+        let unsized_range = MigrationRange {
             store_bytes: None,
-            ..climb
+            ..range
         };
         assert_eq!(
-            unsized_climb.describe(&rung(2)),
+            unsized_range.describe(&rung(2)),
             "migrating the store's shared tables from version 0 to 2, now version 2: test"
         );
     }

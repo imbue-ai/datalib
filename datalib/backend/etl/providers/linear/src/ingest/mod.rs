@@ -538,7 +538,7 @@ async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Resu
     };
     let mut s = FetchSummary::default();
     let result = phases(&mut ctx, &mut s).await;
-    let result = ctx.writes.settle(result).await;
+    let result = ctx.writes.finish_or_roll_back(result).await;
     s.requests = api.requests();
     run.summarize(&s);
     result.map(|()| s)
