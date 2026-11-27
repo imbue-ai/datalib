@@ -91,7 +91,12 @@ const SQLITE_STMTSTATUS_SORT: c_int = 2;
 const SQLITE_STMTSTATUS_AUTOINDEX: c_int = 3;
 const SQLITE_STMTSTATUS_VM_STEP: c_int = 4;
 const SQLITE_SCANSTAT_NVISIT: c_int = 1;
+const SQLITE_SCANSTAT_NAME: c_int = 3;
 const SQLITE_SCANSTAT_EXPLAIN: c_int = 4;
+
+/// The table-valued functions a statement is handed a set of keys through.
+/// A loop over one visits the keys, not a table.
+const SET_FUNCTIONS: [&str; 2] = ["json_each", "json_tree"];
 
 static INSTALLED: AtomicBool = AtomicBool::new(false);
 
@@ -200,12 +205,14 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
         .map_or(nanos.max(0) as u64, |at| at.elapsed().as_nanos() as u64);
     let sql = unsafe { borrowed(sqlite3_sql(stmt)) };
     let db = unsafe { sqlite3_db_handle(stmt) };
+    let (loops, inputs) = unsafe { loops_of(stmt) };
     let mut work = Work {
         vm_steps: status(SQLITE_STMTSTATUS_VM_STEP),
         fullscan_steps: status(SQLITE_STMTSTATUS_FULLSCAN_STEP),
         autoindex_rows: status(SQLITE_STMTSTATUS_AUTOINDEX),
         sorts: status(SQLITE_STMTSTATUS_SORT),
         rows: returned,
+        inputs,
         nanos,
     };
     // Doltlite marks some reads as writes, and the connection's count of
@@ -215,7 +222,6 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
             .rows
             .max(unsafe { sqlite3_changes64(db) }.max(0) as u64);
     }
-    let loops = unsafe { loops_of(stmt) };
     let name = datalib_sql::tag::filed_under(&sql);
     let run = OneRun {
         rows: work.rows,
@@ -244,19 +250,22 @@ unsafe fn finished(stmt: *mut c_void, nanos: i64) {
     let expanded_text = text(expanded);
     unsafe { sqlite3_free(expanded as *mut c_void) };
     WRITING.with(|w| w.set(true));
-    say(&work, &sql, &file, &expanded_text);
+    say(&work, &sql, &file, &expanded_text, &loops);
     WRITING.with(|w| w.set(false));
 }
 
 /// Each loop of the run that just ended, as SQLite explains it (`SCAN t`,
-/// `SEARCH t USING INDEX t_by_x (x=?)`), with the rows it visited; then the
-/// counters start again for the statement's next run.
+/// `SEARCH t USING INDEX t_by_x (x=?)`), with the rows it visited, and the
+/// keys its set loops visited ([`SET_FUNCTIONS`]); then the counters start
+/// again for the statement's next run. A set loop is known by the table it
+/// reads, not by its explanation, which names an alias where one is given.
 ///
 /// # Safety
 /// `stmt` is a statement SQLite has just finished running, and the strings
 /// borrowed from it are used before the callback returns.
-unsafe fn loops_of<'s>(stmt: *mut c_void) -> Vec<(&'s str, u64)> {
+unsafe fn loops_of<'s>(stmt: *mut c_void) -> (Vec<(&'s str, u64)>, u64) {
     let mut loops = Vec::new();
+    let mut inputs = 0;
     for idx in 0.. {
         let mut visited: i64 = 0;
         let mut explain: *const c_char = std::ptr::null();
@@ -285,12 +294,27 @@ unsafe fn loops_of<'s>(stmt: *mut c_void) -> Vec<(&'s str, u64)> {
         if explain.is_null() {
             continue;
         }
-        // Safety: SQLite's own NUL-terminated text, alive with `stmt`.
+        let mut table: *const c_char = std::ptr::null();
+        unsafe {
+            sqlite3_stmt_scanstatus_v2(
+                stmt,
+                idx,
+                SQLITE_SCANSTAT_NAME,
+                0,
+                (&mut table as *mut *const c_char).cast(),
+            )
+        };
+        let visited = visited.max(0) as u64;
+        // Safety, for both: SQLite's own NUL-terminated text (or null, for
+        // the table of a loop that reads none), alive with `stmt`.
+        if SET_FUNCTIONS.contains(&unsafe { borrowed(table) }.as_ref()) {
+            inputs += visited;
+        }
         let explain = unsafe { CStr::from_ptr(explain) }.to_str().unwrap_or("?");
-        loops.push((explain, visited.max(0) as u64));
+        loops.push((explain, visited));
     }
     unsafe { sqlite3_stmt_scanstatus_reset(stmt) };
-    loops
+    (loops, inputs)
 }
 
 /// A C string SQLite owns, borrowed when it is UTF-8; empty for a null
@@ -306,7 +330,7 @@ unsafe fn borrowed<'s>(p: *const c_char) -> std::borrow::Cow<'s, str> {
     unsafe { CStr::from_ptr(p) }.to_string_lossy()
 }
 
-fn say(work: &Work, sql: &str, file: &str, expanded: &str) {
+fn say(work: &Work, sql: &str, file: &str, expanded: &str, loops: &[(&str, u64)]) {
     let values = std::env::var_os(VALUES_ENV).is_some_and(|v| !v.is_empty());
     let shown = if values { expanded } else { sql };
     let shown: String = shown.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -319,6 +343,7 @@ fn say(work: &Work, sql: &str, file: &str, expanded: &str) {
         "heavy statement: {} steps for {} rows",
         work.vm_steps, work.rows
     );
+    let loops = loops_text(loops);
     tracing::warn!(
         target: TARGET,
         statement = shown.as_str(),
@@ -329,9 +354,21 @@ fn say(work: &Work, sql: &str, file: &str, expanded: &str) {
         autoindex_rows = work.autoindex_rows,
         sorts = work.sorts,
         rows = work.rows,
+        inputs = work.inputs,
+        loops = loops.as_str(),
         elapsed_secs = work.nanos as f64 / 1e9,
         "{msg}"
     );
+}
+
+/// Each loop with the rows it visited, in SQLite's order: which one did
+/// the walking.
+fn loops_text(loops: &[(&str, u64)]) -> String {
+    loops
+        .iter()
+        .map(|(explain, visited)| format!("{explain}: {visited}"))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// A C string SQLite owns, copied; empty for a null pointer.
