@@ -1,5 +1,5 @@
-//! YouTube: the videos the account watched, a document per year, and
-//! the channels it subscribes to, which carry no date, in one.
+//! YouTube: the videos the account watched, in one document, and the
+//! channels it subscribes to, which carry no date, in another.
 
 use datalib_etl::bulk::BulkUpsertable;
 use datalib_etl_chat_common::types::NormalizedChat;

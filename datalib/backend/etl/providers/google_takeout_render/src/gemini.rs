@@ -1,6 +1,6 @@
 //! Gemini's activity: each entry is the prompt, by the account, then
-//! Gemini's response. The files a prompt attached ride on the prompt,
-//! the images Gemini drew on the response.
+//! Gemini's response. The files a prompt attached are the prompt
+//! item's attachments, the images Gemini drew the response item's.
 
 use datalib_etl::blob_cas::CasEdgeRow;
 use datalib_etl::bulk::BulkUpsertable;

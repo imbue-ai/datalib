@@ -243,9 +243,9 @@ pub(crate) struct Ctx<'a> {
     /// anchor, a user. A page of search results is not one, since it is
     /// known only as it comes.
     pub bar: RunBar,
-    /// Per loop table, the ticks the listing announced for it ahead of
-    /// the loop, which the loop's owed list counts again.
-    foreseen: Mutex<HashMap<&'static str, u64>>,
+    /// Per loop table, the ticks the listing added to the bar's total for
+    /// it ahead of the loop, which the loop's owed list counts again.
+    counted_ahead: Mutex<HashMap<&'static str, u64>>,
 }
 
 impl Ctx<'_> {
@@ -276,17 +276,18 @@ impl Ctx<'_> {
     }
 
     /// A page stored at a new stamp owes a body, and a comment listing
-    /// when comments are mirrored. Announcing them as the listing goes
-    /// puts a search walk's work in the queue before its loops start.
-    pub fn foresee_pages(&self, pages: u64) {
+    /// when comments are mirrored. Adding them to the bar's total as the
+    /// listing goes puts a search walk's work in the queue before its
+    /// loops start.
+    pub fn expect_bodies_and_comments(&self, pages: u64) {
         let tables: &[&'static str] = if self.opts.comments {
             &[PAGE_MARKDOWN, PAGE_COMMENTS]
         } else {
             &[PAGE_MARKDOWN]
         };
-        let mut foreseen = self.foreseen.lock().unwrap();
+        let mut counted_ahead = self.counted_ahead.lock().unwrap();
         for t in tables {
-            *foreseen.entry(t).or_default() += pages;
+            *counted_ahead.entry(t).or_default() += pages;
         }
         self.bar.expect(pages * tables.len() as u64);
     }
@@ -299,12 +300,17 @@ impl Ctx<'_> {
         flush: usize,
         flush_bytes: usize,
     ) -> Result<owed::Drained> {
-        let foreseen = self.foreseen.lock().unwrap().remove(table).unwrap_or(0);
+        let counted_ahead = self
+            .counted_ahead
+            .lock()
+            .unwrap()
+            .remove(table)
+            .unwrap_or(0);
         let owed_here = owed.len() as u64;
-        // A page foreseen to owe this whose record the store turns out to
-        // hold owes nothing, and leaves the queue.
-        self.bar.expect(owed_here.saturating_sub(foreseen));
-        self.bar.forgo(foreseen.saturating_sub(owed_here));
+        // A page counted ahead as owing this whose record the store turns
+        // out to hold owes nothing, and leaves the queue.
+        self.bar.expect(owed_here.saturating_sub(counted_ahead));
+        self.bar.forgo(counted_ahead.saturating_sub(owed_here));
         self.bar.doing(table);
         let l = self.a_loop(table, flush, flush_bytes);
         owed::drain(&l, owed, f).await
@@ -464,7 +470,7 @@ impl Ctx<'_> {
             })
             .map(String::as_str)
             .collect();
-        self.db.forget_failed_pages(&database_roots).await?;
+        self.db.delete_page_stubs(&database_roots).await?;
         let root_set: HashSet<String> = ids.iter().cloned().collect();
         let under = scope::pages_under(&tree, &root_set);
         let unplaced: Vec<String> = ids
@@ -637,7 +643,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         unreadable: Mutex::new(HashMap::new()),
         counts: Counts::default(),
         bar: RunBar::new(&opts.progress, 0),
-        foreseen: Mutex::new(HashMap::new()),
+        counted_ahead: Mutex::new(HashMap::new()),
     };
     let mut s = FetchSummary::default();
     let mut result = phases(&ctx, &mut s).await;
@@ -657,8 +663,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
     // misconfigured credential fails identically on all of them, and
     // without this the run reports success having stored nothing: the
     // DAG step goes green, render finds an empty raw store, and the
-    // provider looks healthy while being completely dead. That is how
-    // a missing `Notion-Version` header hid for two months.
+    // provider looks healthy while being completely dead.
     if result.is_ok() && all_pages_failed(&s) {
         result = Err(anyhow::anyhow!(
             "every page fetch failed ({} attempted, 0 succeeded) — the raw store \
@@ -791,8 +796,8 @@ mod tests {
         }));
     }
 
-    /// The regression this guards: a systemic credential failure fails on
-    /// every page, and used to be reported as a successful run.
+    /// The regression this guards: a credential that fails on every page
+    /// was reported as a successful run.
     #[test]
     fn all_pages_failed_is_true_when_every_page_failed() {
         assert!(all_pages_failed(&FetchSummary {

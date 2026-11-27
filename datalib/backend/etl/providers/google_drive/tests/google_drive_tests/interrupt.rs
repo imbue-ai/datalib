@@ -106,7 +106,8 @@ async fn a_first_sync_cut_off_at_any_request_resumes_to_the_same_store() {
 }
 
 /// From an empty store nothing is ever *changed*; a download that read
-/// a stored file as done whatever its version passes the test above and
+/// a stored file as done whatever its version passes
+/// `a_first_sync_cut_off_at_any_request_resumes_to_the_same_store` and
 /// fails this one.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_later_sync_cut_off_at_any_request_resumes_to_the_same_store() {

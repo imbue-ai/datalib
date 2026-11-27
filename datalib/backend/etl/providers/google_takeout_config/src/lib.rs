@@ -1,5 +1,5 @@
-//! Provider-owned config schema for the `google_takeout` source (Program A
-//! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
+//! Provider-owned config schema for the `google_takeout` source.
+//! Schema-only (serde + anyhow), so the orchestrator can name
 //! `GoogleTakeoutConfig` without linking the provider.
 
 use std::path::PathBuf;
@@ -78,7 +78,7 @@ impl GoogleTakeoutSync {
 }
 
 /// Params for the render step — no provider-specific render knobs, so
-/// this is the shared bare envelope (see the per-phase params split).
+/// this is the shared bare envelope.
 pub type GoogleTakeoutRenderConfig = datalib_source_common::BareRenderConfig;
 
 impl datalib_source_common::IngestMethods for GoogleTakeoutConfig {

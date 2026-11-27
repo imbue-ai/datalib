@@ -109,9 +109,9 @@ file id alone, so a fetch problem keyed `files:<id>` lands on it.
 row, that capture's `capture_parts`, its `comments` and its
 `file_parents`. Every key in those tables is the file id or starts with
 it, which is how the forward scan maps a changed row to the Doc to
-render again. It also reads each `folders` and `drives` row above it, a
-miss too, so a rename, a move or a folder that arrives later renders it
-again by the reverse lookup.
+render again. It also declares a read of each `folders` and `drives`
+row above it, including a lookup that found no row, so a rename, a move
+or a folder that arrives later renders it again by the reverse lookup.
 
 **Where a row sits** (`grid_rows.md` §"`parent_uuid`…"; `src/tree.rs`).
 The Doc is read together, inside its folder, under the folders above
@@ -139,7 +139,7 @@ A folder's own chain follows its first parent up to the top:
   is a folder with no name, at the top.
 
 A folder is carried by every Doc in or under it, and the grid index
-takes one carrier's word for its name and kind, so a place row says
+takes its name and kind from one of those Docs, so a place row says
 nothing that comes from the Doc carrying it (no account, no sort key).
 Folders sort before the Docs beside them. A file in no folder sits at
 the top of the source. Each comment thread is read together inside the

@@ -32,8 +32,9 @@ pub struct MeRow {
 }
 
 /// `/me` answers `first_name` on some calls and null on others for the
-/// same account, and every conversation reads the `me` row, so the flip
-/// re-rendered every conversation on most syncs. Render never reads it.
+/// same account, and every conversation reads the `me` row, so in the
+/// payload the flip would re-render every conversation on most syncs.
+/// Render never reads it.
 pub const ME_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["first_name"]];
 
 /// `conversations` — one row per ChatGPT conversation id. `update_time`

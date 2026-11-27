@@ -885,8 +885,7 @@ mod tests {
     }
 
     /// A shape we don't recognize must produce no timestamp, never the
-    /// epoch — the doc comment on `parse_date_ms` used to promise `0`,
-    /// and those rows sorted into the grid as real 1970 records.
+    /// epoch: a row dated `0` sorts into the grid as a real 1970 record.
     #[test]
     fn unparseable_dates_yield_none_not_the_epoch() {
         for bad in [
@@ -942,8 +941,8 @@ mod tests {
         // is_me → "Me".
         assert_eq!(doc.items[1].author_display, "Me");
         assert_eq!(doc.items[1].author_kind, AuthorKind::Account);
-        // Named after the person it is with, by their number: the search
-        // list titled it by a bare number before.
+        // Named after the person it is with, by their number, so the
+        // search list titles it by their name, not a bare number.
         assert_eq!(
             chats[0].named_after,
             vec![NamedPerson {

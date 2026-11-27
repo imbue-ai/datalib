@@ -51,7 +51,8 @@ pub fn to_networks(
 
     for doc in &parsed.docs {
         // The parser fills the room map from the same store, so this
-        // should not happen; the render unit is dropped rather than the pass.
+        // should not happen; the render unit fails with a `problems` row
+        // on its document, and the rest of the run goes on.
         let Some(room) = parsed.rooms.get(&doc.room_uuid) else {
             unrendered.push(Unrendered {
                 markdown_uuid: ids::room(source_id, &doc.room_uuid).uuid,
@@ -188,9 +189,7 @@ fn to_chat(
         display,
         // `None`, so chat-common derives the same
         // "{source_label} · {display}" heading the other chat sources
-        // get — here "Beeper:Signal · Bridge Crew". The old
-        // "signal · 2024-03" restated the period the heading already
-        // ends with.
+        // get — here "Beeper:Signal · Bridge Crew".
         title: None,
         author: None,
         account: room.account_id.clone(),

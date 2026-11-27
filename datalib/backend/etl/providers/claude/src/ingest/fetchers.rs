@@ -166,7 +166,7 @@ impl Fetcher<Conversation> for Conversations<'_> {
                     self.ctx.db.store_conversation(tx, c).await?;
                     self.ctx.remember_files(&c.uuid, c.files.clone());
                 }
-                Outcome::Gone => self.ctx.db.forget_conversation(tx, &f.listed.key).await?,
+                Outcome::Gone => self.ctx.db.delete_conversation(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }
@@ -242,7 +242,7 @@ impl Fetcher<CoworkSession> for CoworkSessions<'_> {
                     self.ctx
                         .remember_files(&c.id, super::cowork::files_of(&c.events));
                 }
-                Outcome::Gone => self.ctx.db.forget_cowork_session(tx, &f.listed.key).await?,
+                Outcome::Gone => self.ctx.db.delete_cowork_session(tx, &f.listed.key).await?,
                 Outcome::Failed(_) | Outcome::Skipped(..) => {}
             }
         }

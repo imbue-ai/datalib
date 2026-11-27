@@ -1,4 +1,5 @@
-//! The render wave for the `garmin` source.
+//! What the `garmin` source's render step runs: `plan_render` and the
+//! `SourceRender` it plans.
 
 use std::path::Path;
 

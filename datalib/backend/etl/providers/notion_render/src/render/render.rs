@@ -45,7 +45,7 @@ use datalib_etl_render::pages::batches;
 /// v12: a page body is Notion's enhanced markdown turned into CommonMark,
 ///      under the shared title line, with its ids in the front matter.
 /// v13: a source has a table of contents, the path above a page links it
-///      where the path used to link Notion, and a trashed page says so.
+///      rather than Notion, and a trashed page says so.
 /// v14: a comment's time keeps Notion's `Z`: its clock is unknown.
 /// v15: a page's text is a block keyed by its row, its front matter
 ///      layout around it.
@@ -174,7 +174,7 @@ pub(super) fn parent_of(row: &TreeRow) -> Option<String> {
 ///
 /// A database row's content usually *is* its properties — 71% of pages
 /// in a measured workspace have no body at all — so emitting nothing
-/// for them would drop most of a workspace on the floor.
+/// for them would leave most of a workspace's documents empty.
 fn properties_table(page: &Value) -> String {
     let Some(props) = page.get("properties").and_then(|v| v.as_object()) else {
         return String::new();

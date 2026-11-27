@@ -107,7 +107,7 @@ pub struct Listener {
     pending: Vec<String>,
     /// The store this listener was made from. What it announced itself
     /// wakes nobody: the loop would otherwise tick again after every save
-    /// of its own record.
+    /// of its own state to the store.
     own: String,
     /// The database file, whose change counter the backstop reads.
     db: PathBuf,
@@ -241,8 +241,8 @@ fn change_counter(db: &Path) -> Option<u32> {
     ]))
 }
 
-/// Resolves when the FIFO may have something to read, forgetting that it
-/// did: the drain that follows reads whatever is there.
+/// Resolves when the FIFO may have something to read, and clears that
+/// readiness: the drain that follows reads whatever is there.
 async fn readable(fifo: &Option<Fifo>) {
     match fifo {
         Some(fifo) => match fifo.rx.readable().await {
@@ -359,7 +359,7 @@ mod tests {
     /// hearing a line, a drop in that query could leave the store's one
     /// connection unable to answer the caller's next query: the loop hung
     /// on its next save (harness walk seed 237), and so could every
-    /// handler sharing the server's mailbox connection.
+    /// handler sharing the server's connection to the store.
     #[tokio::test]
     async fn a_listener_dropped_mid_wait_leaves_the_store_usable() {
         let td = tempfile::tempdir().unwrap();
@@ -391,7 +391,7 @@ mod tests {
         assert!(!orphan.exists());
     }
 
-    /// The loop saves its record after every tick; hearing its own save
+    /// The loop saves its state to the store after every tick; hearing its own save
     /// would cost a tick per tick.
     #[tokio::test]
     async fn a_listener_does_not_hear_its_own_store() {

@@ -1,9 +1,9 @@
-//! The prune gate. A listing that did not come back as an enumeration —
-//! a wrapped object with no array inside, a 204/404/empty body, a page
-//! walk that hit an error — leaves the stored rows alone and leaves a
-//! `problems` row saying so; a phase that fails wholesale leaves its
-//! row and the run stays green. The next run that lists clears the row
-//! and prunes.
+//! When a walk prunes. A listing that did not come back as an
+//! enumeration — a wrapped object with no array inside, a 204/404/empty
+//! body, a page walk that hit an error — leaves the stored rows alone
+//! and leaves a `problems` row saying so; a phase that fails wholesale
+//! leaves its row and the run stays green. The next run that lists
+//! clears the row and prunes.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -509,8 +509,8 @@ async fn a_second_page_that_fails_does_not_prune_and_a_complete_walk_does() {
 }
 
 /// User-settings feeds nothing else the run does, so a transient
-/// failure on it used to fail the whole step; now it costs that row
-/// only, which stays as the last run stored it.
+/// failure on it costs that row only, which stays as the last run
+/// stored it, and does not fail the whole step.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_user_settings_failure_is_a_listing_row_and_the_stored_row_stays() {
     let a = Account::tng();
