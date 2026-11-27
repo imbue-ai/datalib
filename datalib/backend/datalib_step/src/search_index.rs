@@ -49,7 +49,7 @@ pub(crate) struct Done {
     pub(crate) embedded: usize,
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
-    pub(crate) unsettled: usize,
+    pub(crate) left_for_next_pass: usize,
     /// Chunks longer than the model's context, cut to fit before they were
     /// embedded: dense text, code or encoded data, whose tail is lost.
     pub(crate) truncated: usize,
@@ -207,7 +207,7 @@ async fn keyword_pass(
             Some(key) => {
                 current.insert(uuid.clone(), key);
             }
-            None => done.unsettled += 1,
+            None => done.left_for_next_pass += 1,
         }
     }
     let owed = datalib_search_index::owed(&current, &indexed);
@@ -225,14 +225,14 @@ async fn keyword_pass(
         let docs = tokio::task::spawn_blocking(move || store.index_docs(&source, &uuids))
             .await
             .context("render store read panicked")??;
-        done.unsettled += batch.len() - docs.len();
+        done.left_for_next_pass += batch.len() - docs.len();
         index.put(&docs).await?;
         done.put += docs.len();
         progress.inc(batch.len() as u64);
     }
     index.remove(&owed.remove).await?;
     done.removed = owed.remove.len();
-    if !cut_short && done.unsettled == 0 {
+    if !cut_short && done.left_for_next_pass == 0 {
         index.set_read_at(group, reading.as_deref()).await?;
     }
     Ok(done)
@@ -336,7 +336,7 @@ async fn embed_with<E: EmbedPrompt>(
         Ok(Done {
             cut: cut.cut,
             removed: cut.removed,
-            unsettled: cut.unsettled + embedded.unsettled,
+            left_for_next_pass: cut.left_for_next_pass + embedded.left_for_next_pass,
             ..embedded
         })
     }
@@ -392,12 +392,12 @@ async fn cut_owed(
         let drawn = draw_batch(root, group, batch.to_vec()).await?;
         // A document drawn from another rendering than the index holds is
         // cut once the keyword pass has taken that rendering.
-        let settled: Vec<IndexDoc> = drawn
+        let in_indexed_rendering: Vec<IndexDoc> = drawn
             .into_iter()
             .filter(|d| indexed.get(&d.markdown_uuid) == Some(&d.content_hash))
             .collect();
-        done.unsettled += batch.len() - settled.len();
-        let cut = cut_batch(Arc::clone(&cutter), settled).await?;
+        done.left_for_next_pass += batch.len() - in_indexed_rendering.len();
+        let cut = cut_batch(Arc::clone(&cutter), in_indexed_rendering).await?;
         cache.file_chunks(&cut).await?;
         done.cut += cut.len();
         progress.inc(batch.len() as u64);
@@ -506,7 +506,7 @@ async fn embed_into<E: EmbedPrompt>(
     'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
         for doc in draw_batch(root, group, uuids.to_vec()).await? {
             let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()])? else {
-                done.unsettled += 1;
+                done.left_for_next_pass += 1;
                 continue;
             };
             pending.extend(prompts);
@@ -607,7 +607,7 @@ async fn embed_on_modal(
 
     let feed = async move {
         let mut stdin = stdin;
-        let mut unsettled = 0;
+        let mut left_for_next_pass = 0;
         let mut prompt_bytes = 0;
         let owing: Vec<String> = by_doc.keys().cloned().collect();
         'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
@@ -616,7 +616,7 @@ async fn embed_on_modal(
                     break 'docs;
                 }
                 let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()])? else {
-                    unsettled += 1;
+                    left_for_next_pass += 1;
                     continue;
                 };
                 for (hash, prompt) in prompts {
@@ -629,7 +629,7 @@ async fn embed_on_modal(
             }
         }
         stdin.shutdown().await.ok();
-        Ok::<_, anyhow::Error>((unsettled, prompt_bytes))
+        Ok::<_, anyhow::Error>((left_for_next_pass, prompt_bytes))
     };
     let collect = async {
         let mut from = FromModal::default();
@@ -718,7 +718,7 @@ async fn embed_on_modal(
         progress.set_message(&spent);
         return Ok(done);
     }
-    let (unsettled, prompt_bytes) = fed?;
+    let (left_for_next_pass, prompt_bytes) = fed?;
     if !status.success() {
         bail!(
             "the Modal driver exited {status}: {}. So far it {spent}",
@@ -736,7 +736,7 @@ async fn embed_on_modal(
     }
     progress.set_message(&spent);
     Ok(Done {
-        unsettled,
+        left_for_next_pass,
         prompt_bytes,
         ..done
     })

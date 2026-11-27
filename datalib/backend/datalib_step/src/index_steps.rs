@@ -128,7 +128,7 @@ pub async fn run_embed(
     let model = ModelFile::new(data_root, models_dir);
     let done =
         crate::search_index::embed(data_root, &env.group, model, on_modal, &progress, stop).await?;
-    report_unsettled(&progress, &env.group, done.unsettled);
+    report_left_for_next_pass(&progress, &env.group, done.left_for_next_pass);
     progress.metric(
         "search_chunks_not_embedded",
         &[("source", env.group.as_str())],
@@ -140,7 +140,7 @@ pub async fn run_embed(
     tracing::info!(
         cut = done.cut,
         embedded = done.embedded,
-        unsettled = done.unsettled,
+        unsettled = done.left_for_next_pass,
         truncated = done.truncated,
         prompt_bytes = done.prompt_bytes,
         embed_secs = format!("{:.1}", done.embed_time.as_secs_f64()),
@@ -154,11 +154,11 @@ pub async fn run_embed(
 
 /// Documents left for the next pass, as a metric the Manage row shows: a
 /// document dropped from this pass is counted rather than lost unseen.
-fn report_unsettled(progress: &Progress, group: &str, unsettled: usize) {
+fn report_left_for_next_pass(progress: &Progress, group: &str, left_for_next_pass: usize) {
     progress.metric(
         "search_index_unsettled",
         &[("source", group)],
-        unsettled as i64,
+        left_for_next_pass as i64,
     );
 }
 

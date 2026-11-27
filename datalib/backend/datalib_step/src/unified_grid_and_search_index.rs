@@ -156,14 +156,14 @@ pub async fn run(
         progress.metric(
             "search_index_unsettled",
             &[("source", source.as_str())],
-            done.unsettled as i64,
+            done.left_for_next_pass as i64,
         );
         if done != crate::search_index::Done::default() {
             tracing::info!(
                 source = %source,
                 put = done.put,
                 removed = done.removed,
-                unsettled = done.unsettled,
+                unsettled = done.left_for_next_pass,
                 "the source's keywords are done"
             );
         }
