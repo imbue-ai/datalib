@@ -138,9 +138,11 @@ describe("ordering by when, not by how it reads", () => {
 
   it("compares across UTC offsets, where text order is a lie", () => {
     // 04:00-07:00 is 11:00Z — two hours AFTER 09:00Z — but sorts before
-    // it as text on the leading hour digits. This is the case the repo's
-    // "keep the source's offset" convention makes real, and the one
-    // a lexicographic sort gets backwards.
+    // it as text on the leading hour digits. AGENTS.md §"Timestamp
+    // convention" makes this case real: a stamp that belongs to the
+    // record (`grid_rows.created_at`) stays in the offset its source
+    // wrote, so one column holds several offsets. A lexicographic sort
+    // gets it backwards.
     const nineUtc = "2026-09-01T09:00:00+00:00";
     const elevenUtcWrittenLocal = "2026-09-01T04:00:00-07:00";
     expect(elevenUtcWrittenLocal < nineUtc, "premise: text order disagrees").toBe(true);

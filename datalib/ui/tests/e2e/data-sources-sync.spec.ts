@@ -6,9 +6,11 @@
 //     `not_selected` into the steps it walks past would show a source
 //     that succeeded yesterday as "not selected", stamped with the time
 //     of a run that never touched it.
-//   * **The row must show the sync happening.** "Running" has to reach
-//     the loop's store when a step *starts*, not when it finishes, or
-//     pressing Sync looks like nothing happened until it is over.
+//   * **The row must show the sync happening.** The tick that starts a
+//     step writes `running` into the loop's store (`run_steps` in
+//     `system/supervisor.sqlite`) before the step ends; were it written
+//     only when the step finished, pressing Sync would look like
+//     nothing happened until it was over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why
 // it carries most of this spec: an `ingest -> render_markdown` edge is
