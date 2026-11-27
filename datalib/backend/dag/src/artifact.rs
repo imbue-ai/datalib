@@ -79,7 +79,7 @@ mod tests {
         assert_eq!(ArtifactPath::parse("a/b").unwrap().as_str(), "a/b");
     }
 
-    /// A `*` is no longer a wildcard — it is a character, and one the
+    /// A `*` is not a wildcard — it is a character, and one the
     /// config's id rules reject. Pinned so nobody reintroduces glob
     /// semantics here by accident.
     #[test]

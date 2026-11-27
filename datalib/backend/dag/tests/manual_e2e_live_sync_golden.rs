@@ -465,7 +465,7 @@ fn persistent_run_root() -> PathBuf {
 /// Refuse to run outside snapshot-update mode, before anything is
 /// fetched.
 ///
-/// A compare run costs three full pipeline passes against real
+/// A compare run costs three full pipeline runs against real
 /// provider APIs and then reports a diff that was always going to be
 /// accepted: upstream moves on its own, so these snapshots record what
 /// the world looked like at the last bake rather than a contract the
