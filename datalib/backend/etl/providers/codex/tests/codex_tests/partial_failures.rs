@@ -156,8 +156,8 @@ async fn what_a_run_could_not_read_is_a_row_until_it_reads() {
     assert_eq!(env.problem_keys().await, Vec::<String>::new());
 
     // A rollout this source must read again — its `ingested_files` row
-    // deleted — but cannot open. The host cache is made to vouch for its bytes, so the
-    // walk itself does not open it.
+    // deleted — but cannot open. The host cache is made to vouch for its
+    // bytes, so the walk itself does not open it.
     let victim =
         "2364/04/13/rollout-2364-04-13T09-15-00-72fb0cda-0eb6-754e-8bfd-a7dcc8d6c8f4.jsonl";
     test_sql!("DELETE FROM ingested_files WHERE rel_path = ?")
