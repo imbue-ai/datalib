@@ -359,8 +359,11 @@ a pill where
 the sync indicator sits stays red for a step the pass could not prepare
 until it is dismissed, and, once the screen is lifted, amber, with a
 button that runs them, while any step the pass marked `needs_rerun` has
-not run since. The pass is held in the server's memory (`/api/config`'s
-`upgrade`) and announced as `pass_changed` on `/api/sync/stream`;
+not run since. The pass is a job in `system/supervisor.sqlite` of kind
+`prepare`, which the loop opens as it starts and closes when it is done,
+with a row per step it asks (`job_steps`); `/api/config`'s `upgrade`
+reads it, and each change is announced as `pass_changed` on
+`/api/sync/stream`;
 freeing disk space is drawn by the same pill (§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
@@ -783,8 +786,7 @@ exits.
 
 `datalib-pipeline serve` says on stderr, one NDJSON line each
 (`supervisor::serve::ServeEvent`), what its parent needs and no store
-holds: that it holds the lock (`holding`), the prepare pass
-(`prepare_plan`, `prepare_step`, `prepare_done`), each busy period
+holds: that it holds the lock (`holding`), each busy period
 (`sync_started`, `sync_over`), and every write it makes to the run
 store (`run_store_written`), which a filesystem watch would report late.
 Its own log lines go to the run store, as a `dag` process outside any
@@ -795,11 +797,13 @@ nothing runs until the file holds a config.
 
 ## Resets and purges
 
-A **wipe** is a row in the mailbox's `wipes` table: a reset (empty what
+A **wipe** is a row in the mailbox's `jobs` table: a reset (empty what
 these steps wrote), a purge (delete the trees of groups the config no
 longer names, and forget their steps ran), a compaction (fold away the
 history nothing reads and collect the rest) or a collection (delete only
-what no commit reaches; [`step_protocol.md`](../../../docs/dev/step_protocol.md#compact-and-collect)). The loop carries one out as
+what no commit reaches; [`step_protocol.md`](../../../docs/dev/step_protocol.md#compact-and-collect)). The table's other kind of
+row, `prepare`, is the loop's own pass at its start (§"Upgrading a
+root"), which no one else opens. The loop carries a wipe out as
 soon as the steps it touches have stopped, whatever else is syncing; it
 does not wait for the sync to end. What it decides is in
 `supervisor/wipe.rs`, and the loop does it (`round.rs`,
@@ -817,7 +821,7 @@ does not wait for the sync to end. What it decides is in
   group's config change is not waited on; a request left with nothing is
   stopped.
 - **It says how far it has got.** A compaction or a collection writes
-  every step it asks into the record's `wipe_steps` table, waiting, then
+  every step it asks into the record's `job_steps` table, waiting, then
   each as it runs and ends: done with the store's size before and after
   (its outcome's `store_bytes`), or failed with why. Each write is
   announced, which the server turns into `pass_changed`, and
@@ -859,10 +863,10 @@ The loop's memory is its **record**, in `system/supervisor.sqlite`
 (`supervisor/store.rs`): `requests` (its `roots`, `opened_by`, a
 `stop_requested_by`, and once closed its `outcome` — `done`, `failed`
 or `stopped` — and `failed_step`), `turned_off` (`step`,
-`turned_off_by`), `wipes` (`kind`, `targets`, `opened_by`, and once
-closed the `error` that stopped it, if any) and `wipe_steps` (a
-compaction's or collection's steps in order, each `state`, `error` and
-`before_bytes`/`after_bytes`). It is plain SQLite in
+`turned_off_by`), `jobs` (`kind`, `targets`, `opened_by`, and once
+closed the `error` that stopped it, if any) and `job_steps` (a
+compaction's, collection's or prepare pass's steps in order, each
+`state`, `error` and `before_bytes`/`after_bytes`). It is plain SQLite in
 rollback-journal mode, so any `sqlite3` reads it, and only the holder of
 `runner-lock` writes it. `supervisor_contention_test` runs seven
 processes on one store (people opening requests, the loop saving, the

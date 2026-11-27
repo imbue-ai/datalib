@@ -388,7 +388,7 @@ pieces already exist; the change is mainly what gets removed.
 | **observed** | `steps` (reads, fingerprint, last success, needs-rerun), `sinks` (versions), `invocations`, `job_steps` | the loop only |
 
 `jobs` replaces `wipes` and also holds the prepare pass; `job_steps`
-replaces `wipe_steps` and the server's in-memory `Upgrade`. The config
+replaces `job_steps` and the server's in-memory `Upgrade`. The config
 file is wanted state too: the loop reads it on `config changed`.
 
 #### The loop
@@ -497,11 +497,10 @@ Each step ships alone, and the harness stays green throughout.
    and the queue ledger is keyed by step id.
 3. **Everything goes through the mailbox.** Done so far: the prepare
    pass runs inside the loop and holds only what it has not reached
-   (open question 3). Still to do: turn `wipes` into `jobs`
-   and add prepare, with its progress in `job_steps` instead of the
-   server's memory. Make the CLI's reset and shrink write jobs. Put
-   both hosts on `supervisor::run`. Item 6 did not wait for this: the
-   prepare pass's progress reaches the server as `ServeEvent` lines.
+   (open question 3); `wipes` are `jobs`, and the pass is one, with its
+   progress in `job_steps`, which the server reads instead of
+   `ServeEvent` lines. Still to do: make the CLI's reset and shrink write
+   jobs, and put both hosts on `supervisor::run`.
 4. **Invocations and requests replace runs** in the run store, the
    record, the server's routes and the UI. This is the largest step.
    The run store is history, not data a person built, so the old rows

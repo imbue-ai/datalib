@@ -25,30 +25,68 @@ use datalib_sql::{sql, sql_id, Sql};
 /// `CREATE TABLE IF NOT EXISTS` makes on its own. Every store from before
 /// the ladder records version 5, with whichever of the record's later
 /// columns its release had.
-const LADDER: &[datalib_store_meta::Migration] = &[datalib_store_meta::Migration {
-    version: 6,
-    name: "steps in one shape; launch_passes goes",
-    apply: |conn| {
-        Box::pin(async move {
-            sql!(
-                "dag.supervisor.migrate_v6_rename_old_steps",
-                "ALTER TABLE steps RENAME TO steps_v5"
-            )
-            .query()
-            .execute(&mut *conn)
-            .await?;
-            Sql::ddl(
-                sql_id!("dag.supervisor.migrate_v6_create_steps"),
-                super::record::STEPS,
-            )
-            .query()
-            .execute(&mut *conn)
-            .await?;
-            STEPS_FROM_V5.raw().execute(&mut *conn).await?;
-            Ok(())
-        })
+const LADDER: &[datalib_store_meta::Migration] = &[
+    datalib_store_meta::Migration {
+        version: 6,
+        name: "steps in one shape; launch_passes goes",
+        apply: |conn| {
+            Box::pin(async move {
+                sql!(
+                    "dag.supervisor.migrate_v6_rename_old_steps",
+                    "ALTER TABLE steps RENAME TO steps_v5"
+                )
+                .query()
+                .execute(&mut *conn)
+                .await?;
+                Sql::ddl(
+                    sql_id!("dag.supervisor.migrate_v6_create_steps"),
+                    super::record::STEPS,
+                )
+                .query()
+                .execute(&mut *conn)
+                .await?;
+                STEPS_FROM_V5.raw().execute(&mut *conn).await?;
+                Ok(())
+            })
+        },
     },
-}];
+    datalib_store_meta::Migration {
+        version: 7,
+        name: "wipes become jobs, which the prepare pass is one kind of",
+        apply: |conn| {
+            Box::pin(async move {
+                let has = |table: &'static str| {
+                    sql!(
+                        "dag.supervisor.migrate_v7_has_table",
+                        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+                    )
+                    .query_scalar::<i64>()
+                    .bind(table)
+                };
+                if has("wipes").fetch_one(&mut *conn).await? > 0 {
+                    sql!(
+                        "dag.supervisor.migrate_v7_rename_wipes",
+                        "DROP INDEX IF EXISTS wipes_open; ALTER TABLE wipes RENAME TO jobs"
+                    )
+                    .raw()
+                    .execute(&mut *conn)
+                    .await?;
+                }
+                if has("wipe_steps").fetch_one(&mut *conn).await? > 0 {
+                    sql!(
+                        "dag.supervisor.migrate_v7_rename_wipe_steps",
+                        "ALTER TABLE wipe_steps RENAME TO job_steps; \
+                         ALTER TABLE job_steps RENAME COLUMN wipe_id TO job_id"
+                    )
+                    .raw()
+                    .execute(&mut *conn)
+                    .await?;
+                }
+                Ok(())
+            })
+        },
+    },
+];
 
 /// Where this build's tables stand. A store at a higher version was
 /// written by a newer build, whose columns this one would not fill.
@@ -90,9 +128,11 @@ const DDL: [&str; 4] = [
         turned_off_at_utc TEXT NOT NULL,
         tz_offset TEXT NOT NULL
     )",
-    // `targets` is a JSON list: step ids for a reset, group ids for a
-    // purge. `error` is set when it closed without being done.
-    "CREATE TABLE IF NOT EXISTS wipes (
+    // Work the loop does that is not a step's run: a reset, a purge, a
+    // compaction or collection, the prepare pass. `targets` is a JSON
+    // list: step ids for a reset, group ids for a purge. `error` is set
+    // when it closed without being done.
+    "CREATE TABLE IF NOT EXISTS jobs (
         id TEXT PRIMARY KEY,
         kind TEXT NOT NULL,
         targets TEXT NOT NULL,
@@ -102,26 +142,26 @@ const DDL: [&str; 4] = [
         closed_at_utc TEXT,
         error TEXT
     )",
-    // How a compaction or a collection stands with each step it asks, in
-    // the order it asks them: what the app's pill counts. `state` is a
-    // `PassState` word.
-    "CREATE TABLE IF NOT EXISTS wipe_steps (
-        wipe_id TEXT NOT NULL,
+    // How a compaction, a collection or the prepare pass stands with each
+    // step it asks, in the order it asks them: what the app's pill and its
+    // upgrade screen count. `state` is a `PassState` word.
+    "CREATE TABLE IF NOT EXISTS job_steps (
+        job_id TEXT NOT NULL,
         ord INTEGER NOT NULL,
         step TEXT NOT NULL,
         state TEXT NOT NULL,
         error TEXT,
         before_bytes INTEGER,
         after_bytes INTEGER,
-        PRIMARY KEY (wipe_id, ord)
+        PRIMARY KEY (job_id, ord)
     )",
 ];
 
-/// `requests` and `wipes` keep every row they were ever given; the loop
+/// `requests` and `jobs` keep every row they were ever given; the loop
 /// reads only the open ones, and these find them without the rest.
 const INDEXES: [&str; 2] = [
     "CREATE INDEX IF NOT EXISTS requests_open ON requests (closed_at_utc, opened_at_utc, id)",
-    "CREATE INDEX IF NOT EXISTS wipes_open ON wipes (closed_at_utc, opened_at_utc, id)",
+    "CREATE INDEX IF NOT EXISTS jobs_open ON jobs (closed_at_utc, opened_at_utc, id)",
 ];
 
 const OPEN_REQUESTS: Sql = sql!(
@@ -131,10 +171,10 @@ const OPEN_REQUESTS: Sql = sql!(
      WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
 );
 
-const OPEN_WIPES: Sql = sql!(
-    "dag.supervisor.find_open_wipes",
+const OPEN_JOBS: Sql = sql!(
+    "dag.supervisor.find_open_jobs",
     "SELECT id, kind, targets, opened_by, closed_at_utc, error \
-     FROM wipes INDEXED BY wipes_open \
+     FROM jobs INDEXED BY jobs_open \
      WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
 );
 
@@ -174,10 +214,12 @@ impl RequestOutcome {
     }
 }
 
-/// What a wipe does: a reset empties what steps wrote, a purge deletes
+/// What a job does: a reset empties what steps wrote, a purge deletes
 /// the trees of groups the config no longer names, a compaction folds
 /// away history nothing reads and collects the rest, a collection deletes
 /// only what no commit reaches (`step_protocol.md` § Compact and collect).
+/// A prepare is the pass the loop opens for itself each time it starts,
+/// and records its progress in (`dag/README.md` §"Upgrading a root").
 #[derive(
     Debug,
     Clone,
@@ -192,14 +234,15 @@ impl RequestOutcome {
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-pub enum WipeKind {
+pub enum JobKind {
     Reset,
     Purge,
     Compact,
     Collect,
+    Prepare,
 }
 
-impl WipeKind {
+impl JobKind {
     pub fn as_str(self) -> &'static str {
         self.into()
     }
@@ -207,9 +250,9 @@ impl WipeKind {
     /// How the steps a compaction or a collection asks give back disk.
     pub fn shrink(self) -> Option<crate::subprocess::Shrink> {
         match self {
-            WipeKind::Compact => Some(crate::subprocess::Shrink::Compact),
-            WipeKind::Collect => Some(crate::subprocess::Shrink::Collect),
-            WipeKind::Reset | WipeKind::Purge => None,
+            JobKind::Compact => Some(crate::subprocess::Shrink::Compact),
+            JobKind::Collect => Some(crate::subprocess::Shrink::Collect),
+            JobKind::Reset | JobKind::Purge | JobKind::Prepare => None,
         }
     }
 
@@ -222,10 +265,10 @@ impl WipeKind {
 /// A reset or purge someone asked for. The loop carries it out as soon as
 /// the steps it touches have stopped, and closes it.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WipeRow {
+pub struct JobRow {
     pub id: String,
     /// `None` for a kind a newer build wrote.
-    pub kind: Option<WipeKind>,
+    pub kind: Option<JobKind>,
     pub targets: Vec<String>,
     pub opened_by: String,
     /// `None` while it is open; then `Some(None)` if it was done, or the
@@ -664,12 +707,12 @@ impl Store {
             .collect()
     }
 
-    pub async fn open_wipe(&self, kind: WipeKind, targets: &[String], by: &str) -> Result<String> {
+    pub async fn open_job(&self, kind: JobKind, targets: &[String], by: &str) -> Result<String> {
         let id = uuid::Uuid::now_v7().to_string();
         let (now, tz_offset) = now_split();
         sql!(
-            "dag.supervisor.insert_wipe",
-            "INSERT INTO wipes (id, kind, targets, opened_by, opened_at_utc, tz_offset) \
+            "dag.supervisor.insert_job",
+            "INSERT INTO jobs (id, kind, targets, opened_by, opened_at_utc, tz_offset) \
              VALUES (?, ?, ?, ?, ?, ?)"
         )
         .query()
@@ -681,17 +724,17 @@ impl Store {
         .bind(tz_offset)
         .execute(&self.pool)
         .await?;
-        self.announce(&format!("wipe opened {id}"));
+        self.announce(&format!("job opened {id}"));
         Ok(id)
     }
 
     /// The loop's to call, and only the loop's. `error` is why it was not
     /// done; `None` when it was.
-    pub async fn close_wipe(&self, id: &str, error: Option<&str>) -> Result<()> {
+    pub async fn close_job(&self, id: &str, error: Option<&str>) -> Result<()> {
         let (now, _) = now_split();
         sql!(
-            "dag.supervisor.close_wipe",
-            "UPDATE wipes SET closed_at_utc = ?, error = ? WHERE id = ? AND closed_at_utc IS NULL"
+            "dag.supervisor.close_job",
+            "UPDATE jobs SET closed_at_utc = ?, error = ? WHERE id = ? AND closed_at_utc IS NULL"
         )
         .query()
         .bind(now)
@@ -699,21 +742,21 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        self.announce(&format!("wipe closed {id}"));
+        self.announce(&format!("job closed {id}"));
         Ok(())
     }
 
-    pub async fn open_wipes(&self) -> Result<Vec<WipeRow>> {
-        let rows = OPEN_WIPES.query().fetch_all(&self.pool).await?;
+    pub async fn open_jobs(&self) -> Result<Vec<JobRow>> {
+        let rows = OPEN_JOBS.query().fetch_all(&self.pool).await?;
         rows.iter().map(wipe_of).collect()
     }
 
     /// Open and closed, oldest first.
-    pub async fn wipes(&self) -> Result<Vec<WipeRow>> {
+    pub async fn wipes(&self) -> Result<Vec<JobRow>> {
         let rows = sql!(
-            "dag.supervisor.list_wipes",
+            "dag.supervisor.list_jobs",
             "SELECT id, kind, targets, opened_by, closed_at_utc, error \
-             FROM wipes ORDER BY opened_at_utc, id"
+             FROM jobs ORDER BY opened_at_utc, id"
         )
         .query()
         .fetch_all(&self.pool)
@@ -721,10 +764,10 @@ impl Store {
         rows.iter().map(wipe_of).collect()
     }
 
-    pub async fn wipe(&self, id: &str) -> Result<Option<WipeRow>> {
+    pub async fn wipe(&self, id: &str) -> Result<Option<JobRow>> {
         let row = sql!(
-            "dag.supervisor.read_wipe",
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes WHERE id = ?"
+            "dag.supervisor.read_job",
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs WHERE id = ?"
         )
         .query()
         .bind(id)
@@ -737,11 +780,11 @@ impl Store {
 impl Store {
     /// The loop's to call, before it asks the first step: every step the
     /// wipe asks, waiting.
-    pub async fn begin_wipe_steps(&self, wipe: &str, steps: &[&str]) -> Result<()> {
+    pub async fn begin_job_steps(&self, wipe: &str, steps: &[&str]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         sql!(
-            "dag.supervisor.delete_wipe_steps",
-            "DELETE FROM wipe_steps WHERE wipe_id = ?"
+            "dag.supervisor.delete_job_steps",
+            "DELETE FROM job_steps WHERE job_id = ?"
         )
         .query()
         .bind(wipe)
@@ -749,8 +792,8 @@ impl Store {
         .await?;
         for (ord, step) in steps.iter().enumerate() {
             sql!(
-                "dag.supervisor.insert_wipe_step",
-                "INSERT INTO wipe_steps (wipe_id, ord, step, state) VALUES (?, ?, ?, ?)"
+                "dag.supervisor.insert_job_step",
+                "INSERT INTO job_steps (job_id, ord, step, state) VALUES (?, ?, ?, ?)"
             )
             .query()
             .bind(wipe)
@@ -761,12 +804,12 @@ impl Store {
             .await?;
         }
         tx.commit().await?;
-        self.announce(&format!("{WIPE_MOVED} {wipe}"));
+        self.announce(&format!("{JOB_MOVED} {wipe}"));
         Ok(())
     }
 
     /// The loop's to call, as each step it asked moves.
-    pub async fn set_wipe_step(
+    pub async fn set_job_step(
         &self,
         wipe: &str,
         ord: usize,
@@ -775,9 +818,9 @@ impl Store {
         bytes: Option<StoreBytes>,
     ) -> Result<()> {
         sql!(
-            "dag.supervisor.update_wipe_step",
-            "UPDATE wipe_steps SET state = ?, error = ?, before_bytes = ?, after_bytes = ? \
-             WHERE wipe_id = ? AND ord = ?"
+            "dag.supervisor.update_job_step",
+            "UPDATE job_steps SET state = ?, error = ?, before_bytes = ?, after_bytes = ? \
+             WHERE job_id = ? AND ord = ?"
         )
         .query()
         .bind(state.as_str())
@@ -788,17 +831,17 @@ impl Store {
         .bind(ord as i64)
         .execute(&self.pool)
         .await?;
-        self.announce(&format!("{WIPE_MOVED} {wipe}"));
+        self.announce(&format!("{JOB_MOVED} {wipe}"));
         Ok(())
     }
 
     /// In the order the wipe asks them. A state this build does not know
     /// reads as waiting.
-    pub async fn wipe_steps(&self, wipe: &str) -> Result<Vec<PassRow>> {
+    pub async fn job_steps(&self, wipe: &str) -> Result<Vec<PassRow>> {
         let rows = sql!(
-            "dag.supervisor.list_wipe_steps",
-            "SELECT step, state, error, before_bytes, after_bytes FROM wipe_steps \
-             WHERE wipe_id = ? ORDER BY ord"
+            "dag.supervisor.list_job_steps",
+            "SELECT step, state, error, before_bytes, after_bytes FROM job_steps \
+             WHERE job_id = ? ORDER BY ord"
         )
         .query()
         .bind(wipe)
@@ -824,16 +867,27 @@ impl Store {
 
     /// The newest compaction or collection opened at or after
     /// `since_utc`, open or closed.
-    pub async fn latest_shrink_since(&self, since_utc: &str) -> Result<Option<WipeRow>> {
+    pub async fn latest_shrink_since(&self, since_utc: &str) -> Result<Option<JobRow>> {
+        self.latest_since(&[JobKind::Compact, JobKind::Collect], since_utc)
+            .await
+    }
+
+    /// The newest prepare pass opened at or after `since_utc`, open or
+    /// closed.
+    pub async fn latest_prepare_since(&self, since_utc: &str) -> Result<Option<JobRow>> {
+        self.latest_since(&[JobKind::Prepare], since_utc).await
+    }
+
+    async fn latest_since(&self, kinds: &[JobKind], since_utc: &str) -> Result<Option<JobRow>> {
+        let kinds: Vec<&str> = kinds.iter().map(|k| k.as_str()).collect();
         let row = sql!(
-            "dag.supervisor.find_latest_shrink_since",
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM wipes \
-             WHERE kind IN (?, ?) AND opened_at_utc >= ? \
+            "dag.supervisor.find_latest_job_since",
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs \
+             WHERE kind IN (SELECT value FROM json_each(?)) AND opened_at_utc >= ? \
              ORDER BY opened_at_utc DESC, id DESC LIMIT 1"
         )
         .query()
-        .bind(WipeKind::Compact.as_str())
-        .bind(WipeKind::Collect.as_str())
+        .bind(serde_json::to_string(&kinds)?)
         .bind(since_utc)
         .fetch_optional(&self.pool)
         .await?;
@@ -843,7 +897,7 @@ impl Store {
 
 /// What the store announces when a wipe's steps move, ahead of the wipe's
 /// id: how a listener tells progress from the rest of the record.
-pub const WIPE_MOVED: &str = "wipe moved";
+pub const JOB_MOVED: &str = "job moved";
 
 /// The clock the store stamps with, as UTC text: what
 /// [`Store::latest_shrink_since`] compares against.
@@ -851,14 +905,14 @@ pub fn now_utc() -> String {
     now_split().0
 }
 
-fn wipe_of(r: &sqlx::sqlite::SqliteRow) -> Result<WipeRow> {
+fn wipe_of(r: &sqlx::sqlite::SqliteRow) -> Result<JobRow> {
     let kind: String = r.try_get("kind")?;
     let targets: String = r.try_get("targets")?;
     let closed_at: Option<String> = r.try_get("closed_at_utc")?;
     let error: Option<String> = r.try_get("error")?;
-    Ok(WipeRow {
+    Ok(JobRow {
         id: r.try_get("id")?,
-        kind: WipeKind::parse(&kind),
+        kind: JobKind::parse(&kind),
         targets: serde_json::from_str(&targets).context("a wipe's targets")?,
         opened_by: r.try_get("opened_by")?,
         closed: closed_at.map(|_| error),
@@ -1019,14 +1073,86 @@ mod tests {
         }
     }
 
-    /// `requests`, `wipes` and `invocations` keep every row they were
+    /// A store at version 6 kept its resets, purges and free-disk passes
+    /// in `wipes` and `wipe_steps`. At its first open they are `jobs` and
+    /// `job_steps`, every row with them, and an open one is still read as
+    /// open: a reset asked for just before the upgrade is still carried
+    /// out.
+    #[tokio::test]
+    async fn a_store_with_wipes_keeps_them_as_jobs() {
+        let root = tempfile::tempdir().unwrap();
+        let path = datalib_runtime::layout::supervisor_db(root.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .idle_timeout(None)
+            .max_lifetime(None)
+            .connect_with(options(&path))
+            .await
+            .unwrap();
+        test_sql!(
+            "CREATE TABLE wipes (id TEXT PRIMARY KEY, kind TEXT NOT NULL, \
+             targets TEXT NOT NULL, opened_by TEXT NOT NULL, opened_at_utc TEXT NOT NULL, \
+             tz_offset TEXT NOT NULL, closed_at_utc TEXT, error TEXT); \
+             CREATE TABLE wipe_steps (wipe_id TEXT NOT NULL, ord INTEGER NOT NULL, \
+             step TEXT NOT NULL, state TEXT NOT NULL, error TEXT, before_bytes INTEGER, \
+             after_bytes INTEGER, PRIMARY KEY (wipe_id, ord)); \
+             CREATE INDEX wipes_open ON wipes (closed_at_utc, opened_at_utc, id); \
+             INSERT INTO wipes VALUES ('w1', 'reset', '[\"a/ingest\"]', 'ui', 't', 'z', \
+             NULL, NULL); \
+             INSERT INTO wipes VALUES ('w2', 'collect', '[]', 'ui', 't', 'z', 't', NULL); \
+             INSERT INTO wipe_steps VALUES ('w2', 0, 'a/ingest', 'done', NULL, 10, 4);"
+        )
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
+        datalib_store_meta::write(
+            &pool,
+            datalib_store_meta::StoreKind::Supervisor,
+            &datalib_store_meta::Shape {
+                tables: "a release's".into(),
+                indexes: None,
+                versions: datalib_store_meta::Versions {
+                    schema: 6,
+                    shared: 0,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        pool.close().await;
+
+        let store = Store::open(root.path()).await.unwrap();
+        let open = store.open_jobs().await.unwrap();
+        assert_eq!(open.len(), 1, "{open:?}");
+        assert_eq!(
+            (open[0].id.as_str(), open[0].kind),
+            ("w1", Some(JobKind::Reset))
+        );
+        assert_eq!(open[0].targets, ["a/ingest"]);
+        let steps = store.job_steps("w2").await.unwrap();
+        assert_eq!(steps.len(), 1, "{steps:?}");
+        assert_eq!(steps[0].state, PassState::Done);
+        let left: Vec<String> = test_sql!(
+            "SELECT name FROM sqlite_master WHERE name IN ('wipes', 'wipe_steps', 'wipes_open')"
+        )
+        .query_scalar()
+        .fetch_all(store.pool())
+        .await
+        .unwrap();
+        assert!(left.is_empty(), "{left:?}");
+        store.close().await;
+    }
+
+    /// `requests`, `jobs` and `invocations` keep every row they were
     /// given, and the loop reads only the open ones. A store from before
     /// their indexes gets them at its next open, and each read seeks the
     /// open rows: before, each one read the whole table.
     #[tokio::test]
     async fn the_open_rows_are_read_by_an_index_an_old_store_gains() {
         use crate::supervisor::record::{CLOSE_ABANDONED_INVOCATIONS, RUNNING_INVOCATIONS};
-        const NAMES: [&str; 3] = ["requests_open", "wipes_open", "invocations_open"];
+        const NAMES: [&str; 3] = ["requests_open", "jobs_open", "invocations_open"];
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         for name in NAMES {
@@ -1039,7 +1165,7 @@ mod tests {
         let store = Store::open(root.path()).await.unwrap();
         for (sql, seek) in [
             (OPEN_REQUESTS, "USING INDEX requests_open (closed_at_utc=?)"),
-            (OPEN_WIPES, "USING INDEX wipes_open (closed_at_utc=?)"),
+            (OPEN_JOBS, "USING INDEX jobs_open (closed_at_utc=?)"),
             (
                 RUNNING_INVOCATIONS,
                 "USING INDEX invocations_open (outcome=?)",
@@ -1313,10 +1439,10 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
             assert_eq!(RequestOutcome::parse(v.as_str()), Some(v));
         }
-        for &v in WipeKind::VARIANTS {
+        for &v in JobKind::VARIANTS {
             let json = serde_json::to_string(&v).unwrap();
             assert_eq!(json, format!("\"{}\"", v.as_str()), "{v:?}");
-            assert_eq!(WipeKind::parse(v.as_str()), Some(v));
+            assert_eq!(JobKind::parse(v.as_str()), Some(v));
         }
     }
 
@@ -1325,19 +1451,19 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let id = store
-            .open_wipe(WipeKind::Purge, &["gone".into()], "ui")
+            .open_job(JobKind::Purge, &["gone".into()], "ui")
             .await
             .unwrap();
-        let open = store.open_wipes().await.unwrap();
+        let open = store.open_jobs().await.unwrap();
         assert_eq!(open.len(), 1);
         assert_eq!(
             (open[0].kind, open[0].targets.as_slice(), &open[0].closed),
-            (Some(WipeKind::Purge), &["gone".to_string()][..], &None)
+            (Some(JobKind::Purge), &["gone".to_string()][..], &None)
         );
-        store.close_wipe(&id, Some("refused")).await.unwrap();
-        store.close_wipe(&id, None).await.unwrap();
+        store.close_job(&id, Some("refused")).await.unwrap();
+        store.close_job(&id, None).await.unwrap();
         let row = store.wipe(&id).await.unwrap().unwrap();
         assert_eq!(row.closed, Some(Some("refused".into())), "closed once");
-        assert!(store.open_wipes().await.unwrap().is_empty());
+        assert!(store.open_jobs().await.unwrap().is_empty());
     }
 }

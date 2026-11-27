@@ -196,9 +196,8 @@ pub enum Verb {
     /// written to the store, idle or not. SIGINT or SIGTERM stops it: its
     /// steps are interrupted and their requests stay open for the next
     /// loop; a second signal exits at once. stderr is an NDJSON stream of
-    /// what the loop has to say that no store holds (holding, prepare_plan,
-    /// prepare_step, prepare_done, sync_started, sync_over,
-    /// run_store_written); its log lines go to the run store.
+    /// what the loop has to say that no store holds (holding, sync_started,
+    /// sync_over, run_store_written); its log lines go to the run store.
     Serve {
         /// The data root, or its config.toml.
         root: PathBuf,
