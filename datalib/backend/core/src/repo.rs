@@ -49,7 +49,7 @@ pub trait AppRepo: Send + Sync {
     /// Drop the samples of both series measured before `before_utc`, a UTC
     /// stamp in the store's form, except each series' newest one at or
     /// before it; how many went.
-    async fn forget_disk_stats_before(&self, _before_utc: &str) -> Result<u64, RepoError> {
+    async fn delete_disk_stats_before(&self, _before_utc: &str) -> Result<u64, RepoError> {
         Err(RepoError::ReadOnly)
     }
 

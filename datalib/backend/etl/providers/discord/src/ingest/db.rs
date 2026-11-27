@@ -409,7 +409,7 @@ pub async fn delete_other_accounts(tx: &mut Tx<'_>, id: &str) -> Result<()> {
             .bind(id)
             .execute(&mut **tx)
             .await
-            .context("forget the account signed in before")?;
+            .context("delete the account signed in before")?;
     }
     Ok(())
 }

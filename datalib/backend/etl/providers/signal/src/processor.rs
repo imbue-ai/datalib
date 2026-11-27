@@ -103,7 +103,6 @@ mod tests {
     use datalib_etl::control::DownloadControl;
     use datalib_etl::download_metrics::DownloadMetrics;
     use datalib_etl::progress::Progress;
-    use datalib_obs::diagnostics::Diagnostics;
 
     /// A download with no passphrase fails and leaves no store: a store,
     /// even an empty one, reads as published, so the prepare pass at the
@@ -127,7 +126,6 @@ mod tests {
             &progress,
             &control,
             DownloadMetrics::new(),
-            Diagnostics::new(),
         );
 
         let err = step.run(&ctx).await.unwrap_err();

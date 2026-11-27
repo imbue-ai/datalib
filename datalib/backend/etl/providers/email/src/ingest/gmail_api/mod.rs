@@ -844,7 +844,7 @@ impl Run<'_> {
                 .bind(&key)
                 .execute(self.db.pool())
                 .await
-                .with_context(|| format!("forget {key}"))?;
+                .with_context(|| format!("delete {key}"))?;
                 Ok(())
             }
         }

@@ -199,13 +199,14 @@ pub enum Verb {
         request_id: Option<String>,
     },
     /// Run the loop on the root until stopped: wait for runner-lock if
-    /// another process holds it, ask each step whose program takes
-    /// --prepare to prepare, then serve every sync, stop, reset and purge
-    /// written to the store, idle or not. SIGINT or SIGTERM stops it: its
-    /// steps are interrupted and their requests stay open for the next
-    /// loop; a second signal exits at once. stderr is an NDJSON stream of
-    /// what the loop has to say that no store holds (holding, busy, idle,
-    /// run_store_written); its log lines go to the run store.
+    /// another process holds it, run the command of each step whose
+    /// program takes --prepare with --prepare appended, then serve every
+    /// sync, stop, reset and purge written to the store, idle or not.
+    /// SIGINT or SIGTERM stops it: its steps are interrupted and their
+    /// requests stay open for the next loop; a second signal exits at
+    /// once. stderr is an NDJSON stream of what the loop has to say that
+    /// no store holds (holding, busy, idle, run_store_written); its log
+    /// lines go to the run store.
     Serve {
         /// The data root, or its config.toml.
         root: PathBuf,

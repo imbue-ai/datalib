@@ -283,7 +283,7 @@ impl RawDb {
         .bind(id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget conversation {id}"))?;
+        .with_context(|| format!("delete conversation {id}"))?;
         Ok(())
     }
 

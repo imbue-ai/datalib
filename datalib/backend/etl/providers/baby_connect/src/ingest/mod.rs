@@ -70,7 +70,7 @@ pub struct FetchSummary {
     pub kids: usize,
     /// Days asked for, and of those, the ones recorded as read for good.
     pub days: usize,
-    pub days_settled: usize,
+    pub days_recorded_read: usize,
     /// Entries the days' answers carried for their own day.
     pub entries: usize,
     pub requests: u64,
@@ -79,8 +79,8 @@ pub struct FetchSummary {
 impl FetchSummary {
     pub fn line(&self) -> String {
         format!(
-            "kids={} days={} days_settled={} entries={} requests={}",
-            self.kids, self.days, self.days_settled, self.entries, self.requests
+            "kids={} days={} days_recorded_read={} entries={} requests={}",
+            self.kids, self.days, self.days_recorded_read, self.entries, self.requests
         )
     }
 }
@@ -225,7 +225,7 @@ impl Ctx<'_> {
         let span = recorded_as_read.then(|| days::span_for(d, held));
         if let Some(span) = &span {
             coverage::cover(tx, DAYS_SCOPE, span.clone()).await?;
-            s.days_settled += 1;
+            s.days_recorded_read += 1;
         }
         s.days += 1;
         s.entries += entries.len();

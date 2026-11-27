@@ -191,7 +191,7 @@ pub async fn delete_collection(tx: &mut Transaction<'_, Sqlite>, collection: &st
         q.bind(collection)
             .execute(&mut **tx)
             .await
-            .with_context(|| format!("forget what {collection} listed"))?;
+            .with_context(|| format!("delete what {collection} listed"))?;
     }
     Ok(())
 }
@@ -267,7 +267,7 @@ pub async fn confirm_named(
         .bind(href)
         .execute(&mut **tx)
         .await
-        .context("settle a listed href")?;
+        .context("delete a listed href from dav_unconfirmed")?;
     }
     Ok(())
 }
