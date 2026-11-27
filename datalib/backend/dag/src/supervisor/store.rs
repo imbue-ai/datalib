@@ -842,8 +842,8 @@ impl Store {
 }
 
 /// What the store announces when a wipe's steps move, ahead of the wipe's
-/// id: how a listener tells progress from the rest of the record.
-pub const WIPE_MOVED: &str = "wipe moved";
+/// id.
+const WIPE_MOVED: &str = "wipe moved";
 
 /// The clock the store stamps with, as UTC text: what
 /// [`Store::latest_shrink_since`] compares against.

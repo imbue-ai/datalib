@@ -355,8 +355,10 @@ the sync indicator sits stays red for a step the pass could not prepare
 until it is dismissed, and, once the screen is lifted, amber, with a
 button that runs them, while any step the pass marked `needs_rerun` has
 not run since. The pass is held in the server's memory (`/api/config`'s
-`upgrade`) and announced as `pass_changed` on `/api/sync/stream`;
-freeing disk space is drawn by the same pill (§"Resets and purges").
+`upgrade`), and the steps it marked are read from the loop's record; a
+move of either is announced as `pass_changed` on `/api/sync/stream`, so
+the screen and the pill go as soon as the last re-run succeeds. Freeing
+disk space is drawn by the same pill (§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
 renamed to its new path, with the record's rows for its steps

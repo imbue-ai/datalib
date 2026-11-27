@@ -165,7 +165,9 @@ pub enum RootEvent {
     /// has a new HEAD: the time series, or their points, moved.
     TimeSeriesIndexChanged,
     /// A pass over the steps moved — the launch's migrate pass, or freeing
-    /// disk space: `/api/config`'s `upgrade` or `free_space` is new.
+    /// disk space — or the loop's record did, which the steps left to re-run
+    /// and the free-space pass are read from: `/api/config`'s `upgrade` or
+    /// `free_space` may be new.
     PassChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,
@@ -201,9 +203,6 @@ enum Moved {
     /// The loop's record and its mailbox, `system/supervisor.sqlite`:
     /// heard by [`watch_record`], not seen by the filesystem.
     Supervisor,
-    /// A wipe opened, closed, or moved on to its next step: heard by
-    /// [`watch_record`] in the announcement's words.
-    Wipe,
     RunStore,
     Frontend,
     GridIndex,
@@ -536,8 +535,6 @@ async fn expand(
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
-            }
-            Moved::Wipe => {
                 out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
@@ -1007,21 +1004,7 @@ async fn watch_record(
         if record && moved.send(Moved::Supervisor).is_err() {
             return;
         }
-        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Wipe).is_err() {
-            return;
-        }
     }
-}
-
-/// Whether an announcement may be a wipe's: opened, closed, or moved on.
-/// A change the backstop found unannounced may be one too.
-fn is_wipe_line(line: &str) -> bool {
-    use datalib_dag::supervisor::announce::UNANNOUNCED;
-    use datalib_dag::supervisor::store::WIPE_MOVED;
-    line == UNANNOUNCED
-        || ["wipe opened ", "wipe closed ", WIPE_MOVED]
-            .iter()
-            .any(|p| line.starts_with(p))
 }
 
 #[cfg(test)]
@@ -1029,18 +1012,6 @@ mod tests {
     use super::*;
 
     use datalib_sql::{test_sql, test_sql_id, Sql};
-    #[test]
-    fn a_wipes_announcements_are_told_from_the_rest() {
-        assert!(is_wipe_line("wipe opened 01a1"));
-        assert!(is_wipe_line("wipe closed 01a1"));
-        assert!(is_wipe_line(&format!(
-            "{} 01a1",
-            datalib_dag::supervisor::store::WIPE_MOVED
-        )));
-        assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
-        assert!(!is_wipe_line("request opened 01a1"));
-    }
-
     #[test]
     fn the_config_and_the_runner_record_are_told_apart() {
         let root = Path::new("/data");
@@ -1462,6 +1433,28 @@ mod tests {
         if !got.contains(&requests) {
             until(&mut rx, requests).await;
         }
+    }
+
+    /// The toolbar's "to re-run" pill stayed after its step had run
+    /// again: the step's success cleared `needs_rerun` in the record, and
+    /// only a wipe's announcements told the page to read `/api/config`.
+    #[tokio::test]
+    async fn a_re_run_mark_clearing_tells_the_page_to_read_its_pass_again() {
+        let td = tempfile::tempdir().unwrap();
+        let store = datalib_dag::supervisor::store::Store::open(td.path())
+            .await
+            .unwrap();
+        let unmarked = store.load_record().await.unwrap();
+        let mut marked = unmarked.clone();
+        marked
+            .steps
+            .entry("idx/index".into())
+            .or_default()
+            .needs_rerun = true;
+        store.save_record(&unmarked, &marked).await.unwrap();
+        let (mut rx, _feed) = watching(td.path()).await;
+        store.save_record(&marked, &unmarked).await.unwrap();
+        until(&mut rx, RootEvent::PassChanged).await;
     }
 
     /// A data root reached through a symlink still reports.
