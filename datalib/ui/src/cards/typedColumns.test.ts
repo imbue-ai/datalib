@@ -249,13 +249,13 @@ describe("a membership cell", () => {
   });
 
   it("shows a settled answer filled, a proposed one outlined, and hands over a press", () => {
-    const settled = draw("a", { applies: false });
-    expect(settled.dataset.state).toBe("out");
-    expect(settled.getAttribute("aria-checked")).toBe("false");
-    expect(settled.classList.contains("proposed")).toBe(false);
-    press(settled, 0);
+    const decided = draw("a", { applies: false });
+    expect(decided.dataset.state).toBe("out");
+    expect(decided.getAttribute("aria-checked")).toBe("false");
+    expect(decided.classList.contains("proposed")).toBe(false);
+    press(decided, 0);
     expect(pressed).toEqual([]);
-    press(settled, 2);
+    press(decided, 2);
     expect(pressed).toEqual([["a", "label:spam", true]]);
 
     const proposed = draw("b", { applies: true, proposed: true, title: "agent: one-way offers" });

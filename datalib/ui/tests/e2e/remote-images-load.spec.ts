@@ -59,7 +59,7 @@ async function openMarketingEmail(page: Page): Promise<string> {
 }
 
 /// This spec's tests share a root, and each starts from no rows.
-async function forgetEveryRule(page: Page): Promise<void> {
+async function deleteEveryRule(page: Page): Promise<void> {
   const resp = await page.request.get("/api/remote_media/allow");
   const { rows } = (await resp.json()) as { rows: { allow_uuid: string }[] };
   for (const { allow_uuid } of rows) {
@@ -210,7 +210,7 @@ test.describe("with only the session cookie", () => {
       expect(hits).toBe(1);
     } finally {
       sender.close();
-      await forgetEveryRule(page);
+      await deleteEveryRule(page);
     }
   });
 });
