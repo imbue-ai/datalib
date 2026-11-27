@@ -1,9 +1,8 @@
 //! Failure classification + per-provider auth remediation hints.
 
 use anyhow::Result;
-use datalib_dag::events::Event;
-use datalib_dag::FailureKind;
 use datalib_etl::upstream::Upstream;
+use datalib_step_protocol::FailureKind;
 
 use crate::source_type::SourceType;
 
@@ -60,10 +59,7 @@ pub fn emit_hint_on_failure(
     let Some(msg) = hint_for(e, source_type, gateway) else {
         return;
     };
-    emitter.event(&Event::Hint {
-        step: String::new(), // re-tagged by the runner
-        msg,
-    });
+    emitter.hint(msg);
 }
 
 /// The fix-it hint for `e`, if a person fixes it. `gateway`: latchkey's

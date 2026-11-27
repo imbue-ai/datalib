@@ -122,7 +122,7 @@ document and that document's banner lists it. Until render has run,
 the problem shows unlinked.
 
 Two steps besides the render keep problems of their own, each under a
-stage no other step writes (`datalib_problems::Stage::OWN_STORE`):
+stage no other step writes (`datalib_problems::OWN_STORE_STAGES`):
 `render_time_series`, a file whose time series could not be read
 (`time_series`), and `render_occurrences`, an event whose occurrences
 could not be listed (`occurrences`). Each finds every one of them again

@@ -167,7 +167,7 @@ fn report_left_for_next_pass(progress: &Progress, group: &str, left_for_next_pas
 /// hand, with nothing from the runner, it claims nothing, and a runner,
 /// if any, takes every success as new.
 fn claim_reads(env: &StepEnv) -> Vec<OutputClaim> {
-    let reads = std::env::var(datalib_dag::subprocess::ENV_READS).unwrap_or_default();
+    let reads = std::env::var(datalib_step_protocol::env::DATALIB_READS).unwrap_or_default();
     version_of_reads(&reads)
         .map(|version| OutputClaim {
             path: env.step.clone(),

@@ -1,16 +1,14 @@
-//! stdout NDJSON emission: progress events (the `datalib_dag`
-//! [`Event`] schema) plus the final outcome line. One shared lock so
-//! progress and outcome lines never interleave.
+//! What this step prints on stdout, through the step protocol's own
+//! [`datalib_step_protocol::Emitter`]: progress events, and the outcome
+//! line with the answers the verbs collect while the step runs.
 
-use std::io::Write;
 use std::sync::{Arc, Mutex};
 
-use datalib_dag::events::{Event, LogLevel};
-use datalib_dag::FailureKind;
 use datalib_etl::progress::{Progress, ProgressSink};
+use datalib_step_protocol::{Event, FailureKind, LogLevel, Outcome, Output, StoreBytes};
 
 /// What this step claims about one of its outputs: its content version
-/// now. Mirrors the wire `ArtifactState`.
+/// now.
 #[derive(Debug, Clone)]
 pub struct OutputClaim {
     pub path: String,
@@ -21,8 +19,7 @@ pub struct OutputClaim {
 
 #[derive(Clone)]
 pub struct Emitter {
-    step: String,
-    out: Arc<Mutex<std::io::Stdout>>,
+    out: datalib_step_protocol::Emitter,
     /// Set by a `--prepare` that cannot bring the step's store to this
     /// build's shape in place; the outcome then says `needs_rerun`.
     needs_rerun: Arc<std::sync::atomic::AtomicBool>,
@@ -37,8 +34,7 @@ pub struct Emitter {
 impl Emitter {
     pub fn new(step: String) -> Self {
         Self {
-            step,
-            out: Arc::new(Mutex::new(std::io::stdout())),
+            out: datalib_step_protocol::Emitter::stdout(step),
             needs_rerun: Arc::default(),
             store_bytes: Arc::default(),
             warnings: Arc::default(),
@@ -63,69 +59,44 @@ impl Emitter {
         *self.store_bytes.lock().unwrap() = Some((before, after));
     }
 
-    fn line(&self, v: &serde_json::Value) {
-        let mut out = self.out.lock().unwrap();
-        // Best-effort: the parent may have gone away.
-        if serde_json::to_writer(&mut *out, v).is_ok() {
-            let _ = out.write_all(b"\n");
-            let _ = out.flush();
-        }
-    }
-
+    // Best-effort, here and below: the runner may have gone away, and a
+    // step that cannot say what it did has nothing better to do.
     pub fn event(&self, e: &Event) {
-        if let Ok(v) = serde_json::to_value(e) {
-            self.line(&v);
-        }
+        let _ = self.out.event(e);
     }
 
-    /// The final stdout line. `failure` classifies a non-zero exit;
-    /// the runner deserializes it straight back into a
-    /// [`FailureKind`], which is why it is that type here rather than a
-    /// word we spell ourselves.
+    pub fn hint(&self, msg: String) {
+        let _ = self.out.hint(msg);
+    }
+
+    /// The final stdout line. `failure` classifies a non-zero exit.
     pub fn outcome(&self, outputs: &[OutputClaim], failure: Option<FailureKind>) {
-        let outs: Vec<serde_json::Value> = outputs
-            .iter()
-            .map(|o| {
-                let mut m = serde_json::Map::new();
-                m.insert("path".into(), o.path.clone().into());
-                m.insert("version".into(), o.version.clone().into());
-                if let Some(rows) = o.rows {
-                    m.insert("rows".into(), rows.into());
-                }
-                serde_json::Value::Object(m)
-            })
-            .collect();
-        let mut m = serde_json::Map::new();
-        m.insert("event".into(), "outcome".into());
-        m.insert("outputs".into(), outs.into());
-        if self.needs_rerun.load(std::sync::atomic::Ordering::SeqCst) {
-            m.insert("needs_rerun".into(), true.into());
-        }
-        if let Some((before, after)) = *self.store_bytes.lock().unwrap() {
-            m.insert(
-                "store_bytes".into(),
-                serde_json::json!({ "before": before, "after": after }),
-            );
-        }
-        let warnings = self.warnings.lock().unwrap().clone();
-        if !warnings.is_empty() {
-            m.insert("warnings".into(), warnings.into());
-        }
-        if let Some(f) = failure {
-            m.insert("failure".into(), f.as_str().into());
-        }
-        self.line(&serde_json::Value::Object(m));
+        let outcome = Outcome {
+            outputs: outputs
+                .iter()
+                .map(|o| Output {
+                    path: o.path.clone(),
+                    version: Some(o.version.clone()),
+                    rows: o.rows,
+                })
+                .collect(),
+            needs_rerun: self.needs_rerun.load(std::sync::atomic::Ordering::SeqCst),
+            store_bytes: self
+                .store_bytes
+                .lock()
+                .unwrap()
+                .map(|(before, after)| StoreBytes { before, after }),
+            warnings: self.warnings.lock().unwrap().clone(),
+            failure,
+        };
+        let _ = self.out.outcome(&outcome);
     }
 
     /// Say whether this step's output may be read while it is being
     /// written. The runner uses it to decide whether a checkpoint may
-    /// dispatch a consumer early; see `Event::Capabilities`.
+    /// dispatch a consumer early.
     pub fn declare_streams_output(&self, streams_output: bool) {
-        self.event(&Event::Capabilities {
-            step: self.step.clone(),
-            streams_output,
-            version: this_build(),
-        });
+        let _ = self.out.capabilities(streams_output, this_build());
     }
 
     /// Say which commit this program was built from, which the run store
@@ -136,8 +107,7 @@ impl Emitter {
 
     pub fn progress(&self) -> Progress {
         Progress::new(Arc::new(EmitterSink {
-            emitter: self.clone(),
-            step: self.step.clone(),
+            out: self.out.clone(),
         }))
     }
 }
@@ -147,63 +117,35 @@ fn this_build() -> Option<String> {
     datalib_runtime::build_id::git_hash()
 }
 
-/// [`ProgressSink`] impl over an [`Emitter`].
+/// [`ProgressSink`] impl over the protocol's emitter.
 struct EmitterSink {
-    emitter: Emitter,
-    step: String,
+    out: datalib_step_protocol::Emitter,
 }
 
 impl ProgressSink for EmitterSink {
     fn set_length(&self, total: Option<u64>) {
-        self.emitter.event(&Event::ProgressLength {
-            step: self.step.clone(),
-            total,
-        });
+        let _ = self.out.progress_length(total);
     }
     fn inc(&self, delta: u64) {
-        self.emitter.event(&Event::ProgressInc {
-            step: self.step.clone(),
-            delta,
-        });
+        let _ = self.out.progress_inc(delta);
     }
     fn set_message(&self, msg: &str) {
-        self.emitter.event(&Event::ProgressMessage {
-            step: self.step.clone(),
-            msg: msg.to_string(),
-        });
+        let _ = self.out.progress_message(msg);
     }
     fn checkpoint(&self, version: &str) {
-        self.emitter.event(&Event::Checkpoint {
-            step: self.step.clone(),
-            version: version.to_string(),
-            rows: None,
-        });
+        let _ = self.out.checkpoint(version, None);
     }
     fn checkpoint_rows(&self, version: &str, rows: u64) {
-        self.emitter.event(&Event::Checkpoint {
-            step: self.step.clone(),
-            version: version.to_string(),
-            rows: Some(rows),
-        });
+        let _ = self.out.checkpoint(version, Some(rows));
     }
     fn metric(&self, name: &str, labels: &[(&str, &str)], value: i64) {
-        self.emitter.event(&Event::Metric {
-            step: self.step.clone(),
-            name: name.to_string(),
-            labels: labels
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-            value,
-        });
+        let _ = self.out.metric(name, labels, value);
     }
     fn finish(&self, msg: &str) {
-        self.emitter.event(&Event::Log {
-            step: self.step.clone(),
+        let _ = self.out.event(&Event::Log {
             level: LogLevel::Info,
             msg: format!("finish: {msg}"),
             ts: None,
-            stream: None,
             target: Some("datalib_step::progress".into()),
             thread: None,
             fields: None,

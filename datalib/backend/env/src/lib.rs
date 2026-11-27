@@ -1,5 +1,6 @@
 //! The environment variables Datalib's processes hand each other: the
-//! runner to a step, the gateway to an applet, anything to latchkey. One
+//! gateway to an applet, anything to latchkey. The ones the runner sets
+//! for a step are the step protocol's, in `datalib_step_protocol::env`. One
 //! spelling per name, so the side that sets a variable and the side that
 //! reads it cannot drift apart silently; and the short list of what a
 //! child is handed of its parent's own environment ([`inherit_only`]).
@@ -13,19 +14,6 @@ macro_rules! names {
         $(pub const $name: &str = stringify!($name);)*
         pub const $list: &[&str] = &[$($name),*];
     };
-}
-
-names! { STEP_PROTOCOL:
-    DATALIB_DAG_STEP,
-    DATALIB_DAG_RUN_ID,
-    DATALIB_DAG_ATTEMPT,
-    DATALIB_DAG_DATA_ROOT,
-    DATALIB_DAG_PARAMS,
-    DATALIB_DAG_INPUTS,
-    DATALIB_DAG_CHANGED_INPUTS,
-    DATALIB_DAG_FAILED_INPUTS,
-    DATALIB_READS,
-    DATALIB_DAG_NOW,
 }
 
 // The knobs `datalib-step` reads, which a config sets in its `[env]`
@@ -297,36 +285,6 @@ mod tests {
         }
     }
 
-    fn step_protocol_doc() -> String {
-        const REL: &str = "docs/dev/step_protocol.md";
-        let r = runfiles::Runfiles::create().expect("runfiles tree");
-        let path = r
-            .rlocation(format!("_main/{REL}"))
-            .unwrap_or_else(|| panic!("rlocation for {REL}"));
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
-    }
-
-    /// The step protocol doc is the contract a third-party step is
-    /// written against, so every variable the runner sets is in its
-    /// table — and the table names nothing the runner does not set. The
-    /// doc's other table is the knobs `datalib-step` reads, which the
-    /// runner only hands on.
-    #[test]
-    fn the_step_protocol_doc_and_the_runner_name_the_same_variables() {
-        let doc = step_protocol_doc();
-        let table: std::collections::BTreeSet<&str> = doc
-            .lines()
-            .filter(|l| l.starts_with("| `DATALIB_"))
-            .filter_map(|l| l.trim_start_matches("| `").split('`').next())
-            .filter(|name| !DATALIB_STEP_KNOBS.contains(name))
-            .collect();
-        let ours: std::collections::BTreeSet<&str> = STEP_PROTOCOL.iter().copied().collect();
-        assert_eq!(
-            table, ours,
-            "docs/dev/step_protocol.md's variable table and datalib_env::STEP_PROTOCOL disagree"
-        );
-    }
-
     /// The server's runner keeps everything but the server's own token,
     /// address and protected-library flag: it is the runner that filters
     /// what each step gets.
@@ -377,9 +335,8 @@ mod tests {
     /// typo in both, which is the point.
     #[test]
     fn a_name_is_its_own_value() {
-        assert_eq!(DATALIB_DAG_STEP, "DATALIB_DAG_STEP");
         assert_eq!(LATCHKEY_GATEWAY, "LATCHKEY_GATEWAY");
-        for list in [STEP_PROTOCOL, APPLET_PROTOCOL, LATCHKEY] {
+        for list in [DATALIB_STEP_KNOBS, APPLET_PROTOCOL, LATCHKEY] {
             for name in list {
                 assert!(
                     name.bytes().all(|b| b.is_ascii_uppercase() || b == b'_'),

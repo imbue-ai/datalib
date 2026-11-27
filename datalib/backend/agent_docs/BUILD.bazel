@@ -9,6 +9,7 @@ rust_library(
     compile_data = [
         "//configs:dag_example.toml",
         "//datalib/backend/dag:README.md",
+        "//datalib/backend/step_protocol:README.md",
         "//docs:agent_user.md",
         "//docs/dev:applets.md",
         "//docs/dev:chips.md",

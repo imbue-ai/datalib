@@ -1,10 +1,12 @@
 use super::*;
+use datalib_problems::{Outcome, Reason, Severity};
 use datalib_sql::{test_sql, test_sql_id, Sql};
+use datalib_step_protocol::Problem as WireProblem;
 
 const STEP: &str = "enterprise/render_markdown";
 
-fn found(scope_key: &str, sample: &str) -> Found {
-    Found {
+fn found(scope_key: &str, sample: &str) -> WireProblem {
+    WireProblem {
         stage: Stage::Render,
         scope_kind: ScopeKind::Entity,
         scope_key: scope_key.to_string(),
@@ -23,7 +25,7 @@ fn found(scope_key: &str, sample: &str) -> Found {
 }
 
 fn row(scope_key: &str) -> ProblemRow {
-    found(scope_key, "x").into_row("enterprise")
+    row_of(found(scope_key, "x"), "enterprise")
 }
 
 fn at(day: u32) -> StoredStamp {
@@ -33,19 +35,14 @@ fn at(day: u32) -> StoredStamp {
 async fn run(
     root: &Path,
     day: u32,
-    found: Vec<Found>,
+    found: Vec<WireProblem>,
     covered: &[Covered],
     ended: Ended,
 ) -> Vec<ProblemRow> {
     let mut file = StepFile::open(root, STEP, at(day)).await.unwrap();
-    file.record(
-        found
-            .into_iter()
-            .map(|f| f.into_row("enterprise"))
-            .collect(),
-    )
-    .await
-    .unwrap();
+    file.record(found.into_iter().map(|f| row_of(f, "enterprise")).collect())
+        .await
+        .unwrap();
     file.finish(covered, ended).await.unwrap();
     read(&file_of(root, STEP)).await.unwrap()
 }
@@ -168,11 +165,11 @@ async fn no_file_is_no_problems() {
 /// problem names reaching its row.
 #[test]
 fn the_lines_read_as_the_protocol_spells_them() {
-    let f: Found = serde_json::from_str(
+    let f: WireProblem = serde_json::from_str(
         r#"{"event":"problem","stage":"fetch","scope_kind":"entity","scope_key":"messages:C01/1","outcome":"dropped","reason":"fetch_failed","severity":"error","upstream_entity_kind":"message","upstream_id":"C01/1"}"#,
     )
     .unwrap();
-    let row = f.into_row("enterprise");
+    let row = row_of(f, "enterprise");
     assert_eq!(row.severity, Severity::Error);
     assert_eq!(row.upstream_id.as_deref(), Some("C01/1"));
     let c: Covered = serde_json::from_str(
@@ -209,11 +206,11 @@ async fn a_steps_problems_are_its_stores_rows_as_last_sealed() {
     let store = dir.path().join(step).join("entities.doltlite_db");
     std::fs::create_dir_all(store.parent().unwrap()).unwrap();
     let pool = datalib_etl::doltlite_raw::open(&store, &[]).await.unwrap();
-    insert(&pool, &found("messages:1", "404").into_row("riker")).await;
+    insert(&pool, &row_of(found("messages:1", "404"), "riker")).await;
     datalib_etl::doltlite_raw::commit_run(&pool, "seal")
         .await
         .unwrap();
-    insert(&pool, &found("messages:2", "404").into_row("riker")).await;
+    insert(&pool, &row_of(found("messages:2", "404"), "riker")).await;
 
     let mut file = StepFile::open(dir.path(), step, at(1)).await.unwrap();
     file.record(vec![row("listing:channels")]).await.unwrap();
@@ -246,7 +243,7 @@ async fn replace_keeps_the_stamps_of_the_unchanged_and_joins_two_reasons() {
     replace(&pool, vec![row("a:1"), row("b:1")], &at(1))
         .await
         .unwrap();
-    let mut twice = found("c:1", "x").into_row("enterprise");
+    let mut twice = row_of(found("c:1", "x"), "enterprise");
     let again = ProblemRow {
         sample: "y".into(),
         ..twice.clone()

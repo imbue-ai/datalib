@@ -38,6 +38,7 @@ rust_library(
         "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/step_problems:datalib_step_problems",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         "//datalib/backend/store_meta:datalib_store_meta",
         "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
@@ -117,11 +118,13 @@ rust_test(
         ":datalib_pipeline_bin",
         "//datalib/backend/obs:log_probe",
         "//datalib/backend/parent_watch:parent_watch_probe",
+        "//datalib/backend/step_protocol:minimal_step",
     ],
     edition = "2021",
     env = {
         "DATALIB_PIPELINE_BIN": "$(rootpath :datalib_pipeline_bin)",
         "LOG_PROBE": "$(rootpath //datalib/backend/obs:log_probe)",
+        "MINIMAL_STEP": "$(rootpath //datalib/backend/step_protocol:minimal_step)",
         "PARENT_WATCH_PROBE": "$(rootpath //datalib/backend/parent_watch:parent_watch_probe)",
     },
     deps = [

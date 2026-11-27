@@ -122,6 +122,7 @@ rust_library(
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/env:datalib_env",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
         "//datalib/backend/fetch:datalib_fetch",

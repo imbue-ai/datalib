@@ -20,7 +20,7 @@ rust_library(
         "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/runtime:datalib_runtime",
-        "//datalib/backend/env:datalib_env",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",

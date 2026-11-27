@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use datalib_etl::processor::RunCtx;
 use datalib_etl::progress::Progress;
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_schema::problems::{metric_label, Severity, METRIC};
 
 use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
@@ -143,7 +143,7 @@ async fn report_problems(progress: &Progress, raw_path: &Path) {
             for severity in [Severity::Error, Severity::Warning] {
                 progress.metric(
                     METRIC,
-                    &[severity.metric_label()],
+                    &[metric_label(severity)],
                     counts.get(&severity).copied().unwrap_or(0),
                 );
             }

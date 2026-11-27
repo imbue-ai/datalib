@@ -11,7 +11,7 @@ use datalib_etl::doltlite_raw;
 use datalib_etl_calendar_common::occurrences::Window;
 use datalib_etl_calendar_config::CalendarOccurrencesConfig;
 use datalib_etl_calendar_render::occurrences::{self, store};
-use datalib_schema::problems::{Severity, METRIC};
+use datalib_schema::problems::{metric_label, Severity, METRIC};
 
 use crate::events::{Emitter, OutputClaim};
 use crate::source::StepEnv;
@@ -71,7 +71,7 @@ pub async fn run(
     let problems = listed.problems(&env.group);
     let progress = emitter.progress();
     for (severity, n) in [(Severity::Error, 0), (Severity::Warning, problems.len())] {
-        progress.metric(METRIC, &[severity.metric_label()], n as i64);
+        progress.metric(METRIC, &[metric_label(severity)], n as i64);
     }
 
     let db = datalib_etl::layout::render_occurrences_db(data_root, &env.group);

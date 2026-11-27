@@ -165,11 +165,18 @@ fn main() {
 fn run(cli: Cli) -> Result<()> {
     // The config entry's `params`, in the environment rather than on
     // argv: they can carry tokens, and argv is readable by every user.
-    let params: serde_json::Value = match std::env::var(datalib_env::DATALIB_DAG_PARAMS) {
-        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
-            .with_context(|| format!("{} is not valid JSON", datalib_env::DATALIB_DAG_PARAMS))?,
-        _ => serde_json::Value::Null,
-    };
+    let params: serde_json::Value =
+        match std::env::var(datalib_step_protocol::env::DATALIB_DAG_PARAMS) {
+            Ok(text) if !text.trim().is_empty() => {
+                serde_json::from_str(&text).with_context(|| {
+                    format!(
+                        "{} is not valid JSON",
+                        datalib_step_protocol::env::DATALIB_DAG_PARAMS
+                    )
+                })?
+            }
+            _ => serde_json::Value::Null,
+        };
     // Write, then serve. The order is the contract: the gateway waits
     // for the `DATALIB_APPLET_PORT=` line `print_port` prints on
     // stdout and then scans the store, so printing it early would race

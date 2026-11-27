@@ -387,7 +387,7 @@ impl SealState {
     /// zero included, so the Manage row counts what a checkpoint holds
     /// while the download is still running. Never a reason to fail.
     async fn publish_problem_counts(&self) {
-        use datalib_problems::{Severity, METRIC};
+        use datalib_problems::{metric_label, Severity, METRIC};
         let counted: Result<Vec<(String, i64)>, _> = sql!(
             "etl.raw_store.count_problems_by_severity",
             "SELECT severity, COUNT(*) FROM problems GROUP BY severity"
@@ -402,7 +402,7 @@ impl SealState {
                         .iter()
                         .find(|(word, _)| word == severity.as_str())
                         .map_or(0, |(_, n)| *n);
-                    self.progress.metric(METRIC, &[severity.metric_label()], n);
+                    self.progress.metric(METRIC, &[metric_label(severity)], n);
                 }
             }
             Err(e) => tracing::warn!(
