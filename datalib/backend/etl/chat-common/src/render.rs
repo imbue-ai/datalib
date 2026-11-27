@@ -18,7 +18,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 ///
 /// **Bump this whenever `render_markdown` changes what it writes.**
 /// Without it, changing the shared layout means editing the version
-/// constant in all ten providers by hand and re-rendering nothing in
+/// constant in every chat provider by hand and re-rendering nothing in
 /// the one you forget. It reaches the render step as a render param
 /// ([`layout_params`]), so a bump renders every document again the way
 /// any param change does. The provider's own number stays its own —
@@ -26,41 +26,10 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
 ///
-/// It also covers what `render_markdown` writes beside the markdown:
-/// v10 moved only the `source_contacts` rows (`people.rs` counts
-/// reactors), and every document had to be rendered again for an
-/// existing root to hold them.
-/// v12: the people baseline counts a reactor to a message not in
-/// the mirror, which moves only the `source_contacts` rows.
-/// v13: an attachment's size comes from its bytes when the provider
-/// gave none, lost bytes are a `blob_missing` problem, and the versions
-/// a conversation left fold in as `<details class="branch">`.
-/// v14: an email's Bcc shows on its recipients line, and it and each
-/// message's mentions are `supplied_search_terms` rows.
-/// v15: a document's own row names everyone who took part in it
-/// (`participant` terms), so `is:document with:…` finds conversations.
-/// v16: a chat's conversation name is its subject alone; `channel` is
-/// left to sources that file a row somewhere else.
-/// v17: a chat named by its people names them on its document's own row
-/// (`subject` terms), so the Subject cell draws them as chips.
-/// v18: participants are who wrote a message, never a tool call or a
-/// stand-in label ("Me", "Unknown"; `AuthorKind`).
-/// v19: an item with attachments draws its labels too.
-/// v20: an attachment its source's blob store holds is linked at its
-/// `/data/…` address rather than copied beside the page.
-/// v21: so is a person's photo.
-/// v22: the account's own messages are "Me", a chip of the `me:self`
-/// handle, whatever stand-in the source used ("User", "Human").
-/// v23: a message's time is on the clock its source wrote it on, and a
-/// time whose source names no clock says so (`Z`), in the header
-/// and in the row's `created_at`.
-/// v24: a `Markdown` body that leaves a fence or an HTML block open is
-/// closed at its end, so the messages after it are not swallowed.
-/// v25: titles, names, filenames and labels lose their bidi controls.
-/// v26: a chat is one document; the front matter has no `period`, and
-/// no title says which months it holds.
-/// v27: a chat is drawn in the chat layout: no box per message, one
-/// header over a run of one person's messages, reactions as pills.
+/// It also covers what `render_markdown` writes beside the markdown,
+/// the `source_contacts` rows and the search terms among them: a change
+/// only there still needs every document rendered again for an
+/// existing root to hold it.
 pub const LAYOUT_VERSION: u32 = 27;
 
 /// What every chat-common provider declares through
@@ -184,7 +153,7 @@ pub struct RenderSummary {
     /// Every chat rendered, with what it was built from — the render units
     /// the caller declares through `RenderCtx::declare_render_unit`. A chat
     /// handed in that produced nothing is here too, which is how its
-    /// old documents go.
+    /// old documents are deleted.
     pub render_units: RenderUnits,
 }
 
@@ -1152,7 +1121,7 @@ fn build_grid_rows(
             GridRow::builder()
                 .uuid(item.message_uuid.clone())
                 .provider(profile.provider)
-                // Per-item role override (ChatGPT/Anthropic) or the profile default.
+                // Per-item role override (ChatGPT/Claude) or the profile default.
                 .kind(
                     item.kind_label
                         .clone()
@@ -1432,8 +1401,8 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 // Format helpers
 use datalib_time::{record_stamp_from_unix_millis_at, RecordStampPrecision};
 
-/// Seconds precision, as this renderer has always emitted. Changing it
-/// would re-render every document chat-common has written.
+/// Seconds precision. Changing it would re-render every document
+/// chat-common has written.
 fn human_bytes(n: i64) -> String {
     let n = n as f64;
     if n < 1024.0 {
@@ -3025,9 +2994,8 @@ mod tests {
         }
     }
 
-    /// The bug this whole `Option<i64>` change exists to remove: an item
-    /// upstream never stamped used to land in the grid as a real-looking
-    /// `1970-01-01T00:00:00+00:00`. It must be null instead.
+    /// An item upstream never stamped must reach the grid with a null
+    /// stamp, not a real-looking `1970-01-01T00:00:00+00:00`.
     #[test]
     fn undated_item_gets_a_null_created_at_not_the_epoch() {
         let profile = test_profile();

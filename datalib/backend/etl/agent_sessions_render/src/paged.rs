@@ -42,7 +42,7 @@ pub struct ReadClock {
 }
 
 impl ReadClock {
-    /// `query`'s time goes down as the store's.
+    /// Run `query`, adding its time to the time spent in the store.
     pub async fn load<T>(&self, query: impl Future<Output = T>) -> T {
         let started = Instant::now();
         let answer = query.await;
@@ -50,7 +50,8 @@ impl ReadClock {
         answer
     }
 
-    /// `parse`'s time goes down as turning the answer into values.
+    /// Run `parse`, adding its time to the time spent turning the
+    /// store's rows into values.
     pub fn parse<T>(&self, parse: impl FnOnce() -> T) -> T {
         let started = Instant::now();
         let values = parse();
@@ -150,9 +151,10 @@ pub fn titles(transcripts: &[(String, Value)]) -> HashMap<String, String> {
 }
 
 /// Renders the transcripts in the store at `db_path` that this run has
-/// to, a page at a time. `on_render_units` hears each page's render units before
-/// the next page is read; its first call names, with nothing, the ones
-/// whose transcript is gone, so their documents go.
+/// to, a page at a time. `on_render_units` is called with each page's
+/// render units before the next page is read; its first call names, with
+/// no inputs, the ones whose transcript is gone, so their documents are
+/// deleted.
 pub fn render_paged<S: SessionRender>(
     source: &S,
     db_path: &Path,
@@ -211,7 +213,7 @@ fn render_open<S: SessionRender>(
     let titles = titles(&transcripts);
     // No early return on an empty store: a run that deleted every
     // transcript still has to declare their render units empty so the
-    // documents go.
+    // documents are deleted.
     let plan = plan(transcripts, range, scan.render.as_ref(), |id| {
         source.chat_uuid(id)
     });
@@ -347,7 +349,7 @@ fn plan(
 }
 
 /// `weights` (records per transcript) cut into pages of at most
-/// `size.bytes` worth of records and `size.render units` transcripts. One
+/// `size.bytes` worth of records and `size.render_units` transcripts. One
 /// transcript over the budget is a page of its own.
 fn pages(weights: &[u64], size: PageSize) -> Vec<Range<usize>> {
     let per_page = size.render_units.max(1);

@@ -99,8 +99,8 @@ mod tests {
 
     #[test]
     fn iso_stamps_carry_an_explicit_offset() {
-        // AGENTS.md: an epoch-derived timestamp renders as UTC with an
-        // explicit `+00:00`, never a bare `Z`-less or offset-less form.
+        // An epoch-derived timestamp renders as UTC with an explicit
+        // `+00:00`, never without an offset.
         let s = iso(1_781_481_609_000).unwrap();
         assert!(s.starts_with("2026-"), "{s}");
         assert!(s.ends_with("+00:00"), "{s}");

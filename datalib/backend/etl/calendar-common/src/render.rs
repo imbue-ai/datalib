@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(problems[0].reason, Reason::CoercionFailed);
     }
 
-    /// The sink's answer is the run's answer.
+    /// A sink that returns an error for a document fails the render.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };
