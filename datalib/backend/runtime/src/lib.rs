@@ -1,4 +1,4 @@
-//! Where datalib's files sit on disk, how it spawns the Node-based tools
+//! Where Datalib's files sit on disk, how it spawns the Node-based tools
 //! it ships with, where it finds the CUDA module, and how it replaces a
 //! file in one rename.
 

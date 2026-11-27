@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# One function: the filter every datalib process logs under, from the
+# One function: the filter every Datalib process logs under, from the
 # level `config.toml` names. Its own crate with no dependencies because
 # both `datalib_obs` and `datalib_runs` (which deliberately does not
 # link `datalib_obs`) need it, and a step and the runner that reads

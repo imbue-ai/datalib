@@ -46,8 +46,9 @@ pub struct NormalizedContact {
     pub created_at: Option<String>,
     pub modified_at: Option<String>,
     /// The person whose account this source is: who signed in, whose
-    /// mailbox it is; for the contacts app, a contact marked as them. The search reads each such contact's handles as
-    /// `me` (`docs/dev/contacts.md` §"Searching for a person").
+    /// mailbox it is; for the contacts app, a contact marked as them. The
+    /// search reads each such contact's handles as `me`
+    /// (`docs/dev/contacts.md` §"Searching for a person").
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub account: bool,
 }

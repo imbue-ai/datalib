@@ -89,9 +89,10 @@ pub mod not_linked {
     /// A person said `handle` is not `contact_id`: they unlinked it or
     /// rejected an agent's link. An agent may not propose it again, and
     /// the row outlives the contact, so it names the contact as it was
-    /// called and keeps what the agent said, where one had. `contact_rejected` marks the
-    /// handles of a contact an agent made that the person rejected whole:
-    /// together they are a grouping no agent may propose again.
+    /// called and keeps what the agent said, where one had.
+    /// `contact_rejected` marks the handles of a contact an agent made that
+    /// the person rejected whole: together they are a grouping no agent
+    /// may propose again.
     #[derive(Debug, Clone, PortableTable)]
     #[portable_table(table = "not_linked", primary_key = "handle, contact_id")]
     pub struct NotLinkedRow {

@@ -1,5 +1,5 @@
 //! The downgrade guard: a build never writes a store a newer line of
-//! datalib wrote. An older build's reconcile would drop the columns it
+//! Datalib wrote. An older build's reconcile would drop the columns it
 //! does not know, and take the rows with them (`doltlite_raw`'s
 //! drop-and-recreate), so the open is refused before anything touches
 //! the file.

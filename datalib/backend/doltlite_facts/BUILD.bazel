@@ -3,7 +3,7 @@ load("@rules_python//python:defs.bzl", "py_test")
 load("@rules_rust//rust:defs.bzl", "rust_test")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
-# The doltlite facts datalib depends on (docs/dev/doltlite.md), one test
+# The doltlite facts Datalib depends on (docs/dev/doltlite.md), one test
 # each. Run it after every doltlite bump; a fact that moved fails by name.
 rust_test(
     name = "doltlite_facts_test",

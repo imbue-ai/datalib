@@ -1,9 +1,7 @@
-// Hand-written companion to the generated `GridRow` struct (see
-// `generated/grid_rows.rs`). The generated file is a plain data struct
-// with public fields; this module adds the one *blessed* way to build a
-// row — a validating builder — so producers stop hand-writing 24-field
-// literals (where a malformed value silently reaches the grid) and
-// instead funnel through [`GridRow::builder`].
+// The one way to build a `GridRow` (`grid_rows.rs`, a plain struct with
+// public fields): a validating builder, [`GridRow::builder`], so a
+// malformed value fails at the producer instead of reaching the grid
+// from a hand-written struct literal.
 
 use datalib_time::validate_iso_offset;
 
@@ -356,11 +354,9 @@ impl GridRowBuilder {
                     Problem::field(field, Reason::NoIdentity, ""),
                     Some(render_version),
                 ));
-                // Deliberately no `warn!` here. The render path's
-                // diagnostics buffer is not installed (see the audit's
-                // §1), so a log line from here reaches nobody — that is
-                // the gap this sink exists to close, and logging into
-                // the void beside it would only look like coverage.
+                // Deliberately no `warn!` here: the problem row above is
+                // what a person sees, and a log line alone reaches nobody
+                // (AGENTS.md §"No fallbacks, no workarounds").
                 None
             }
         }

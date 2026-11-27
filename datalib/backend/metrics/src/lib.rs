@@ -37,8 +37,7 @@ pub const QUEUED: &str = "queued";
 /// done — stopped, failed, given up: work it saw waiting and did not get
 /// done, which the next sync starts on. A gauge the runner writes as the
 /// step ends, zero when it succeeded, so the next run that invokes the
-/// step replaces it; the
-/// runner sets `queued` itself to zero then, since a step that has ended
+/// step replaces it; the runner sets `queued` itself to zero then, since a step that has ended
 /// has nothing ahead of it in that run. The Manage screen's "owed".
 pub const OWED: &str = "owed";
 
@@ -53,16 +52,17 @@ pub const CHECKPOINTS: &str = "checkpoints_total";
 
 /// The rows the runner has taken off a `queued{from=<producer>}` queue
 /// as the step read them: a running total, one per producer, with the
-/// same label. A queue a pass empties all at once falls in a sawtooth,
-/// which a sampled gauge can miss the bottom of; a total that only
-/// grows loses nothing to sampling, and is what the ETA column reads
-/// the pace off.
+/// same label. A queue one process of the step empties all at once
+/// falls in a sawtooth, which a sampled gauge can miss the bottom of; a
+/// total that only grows loses nothing to sampling, and is what the ETA
+/// column reads the pace off.
 pub const DEQUEUED: &str = "dequeued_total";
 
-/// The passes of a step's last run that failed and were run again
-/// because what the step reads moved: a gauge the runner reports as the
-/// step ends, zero included, so the next run that invokes the step
-/// replaces it. The run reports only the last pass's outcome, so this is
+/// How many times, in a step's last run, the step's process failed and
+/// the runner started it again because what the step reads moved: a
+/// gauge the runner reports as the step ends, zero included, so the next
+/// run that invokes the step replaces it. The run reports only the last
+/// process's outcome, so this is
 /// where an earlier failure stays visible; the Manage screen counts each
 /// one as a warning on the step's row.
 pub const FAILED_PASSES: &str = "failed_passes";

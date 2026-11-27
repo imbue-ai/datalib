@@ -677,7 +677,7 @@ fn attach_diff_weights(data_nodes: &mut [Node]) {
     }
 }
 
-// the seam
+// the entry point: every step above, in order
 
 pub fn analyze(inputs: &Inputs) -> DiffResult {
     let (left_findings, right_findings, counts) =

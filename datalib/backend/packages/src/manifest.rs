@@ -64,8 +64,8 @@ pub struct SourceTemplate {
     /// Function → the command its step runs, the first word a path inside
     /// the package, with how the step reads and what it locks.
     pub commands: BTreeMap<String, StepCommand>,
-    /// The command that answers "Check connection" and a picker's "Load"
-    /// for a source of this type, the first word a path inside the package
+    /// The command run for "Check connection" and a picker's "Load" for
+    /// a source of this type, the first word a path inside the package
     /// (`docs/dev/step_protocol.md` §"Probe").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<String>,

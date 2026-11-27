@@ -14,7 +14,7 @@ exports_files([
 #
 # That leaves its logic outside `bazelisk test //...`, which AGENTS.md
 # calls the source of truth. `src/launcher.rs` is the part where that
-# matters — which data roots the welcome screen offers, and where a new
+# matters — which data roots the libraries screen offers, and where a new
 # one goes — so it is written free of `tauri` and compiled a second
 # time here, as its own crate, purely to run the tests inside it. The
 # shipping build still compiles it as a module of the shell; this
@@ -111,8 +111,8 @@ rust_test(
 # The Node runtime that ships inside the .app, copied out of the
 # rules_nodejs toolchain repo so it lands at a predictable
 # `bazel-bin/datalib/tauri/` path — the same convention
-# `tauri.conf.json`'s beforeBuildCommand already uses for the seven
-# backend binaries it stages.
+# `tauri.conf.json`'s beforeBuildCommand already uses for the backend
+# binaries it stages.
 #
 # The copy is what buys the predictable path: `@nodejs_host//:node_bin`
 # lives in an external repo whose bzlmod-mangled name has no stable

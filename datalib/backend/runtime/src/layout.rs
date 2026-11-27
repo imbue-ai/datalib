@@ -47,8 +47,8 @@ pub const CURATED_DIR: &str = "datalib_curated";
 pub const GRID_DB: &str = "db.sqlite";
 /// The inference cache's directory, relative to
 /// [`UNIFIED_GRID_AND_SEARCH_INDEX_DIR`]: every source's `embed` writes it,
-/// `unified_grid_and_search_index` sweeps it. The search index's tables are in the grid
-/// index's file.
+/// and `unified_grid_and_search_index` deletes the vectors no chunk names.
+/// The search index's tables are in the grid index's file.
 pub const SEARCH_INDEX_DIR: &str = "search_index";
 
 /// A download step's raw store, inside its tree: entity tables,
@@ -78,8 +78,9 @@ pub const RUNS_DB: &str = "runs.sqlite";
 pub const RUNS_DIR_REL: &str = "system/runs";
 /// The supervisor's store, relative to `system/`: open requests, the
 /// steps turned off, and what the loop decided about them. Plain SQLite,
-/// and the mailbox through which the UI and the CLI steer one root at
-/// once (`dag/README.md` §"The record").
+/// and the UI and the CLI steer one root at once by writing rows into
+/// its `requests`, `turned_off` and `wipes` tables (`dag/README.md`
+/// §"The record").
 pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// The server's exclusive claim on this root, relative to `system/`.
 /// Held with `flock(2)` for the life of the process; its contents are
@@ -198,8 +199,7 @@ mod runs_layout_tests {
 
 /// Create `data_root` readable by its owner only, if it does not exist.
 /// Missing parents are created with the process's default mode: they
-/// are not ours to restrict, and only the root holds
-/// the mirror. The mode is not re-applied to a root that already exists.
+/// are not ours to restrict, and only the root holds the mirror. The mode is not re-applied to a root that already exists.
 pub fn create_data_root(data_root: &Path) -> std::io::Result<()> {
     if data_root.is_dir() {
         return Ok(());
@@ -237,8 +237,9 @@ pub fn restrict_data_root(data_root: &Path) -> std::io::Result<()> {
 /// bundled runtime's). The first line is the spec's magic, which `restic`,
 /// `borg` and `tar --exclude-caches` recognize; see
 /// <https://bford.info/cachedir/>. Nothing inside a library is tagged: a
-/// library put back without a tree the loop's record says is up to date
-/// stays without it (`docs/user/backing_up.md`).
+/// library put back without a tree that the loop's store
+/// (`system/supervisor.sqlite`) says is up to date stays without it
+/// (`docs/user/backing_up.md`).
 pub const CACHEDIR_TAG_BODY: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
     # This directory is a cache: datalib fetches what it holds again when\n\
     # it is missing. Safe for backups to skip.\n\

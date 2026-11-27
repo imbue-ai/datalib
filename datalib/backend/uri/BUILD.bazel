@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# datalib's names, `datalib:<kind>/<id>` (docs/dev/plans/datalib_uris.md):
+# Datalib's names, `datalib:<kind>/<id>` (docs/dev/plans/datalib_uris.md):
 # written by whatever links to a thing, read by whatever opens one. Its
 # one dependency, uuid_text, has none, so anything can link it. Bazel-only.
 rust_library(

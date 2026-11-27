@@ -68,7 +68,7 @@ pub fn temp_dir(root: &Path) -> PathBuf {
     root.join("system").join("tmp")
 }
 
-/// Where the web view keeps its disk cache. A server now tells it to store
+/// Where the web view keeps its disk cache. The server tells it to store
 /// nothing from a protected library, but an earlier build's responses can
 /// still be here, outside the folder. Only a cache: nothing is lost.
 pub fn web_cache(home: &Path) -> PathBuf {

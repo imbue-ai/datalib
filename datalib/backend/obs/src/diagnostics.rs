@@ -1,6 +1,7 @@
 //! Per-source diagnostics capture: every WARN/ERROR `tracing` event a
-//! source emits during its download is collected so the orchestrator can
-//! fold it into the per-source block of the JSON sync summary.
+//! source emits during its download is collected into the buffer the
+//! ingest step installs (`datalib_step/src/ingest.rs`). Nothing outside
+//! this crate's tests reads the buffer back.
 
 use std::fmt::Write as _;
 use std::future::Future;
@@ -31,8 +32,8 @@ pub struct DiagnosticEntry {
 const MAX_ENTRIES: usize = 500;
 
 /// Per-source buffer of captured WARN/ERROR events. Cheap to clone behind
-/// the `Arc` the orchestrator hands out; the same handle is installed as
-/// the ambient context ([`scope`]) and read back after the download.
+/// the `Arc` the ingest step makes; the same handle is installed as the
+/// ambient context ([`scope`]) and handed to each processor's `RunCtx`.
 #[derive(Default)]
 pub struct Diagnostics {
     entries: Mutex<Vec<DiagnosticEntry>>,

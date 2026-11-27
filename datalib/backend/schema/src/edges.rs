@@ -6,10 +6,8 @@
 // how datalib records discovered linkages between documents — e.g.
 // URL-in-slack-message → notion-page, or first-word-of-greek-section ↔
 // first-word-of-english-section. The table is intentionally generic:
-// src and dst are symmetric in shape (both can be whole docs or spans),
-// even though current use cases all use span sources. New ingests are
-// expected to populate this table; older ingests that pre-date the
-// table simply leave it empty (the schema is purely additive).
+// src and dst are symmetric in shape (both can be whole docs or spans).
+// A render that records no edges leaves the table empty.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -18,8 +16,8 @@ use serde::{Deserialize, Serialize};
 /// anchors are described by (markdown_uuid, anchor_uuid?) where the
 /// anchor_uuid is null for whole-document anchors. The optional `label`
 /// carries a free-form discriminator (e.g. 'cross-language',
-/// 'url-target') that producers may set; the current UI does not render
-/// it.
+/// 'url-target') that producers may set; the document card shows it as
+/// the link's text when it is set.
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "edges", primary_key = "edge_uuid")]
 pub struct EdgeRow {
@@ -47,7 +45,7 @@ pub struct EdgeRow {
     pub src_anchor_uuid: Option<String>,
     /// FK into `markdowns.markdown_uuid` — the rendered document the
     /// destination anchor lives in. Cross-document edges have dst != src;
-    /// same-document edges (none today, but legal) have dst == src.
+    /// same-document edges (allowed) have dst == src.
     #[col(sql = "VARCHAR(96)")]
     pub dst_markdown_uuid: String,
     /// Identifies the destination anchor inside `dst_markdown_uuid`. NULL
@@ -58,9 +56,9 @@ pub struct EdgeRow {
     #[col(sql = "VARCHAR(96)")]
     pub dst_anchor_uuid: Option<String>,
     /// Optional free-form label describing the edge's semantics (e.g.
-    /// 'cross-language', 'url-target', 'bilingual-alignment'). No use
-    /// case requires a label today; the column exists so future
-    /// consumers can filter or style by it.
+    /// 'cross-language', 'url-target', 'bilingual-alignment'). The
+    /// document card shows it as the link's text, ahead of the
+    /// destination's title.
     #[col(sql = "VARCHAR(64)")]
     pub label: Option<String>,
     /// What the edge means, an [`EdgeKind`] stored as its number.

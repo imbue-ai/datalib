@@ -2,7 +2,7 @@
 //! cannot get it there. A store owner declares its migrations in order;
 //! `_datalib_meta.schema_version` says how many have run; an open runs
 //! the rest, one at a time, each in its own transaction and — for a
-//! doltlite store — its own commit. The tables every store shares climb
+//! doltlite store — its own commit. The tables every store shares have
 //! a second ladder the framework keeps, counted by
 //! `shared_schema_version`. The reference is etl/README.md
 //! §"The migration ladder".
@@ -92,12 +92,12 @@ impl std::fmt::Display for AheadOfLadder {
 
 impl std::error::Error for AheadOfLadder {}
 
-/// Where one store's climb starts and ends, which a rung's report names
-/// so a person can tell how much is left.
+/// The version one store's migrations start from and end at, which a
+/// rung's report names so a person can tell how much is left.
 #[derive(Debug, Clone, Copy)]
 pub struct Climb {
     pub ladder: Ladder,
-    /// The version the store was at when the climb began.
+    /// The version the store was at before its first migration ran.
     pub from: u32,
     pub top: u32,
     /// The store file's size, when the owner knows its path.
@@ -256,11 +256,11 @@ mod tests {
     }
 
     /// A rung that runs for many minutes says, before it starts and before
-    /// each statement, where the climb is: from which version to which,
+    /// each statement, where the migrations are: from which version to which,
     /// how big the store is, and which statement of the rung is running
     /// (#1678: a 37-minute rung said only its name).
     #[tokio::test]
-    async fn a_rung_reports_its_climb_and_each_statement() {
+    async fn a_rung_reports_its_version_range_and_each_statement() {
         let said = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = said.clone();
         report_to(move |msg| sink.lock().unwrap().push(msg.to_string()));
@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn a_climb_names_the_shared_tables_and_a_small_store_in_megabytes() {
+    fn a_migration_report_names_the_shared_tables_and_a_small_store_in_megabytes() {
         let climb = Climb {
             ladder: Ladder::Shared,
             from: 0,

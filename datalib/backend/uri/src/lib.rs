@@ -1,7 +1,7 @@
-//! datalib's names: a `datalib:<kind>/<id>` link saying what something is
+//! Datalib's names: a `datalib:<kind>/<id>` link saying what something is
 //! (docs/dev/plans/datalib_uris.md). `ui/src/uri.ts` is the same in the
 //! UI; both read and write `ui/tests/uri-fixtures.json` alike. The `doc`,
-//! `photo` and `node` kinds live here so far. A `doc` link may carry its page's
+//! `photo` and `node` kinds are the ones defined here. A `doc` link may carry its page's
 //! title as words before the uuid (`datalib:doc/Ten-Forward-<uuid>`), for
 //! a person to read; this reads past them and writes none.
 

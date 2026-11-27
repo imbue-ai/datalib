@@ -1,4 +1,4 @@
-//! The log filter every datalib process starts from: the level
+//! The log filter every Datalib process starts from: the level
 //! `config.toml` asks for (`log_level`, `trace` when it does not say)
 //! for our own lines, unless `RUST_LOG` says otherwise.
 

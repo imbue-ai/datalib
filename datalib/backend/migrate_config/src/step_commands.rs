@@ -1,5 +1,5 @@
 //! The shape from before every step named its program: a step of
-//! datalib's own wrote no `command`, and the loader read that as
+//! Datalib's own wrote no `command`, and the loader read that as
 //! `datalib-step`. The rewrite writes `command = "datalib-step"` on the
 //! line after each such step's `function`.
 //!

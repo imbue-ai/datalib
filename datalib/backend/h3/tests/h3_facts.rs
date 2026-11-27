@@ -1,4 +1,4 @@
-//! The H3 behaviour datalib depends on, one test per fact, in the order
+//! The H3 behaviour Datalib depends on, one test per fact, in the order
 //! `datalib/backend/h3/README.md` states them. An `h3o` bump that moves a
 //! fact fails here by name: fix the fact in the README, then the test,
 //! then whatever leaned on it.

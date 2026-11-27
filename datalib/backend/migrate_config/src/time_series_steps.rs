@@ -2,8 +2,9 @@
 //! them (`crate::retired::TIME_SERIES_SOURCE_TYPES`) have no
 //! `render_time_series` step, and there is no time-series index. The
 //! rewrite adds the steps a source lacks, the index group with its
-//! `time_series_index` reading every one, and the applet that serves it, appended after everything the file
-//! holds, so every comment and entry stays where it was.
+//! `time_series_index` reading every one, and the applet that serves it,
+//! appended after everything the file holds, so every comment and entry
+//! stays where it was.
 //!
 //! It applies only to a config with no `unified_time_series_index` group.
 //! Once that group is there the time-series steps are the person's: a

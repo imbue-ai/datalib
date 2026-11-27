@@ -2,8 +2,8 @@
 //! published to the store always reach it?
 //!
 //! Two processes write this file on purpose — the runner writes its
-//! runs, `datalib-http` writes its own log — and until this test the
-//! reason that was safe had only ever been an argument. Four writers is
+//! runs, `datalib-http` writes its own log — and this test checks that
+//! doing so is safe. Four writers is
 //! more than a data root ever really has, so a green run here is a
 //! bound rather than a coincidence.
 //!
