@@ -54,8 +54,8 @@ pub fn words(text: &str) -> Vec<String> {
 }
 
 /// Whether lowercased `text` holds `term` as a word, or a word sharing its
-/// first five letters when it has that many: the keyword index stems, so
-/// "imminent" found "imminently". Looked up in place, with no word list.
+/// first five letters when it has that many, so "imminent" finds
+/// "imminently". Looked up in place, with no word list.
 fn holds(text: &str, term: &str) -> bool {
     let stem: String = term.chars().take(5).collect();
     let whole = stem.len() == term.len();
@@ -314,8 +314,8 @@ mod tests {
     }
 
     /// The quote starts at the first line of the message holding one of
-    /// the search's words, a stem of it included, since the keyword index
-    /// stems; with none, at the message's first line.
+    /// the search's words, or a word sharing its first five letters; with
+    /// none, at the message's first line.
     #[test]
     fn a_hit_is_quoted_from_the_first_line_holding_a_search_word() {
         let rows = two_messages(CHAT);

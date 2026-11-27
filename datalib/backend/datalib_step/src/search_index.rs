@@ -49,7 +49,7 @@ pub(crate) struct Done {
     pub(crate) embedded: usize,
     /// Documents whose file and render store disagree, so they are left for
     /// the next pass: the render is mid-write, or the file was touched.
-    pub(crate) unsettled: usize,
+    pub(crate) left_for_next_pass: usize,
     /// Chunks longer than the model's context, cut to fit before they were
     /// embedded: dense text, code or encoded data, whose tail is lost.
     pub(crate) truncated: usize,
@@ -197,7 +197,8 @@ async fn keyword_pass(
                 .collect()
         }
     };
-    // Forgotten first, so a pass cut short is never taken for a finished one.
+    // The commit the last pass read is cleared first, so a pass cut short
+    // is never taken for a finished one.
     index.set_read_at(group, None).await?;
     let indexed = index.indexed(group).await?;
     let mut current: BTreeMap<String, String> = BTreeMap::new();
@@ -206,7 +207,7 @@ async fn keyword_pass(
             Some(key) => {
                 current.insert(uuid.clone(), key);
             }
-            None => done.unsettled += 1,
+            None => done.left_for_next_pass += 1,
         }
     }
     let owed = datalib_search_index::owed(&current, &indexed);
@@ -224,14 +225,14 @@ async fn keyword_pass(
         let docs = tokio::task::spawn_blocking(move || store.index_docs(&source, &uuids))
             .await
             .context("render store read panicked")??;
-        done.unsettled += batch.len() - docs.len();
+        done.left_for_next_pass += batch.len() - docs.len();
         index.put(&docs).await?;
         done.put += docs.len();
         progress.inc(batch.len() as u64);
     }
     index.remove(&owed.remove).await?;
     done.removed = owed.remove.len();
-    if !cut_short && done.unsettled == 0 {
+    if !cut_short && done.left_for_next_pass == 0 {
         index.set_read_at(group, reading.as_deref()).await?;
     }
     Ok(done)
@@ -335,7 +336,7 @@ async fn embed_with<E: EmbedPrompt>(
         Ok(Done {
             cut: cut.cut,
             removed: cut.removed,
-            unsettled: cut.unsettled + embedded.unsettled,
+            left_for_next_pass: cut.left_for_next_pass + embedded.left_for_next_pass,
             ..embedded
         })
     }
@@ -346,11 +347,11 @@ async fn embed_with<E: EmbedPrompt>(
 
 /// Cuts into chunks, and files, every document of `group` the keyword
 /// index holds (`indexed`, `markdown_uuid → content_hash`) that was not
-/// cut from the rendering it holds, and forgets the ones it no longer
-/// holds once its keyword pass has `finished`: a pass cut short, over an
-/// index emptied for a new shape, has not put back what it will, and
-/// forgetting those would cost their vectors at the next sweep. `cutter`
-/// is called only when a document is owed.
+/// cut from the rendering it holds, and deletes the filed chunks of the
+/// ones it no longer holds once its keyword pass has `finished`: a pass
+/// cut short, over an index emptied for a new shape, has not put back
+/// what it will, and deleting those would cost their vectors at the next
+/// sweep. `cutter` is called only when a document is owed.
 #[allow(clippy::too_many_arguments)]
 async fn cut_owed(
     cache: &InferenceCache,
@@ -365,7 +366,7 @@ async fn cut_owed(
     let mut done = Done::default();
     let owed = datalib_search_index::owed(indexed, &cache.chunked(group).await?);
     if finished {
-        cache.forget_chunked(&owed.remove).await?;
+        cache.delete_chunked(&owed.remove).await?;
         done.removed = owed.remove.len();
     } else if !owed.remove.is_empty() {
         tracing::info!(
@@ -391,12 +392,12 @@ async fn cut_owed(
         let drawn = draw_batch(root, group, batch.to_vec()).await?;
         // A document drawn from another rendering than the index holds is
         // cut once the keyword pass has taken that rendering.
-        let settled: Vec<IndexDoc> = drawn
+        let in_indexed_rendering: Vec<IndexDoc> = drawn
             .into_iter()
             .filter(|d| indexed.get(&d.markdown_uuid) == Some(&d.content_hash))
             .collect();
-        done.unsettled += batch.len() - settled.len();
-        let cut = cut_batch(Arc::clone(&cutter), settled).await?;
+        done.left_for_next_pass += batch.len() - in_indexed_rendering.len();
+        let cut = cut_batch(Arc::clone(&cutter), in_indexed_rendering).await?;
         cache.file_chunks(&cut).await?;
         done.cut += cut.len();
         progress.inc(batch.len() as u64);
@@ -505,7 +506,7 @@ async fn embed_into<E: EmbedPrompt>(
     'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
         for doc in draw_batch(root, group, uuids.to_vec()).await? {
             let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()])? else {
-                done.unsettled += 1;
+                done.left_for_next_pass += 1;
                 continue;
             };
             pending.extend(prompts);
@@ -606,7 +607,7 @@ async fn embed_on_modal(
 
     let feed = async move {
         let mut stdin = stdin;
-        let mut unsettled = 0;
+        let mut left_for_next_pass = 0;
         let mut prompt_bytes = 0;
         let owing: Vec<String> = by_doc.keys().cloned().collect();
         'docs: for uuids in owing.chunks(DOCUMENT_BATCH) {
@@ -615,7 +616,7 @@ async fn embed_on_modal(
                     break 'docs;
                 }
                 let Some(prompts) = prompts_for(&doc, &by_doc[doc.markdown_uuid.as_str()])? else {
-                    unsettled += 1;
+                    left_for_next_pass += 1;
                     continue;
                 };
                 for (hash, prompt) in prompts {
@@ -628,7 +629,7 @@ async fn embed_on_modal(
             }
         }
         stdin.shutdown().await.ok();
-        Ok::<_, anyhow::Error>((unsettled, prompt_bytes))
+        Ok::<_, anyhow::Error>((left_for_next_pass, prompt_bytes))
     };
     let collect = async {
         let mut from = FromModal::default();
@@ -717,7 +718,7 @@ async fn embed_on_modal(
         progress.set_message(&spent);
         return Ok(done);
     }
-    let (unsettled, prompt_bytes) = fed?;
+    let (left_for_next_pass, prompt_bytes) = fed?;
     if !status.success() {
         bail!(
             "the Modal driver exited {status}: {}. So far it {spent}",
@@ -735,7 +736,7 @@ async fn embed_on_modal(
     }
     progress.set_message(&spent);
     Ok(Done {
-        unsettled,
+        left_for_next_pass,
         prompt_bytes,
         ..done
     })
@@ -792,9 +793,10 @@ async fn embed_batch<E: EmbedPrompt>(
 }
 
 /// The `unified_grid_and_search_index` step's sweep, after its keyword
-/// passes: the cache forgets the chunks of every source it does not
-/// search, then keeps only the vectors a filed chunk names. Answers how
-/// many vectors went. Touches nothing that does not exist yet.
+/// passes: deletes the filed chunks of every source it does not search,
+/// then every vector of another model than the pinned one and every
+/// vector no filed chunk names. Returns how many vectors went.
+/// Touches nothing that does not exist yet.
 pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
     let cache_path = layout::inference_cache_db(root);
     if !cache_path.exists() {
@@ -1030,7 +1032,7 @@ mod tests {
 
     /// A source added to the config but not yet rendered has no render
     /// store on disk. Its keyword pass indexes nothing and fails nothing;
-    /// it once failed the whole index step, which held every `embed`.
+    /// it once failed the whole index step, so no `embed` could start.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_source_with_no_render_store_yet_indexes_nothing() {
         let td = tempfile::tempdir().unwrap();
@@ -1151,10 +1153,10 @@ mod tests {
 
     /// A keyword pass cut short, as after the index was emptied for a new
     /// shape, has not put every document back: the embed keeps the chunks
-    /// of the ones it lacks, so the sweep keeps their vectors, and forgets
+    /// of the ones it lacks, so the sweep keeps their vectors, and deletes
     /// them only once a pass has finished without them.
     #[tokio::test(flavor = "multi_thread")]
-    async fn an_unfinished_keyword_pass_forgets_no_ones_chunks() {
+    async fn an_unfinished_keyword_pass_deletes_no_ones_chunks() {
         let td = tempfile::tempdir().unwrap();
         let root = td.path();
         one_doc(root, GROUP, "d-tea", "Tea, Earl Grey");

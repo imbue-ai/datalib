@@ -1,5 +1,6 @@
-//! The render step driver: one source's render wave, written to the tree
-//! the step id names and read from the raw store its input names.
+//! The render step driver: one source's render processors, written to
+//! the tree the step id names and read from the raw store its input
+//! names.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -30,8 +31,9 @@ pub async fn run(
     control: &datalib_etl::control::DownloadControl,
 ) -> Result<Vec<OutputClaim>> {
     // A render store is a doltlite store, and a consumer that pins a commit
-    // reads a stable view of it while this step keeps writing. That is P2 of
-    // the sink contract, and it is what lets `unified_grid_and_search_index` start before this
+    // reads a stable view of it while this step keeps writing. That is P2
+    // in `datalib/backend/dag/README.md` §"What a sink owes its consumers",
+    // and it is what lets `unified_grid_and_search_index` start before this
     // finishes. Said before any work, so the runner knows by the time the
     // first checkpoint arrives.
     emitter.declare_streams_output(true);
@@ -367,7 +369,7 @@ pub fn render_source(
             let rows = checkpointer.pending();
             checkpointer.sealed();
             // `None` means nothing was dirty after all, so no
-            // version moved and there is nothing to announce.
+            // version moved and there is nothing to report.
             if let Some(hash) = sealed {
                 progress.checkpoint_rows(&store.tree_of(&hash)?, rows);
             }
@@ -972,7 +974,7 @@ pub(crate) type DiffTable<'a> = dyn FnMut(&sqlx::SqlitePool, &str, &str, &str) -
 /// (`emptied_table_evidence`). Nothing
 /// to say — no cursor, no raw doltlite store, nothing declared yet, or a
 /// range this store cannot resolve — leaves the provider's own scan to
-/// decide alone, as it did before `render_inputs`, and no render unit gone.
+/// decide alone, and no render unit gone.
 fn reverse_lookup(
     store: &IndexedMarkdownStore,
     raw_db: Option<&Path>,
@@ -1518,8 +1520,8 @@ mod plan_tests {
         );
     }
 
-    /// A param change re-renders everything and does not forget where
-    /// it was — "render every render unit" and "lose the range" are different
+    /// A param change re-renders everything and keeps the stored cursor —
+    /// "render every render unit" and "drop the cursor" are different
     /// requests, and only the first is wanted here.
     #[test]
     fn a_param_change_renders_everything() {

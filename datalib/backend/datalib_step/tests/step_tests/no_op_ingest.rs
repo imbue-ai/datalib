@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 const STEP: &str = "work-slack/ingest";
 
-/// The run's outcome line, and every checkpoint version it announced.
+/// The run's outcome line, and every checkpoint version it reported.
 fn ingest(root: &Path, playback: &Path, params: &Path, now: &str) -> (String, Vec<String>) {
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .env(

@@ -2,12 +2,13 @@
 //! what this step wrote to this build's shape where that can be done in
 //! place, fetching nothing; say when it cannot (`needs_rerun`); and refuse,
 //! as failure kind `incompatible`, a store a newer build wrote
-//! (`docs/dev/step_protocol.md` § Verbs). The runner asks at every
-//! start, so a store this build has already opened costs a read of its
-//! `_datalib_meta` and nothing else; only a store an earlier build left,
-//! or a build that cannot name its commit, makes an ingest build a
-//! scratch store to compare shapes with. What each function writes is its own
-//! business: the runner only hears the answer.
+//! (`docs/dev/step_protocol.md` § Verbs). The runner runs the step's
+//! command with `--prepare` appended at every start, so a store this
+//! build has already opened costs a read of its `_datalib_meta` and
+//! nothing else; only a store an earlier build left, or a build that
+//! cannot name its commit, makes an ingest build a scratch store to
+//! compare shapes with. What each function writes is its own business:
+//! the runner reads only the exit status and the outcome line.
 
 use std::path::Path;
 
@@ -68,8 +69,8 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
 
 /// Earlier builds marked each render tree and the index tree with a
 /// `CACHEDIR.TAG`, which backup tools skip. A library put back without
-/// them stays without them: the loop's record, in `system/`, says their
-/// steps are up to date (`docs/user/backing_up.md`).
+/// them stays without them: the loop's store, `system/supervisor.sqlite`,
+/// says their steps are up to date (`docs/user/backing_up.md`).
 fn remove_cache_tags(env: &StepEnv, data_root: &Path, tree: &Path) -> Result<()> {
     let index = datalib_core::layout::unified_grid_and_search_index_dir(data_root);
     let trees: &[&Path] = match env.function {
@@ -84,8 +85,9 @@ fn remove_cache_tags(env: &StepEnv, data_root: &Path, tree: &Path) -> Result<()>
 }
 
 /// The one thing of the inference cache's shape prepare moves itself: its
-/// page size, which no reader reads around. Every `embed` writes the
-/// cache, but only this step is asked once, so it is this one's.
+/// page size, which no reader reads around. Every source's `embed` writes
+/// the cache, but there is one `unified_grid_and_search_index` step, so
+/// its `--prepare` run rewrites it.
 async fn rewrite_inference_cache(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<()> {
     use datalib_search_index::cache;
     let path = datalib_core::layout::inference_cache_db(data_root);
@@ -194,7 +196,8 @@ async fn reopen(function: Function, tree: &Path, store: &Path) -> Result<()> {
 
 /// Whether a source the step reads was drawn into the search index by
 /// another version of the index text: a build that draws or chunks
-/// otherwise asks for the keyword pass, whose renders did not move.
+/// otherwise reports `needs_rerun` so the keyword pass runs again, though
+/// the renders it reads did not move.
 async fn drawn_by_another_version(env: &StepEnv, data_root: &Path) -> Result<bool> {
     let index = datalib_core::layout::grid_index_db(data_root);
     let cache = datalib_core::layout::inference_cache_db(data_root);
@@ -327,7 +330,8 @@ async fn bring_raw_store_up_to_date(source_type: &str, group: &str, tree: &Path)
 /// sync. Committed only when there was one to name.
 async fn adopt_sourceless_problems(group: &str, tree: &Path) -> Result<()> {
     // Bare: only the provider's own open knows its DDL and ladder, and
-    // one without them reads a store its ladder has climbed as newer.
+    // one without them reads a store its ladder's migrations have run on
+    // as newer.
     let pool = datalib_etl::doltlite_raw::open_bare(&entities_db(tree)).await?;
     let adopted = async {
         let n = datalib_etl::doltlite_raw::adopt_sourceless_problems(&pool, group).await?;
@@ -380,7 +384,7 @@ fn standing(
     }
 }
 
-/// How `store` stands against `want`, answering `needs_rerun` when only
+/// How `store` stands against `want`, reporting `needs_rerun` when only
 /// its step can bring it there. The caller opens it when only its indexes
 /// moved.
 async fn bring_to_shape(
@@ -907,9 +911,10 @@ mod tests {
         assert_eq!(refused.step.as_deref(), Some("mail/ingest"));
     }
 
-    /// The runner asks at every start, so a raw store this release already
-    /// shaped is left alone: no claim, no commit, even where opening it
-    /// would have moved a meta row (another commit of the same release).
+    /// The runner runs `--prepare` at every start, so a raw store this
+    /// release already shaped is left alone: no claim, no commit, even
+    /// where opening it would have moved a meta row (another commit of
+    /// the same release).
     /// A store an older release wrote is opened once, and its new version
     /// reported.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -924,7 +929,7 @@ mod tests {
         let emitter = Emitter::new(env.step.clone());
         let claims = run(&env, root.path(), &emitter).await.unwrap();
         assert!(claims.is_empty(), "{claims:?}");
-        assert!(!emitter.asked_for_a_rerun());
+        assert!(!emitter.reported_needs_rerun());
         assert_eq!(
             crate::ingest::raw_store_version(&tree).await.unwrap(),
             before,
@@ -1061,19 +1066,20 @@ mod tests {
         pool.close().await;
     }
 
-    /// A render store in this build's shape answers nothing; one an older
-    /// build wrote in another shape answers `needs_rerun`, and is not
-    /// touched. A render that has never run has no shape to be behind in.
+    /// For a render store in this build's shape `--prepare` reports
+    /// nothing; for one an older build wrote in another shape it reports
+    /// `needs_rerun`, and leaves the store untouched. A render that has
+    /// never run has no shape to be behind in.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_render_store_in_another_shape_asks_for_a_rerun() {
+    async fn a_render_store_in_another_shape_reports_needs_rerun() {
         let root = tempfile::tempdir().unwrap();
         let env = env_of("mail/render_markdown", Function::RenderMarkdown);
-        let ask = || async {
+        let run_prepare = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();
-            emitter.asked_for_a_rerun()
+            emitter.reported_needs_rerun()
         };
-        assert!(!ask().await, "no store yet");
+        assert!(!run_prepare().await, "no store yet");
 
         let tree = root.path().join(&env.step);
         tokio::task::spawn_blocking({
@@ -1086,16 +1092,16 @@ mod tests {
         })
         .await
         .unwrap();
-        assert!(!ask().await, "this build's shape");
+        assert!(!run_prepare().await, "this build's shape");
 
         let db = datalib_etl_render::indexed_markdown::path_for(&tree);
         written_by_an_older_build(&db).await;
-        assert!(ask().await, "an older build's shape");
+        assert!(run_prepare().await, "an older build's shape");
     }
 
     /// A render store whose tables are this build's and whose indexes are
     /// not is brought up to date by prepare itself, which makes the
-    /// indexes, rather than asking for a re-render: the store then reads
+    /// indexes, rather than reporting `needs_rerun`: the store then reads
     /// as this build's shape.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_store_missing_only_an_index_gets_it_without_a_rerun() {
@@ -1133,7 +1139,7 @@ mod tests {
 
         let emitter = Emitter::new(env.step.clone());
         run(&env, root.path(), &emitter).await.unwrap();
-        assert!(!emitter.asked_for_a_rerun());
+        assert!(!emitter.reported_needs_rerun());
         let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
         assert_eq!(
             meta.map(|m| m.shape()),
@@ -1193,12 +1199,12 @@ mod tests {
             "unified_grid_and_search_index/unified_grid_and_search_index",
             Function::UnifiedGridAndSearchIndex,
         );
-        let ask = || async {
+        let run_prepare = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();
-            emitter.asked_for_a_rerun()
+            emitter.reported_needs_rerun()
         };
-        assert!(!ask().await, "no index yet");
+        assert!(!run_prepare().await, "no index yet");
 
         let db = datalib_core::layout::grid_index_db(root.path());
         let edit = |sql: &'static str| {
@@ -1219,12 +1225,12 @@ mod tests {
         datalib_etl_render::grid_index::close_index(pool)
             .await
             .unwrap();
-        assert!(!ask().await, "this build's shape");
+        assert!(!run_prepare().await, "this build's shape");
 
         // Made before an index this build reads by: prepare makes it.
         edit("DROP INDEX markdowns_searchable").await;
         edit("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'").await;
-        assert!(!ask().await, "an index alone is made in place");
+        assert!(!run_prepare().await, "an index alone is made in place");
         let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
         assert_eq!(
             meta.map(|m| m.shape()),
@@ -1238,7 +1244,10 @@ mod tests {
              WHERE key IN ('schema_hash', 'schema_hash.keywords')",
         )
         .await;
-        assert!(ask().await, "the step fills the keyword tables again");
+        assert!(
+            run_prepare().await,
+            "the step fills the keyword tables again"
+        );
         let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
         assert_eq!(
             meta.map(|m| m.shape()),
@@ -1251,12 +1260,12 @@ mod tests {
         grid.close().await;
 
         written_by_an_older_build(&db).await;
-        assert!(ask().await, "an older build's shape");
+        assert!(run_prepare().await, "an older build's shape");
     }
 
     /// A map an earlier build wrote, naming each point by its file's path,
-    /// is deleted and asks for a rerun, which lays it out afresh; a map
-    /// this build wrote is kept and asks for nothing.
+    /// is deleted and `--prepare` reports `needs_rerun`, whose run lays it
+    /// out afresh; a map this build wrote is kept and nothing is reported.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn an_embedding_map_this_build_does_not_read_is_laid_out_afresh() {
         use datalib_unified_grid_and_search_index::embedding_map as map_file;
@@ -1265,12 +1274,12 @@ mod tests {
             "unified_grid_and_search_index/embedding_map",
             Function::EmbeddingMap,
         );
-        let ask = || async {
+        let run_prepare = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();
-            emitter.asked_for_a_rerun()
+            emitter.reported_needs_rerun()
         };
-        assert!(!ask().await, "no map yet");
+        assert!(!run_prepare().await, "no map yet");
 
         let current = map_file::EmbeddingMap {
             made_at: "2026-11-20T10:00:00-08:00".into(),
@@ -1285,7 +1294,7 @@ mod tests {
             }],
         };
         map_file::write(root.path(), &current).unwrap();
-        assert!(!ask().await, "this build's map");
+        assert!(!run_prepare().await, "this build's map");
         assert_eq!(map_file::read(root.path()).unwrap(), Some(current));
 
         let by_path = serde_json::json!({
@@ -1294,7 +1303,7 @@ mod tests {
             "points": [{"path": "slack/render_markdown/1a/c-1a.md", "x": 1.0, "y": 2.0}],
         });
         std::fs::write(map_file::path(root.path()), by_path.to_string()).unwrap();
-        assert!(ask().await, "an earlier build's map");
+        assert!(run_prepare().await, "an earlier build's map");
         assert_eq!(map_file::read(root.path()).unwrap(), None, "deleted");
     }
 
@@ -1309,12 +1318,12 @@ mod tests {
             Function::UnifiedGridAndSearchIndex,
         );
         let path = datalib_core::layout::inference_cache_db(root.path());
-        let ask = || async {
+        let run_prepare = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();
-            assert!(!emitter.asked_for_a_rerun());
+            assert!(!emitter.reported_needs_rerun());
         };
-        ask().await;
+        run_prepare().await;
         assert!(!path.exists(), "none is made");
 
         let made = InferenceCache::open(&path).await.unwrap();
@@ -1334,7 +1343,7 @@ mod tests {
         pool.close().await;
         assert!(cache::in_other_pages(&path).await.unwrap(), "set up");
 
-        ask().await;
+        run_prepare().await;
         assert!(!cache::in_other_pages(&path).await.unwrap());
         let kept = InferenceCache::open(&path).await.unwrap();
         let missing = kept.missing("gemma", &["a".to_string()]).await.unwrap();
@@ -1343,11 +1352,12 @@ mod tests {
     }
 
     /// A new version of the index's drawing or chunking moves nothing the
-    /// `unified_grid_and_search_index` step's keyword pass reads, so the prepare verb asks for it:
+    /// `unified_grid_and_search_index` step's keyword pass reads, so
+    /// `--prepare` reports `needs_rerun` to run that pass again:
     /// when a source it reads was drawn by another version, and not before
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn a_search_index_drawn_by_another_version_asks_for_the_keyword_pass() {
+    async fn a_search_index_drawn_by_another_version_reports_needs_rerun() {
         let root = tempfile::tempdir().unwrap();
         let env = StepEnv {
             inputs: vec!["mail/render_markdown".into()],
@@ -1356,12 +1366,12 @@ mod tests {
                 Function::UnifiedGridAndSearchIndex,
             )
         };
-        let ask = || async {
+        let run_prepare = || async {
             let emitter = Emitter::new(env.step.clone());
             run(&env, root.path(), &emitter).await.unwrap();
-            emitter.asked_for_a_rerun()
+            emitter.reported_needs_rerun()
         };
-        assert!(!ask().await, "no index yet");
+        assert!(!run_prepare().await, "no index yet");
         let grid = datalib_core::layout::grid_index_db(root.path());
         let pool = datalib_etl_render::grid_index::open_index(&grid)
             .await
@@ -1370,7 +1380,7 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !ask().await,
+            !run_prepare().await,
             "a grid in this build's shape, nothing searched yet"
         );
         let put = |key: String| async {
@@ -1391,9 +1401,9 @@ mod tests {
             index.close().await;
         };
         put("h.t0".to_string()).await;
-        assert!(ask().await, "drawn by an older version");
+        assert!(run_prepare().await, "drawn by an older version");
         put(format!("h{}", datalib_search_index::text::key_suffix())).await;
-        assert!(!ask().await, "this build's version");
+        assert!(!run_prepare().await, "this build's version");
     }
 
     /// A tag an earlier build left on a render tree or the index tree is

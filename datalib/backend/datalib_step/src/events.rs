@@ -46,7 +46,7 @@ impl Emitter {
     }
 
     #[cfg(test)]
-    pub fn asked_for_a_rerun(&self) -> bool {
+    pub fn reported_needs_rerun(&self) -> bool {
         self.needs_rerun.load(std::sync::atomic::Ordering::SeqCst)
     }
 

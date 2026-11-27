@@ -75,7 +75,7 @@ pub fn run(
             datalib_etl_google_drive::synthesize::GoogleDriveSynth::new(input.clone()),
         ),
         // Everything else is file-backed or otherwise synth-less: no
-        // download HTTP to play back. Skip quietly like sync did.
+        // download HTTP to play back. Skip quietly.
         _ => {
             log(format!(
                 "synthesize {name} ({step_type}): skipped (no HTTP synthesizer for this source type)"

@@ -32,7 +32,7 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
     out.into_iter().collect()
 }
 
-/// Put the embedding model in place, sha256-verified, and answer its
+/// Put the embedding model in place, sha256-verified, and return its
 /// directory. A no-op once it is.
 fn provision_embed_model(
     root: &Path,
@@ -128,7 +128,7 @@ pub async fn run_embed(
     let model = ModelFile::new(data_root, models_dir);
     let done =
         crate::search_index::embed(data_root, &env.group, model, on_modal, &progress, stop).await?;
-    report_unsettled(&progress, &env.group, done.unsettled);
+    report_left_for_next_pass(&progress, &env.group, done.left_for_next_pass);
     progress.metric(
         "search_chunks_not_embedded",
         &[("source", env.group.as_str())],
@@ -140,7 +140,7 @@ pub async fn run_embed(
     tracing::info!(
         cut = done.cut,
         embedded = done.embedded,
-        unsettled = done.unsettled,
+        unsettled = done.left_for_next_pass,
         truncated = done.truncated,
         prompt_bytes = done.prompt_bytes,
         embed_secs = format!("{:.1}", done.embed_time.as_secs_f64()),
@@ -153,17 +153,17 @@ pub async fn run_embed(
 }
 
 /// Documents left for the next pass, as a metric the Manage row shows: a
-/// document dropped from this pass leaves a trail.
-fn report_unsettled(progress: &Progress, group: &str, unsettled: usize) {
+/// document dropped from this pass is counted rather than lost unseen.
+fn report_left_for_next_pass(progress: &Progress, group: &str, left_for_next_pass: usize) {
     progress.metric(
         "search_index_unsettled",
         &[("source", group)],
-        unsettled as i64,
+        left_for_next_pass as i64,
     );
 }
 
 /// A per-source step's version is what it read: the step compares hashes
-/// itself, so the runner only has to know when to ask again. Run by
+/// itself, so the runner only has to know when to run it again. Run by
 /// hand, with nothing from the runner, it claims nothing, and a runner,
 /// if any, takes every success as new.
 fn claim_reads(env: &StepEnv) -> Vec<OutputClaim> {

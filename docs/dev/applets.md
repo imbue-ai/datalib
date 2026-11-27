@@ -150,7 +150,7 @@ stderr is a pipe to a process that no longer exists, so writing to it
 takes `EPIPE`. `eprintln!` *panics* on a failed write, and a panic in
 the watching thread leaves the process running — the leak you were
 fixing, one line from the exit that fixes it. Write best-effort
-(`let _ = writeln!(…)`), the way `announce_port` and
+(`let _ = writeln!(…)`), the way `print_port` and
 `datalib_parent_watch::report` do.
 
 That is the whole contract. There is no protocol version, no handshake,
