@@ -15,7 +15,7 @@ use datalib_dag::config::{ConfigCheck, DagConfig};
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::pass::PassRow;
 use datalib_dag::supervisor::serve::{self, ServeEvent};
-use datalib_dag::supervisor::store::{Store, WipeKind};
+use datalib_dag::supervisor::store::{JobKind, Store};
 use datalib_dag::supervisor::wipe::tree_group;
 use tokio::io::AsyncBufReadExt;
 use tokio::sync::{watch, OnceCell};
@@ -52,7 +52,7 @@ pub struct Upgrade {
 pub struct FreeSpace {
     pub id: String,
     /// `collect`, or `compact` when old versions of derived data go.
-    pub kind: WipeKind,
+    pub kind: JobKind,
     /// The loop is still on it.
     pub running: bool,
     /// Why it was not done, once it is over.
@@ -70,7 +70,6 @@ pub struct SyncControl {
     /// This server's runner holds `runner-lock`.
     runs_the_loop: Arc<AtomicBool>,
     busy: Arc<AtomicBool>,
-    upgrade: Arc<Mutex<Upgrade>>,
     /// Why nothing can sync from this server: no runner found, or one
     /// that keeps stopping. Every Sync button says it.
     trouble: Arc<Mutex<Option<String>>>,
@@ -90,7 +89,6 @@ impl SyncControl {
             root,
             runs_the_loop: Arc::new(AtomicBool::new(false)),
             busy: Arc::new(AtomicBool::new(false)),
-            upgrade: Arc::new(Mutex::new(Upgrade::default())),
             trouble: Arc::new(Mutex::new(None)),
             started_at_utc: Arc::new(datalib_dag::supervisor::store::now_utc()),
             mailbox: Arc::new(OnceCell::new()),
@@ -110,11 +108,19 @@ impl SyncControl {
         }
     }
 
-    pub fn upgrade(&self) -> Upgrade {
-        self.upgrade
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+    /// The prepare pass of the loop running since this server started,
+    /// as the store holds it: its job open while it runs, with a row per
+    /// step it asks.
+    pub async fn upgrade(&self) -> anyhow::Result<Upgrade> {
+        let store = self.mailbox().await?;
+        let Some(job) = store.latest_prepare_since(&self.started_at_utc).await? else {
+            return Ok(Upgrade::default());
+        };
+        Ok(Upgrade {
+            migrating: job.closed.is_none(),
+            settled: job.closed.is_some(),
+            steps: store.job_steps(&job.id).await?,
+        })
     }
 
     /// Why nothing can sync from this server, when nothing can.
@@ -143,7 +149,7 @@ impl SyncControl {
             return Ok(None);
         };
         Ok(Some(FreeSpace {
-            steps: store.wipe_steps(&wipe.id).await?,
+            steps: store.job_steps(&wipe.id).await?,
             id: wipe.id,
             kind,
             running: wipe.closed.is_none(),
@@ -161,7 +167,7 @@ impl SyncControl {
     /// emptiness reaches the grid. The loop does it as soon as the targets
     /// have stopped, whatever else is syncing.
     pub async fn reset(&self, targets: &[String], by: &str) -> Result<WipeAnswer, String> {
-        self.wipe(WipeKind::Reset, targets, by).await
+        self.wipe(JobKind::Reset, targets, by).await
     }
 
     /// Delete the trees of `groups`, which the config no longer names, and
@@ -173,7 +179,7 @@ impl SyncControl {
         if let Some(why) = purge_refusal(&checked.cfg, groups) {
             return Err(why);
         }
-        self.wipe(WipeKind::Purge, groups, by).await
+        self.wipe(JobKind::Purge, groups, by).await
     }
 
     /// Give back the disk no commit reaches in the stores of `targets`, or
@@ -187,9 +193,9 @@ impl SyncControl {
         by: &str,
     ) -> Result<WipeAnswer, String> {
         let kind = if drop_old_versions_on_derived_data {
-            WipeKind::Compact
+            JobKind::Compact
         } else {
-            WipeKind::Collect
+            JobKind::Collect
         };
         self.wipe(kind, targets, by).await
     }
@@ -198,7 +204,7 @@ impl SyncControl {
     /// say how it went. Whichever process runs the loop carries it out.
     async fn wipe(
         &self,
-        kind: WipeKind,
+        kind: JobKind,
         targets: &[String],
         by: &str,
     ) -> Result<WipeAnswer, String> {
@@ -207,7 +213,7 @@ impl SyncControl {
 
     async fn wipe_waiting(
         &self,
-        kind: WipeKind,
+        kind: JobKind,
         targets: &[String],
         by: &str,
         wait: Duration,
@@ -216,12 +222,12 @@ impl SyncControl {
         // Made before the row, so the loop's close is not missed.
         let mut listener = Listener::new(store, "a wipe's answer");
         let id = store
-            .open_wipe(kind, targets, by)
+            .open_job(kind, targets, by)
             .await
             .map_err(|e| format!("{e:#}"))?;
         let answer = async {
             loop {
-                let row = store.wipe(&id).await.map_err(|e| format!("{e:#}"))?;
+                let row = store.job(&id).await.map_err(|e| format!("{e:#}"))?;
                 if let Some(closed) = row.and_then(|r| r.closed) {
                     return closed.map_or(Ok(()), Err);
                 }
@@ -426,47 +432,13 @@ impl SyncControl {
         announce: Option<&crate::watch::RootTx>,
         nudge: Option<&crate::watch::Nudge>,
     ) {
-        let tell = |event: crate::watch::RootEvent| {
-            if let Some(tx) = announce {
-                let _ = tx.send(event.into());
-            }
-        };
-        // Every row's Sync is disabled while the pass runs and enabled
-        // after: a change to the rows as much as to `upgrade`.
         let rows_changed = || self.rows_changed(announce);
-        let upgrade = || self.upgrade.lock().unwrap_or_else(|e| e.into_inner());
         match event {
             ServeEvent::Holding => {
                 self.runs_the_loop.store(true, Ordering::SeqCst);
                 if self.set_trouble(None) {
                     rows_changed();
                 }
-            }
-            ServeEvent::PreparePlan { steps } => {
-                *upgrade() = Upgrade {
-                    migrating: true,
-                    settled: false,
-                    steps: steps.iter().map(|step| PassRow::waiting(step)).collect(),
-                };
-                tell(crate::watch::RootEvent::PassChanged);
-                rows_changed();
-                self.busy.store(true, Ordering::SeqCst);
-            }
-            ServeEvent::PrepareStep { step, state, error } => {
-                if let Some(row) = upgrade().steps.iter_mut().find(|r| r.step == step) {
-                    row.state = state;
-                    row.error = error;
-                }
-                tell(crate::watch::RootEvent::PassChanged);
-            }
-            ServeEvent::PrepareDone => {
-                let was_migrating = std::mem::replace(&mut upgrade().migrating, false);
-                if was_migrating {
-                    self.busy.store(false, Ordering::SeqCst);
-                    rows_changed();
-                }
-                upgrade().settled = true;
-                tell(crate::watch::RootEvent::PassChanged);
             }
             ServeEvent::SyncStarted { .. } => self.busy.store(true, Ordering::SeqCst),
             ServeEvent::SyncOver { .. } => self.busy.store(false, Ordering::SeqCst),
@@ -555,7 +527,7 @@ mod tests {
         let held = datalib_dag::lock::acquire_runner(td.path()).expect("claim");
         let answer = control
             .wipe_waiting(
-                WipeKind::Reset,
+                JobKind::Reset,
                 &["a/ingest".into()],
                 "ui",
                 Duration::from_millis(200),
@@ -563,7 +535,7 @@ mod tests {
             .await;
         assert_eq!(answer, Ok(WipeAnswer::Queued));
         let store = control.mailbox().await.unwrap();
-        let open = store.open_wipes().await.unwrap();
+        let open = store.open_jobs().await.unwrap();
         assert_eq!(open.len(), 1, "{open:?}");
         drop(held);
     }
@@ -586,49 +558,41 @@ mod tests {
         assert_eq!(control.trouble(), None);
     }
 
-    /// The prepare pass reaches `/api/config` as the loop says it: every
-    /// step waiting, then each as it runs and ends, Sync paused until the
-    /// pass is over, and `settled` only then.
-    #[test]
-    fn the_prepare_pass_is_reported_as_the_loop_says_it() {
+    /// The prepare pass reaches `/api/config` from the store: its job and
+    /// a row per step, as the loop writes them. Before, the server kept it
+    /// in memory from the loop's stderr, where no other client could read
+    /// it.
+    #[tokio::test]
+    async fn the_prepare_pass_is_read_from_the_store() {
         use datalib_dag::supervisor::pass::PassState;
+        use datalib_dag::supervisor::store::JobKind;
         let td = tempfile::tempdir().unwrap();
         let control = SyncControl::new(Arc::new(td.path().to_path_buf()));
-        control.hear(ServeEvent::Holding, None, None);
-        assert!(control.runs_the_loop.load(Ordering::SeqCst));
-        control.hear(
-            ServeEvent::PreparePlan {
-                steps: vec!["a/ingest".into(), "a/render".into()],
-            },
-            None,
-            None,
-        );
-        let u = control.upgrade();
-        assert!(u.migrating && !u.settled && control.running());
-        assert_eq!(u.steps.len(), 2);
-        assert!(u.steps.iter().all(|r| r.state == PassState::Waiting));
-        control.hear(
-            ServeEvent::PrepareStep {
-                step: "a/render".into(),
-                state: PassState::Failed,
-                error: Some("why".into()),
-            },
-            None,
-            None,
-        );
-        let u = control.upgrade();
-        assert_eq!(u.steps[0].state, PassState::Waiting);
-        assert_eq!(u.steps[1].state, PassState::Failed);
-        assert_eq!(u.steps[1].error.as_deref(), Some("why"));
-        control.hear(ServeEvent::PrepareDone, None, None);
-        let u = control.upgrade();
-        assert!(!u.migrating && u.settled && !control.running());
-        assert_eq!(u.steps[1].state, PassState::Failed, "kept for the pill");
+        assert_eq!(control.upgrade().await.unwrap(), Upgrade::default());
 
-        control.hear(ServeEvent::SyncStarted { run_id: "r".into() }, None, None);
-        assert!(control.running());
-        control.hear(ServeEvent::SyncOver { run_id: "r".into() }, None, None);
-        assert!(!control.running());
+        let store = Store::open(td.path()).await.unwrap();
+        let job = store
+            .open_job(JobKind::Prepare, &[], "the loop")
+            .await
+            .unwrap();
+        store
+            .begin_job_steps(&job, &["a/ingest", "a/render"])
+            .await
+            .unwrap();
+        let u = control.upgrade().await.unwrap();
+        assert!(u.migrating && !u.settled);
+        assert!(u.steps.iter().all(|r| r.state == PassState::Waiting));
+        store
+            .set_job_step(&job, 1, PassState::Failed, Some("why"), None)
+            .await
+            .unwrap();
+        store.close_job(&job, None).await.unwrap();
+        let u = control.upgrade().await.unwrap();
+        assert!(!u.migrating && u.settled);
+        assert_eq!(u.steps[0].state, PassState::Waiting);
+        assert_eq!(u.steps[1].state, PassState::Failed, "kept for the pill");
+        assert_eq!(u.steps[1].error.as_deref(), Some("why"));
+        store.close().await;
     }
 
     /// A root whose config has one group, `keep`, with one step.

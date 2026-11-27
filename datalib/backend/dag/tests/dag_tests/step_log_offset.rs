@@ -68,10 +68,11 @@ async fn a_step_line_is_filed_under_the_runner_s_offset() {
     .unwrap();
     pool.close().await;
 
-    assert_eq!(
-        runner,
-        vec![Some("+03:00".to_string())],
-        "the runner's zone"
+    // The runner's own log, and the run's record: both in its zone.
+    assert!(!runner.is_empty(), "no runner process in the run store");
+    assert!(
+        runner.iter().all(|z| z.as_deref() == Some("+03:00")),
+        "the runner's zone: {runner:?}"
     );
     assert_eq!(step.len(), 1, "the step's line: {step:?}\n{out:?}");
     assert_eq!(step[0].1.as_deref(), Some("+03:00"), "{step:?}");

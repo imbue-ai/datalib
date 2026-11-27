@@ -286,12 +286,14 @@ what `from:` them finds. Counting every author from
 `grid_rows_by_author` takes 24 ms warm for 1,211 authors. The last date
 needs the stamp added to that index: without it the same read took 29 s.
 
-Today each document's record of a person carries a count of its own,
-`seen`. The two counts agree for 62 of 74 people in the fixture; the
-other 12 have more grid rows, for a reason not yet looked into, which
-comes first. Dropping `seen` altogether is worth doing but nothing here
-needs it. It also weighs which name a person goes by, so that one forged
-message renames nobody, and that would have to move to the grid's rows.
+Each document's record of a person carried a count of its own, `seen`,
+which counted messages and left out reactions, edit versions, comments,
+and everything from a source whose records counted nothing; it
+disagreed with `from:` for 27 of the fixture's 119 records. It is gone: the
+grid's rows are the one count (built,
+[`../contacts.md`](../contacts.md) §"How much someone wrote"), and the
+author index carries the stamp. A name is still weighed per document,
+so one forged message renames nobody.
 
 ## Order of work
 
