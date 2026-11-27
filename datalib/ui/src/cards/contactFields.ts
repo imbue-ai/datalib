@@ -1,15 +1,14 @@
-// Your contact's fields beside the rest of the card: where an address or
-// number field stands against the links, and copying a value from what a
-// source says about the person into the contact
-// (docs/dev/plans/contact_editing.md § "Fields and links are separate",
-// § "Copying from sources"). Pure; `ContactEditor.ce.vue` and
-// `PersonCard.ce.vue` draw it.
+// Your contact's lines beside the rest of the card: who else has an
+// address or number typed into it, and copying a value from what a source
+// says about the person into the contact (docs/dev/contacts.md § "Fields,
+// and editing a contact through a draft"). Pure; `ContactEditor.ce.vue`
+// and `PersonCard.ce.vue` draw it.
 
 import { kindLabel, type ContactEdit, type Field, type FieldKind } from "./contactEdit";
 import type { NormalizedContact, Who } from "./contacts";
 
-/** Where a field's handle stands: linked to this contact, to nobody, or
- *  to others, who are named. Null for a field that is no handle. */
+/** Where a typed line's handle stands: this contact's already, nobody's,
+ *  or others', who are named. Null for a line that is no handle. */
 export type Standing =
   | { state: "this" }
   | { state: "none"; handle: string }
@@ -26,27 +25,6 @@ export function standing(
   return owners.some((c) => c.key === contactId)
     ? { state: "this" }
     : { state: "other", handle, owners };
-}
-
-/** The contact's linked addresses and numbers that no field holds: each
- *  can be added as one, never on its own. */
-export function linkedNotFields(
-  linked: NormalizedContact["handles"],
-  fieldHandles: (string | null)[],
-): { handle: string; kind: FieldKind; value: string; label: string | null }[] {
-  const held = new Set(fieldHandles.filter(Boolean));
-  const out: { handle: string; kind: FieldKind; value: string; label: string | null }[] = [];
-  for (const h of linked) {
-    if (!h.handle || held.has(h.handle) || h.stopped_working_by) continue;
-    if (h.medium === "other") continue;
-    out.push({
-      handle: h.handle,
-      kind: h.medium === "email" ? "email" : "phone",
-      value: h.value,
-      label: h.label,
-    });
-  }
-  return out;
 }
 
 /** One thing a source says that a contact can hold: its name, its note,
@@ -69,26 +47,52 @@ function detailField(label: string): { kind: FieldKind; label: string | null } {
   return { kind: "other", label: label.trim() || null };
 }
 
+/** A source's address or number as a line of your contact; null for a
+ *  handle with no address or number of its own (a Slack id). */
+export function handleValueOf(h: NormalizedContact["handles"][number]): SourceValue | null {
+  if (h.medium === "other" || !h.value.trim()) return null;
+  return {
+    part: "field",
+    kind: h.medium === "email" ? "email" : "phone",
+    label: h.label,
+    value: h.value,
+  };
+}
+
+/** A source's detail ("Address (work)") as a line of your contact. */
+export function detailValue(d: { label: string; value: string }): SourceValue | null {
+  return d.value.trim() ? { part: "field", ...detailField(d.label), value: d.value } : null;
+}
+
+export const titleValue = (title: string): SourceValue => ({
+  part: "field",
+  kind: "title",
+  label: null,
+  value: title,
+});
+
+export const orgValue = (org: string): SourceValue => ({
+  part: "field",
+  kind: "organization",
+  label: null,
+  value: org,
+});
+
 /** Everything `c` says that a contact can hold, in the card's order:
- *  name, addresses and numbers, role, the rest, the note. A handle with
- *  no address or number of its own (a Slack id) is a link, not a field. */
+ *  name, addresses and numbers, role, the rest, the note. */
 export function sourceValues(c: NormalizedContact): SourceValue[] {
   const out: SourceValue[] = [];
   const name = c.names[0]?.trim();
   if (name) out.push({ part: "name", value: name });
   for (const h of c.handles) {
-    if (h.medium === "other" || !h.value.trim()) continue;
-    out.push({
-      part: "field",
-      kind: h.medium === "email" ? "email" : "phone",
-      label: h.label,
-      value: h.value,
-    });
+    const v = handleValueOf(h);
+    if (v) out.push(v);
   }
-  if (c.title?.trim()) out.push({ part: "field", kind: "title", label: null, value: c.title });
-  if (c.org?.trim()) out.push({ part: "field", kind: "organization", label: null, value: c.org });
+  if (c.title?.trim()) out.push(titleValue(c.title));
+  if (c.org?.trim()) out.push(orgValue(c.org));
   for (const d of c.details ?? []) {
-    if (d.value.trim()) out.push({ part: "field", ...detailField(d.label), value: d.value });
+    const v = detailValue(d);
+    if (v) out.push(v);
   }
   if (c.note?.trim()) out.push({ part: "note", value: c.note.trim() });
   return out;
@@ -150,19 +154,6 @@ export function copyInto(
         ],
       };
   }
-}
-
-/** What "Copy all" copies: everything but the name, which the person
- *  picks on its own, since every source has one. */
-export function copyAll(
-  edit: ContactEdit,
-  values: SourceValue[],
-  from: CopiedFrom,
-  newId: () => string,
-): ContactEdit {
-  return values
-    .filter((v) => v.part !== "name")
-    .reduce((e, v) => copyInto(e, v, from, newId), edit);
 }
 
 /** How a value reads on its copy button's line. */

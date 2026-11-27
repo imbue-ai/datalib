@@ -153,9 +153,10 @@ describe("sectionLines", () => {
       note: "  plays trombone ",
       seen: { items: 1, last_at: "2364-03-01T09:00:00Z" },
     };
-    expect(sectionLines(c)).toEqual([
+    expect(sectionLines(c).map(({ label, value }) => ({ label, value }))).toEqual([
       { label: "Also called", value: "Will" },
-      { label: "Role", value: "First officer, Starfleet" },
+      { label: "Title", value: "First officer" },
+      { label: "Organization", value: "Starfleet" },
       { label: "Birthday", value: "2335-08-19" },
       { label: "Note", value: "plays trombone" },
       { label: "Seen", value: "1 item, last 2364-03-01T09:00:00Z" },
@@ -163,7 +164,25 @@ describe("sectionLines", () => {
     expect(sectionLines(c, () => "Mar 1")).toContainEqual({
       label: "Seen",
       value: "1 item, last Mar 1",
+      use: null,
     });
+  });
+
+  it("offers each line a contact can hold to Use, as the line it would be", () => {
+    const c: NormalizedContact = {
+      ...contact("contacts", "riker.vcf", ["Riker", "Will"]),
+      title: "First officer",
+      details: [{ label: "Address (home)", value: "Valdez, Alaska" }],
+      note: "plays trombone",
+      seen: { items: 1, last_at: null },
+    };
+    expect(sectionLines(c).map((l) => l.use)).toEqual([
+      null,
+      { part: "field", kind: "title", label: null, value: "First officer" },
+      { part: "field", kind: "address", label: "home", value: "Valdez, Alaska" },
+      { part: "note", value: "plays trombone" },
+      null,
+    ]);
   });
 
   it("says nothing it does not have", () => {

@@ -48,7 +48,9 @@ export type DraftView = {
 };
 
 export type Saved =
-  { outcome: "saved"; commit: string | null } | { outcome: "stale"; view: DraftView };
+  | { outcome: "saved"; commit: string | null }
+  | { outcome: "stale"; view: DraftView }
+  | { outcome: "held"; held: { handle: string; by: string[] }[] };
 
 export function newField(kind: FieldKind, fieldId: string): Field {
   return { field_id: fieldId, kind, label: null, value: "", copied_from: null };
