@@ -1,6 +1,6 @@
 //! The server's sync path, end to end: `POST /api/requests` writes a
-//! request, the loop the server runs in-process takes it on, and the
-//! Manage rows read what the loop records of each step.
+//! request, the loop the server runs starts serving it, and the Manage
+//! rows read what the loop writes of each step.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -175,8 +175,8 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
     let state = server(root).await;
 
     let a = sync(&state, "a/out").await;
-    // The POST answers once the loop has taken the request on, so the
-    // first rows read after it already offer to stop it.
+    // The POST answers once the loop has started serving the request, so
+    // the first rows read after it already offer to stop it.
     assert_eq!(row(&state, "a/out").await["stop_request_ids"], json!([a]));
     until("a to start", Duration::from_secs(30), || async {
         started(root, "a")
@@ -365,7 +365,7 @@ async fn step_of(state: &AppState, request: &str, step: &str) -> serde_json::Val
 
 /// An app that reads only the raw stores waited for the whole request,
 /// which stays open until the index after its download has run. The
-/// request's own answer says when the download is done.
+/// request's own `GET /api/requests/{id}` says when the download is done.
 #[tokio::test]
 async fn a_requests_root_reads_done_while_the_index_after_it_runs() {
     let td = tempfile::tempdir().unwrap();
@@ -436,8 +436,8 @@ async fn a_requests_root_reads_done_while_the_index_after_it_runs() {
     state.sync.shutdown(Duration::from_secs(5)).await;
 }
 
-/// Waits until the loop's record and requests satisfy `ready`, looking
-/// again each time a commit is announced, never on a timer.
+/// Waits until the loop's `steps` and `requests` tables satisfy `ready`,
+/// looking again each time a commit is announced, never on a timer.
 async fn when(
     store: &datalib_dag::supervisor::store::Store,
     heard: &mut datalib_dag::supervisor::announce::Listener,
@@ -470,8 +470,8 @@ fn running(record: &datalib_dag::supervisor::record::Record, step: &str) -> bool
 
 /// A source added to `config.toml` on disk mid-sync, by the app's editor,
 /// an agent or a person, starts beside the sync already running: the
-/// server's watch sees the file move and tells the loop, which takes the
-/// new config on. The whole chain, the platform's file events included.
+/// server's watch sees the file move and tells the loop, which starts
+/// using the new config. The whole chain, the platform's file events included.
 #[tokio::test]
 async fn a_source_added_on_disk_mid_sync_starts_beside_the_running_one() {
     let td = tempfile::tempdir().unwrap();
@@ -514,8 +514,7 @@ fn alive(pid: i32) -> bool {
 
 /// A step that will not stop: it ignores its SIGINT, spawns a child of
 /// its own — the shape of a download running `latchkey curl` under
-/// node — and
-/// otherwise runs forever.
+/// node — and otherwise runs forever.
 const DEAF: &str = r#"
     trap '' INT
     out="$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"

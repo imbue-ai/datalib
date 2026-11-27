@@ -1,8 +1,8 @@
 //! `POST /api/free_disk_space`, and `POST /api/compact`, its old spelling
-//! with `drop_old_versions_on_derived_data`: the loop the server runs asks each step that
-//! takes the verbs to `--collect`, or `--compact` when old versions go,
-//! all of them when no target is named, and refuses a step that does not
-//! take them.
+//! with `drop_old_versions_on_derived_data`: the loop the server runs
+//! runs each step that takes the verbs with `--collect` appended, or
+//! `--compact` when old versions go, all of them when no target is named,
+//! and refuses a step that does not take them.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -109,8 +109,8 @@ async fn until_asked(root: &Path, verb: &str, want: &[&str]) {
     }
 }
 
-/// No targets asks every built-in step, and not a step with a command of
-/// its own, which has never heard of the verb.
+/// With no targets, every built-in step is run with the verb, and not a
+/// step with a command of its own, which has never heard of the verb.
 #[tokio::test]
 async fn compact_with_no_targets_asks_every_step_that_takes_the_verb() {
     let td = tempfile::tempdir().unwrap();
@@ -133,8 +133,8 @@ async fn compact_with_no_targets_asks_every_step_that_takes_the_verb() {
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
 
-/// A named step alone is asked; one the config lacks, or one that does
-/// not take the verb, is refused with the reason.
+/// Only a named step is run; one the config lacks, or one that does not
+/// take the verb, is refused with the reason.
 #[tokio::test]
 async fn compact_asks_the_named_step_and_refuses_one_it_cannot() {
     let td = tempfile::tempdir().unwrap();
@@ -174,7 +174,7 @@ async fn compact_asks_the_named_step_and_refuses_one_it_cannot() {
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
 
-/// Freeing disk space without dropping old versions asks the same steps
+/// Freeing disk space without dropping old versions runs the same steps
 /// with `--collect`, and refuses a step that does not take it by that
 /// verb's name.
 #[tokio::test]
@@ -209,7 +209,7 @@ async fn free_disk_space_collects_every_step_that_takes_the_verb() {
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
 
-/// `drop_old_versions_on_derived_data` asks with `--compact`.
+/// `drop_old_versions_on_derived_data` runs them with `--compact`.
 #[tokio::test]
 async fn free_disk_space_dropping_old_versions_compacts() {
     let td = tempfile::tempdir().unwrap();
@@ -236,9 +236,9 @@ async fn free_disk_space_dropping_old_versions_compacts() {
     assert!(state.sync.shutdown(Duration::from_secs(10)).await);
 }
 
-/// Like [`FAKE_STEP`], and a collection answers with its store's size;
-/// the render's waits for `go` under the root, so the test sees the pass
-/// with one step done and the next still running.
+/// Like [`FAKE_STEP`], and its `--collect` reports its store's size; the
+/// render's waits for `go` under the root, so the test sees the
+/// collection with one step done and the next still running.
 const FAKE_STEP_REPORTING: &str = r#"#!/bin/sh
 case " $* " in
   *" --collect "*) mode=collect ;;
@@ -305,8 +305,8 @@ async fn until_free_space(
     }
 }
 
-/// Guards the free-space pass the app could not see move: `/api/config`
-/// says how each step it asks stands while it runs, with what each store
+/// Guards the collection the app could not see move: `/api/config` says
+/// how each step it runs stands while it runs, with what each store
 /// gave back, and that it is over once it is.
 #[tokio::test]
 async fn free_disk_space_reports_each_step_as_it_goes() {

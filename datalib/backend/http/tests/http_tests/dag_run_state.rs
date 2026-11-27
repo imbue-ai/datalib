@@ -1,4 +1,4 @@
-//! `GET /api/dag` carries the runner's own per-step run record.
+//! `GET /api/dag` carries the runner's own per-step rows from its store.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -141,7 +141,7 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
     assert_eq!(render["last_run"]["error"], "bad json at line 3");
 }
 
-/// A run record with no `finished_at` and nobody holding the runner
+/// A run row with no `finished_at` and nobody holding the runner
 /// lock is a run that *died*. Reporting it as live would spin the UI
 /// forever; the lock is what makes the difference knowable, since the
 /// kernel drops it when the holder exits however it exits.
@@ -175,7 +175,7 @@ async fn an_open_record_with_no_lock_holder_is_not_live() {
     assert_eq!(step["current_state"], "running");
 }
 
-/// ...and with a runner actually holding the root, the same record is
+/// ...and with a runner actually holding the root, the same run is
 /// live. This is the pair that makes the previous test mean something.
 #[tokio::test]
 #[cfg(unix)]

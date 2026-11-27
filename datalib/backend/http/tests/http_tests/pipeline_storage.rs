@@ -206,7 +206,7 @@ async fn a_group_directory_is_a_measured_tree_of_its_own() {
 /// send one with the person's cookie: an `<img src>` in an email, a
 /// card's argument, a navigation from another site. A walk of a large
 /// root is minutes of disk, and the frame it sends makes a table card
-/// on that URL ask again.
+/// on that URL fetch again.
 #[tokio::test]
 async fn a_get_never_walks_the_data_root() {
     let td = tempfile::tempdir().unwrap();
