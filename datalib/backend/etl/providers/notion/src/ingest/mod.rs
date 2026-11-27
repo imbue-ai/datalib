@@ -245,7 +245,7 @@ pub(crate) struct Ctx<'a> {
     pub bar: RunBar,
     /// Per loop table, the ticks the listing added to the bar's total for
     /// it ahead of the loop, which the loop's owed list counts again.
-    foreseen: Mutex<HashMap<&'static str, u64>>,
+    counted_ahead: Mutex<HashMap<&'static str, u64>>,
 }
 
 impl Ctx<'_> {
@@ -279,15 +279,15 @@ impl Ctx<'_> {
     /// when comments are mirrored. Adding them to the bar's total as the
     /// listing goes puts a search walk's work in the queue before its
     /// loops start.
-    pub fn foresee_pages(&self, pages: u64) {
+    pub fn expect_bodies_and_comments(&self, pages: u64) {
         let tables: &[&'static str] = if self.opts.comments {
             &[PAGE_MARKDOWN, PAGE_COMMENTS]
         } else {
             &[PAGE_MARKDOWN]
         };
-        let mut foreseen = self.foreseen.lock().unwrap();
+        let mut counted_ahead = self.counted_ahead.lock().unwrap();
         for t in tables {
-            *foreseen.entry(t).or_default() += pages;
+            *counted_ahead.entry(t).or_default() += pages;
         }
         self.bar.expect(pages * tables.len() as u64);
     }
@@ -300,12 +300,12 @@ impl Ctx<'_> {
         flush: usize,
         flush_bytes: usize,
     ) -> Result<owed::Drained> {
-        let foreseen = self.foreseen.lock().unwrap().remove(table).unwrap_or(0);
+        let counted_ahead = self.counted_ahead.lock().unwrap().remove(table).unwrap_or(0);
         let owed_here = owed.len() as u64;
-        // A page foreseen to owe this whose record the store turns out to
-        // hold owes nothing, and leaves the queue.
-        self.bar.expect(owed_here.saturating_sub(foreseen));
-        self.bar.forgo(foreseen.saturating_sub(owed_here));
+        // A page counted ahead as owing this whose record the store turns
+        // out to hold owes nothing, and leaves the queue.
+        self.bar.expect(owed_here.saturating_sub(counted_ahead));
+        self.bar.forgo(counted_ahead.saturating_sub(owed_here));
         self.bar.doing(table);
         let l = self.a_loop(table, flush, flush_bytes);
         owed::drain(&l, owed, f).await
@@ -638,7 +638,7 @@ async fn download(opts: FetchOptions, found: RunProblems) -> Result<FetchSummary
         unreadable: Mutex::new(HashMap::new()),
         counts: Counts::default(),
         bar: RunBar::new(&opts.progress, 0),
-        foreseen: Mutex::new(HashMap::new()),
+        counted_ahead: Mutex::new(HashMap::new()),
     };
     let mut s = FetchSummary::default();
     let mut result = phases(&ctx, &mut s).await;

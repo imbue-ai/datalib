@@ -51,9 +51,9 @@ impl Recorder {
         out
     }
 
-    fn announced_and_done(&self) -> (u64, u64) {
+    fn largest_total_and_done(&self) -> (u64, u64) {
         let events = self.events.lock().unwrap();
-        let announced = events
+        let largest_total = events
             .iter()
             .filter_map(|ev| match ev {
                 Ev::Length(t) => *t,
@@ -68,7 +68,7 @@ impl Recorder {
                 Ev::Length(_) => 0,
             })
             .sum();
-        (announced, done)
+        (largest_total, done)
     }
 }
 
@@ -122,7 +122,7 @@ async fn run_recorded_on(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_search_run_queues_each_listed_pages_body_and_comments() {
     let recorder = run_recorded(&[]).await;
-    assert_eq!(recorder.announced_and_done(), (4, 4));
+    assert_eq!(recorder.largest_total_and_done(), (4, 4));
     let series = recorder.queued_series();
     assert_eq!(
         series.first(),
@@ -137,7 +137,7 @@ async fn a_search_run_queues_each_listed_pages_body_and_comments() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_roots_run_counts_objects_bodies_and_comments_once_each() {
     let recorder = run_recorded(&[BRIDGE, SICKBAY]).await;
-    assert_eq!(recorder.announced_and_done(), (6, 6));
+    assert_eq!(recorder.largest_total_and_done(), (6, 6));
     let series = recorder.queued_series();
     assert_zero_only_once_done(&series);
 }

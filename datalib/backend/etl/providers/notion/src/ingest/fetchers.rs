@@ -81,7 +81,7 @@ impl Fetcher<PageUpsert> for Objects<'_> {
                         // Its body and comments join the queue before
                         // this object is counted done, so the queue
                         // never reads empty with them still to come.
-                        self.ctx.foresee_pages(1);
+                        self.ctx.expect_bodies_and_comments(1);
                         Outcome::Got(row)
                     }
                     None => Outcome::Failed("the page object has no id".into()),

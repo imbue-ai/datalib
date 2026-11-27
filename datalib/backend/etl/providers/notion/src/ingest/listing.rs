@@ -388,7 +388,7 @@ impl Ctx<'_> {
         }
         tx.commit().await?;
         self.wrote(rows.len() as u64).await;
-        self.foresee_pages(rows.len() as u64);
+        self.expect_bodies_and_comments(rows.len() as u64);
         Ok(stored)
     }
 
