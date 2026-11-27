@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `claude` source: the live API
+//! The `DataProcessor`s for the `claude` source: the live API
 //! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
