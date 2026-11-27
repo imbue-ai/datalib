@@ -10,7 +10,8 @@ other type's is still `datalib-step probe`), item 8 (applets and probes
 get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
 crate of its own is decided, not done) and item 9 (the lint checks are
 in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
-in section 10, step 1 is done (#2033); steps 2 to 6 are not.
+in section 10, steps 1 and 2 are done (#2033, #2034); steps 3 to 6
+are not.
 
 ## The end state
 
@@ -487,7 +488,13 @@ Each step ships alone, and the harness stays green throughout.
    `Periods` trait and the at-rest tick are gone. The CLI's sync still
    serves one period and exits (`Runner::serve`), until step 3 makes it
    a client.
-2. **Key by step id.** This removes the remap code.
+2. **Key by step id (done).** The loop's own state is one slot per step
+   id (`round.rs`'s `Slots`), holding what an invocation read by producer
+   id; the facts the tick takes are laid out by index from the record and
+   those slots at every tick. A swap replaces the graph and the lock shape,
+   and finishes what a dropped step had ended. `carry`, `remap_consumed`,
+   `Slot::remapped`, `QueueLedger::remap` and `remap_by_step` are gone,
+   and the queue ledger is keyed by step id.
 3. **Everything goes through the mailbox.** Turn `wipes` into `jobs`
    and add prepare, with its progress in `job_steps` instead of the
    server's memory. Make the CLI's reset and shrink write jobs. Put
