@@ -274,7 +274,7 @@ impl Listing<'_> {
                     "Google expired the sync token; listing every contact"
                 );
                 let mut tx = self.db.pool().begin().await.context("begin")?;
-                RawDb::forget_google_sync_token(&mut tx, self.book).await?;
+                RawDb::delete_google_sync_token(&mut tx, self.book).await?;
                 tx.commit().await.context("commit")?;
                 self.list(None, summary).await
             }
