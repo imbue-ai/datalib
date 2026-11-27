@@ -201,7 +201,8 @@ read-only open (`doltlite_raw::open_reader(path, Some(commit))`). So:
   the index runs again.
 
 A source named in `inputs` with no store yet keeps whatever the index
-held for it. A source no longer in `inputs` is dropped, rows and record.
+held for it. A source no longer in `inputs` is dropped: its rows and
+its `time_series_sources` row are deleted.
 
 ## The applet
 
