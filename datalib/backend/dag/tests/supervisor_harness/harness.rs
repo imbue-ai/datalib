@@ -692,8 +692,8 @@ impl Harness {
     pub async fn sync_all(&mut self) -> String {
         let path = config::root_config_path(self.root.path());
         let (checked, _) = config::load_graded(&path).unwrap();
-        let fringe = checked.graph.fringe_ids();
-        self.sync(&fringe).await
+        let roots = checked.graph.ids_without_inputs();
+        self.sync(&roots).await
     }
 
     pub async fn stop(&mut self, request: &str) {

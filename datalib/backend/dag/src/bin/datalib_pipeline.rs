@@ -285,7 +285,7 @@ async fn main() -> Result<()> {
         Own::Job(store.open_job(JobKind::Reset, &reset, CLI_OPENER).await?)
     } else {
         let roots: Vec<String> = if sync_only.is_empty() {
-            graph.fringe_ids().into_iter().map(str::to_string).collect()
+            graph.ids_without_inputs().into_iter().map(str::to_string).collect()
         } else {
             sync_only.clone()
         };

@@ -359,7 +359,7 @@ struct OpenRun {
 #[cfg(test)]
 impl Runner {
     pub(crate) async fn run(&self, graph: &Graph) -> Result<RunReport> {
-        let sources: Vec<&str> = graph.fringe_ids();
+        let sources: Vec<&str> = graph.ids_without_inputs();
         self.run_roots(graph, &sources).await
     }
 

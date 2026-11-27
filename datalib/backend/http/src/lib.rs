@@ -818,7 +818,7 @@ fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config
 fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
     checked
         .graph
-        .fringe_ids()
+        .ids_without_inputs()
         .into_iter()
         .map(str::to_string)
         .collect()
