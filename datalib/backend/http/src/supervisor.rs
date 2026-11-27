@@ -437,8 +437,6 @@ impl SyncControl {
                 let _ = tx.send(event.into());
             }
         };
-        // Every row's Sync is disabled while the pass runs and enabled
-        // after: a change to the rows as much as to `upgrade`.
         let rows_changed = || self.rows_changed(announce);
         let upgrade = || self.upgrade.lock().unwrap_or_else(|e| e.into_inner());
         match event {
