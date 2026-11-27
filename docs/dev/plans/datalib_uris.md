@@ -1,6 +1,6 @@
 # Datalib links: a name for what something is, an address for its bytes
 
-*Mirror of the "Names and addresses" tab of the [Datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); step 1 of §6 landed in PR #1305; the `doc` kind (§3) is written by search results and the copied 🆔 (PRs #1441, #1443).*
+*Mirror of the "Names and addresses" tab of the [Datalib links](https://claude.ai/code/artifact/dd31c9e3-8ef9-4185-a85f-0c29a1318117) Claude Doc, which is the source of truth while this plan is under review. Edit the doc and re-mirror this file; don't edit it here. Proposal (2026-10-20); steps 1 and 3 of §6 are built, the rest is not (see Status).*
 
 Copy a message's 🆔 today and paste it into your notes: you get a link like `datalib://chat/1f3a…?msg=9c2e…`, and it opens nothing anywhere. That link is one of ten ways Datalib writes a link to something it holds, and the attachments work is about to add more. This doc proposes two forms to replace all of them but card links (§1), before the new ones ship: a `datalib:` **name**, which says what something is, and a `/data/…` **address**, where the server hands out its bytes.
 
@@ -14,7 +14,7 @@ Words used throughout:
 
 Already decided: kinds are written in `snake_case`, and attachment addresses are built first, to try the design out.
 
-**Status:** step 1 of §6 (the blob-store contract crate, the `/data/` route, and `blob` addresses for chat sources, Notion and Google Drive Docs) landed in PR #1305. Nothing else here is built.
+**Status:** step 1 of §6 is built: `blob` addresses for chat sources, Notion and Google Drive Docs (PR #1305), email's `part` addresses (#1312), and contact photos served from the contacts download's blob store (#1314). Step 3 is built too: a copied 🆔 and a search hit carry a `doc` name (#1441, #1443, #1920), written and read by the `datalib_uri` crate and `ui/src/uri.ts`, both checked against one fixtures file. Two kinds this tab does not list live there as well: `photo` (#1523) and `node` (#1927). An old `datalib://chat/…` link is no longer understood: only `router/deeplink.ts` and `core/src/deeplink.rs` read it, and nothing calls them. Not built: step 2 (source, step, contact and person chips are still written in their own places), step 4 (the grid's `entire_chat` is still a `/chat/<uuid>` path) and step 5 (the desktop app opens no `datalib:` link).
 
 ## 1. What exists today
 
@@ -77,15 +77,15 @@ Names, for things you point at:
 | `step` | `datalib:step/<group>/<function>` | a step | its log | exists |
 | `contact` | `datalib:contact/<id>` | one of your contacts that has no handle; a contact with one is drawn as its best handle's chip instead | nothing yet: the person card is keyed by handle, so a contact with none has no card (a handle chip opens the person card, contact included) | exists |
 | `handle` | `datalib:handle/<kind>/<value>` | a person, by an id with no standard link | the person card | exists |
-| `doc` | `datalib:doc/<page uuid>[#<message uuid>]` | a page, or a message on it | the page | new; replaces `datalib://chat/…` and the `/chat/…` spellings |
+| `doc` | `datalib:doc/<page uuid>[#<message uuid>]` | a page, or a message on it | the page | exists (PRs #1441, #1443); replaced `datalib://chat/…` and the `/chat/…` spellings |
 
 Addresses, for bytes the server hands out. Both reach the same place, a step's blob store:
 
 | Address | Returns | Used for | Status |
 | --- | --- | --- | --- |
 | `/data/<group>/<function>/blob/<hash>` | the stored bytes with that hash | attachments of chat sources, Notion and Google Drive Docs | built, PR #1305 |
-| `/data/<group>/<function>/blob/<email hash>/part/<part hash>` | one attachment from inside a stored email | email attachments | planned |
-| `/data/<group>/<function>/blob/<hash>`, once the contacts download keeps each photo in its blob store | a contact's photo | contact photos | planned |
+| `/data/<group>/<function>/blob/<email hash>/part/<part hash>` | one attachment from inside a stored email | email attachments | built, PR #1312 |
+| `/data/<group>/<function>/blob/<hash>`, once the contacts download keeps each photo in its blob store | a contact's photo | contact photos | built, PR #1314 |
 
 **The blob-store contract is the one thing the server knows about a step's data**, a standardized tentacle:
 
