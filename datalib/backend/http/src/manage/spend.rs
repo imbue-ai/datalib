@@ -1,6 +1,6 @@
 //! The Modal spend cell: what a step's Modal Sandboxes cost at list
-//! price, summed over the runs the run store keeps, with the total
-//! climbing run by run behind it. Only an `embed` step that sent chunks
+//! price, summed over the invocations (and an older build's runs) the run
+//! store keeps, with the total climbing one by one behind it. Only an `embed` step that sent chunks
 //! to Modal reports it (`datalib_metrics::MODAL_COST`); every other row
 //! is blank, and the column hides while every row is.
 
@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 
 use datalib_columns::{Sample, Timeseries};
-use datalib_runs::MetricRow;
+use datalib_runs::{MetricValue, ReportedIn};
 
 use super::queue::grouped;
 
@@ -19,10 +19,11 @@ pub const WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 /// The unit the UI formats as dollars.
 pub const UNIT: &str = "micro_usd";
 
-/// One run's Modal figures for one step, summed over GPUs.
+/// One invocation's (or old run's) Modal figures for one step, summed
+/// over GPUs.
 #[derive(Default)]
 struct Run {
-    run_id: String,
+    reported_in: ReportedIn,
     at: String,
     micro_usd: i64,
     sandboxes: i64,
@@ -30,24 +31,24 @@ struct Run {
     gpus: Vec<String>,
 }
 
-/// `step id → its Modal spend cell`, from every run's value of
+/// `step id → its Modal spend cell`, from every invocation's value of
 /// [`datalib_metrics::MODAL_COST`], [`datalib_metrics::MODAL_SANDBOXES`]
 /// and [`datalib_metrics::MODAL_SANDBOX_SECONDS`] (each a running total
-/// within its run, so its value is what the run came to). A step that
+/// within its invocation, so its value is what that came to). A step that
 /// never sent anything to Modal is absent, so its cell is blank.
 pub fn by_step(
-    cost: &[MetricRow],
-    sandboxes: &[MetricRow],
-    seconds: &[MetricRow],
+    cost: &[MetricValue],
+    sandboxes: &[MetricValue],
+    seconds: &[MetricValue],
 ) -> HashMap<String, Timeseries> {
     let mut runs: BTreeMap<&str, Vec<Run>> = BTreeMap::new();
     for m in cost {
         let step = runs.entry(m.step.as_str()).or_default();
-        let run = match step.iter_mut().find(|r| r.run_id == m.run_id) {
+        let run = match step.iter_mut().find(|r| r.reported_in == m.reported_in) {
             Some(r) => r,
             None => {
                 step.push(Run {
-                    run_id: m.run_id.clone(),
+                    reported_in: m.reported_in.clone(),
                     ..Default::default()
                 });
                 step.last_mut().unwrap()
@@ -71,7 +72,7 @@ pub fn by_step(
         for m in rows {
             if let Some(run) = runs
                 .get_mut(m.step.as_str())
-                .and_then(|runs| runs.iter_mut().find(|r| r.run_id == m.run_id))
+                .and_then(|runs| runs.iter_mut().find(|r| r.reported_in == m.reported_in))
             {
                 add(run, m.value);
             }
@@ -109,9 +110,9 @@ fn detail(total: i64, runs: &[Run]) -> String {
         "about {} at Modal's list price over the {} the run store keeps{}",
         dollars(total),
         if n == 1 {
-            "1 run".to_string()
+            "1 invocation".to_string()
         } else {
-            format!("{n} runs")
+            format!("{n} invocations")
         },
         runs.first()
             .map(|r| format!(", since {}", short_day(&r.at)))
@@ -161,9 +162,9 @@ fn short_day(at: &str) -> &str {
 mod tests {
     use super::*;
 
-    fn row(run: &str, step: &str, name: &str, labels: &str, at: &str, value: i64) -> MetricRow {
-        MetricRow {
-            run_id: run.into(),
+    fn row(run: &str, step: &str, name: &str, labels: &str, at: &str, value: i64) -> MetricValue {
+        MetricValue {
+            reported_in: ReportedIn::Run(run.into()),
             step: step.into(),
             name: name.into(),
             labels: labels.into(),
@@ -223,7 +224,7 @@ mod tests {
         assert_eq!(
             cell.detail.as_deref(),
             Some(
-                "about $8.12 at Modal's list price over the 2 runs the run store keeps, \
+                "about $8.12 at Modal's list price over the 2 invocations the run store keeps, \
                  since 2026-11-18. The latest: $8.07, 121 T4 Sandboxes, 9 h 10 min of \
                  Sandbox time. An estimate that errs high: each Sandbox is priced as if \
                  it used a core and 2 GiB beside its GPU."

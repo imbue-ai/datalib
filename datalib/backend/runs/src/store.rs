@@ -541,6 +541,12 @@ pub enum ReportedIn {
     Run(String),
 }
 
+impl Default for ReportedIn {
+    fn default() -> Self {
+        ReportedIn::Invocation(String::new())
+    }
+}
+
 impl ReportedIn {
     /// From a row with an `invocation_id` and a `run_id` column, one of
     /// them set. An empty invocation id is a value the runner keeps for a
@@ -573,7 +579,7 @@ impl std::fmt::Display for ReportedIn {
 }
 
 /// One series' value, as a reader of both kinds of history gets it.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct MetricValue {
     pub reported_in: ReportedIn,
     pub step: String,
@@ -597,7 +603,7 @@ fn metric_value_from(r: &sqlx::sqlite::SqliteRow) -> MetricValue {
 }
 
 /// One sample of one series, as a reader of both kinds of history gets it.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize)]
 pub struct MetricSample {
     pub reported_in: ReportedIn,
     pub step: String,

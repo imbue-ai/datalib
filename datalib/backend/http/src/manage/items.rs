@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use datalib_columns::{Sample, Timeseries};
-use datalib_runs::{MetricRow, MetricSampleRow};
+use datalib_runs::{MetricSample, MetricValue};
 
 use super::queue::grouped;
 
@@ -23,9 +23,9 @@ pub const WINDOW: Duration = Duration::from_secs(3 * 24 * 60 * 60);
 /// items series since the window opened. A step that has never reported
 /// items is absent, so its cell is blank rather than a false zero.
 pub fn by_step(
-    items: &[MetricRow],
-    documents: &[MetricRow],
-    history: &[MetricSampleRow],
+    items: &[MetricValue],
+    documents: &[MetricValue],
+    history: &[MetricSample],
 ) -> HashMap<String, Timeseries> {
     let documents: HashMap<&str, i64> = documents
         .iter()
@@ -71,9 +71,9 @@ fn count(n: i64, noun: &str) -> String {
 mod tests {
     use super::*;
 
-    fn latest(step: &str, name: &str, value: i64) -> MetricRow {
-        MetricRow {
-            run_id: "r2".into(),
+    fn latest(step: &str, name: &str, value: i64) -> MetricValue {
+        MetricValue {
+            reported_in: datalib_runs::ReportedIn::Invocation("i2".into()),
             step: step.into(),
             name: name.into(),
             value,
@@ -81,8 +81,8 @@ mod tests {
         }
     }
 
-    fn sample(step: &str, at: &str, value: i64) -> MetricSampleRow {
-        MetricSampleRow {
+    fn sample(step: &str, at: &str, value: i64) -> MetricSample {
+        MetricSample {
             step: step.into(),
             name: datalib_metrics::ITEMS.into(),
             ts_utc: at.into(),

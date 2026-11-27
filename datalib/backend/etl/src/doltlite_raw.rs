@@ -1957,9 +1957,9 @@ async fn has_dolt_extensions_on(conn: &mut sqlx::SqliteConnection) -> bool {
     matches!(res, Ok(n) if n > 0)
 }
 
-/// The run a step belongs to, from the runner's environment
-/// (`docs/dev/step_protocol.md`), or `None` outside a run.
-pub const RUN_ID_ENV: &str = datalib_env::DATALIB_DAG_RUN_ID;
+/// The invocation a step is, from the runner's environment
+/// (`docs/dev/step_protocol.md`), or `None` outside the runner.
+pub const INVOCATION_ID_ENV: &str = datalib_env::DATALIB_DAG_INVOCATION_ID;
 
 /// The data root, from the same environment.
 pub const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
@@ -1975,16 +1975,17 @@ fn path_label(path: &Path) -> String {
     under_root.unwrap_or(path).display().to_string()
 }
 
-/// A commit message with the run stamped on its end — `… run=<id>` —
-/// so the commit can be joined back to the run's log. The history
-/// reader parses exactly this suffix.
-pub fn stamp_run(msg: &str) -> String {
-    stamp_run_with(msg, std::env::var(RUN_ID_ENV).ok().as_deref())
+/// A commit message with the invocation stamped on its end —
+/// `… invocation=<id>` — so the commit can be joined back to the
+/// invocation's log. The history reader parses exactly this suffix, and
+/// the ` run=<id>` older builds wrote.
+pub fn stamp_invocation(msg: &str) -> String {
+    stamp_invocation_with(msg, std::env::var(INVOCATION_ID_ENV).ok().as_deref())
 }
 
-fn stamp_run_with(msg: &str, run_id: Option<&str>) -> String {
-    match run_id {
-        Some(id) if !id.trim().is_empty() => format!("{msg} run={}", id.trim()),
+fn stamp_invocation_with(msg: &str, invocation: Option<&str>) -> String {
+    match invocation {
+        Some(id) if !id.trim().is_empty() => format!("{msg} invocation={}", id.trim()),
         _ => msg.to_string(),
     }
 }
@@ -2106,13 +2107,13 @@ pub(crate) async fn commit_on(
             "SELECT dolt_commit('-Am', ?)"
         )
         .query_scalar::<Option<String>>()
-        .bind(stamp_run(msg)),
+        .bind(stamp_invocation(msg)),
         Some(date) => sql!(
             "etl.doltlite_raw.commit_all_at_date",
             "SELECT dolt_commit('-Am', ?, '--date', ?)"
         )
         .query_scalar::<Option<String>>()
-        .bind(stamp_run(msg))
+        .bind(stamp_invocation(msg))
         .bind(date),
     };
     // "nothing to commit" is a legitimate outcome: a pass that fetched
@@ -3699,16 +3700,16 @@ mod tests {
     }
 
     /// The stamp is what `datalib_history` parses back out, so its
-    /// shape is a contract: one trailing ` run=<id>`, and nothing when
-    /// there is no run.
+    /// shape is a contract: one trailing ` invocation=<id>`, and nothing
+    /// outside the runner.
     #[test]
-    fn commit_messages_carry_the_run_id_as_a_trailing_stamp() {
+    fn commit_messages_carry_the_invocation_id_as_a_trailing_stamp() {
         assert_eq!(
-            stamp_run_with("download slack: msgs=4", Some("0199-abc")),
-            "download slack: msgs=4 run=0199-abc"
+            stamp_invocation_with("download slack: msgs=4", Some("0199-abc")),
+            "download slack: msgs=4 invocation=0199-abc"
         );
-        assert_eq!(stamp_run_with("seal", Some("  ")), "seal");
-        assert_eq!(stamp_run_with("seal", None), "seal");
+        assert_eq!(stamp_invocation_with("seal", Some("  ")), "seal");
+        assert_eq!(stamp_invocation_with("seal", None), "seal");
     }
 
     const WIDGETS_DDL: &str = "CREATE TABLE IF NOT EXISTS widgets (

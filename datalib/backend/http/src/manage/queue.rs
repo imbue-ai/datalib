@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, HashMap};
 
 use datalib_columns::Quantity;
 use datalib_metrics::{DEQUEUED, DONE, OWED, QUEUED};
-use datalib_runs::{MetricRow, MetricSampleRow};
+use datalib_runs::{MetricSample, MetricValue};
 use serde::Serialize;
 
 use crate::{secs_between, series_key, DagStepProgress};
@@ -90,7 +90,7 @@ pub struct QueueDrain {
 /// its current values (`name{labels}` → value), when it started, and
 /// `now`. `None` for a step with no queue, or nothing to measure from.
 pub fn queue_drain(
-    samples: &[&MetricSampleRow],
+    samples: &[&MetricSample],
     current: &BTreeMap<String, i64>,
     started: Option<&str>,
     now: &str,
@@ -354,17 +354,18 @@ fn eta(
     }
 }
 
-/// What a step's own queue still held when its last run ended — the
-/// runner's `owed`, which the runner does not empty with the queue.
+/// What a step's own queue still held when its last invocation ended —
+/// the runner's `owed`, which the runner does not empty with the queue.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Owed {
     pub count: i64,
-    /// The run that ended with it.
-    pub run_id: String,
+    /// The invocation that ended with it (or an older build's run), as a
+    /// hover names it.
+    pub ended: String,
 }
 
 /// `step id → what it owes`, from the newest [`OWED`] sample per step.
-pub fn owed_by_step(latest: &[MetricRow]) -> HashMap<String, Owed> {
+pub fn owed_by_step(latest: &[MetricValue]) -> HashMap<String, Owed> {
     latest
         .iter()
         .filter(|m| m.name == OWED && m.labels.is_empty())
@@ -373,7 +374,7 @@ pub fn owed_by_step(latest: &[MetricRow]) -> HashMap<String, Owed> {
                 m.step.clone(),
                 Owed {
                     count: m.value,
-                    run_id: m.run_id.clone(),
+                    ended: m.reported_in.to_string(),
                 },
             )
         })
@@ -390,10 +391,10 @@ pub fn owed_cell(owed: Option<&Owed>, activity: Activity) -> Quantity {
             unit: "count".into(),
             note: None,
             detail: Some(format!(
-                "{} the step saw waiting and did not get to before run {} ended: what its \
+                "{} the step saw waiting and did not get to before {} ended: what its \
                  own queue still held. The next sync starts on it.",
                 grouped(o.count),
-                o.run_id
+                o.ended
             )),
         },
     }
@@ -517,8 +518,8 @@ mod tests {
         format!("2026-09-30T10:{mm_ss}.000000+00:00")
     }
 
-    fn sample(name: &str, labels: &str, mm_ss: &str, value: i64) -> MetricSampleRow {
-        MetricSampleRow {
+    fn sample(name: &str, labels: &str, mm_ss: &str, value: i64) -> MetricSample {
+        MetricSample {
             name: name.into(),
             labels: labels.into(),
             ts_utc: at(mm_ss),
@@ -530,7 +531,7 @@ mod tests {
     /// A consumer's queue as the runner keeps it: seals pile on, and the
     /// end of one process takes the whole pile off at once. 40 came off in
     /// the last two minutes (at 03:40), and 60 are on it now.
-    fn sawtooth() -> Vec<MetricSampleRow> {
+    fn sawtooth() -> Vec<MetricSample> {
         let from = "from=a/ingest";
         vec![
             sample("queued", from, "02:30", 10),
@@ -549,7 +550,7 @@ mod tests {
     #[test]
     fn a_sawtooth_is_paced_by_what_came_off_it_not_by_its_net_change() {
         let samples = sawtooth();
-        let refs: Vec<&MetricSampleRow> = samples.iter().collect();
+        let refs: Vec<&MetricSample> = samples.iter().collect();
         let now = current(&[
             ("queued{from=a/ingest}", 60),
             ("dequeued_total{from=a/ingest}", 40),
@@ -571,7 +572,7 @@ mod tests {
 
         // A step that reports only the queue: the fall at 03:40 is summed
         // from its samples, and reads the same.
-        let queue_only: Vec<&MetricSampleRow> =
+        let queue_only: Vec<&MetricSample> =
             samples.iter().filter(|m| m.name == "queued").collect();
         let d = queue_drain(
             &queue_only,
@@ -593,7 +594,7 @@ mod tests {
             sample("queued", "from=a", "01:00", 0),
             sample("queued", "from=a", "02:00", 50),
         ];
-        let refs: Vec<&MetricSampleRow> = samples.iter().collect();
+        let refs: Vec<&MetricSample> = samples.iter().collect();
         let now = current(&[("queued{from=a}", 50), ("dequeued_total{from=a}", 100)]);
         let d = queue_drain(&refs, &now, Some(STARTED), NOW).unwrap();
         assert_eq!((d.taken, d.secs, d.since_start), (100, 300.0, true));
@@ -607,7 +608,7 @@ mod tests {
             sample("done_total", "", "02:00", 10),
             sample("queued", "from=a", "02:00", 5),
         ];
-        let refs: Vec<&MetricSampleRow> = samples.iter().collect();
+        let refs: Vec<&MetricSample> = samples.iter().collect();
         let own = queue_drain(
             &refs,
             &current(&[("queued", 5), ("done_total", 70)]),
@@ -756,7 +757,7 @@ mod tests {
     fn what_a_step_owes_shows_at_rest_and_a_group_shows_its_first() {
         let owed = |count| Owed {
             count,
-            run_id: "r7".into(),
+            ended: "run r7".into(),
         };
         let at_rest = owed_cell(Some(&owed(412)), Activity::Idle);
         assert_eq!(at_rest.value, Some(412));

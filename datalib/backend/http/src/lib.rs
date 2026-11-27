@@ -53,6 +53,7 @@ pub mod prometheus;
 pub mod remote_media;
 pub mod request_log;
 pub mod request_progress;
+pub mod runs_view;
 pub mod starter;
 pub mod step_program;
 pub mod supervisor;
@@ -273,6 +274,7 @@ fn routes(state: AppState) -> Router {
         .route("/api/processes", get(processes_list))
         .route("/api/log/{seq}", get(log_line))
         .route("/api/runs/{run}/steps", get(run_steps))
+        .route("/api/runs/{run}/invocations", get(run_invocations))
         .route("/api/runs/{run}/log", get(run_log))
         .route("/api/log", get(log_lines))
         .route("/api/log/keys", get(log_keys))
@@ -1204,16 +1206,15 @@ pub struct DagStepInfo {
     pub outputs: Vec<String>,
     /// Ids of the steps this one declares as inputs — the DAG edges.
     pub deps: Vec<String>,
-    /// What this step did the last time a run reached it, from the
+    /// What this step did the last time a request reached it, from the
     /// runner's own state. `None` when it has never been reached.
     pub last_run: Option<DagStepRun>,
-    /// What this step is doing in the run currently in flight, when
-    /// there is one: `running`, `succeeded`, `blocked`, … `None` means
-    /// the scheduler has not reached it yet.
+    /// What this step is doing for the sync `run` names: `running`,
+    /// `succeeded`, `blocked`, … `None` when that sync has not reached it.
     pub current_state: Option<String>,
-    /// What the step has reported in the run currently in flight.
-    /// `None` when it has reported nothing — which is not the same as
-    /// zero, and should be drawn as a spinner rather than an empty bar.
+    /// What the step's newest invocation has reported. `None` when it has
+    /// reported nothing — which is not the same as zero, and should be
+    /// drawn as a spinner rather than an empty bar.
     pub progress: Option<DagStepProgress>,
 }
 
@@ -1227,7 +1228,7 @@ pub struct DagStepProgress {
     /// the two the runner derives for a step that reports the simple
     /// `progress_length` / `progress_inc` form.
     pub metrics: std::collections::BTreeMap<String, i64>,
-    /// `warn` and `error` log lines so far this run.
+    /// `warn` and `error` log lines so far in its newest invocation.
     pub errors: i64,
     /// For a running step: seconds since any of its metrics last moved
     /// (since it started, if none ever did). Long means "not advancing";
@@ -1256,8 +1257,8 @@ pub(crate) fn secs_between(earlier: &str, later: &str) -> Option<f64> {
     Some((b - a).num_microseconds()? as f64 / 1_000_000.0)
 }
 
-/// A run's per-step numbers, keyed by step, from a store snapshot, with
-/// ages and queue drains derived as of `now` (UTC, ISO).
+/// Each step's numbers in a snapshot, keyed by step, with ages and queue
+/// drains derived as of `now` (UTC, ISO).
 fn progress_by_step(
     snap: &datalib_runs::Snapshot,
     now: &str,
@@ -1302,7 +1303,7 @@ fn progress_by_step(
     }
     for st in &snap.steps {
         if let Some(p) = by_step.get_mut(&st.step) {
-            let history: Vec<&datalib_runs::MetricSampleRow> = snap
+            let history: Vec<&datalib_runs::MetricSample> = snap
                 .queue_history
                 .iter()
                 .filter(|m| m.step == st.step)
@@ -1320,12 +1321,17 @@ fn now_utc() -> String {
         .0
 }
 
-/// A step's last outcome, mirroring `datalib_dag::supervisor::record::LastRun`.
+/// A step's last outcome, from
+/// `datalib_dag::supervisor::record::LastInvocation`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagStepRun {
-    /// The run it happened in — what to pass to `/api/runs/{run}/log`
-    /// for its log. Empty for a record written before runs had ids.
+    /// The sync it happened in — the first request its last invocation
+    /// served, what to pass to `/api/runs/{run}/log` for its log. Empty
+    /// for an outcome an older build recorded, which names no request.
     pub run_id: String,
+    /// The invocation itself; empty for an outcome an older build
+    /// recorded.
+    pub invocation_id: String,
     pub started_at: String,
     pub finished_at: Option<String>,
     pub status: String,
@@ -1333,10 +1339,11 @@ pub struct DagStepRun {
     pub error: Option<String>,
 }
 
-impl From<&datalib_dag::supervisor::record::LastRun> for DagStepRun {
-    fn from(r: &datalib_dag::supervisor::record::LastRun) -> Self {
+impl From<&datalib_dag::supervisor::record::LastInvocation> for DagStepRun {
+    fn from(r: &datalib_dag::supervisor::record::LastInvocation) -> Self {
         DagStepRun {
-            run_id: r.run_id.clone(),
+            run_id: r.requests.first().cloned().unwrap_or_default(),
+            invocation_id: r.invocation_id.clone(),
             started_at: r.started_at.clone(),
             finished_at: r.finished_at.clone(),
             status: r.status.clone(),
@@ -1346,12 +1353,14 @@ impl From<&datalib_dag::supervisor::record::LastRun> for DagStepRun {
     }
 }
 
-/// The run in flight, or the one that finished last.
+/// The sync in flight — the oldest open request — or the one that closed
+/// last. The app calls a request a run.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct DagRunInfo {
+    /// The request's id.
     pub run_id: String,
     pub started_at: String,
-    /// `None` while the run is going.
+    /// `None` while the request is open.
     pub finished_at: Option<String>,
     /// True when a runner actually holds this root right now.
     pub live: bool,
@@ -1362,7 +1371,7 @@ pub struct DagResponse {
     pub ok: bool,
     pub error: Option<String>,
     pub steps: Vec<DagStepInfo>,
-    /// `None` when nothing has ever run against this root.
+    /// `None` when nothing has ever been asked of this root.
     pub run: Option<DagRunInfo>,
 }
 
@@ -1370,15 +1379,18 @@ pub struct DagResponse {
 /// the run store's live numbers laid over it. What `GET /api/dag` and
 /// `GET /api/manage/rows` both read.
 pub struct DagSnapshot {
-    /// The run in flight, or the one that finished last. Absent on a
-    /// root that has never synced, which is not an error.
+    /// The sync in flight, or the one that closed last. Absent on a root
+    /// that has never synced, which is not an error.
     pub run: Option<DagRunInfo>,
-    /// step id → its state in the run `run` describes.
+    /// The requests open now: a step whose last invocation served one has
+    /// run in this sync.
+    pub open_requests: BTreeSet<String>,
+    /// step id → what it is doing, or did, for the request `run` names.
     pub states: std::collections::BTreeMap<String, String>,
     /// step id → its row in the loop's `steps` table: its state now, what
-    /// it did the last time a run reached it, when it last succeeded.
+    /// it did the last time a request reached it, when it last succeeded.
     pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
-    /// step id → what it has reported in the run in flight.
+    /// step id → what its newest invocation has reported.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
     /// step id → what it last reported of its problems, and the streaming
     /// processes of its last run that failed and were started again.
@@ -1402,42 +1414,43 @@ pub struct DagSnapshot {
 pub struct SnapshotTimings {
     /// The loop's store, `system/supervisor.sqlite`.
     pub loop_store: std::time::Duration,
-    /// The rest is the run store, `system/runs/runs.sqlite`: the live
-    /// run's progress, then the metrics behind Problems, Items and what a step owes.
+    /// The rest is the run store, `system/runs/runs.sqlite`: the newest
+    /// invocations' progress, then the metrics behind Problems, Items and
+    /// what a step owes.
     pub run_progress: std::time::Duration,
     pub run_metrics: std::time::Duration,
 }
 
-/// An open run in the loop's `runs` table while nothing is running is a
-/// run that died, so `live` is [`supervisor::SyncControl::running`].
+/// An open request while nothing is running is one no loop is serving,
+/// so `live` is [`supervisor::SyncControl::running`].
 pub async fn dag_snapshot(
     root: &std::path::Path,
     sync: &supervisor::SyncControl,
 ) -> anyhow::Result<DagSnapshot> {
     let started = std::time::Instant::now();
     let loaded = match sync.supervisor_store().await {
-        Ok(store) => store.load_record().await,
+        Ok(store) => record_and_requests(store).await,
         Err(e) => Err(e),
     };
-    let state = loaded.unwrap_or_else(|e| {
+    let (state, open, newest) = loaded.unwrap_or_else(|e| {
         tracing::warn!("could not read the loop's record, so nothing reads as run: {e:#}");
         Default::default()
     });
     let live = sync.running();
-    let run = state.current_run.as_ref().map(|r| DagRunInfo {
-        run_id: r.run_id.clone(),
-        started_at: r.started_at.clone(),
-        finished_at: r.finished_at.clone(),
-        live: live && r.finished_at.is_none(),
+    let run = open.first().or(newest.as_ref()).map(|r| DagRunInfo {
+        run_id: r.id.clone(),
+        started_at: r.opened_at.clone(),
+        finished_at: r.closed_at.clone(),
+        live: live && r.closed_at.is_none(),
     });
-    let states = state
-        .current_run
+    let open_requests: BTreeSet<String> = open.iter().map(|r| r.id.clone()).collect();
+    let states = run
         .as_ref()
-        .map(|r| r.states.clone())
+        .map(|run| states_for(&state, &run.run_id))
         .unwrap_or_default();
 
     let loop_store = started.elapsed();
-    let progress = live_progress(root, run.as_ref().map(|r| r.run_id.as_str())).await?;
+    let progress = live_progress(root).await?;
     let run_progress = started.elapsed() - loop_store;
 
     let problems = manage::counts_by_step(
@@ -1460,9 +1473,9 @@ pub async fn dag_snapshot(
         &datalib_runs::metric_history(root, datalib_metrics::ITEMS, &since).await?,
     );
     let spend = manage::spend_by_step(
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_COST).await?,
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOXES).await?,
-        &datalib_runs::metric_by_run(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await?,
+        &datalib_runs::metric_by_invocation(root, datalib_metrics::MODAL_COST).await?,
+        &datalib_runs::metric_by_invocation(root, datalib_metrics::MODAL_SANDBOXES).await?,
+        &datalib_runs::metric_by_invocation(root, datalib_metrics::MODAL_SANDBOX_SECONDS).await?,
     );
     let owed =
         manage::owed_by_step(&datalib_runs::latest_metric(root, datalib_metrics::OWED).await?);
@@ -1474,6 +1487,7 @@ pub async fn dag_snapshot(
 
     Ok(DagSnapshot {
         run,
+        open_requests,
         states,
         steps: state.steps,
         progress,
@@ -1486,21 +1500,58 @@ pub async fn dag_snapshot(
     })
 }
 
-/// What each step has reported in `run`, the loop's run in flight or the
-/// one that finished last. Only when the run store's newest run is that
-/// one: in the window between a run opening its row and the runner
-/// writing its first row, the newest run in the store is still the run
-/// before, and painting its numbers onto this run's steps is worse than
-/// showing none at all.
+/// The loop's record, the requests open now (oldest first), and the
+/// newest closed one.
+async fn record_and_requests(
+    store: &datalib_dag::supervisor::store::Store,
+) -> anyhow::Result<(
+    datalib_dag::supervisor::record::Record,
+    Vec<datalib_dag::supervisor::store::RequestRow>,
+    Option<datalib_dag::supervisor::store::RequestRow>,
+)> {
+    let record = store.load_record().await?;
+    let open = store.open_requests().await?;
+    let newest = match open.is_empty() {
+        true => store.recent_requests(1).await?.into_iter().next(),
+        false => None,
+    };
+    Ok((record, open, newest))
+}
+
+/// What each step is doing, or last did, for `request`: running or
+/// blocked now, or how its last outcome ended when that outcome was for
+/// this request. A step the request has not reached has no entry.
+fn states_for(
+    record: &datalib_dag::supervisor::record::Record,
+    request: &str,
+) -> std::collections::BTreeMap<String, String> {
+    use datalib_dag::supervisor::tick::StateKind;
+    record
+        .steps
+        .iter()
+        .filter_map(|(id, st)| {
+            let last = st.last_invocation.as_ref();
+            let for_it = last.is_some_and(|l| l.requests.iter().any(|r| r == request))
+                || st.requests.iter().any(|r| r == request);
+            if !for_it {
+                return None;
+            }
+            let word = match st.state {
+                Some(StateKind::Running) => "running".to_string(),
+                Some(StateKind::Blocked) => "blocked".to_string(),
+                _ => last.map(|l| l.status.clone()).filter(|s| !s.is_empty())?,
+            };
+            Some((id.clone(), word))
+        })
+        .collect()
+}
+
+/// What each step's newest invocation has reported.
 async fn live_progress(
     root: &std::path::Path,
-    run: Option<&str>,
 ) -> anyhow::Result<std::collections::HashMap<String, DagStepProgress>> {
     let store = datalib_runs::snapshot(root).await?;
-    Ok(match (run, store.run_id.as_deref()) {
-        (Some(run), Some(store_run)) if run == store_run => progress_by_step(&store, &now_utc()),
-        _ => Default::default(),
-    })
+    Ok(progress_by_step(&store, &now_utc()))
 }
 
 /// `GET /api/dag` — the step DAG derived from the data root's config,
@@ -1512,6 +1563,7 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
 
     let DagSnapshot {
         run,
+        open_requests: _,
         states,
         steps: records,
         progress,
@@ -1548,7 +1600,7 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
                         .collect(),
                     last_run: records
                         .get(&sp.id)
-                        .and_then(|r| r.last_run.as_ref())
+                        .and_then(|r| r.last_invocation.as_ref())
                         .map(DagStepRun::from),
                     current_state: states.get(&sp.id).cloned(),
                     progress: progress.get(&sp.id).cloned(),
@@ -1993,21 +2045,37 @@ async fn sync_stream(
 
 #[derive(Debug, Deserialize)]
 struct RunsParams {
-    /// Only runs this step took part in.
+    /// Only runs an invocation of this step served.
     #[serde(default)]
     step: Option<String>,
     #[serde(default)]
     limit: Option<i64>,
 }
 
-/// `GET /api/runs` — recent runs from `system/runs/runs.sqlite`, newest first,
-/// as `app_schema::runs::RunRow`.
+/// `GET /api/runs` — the newest runs, newest first: each request and job
+/// from `system/supervisor.sqlite`, and each run an older build recorded
+/// in the run store (`runs_view.rs`).
 async fn runs_list(
     State(s): State<AppState>,
     Query(p): Query<RunsParams>,
-) -> Result<Json<Vec<datalib_runs::RunRow>>, Refusal> {
+) -> Result<Json<Vec<runs_view::RunView>>, Refusal> {
     let limit = p.limit.unwrap_or(50).clamp(1, 1000);
-    datalib_runs::runs(&s.root, p.step.as_deref(), limit)
+    let store = supervisor_store(&s).await?;
+    let steps = p.step.map(|s| vec![s]);
+    runs_view::list(&s.root, store, steps.as_deref(), limit)
+        .await
+        .map(Json)
+        .map_err(unread)
+}
+
+/// `GET /api/runs/{run}/invocations` — the invocations started for one
+/// request or job, oldest first, each with how it went. Empty for a run
+/// an older build recorded, which had none.
+async fn run_invocations(
+    State(s): State<AppState>,
+    Path(run): Path<String>,
+) -> Result<Json<Vec<datalib_runs::InvocationRow>>, Refusal> {
+    datalib_runs::invocations_of(&s.root, &run)
         .await
         .map(Json)
         .map_err(unread)
@@ -2039,8 +2107,8 @@ async fn log_line(
 
 #[derive(Debug, Deserialize)]
 struct ProcessesParams {
-    /// Only the processes of this run: its runner and its steps'
-    /// attempts.
+    /// Only the processes of this run: the attempts of a request's or a
+    /// job's invocations, or an older build's run's runner and steps.
     #[serde(default)]
     run: Option<String>,
     /// Only processes of this kind (`http` for the server's launches).
@@ -2051,8 +2119,9 @@ struct ProcessesParams {
 }
 
 /// `GET /api/processes` — every process the store holds, newest first:
-/// the server's launches, the runners, each step's attempts with how it
-/// ended. The log panel's unit: a line belongs to one of these.
+/// the server's launches, the runners, each attempt of each invocation
+/// with how it ended. The log panel's unit: a line belongs to one of
+/// these.
 async fn processes_list(
     State(s): State<AppState>,
     Query(p): Query<ProcessesParams>,
@@ -2064,35 +2133,37 @@ async fn processes_list(
         .map_err(unread)
 }
 
-/// One step in one run: its row, and what it reported.
+/// One step in one run: its newest invocation for it (an older build's
+/// run: its row), and what it reported.
 #[derive(Debug, Serialize)]
 pub struct RunStepInfo {
     #[serde(flatten)]
-    pub row: datalib_runs::StepRunRow,
+    pub row: datalib_runs::SnapshotStep,
     pub progress: DagStepProgress,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RunStepsResponse {
-    pub run: Option<datalib_runs::RunRow>,
+    pub run: Option<runs_view::RunView>,
     pub steps: Vec<RunStepInfo>,
 }
 
 /// `GET /api/runs/{run}/steps` — every step's state and numbers for one
-/// run, past or in flight. `run: null` for a run the store does not have.
+/// run, past or in flight. `run: null` for a run nothing has.
 async fn run_steps(
     State(s): State<AppState>,
     Path(run): Path<String>,
 ) -> Result<Json<RunStepsResponse>, Refusal> {
-    let snap = datalib_runs::snapshot_of(&s.root, Some(&run))
-        .await
-        .map_err(unread)?;
-    let Some(run_id) = snap.run_id.clone() else {
+    let store = supervisor_store(&s).await?;
+    let Some(view) = runs_view::one(&s.root, store, &run).await.map_err(unread)? else {
         return Ok(Json(RunStepsResponse {
             run: None,
             steps: Vec::new(),
         }));
     };
+    let snap = datalib_runs::snapshot_of(&s.root, Some(&run))
+        .await
+        .map_err(unread)?;
     let mut progress = progress_by_step(&snap, &now_utc());
     let steps = snap
         .steps
@@ -2111,21 +2182,14 @@ async fn run_steps(
         })
         .collect();
     Ok(Json(RunStepsResponse {
-        run: Some(datalib_runs::RunRow {
-            run_id,
-            started_at_utc: snap.started_at_utc.unwrap_or_default(),
-            finished_at_utc: snap.finished_at_utc,
-            tz_offset: snap.tz_offset,
-            kind: snap.kind,
-            reason: snap.reason,
-        }),
+        run: Some(view),
         steps,
     }))
 }
 
 #[derive(Debug, Deserialize)]
 struct RunLogParams {
-    /// Only this step's lines; omit for the whole run.
+    /// Only this step's lines; omit for every step of the run.
     #[serde(default)]
     step: Option<String>,
     /// Only lines after this `seq` — how a client tails: remember the
@@ -2136,7 +2200,8 @@ struct RunLogParams {
     limit: Option<i64>,
 }
 
-/// `GET /api/runs/{run}/log` — the run's log lines, oldest first, as
+/// `GET /api/runs/{run}/log` — the lines of a request's or a job's
+/// invocations, or of an older build's run, oldest first, as
 /// `app_schema::runs::LogRow`.
 async fn run_log(
     State(s): State<AppState>,
@@ -2375,23 +2440,22 @@ mod tests {
     /// "silent" (both long). A finished step has no ages.
     #[test]
     fn ages_are_derived_from_the_snapshot() {
-        use datalib_runs::{MetricRow, StepRunRow};
+        use datalib_runs::{MetricValue, SnapshotStep};
         let snap = datalib_runs::Snapshot {
-            run_id: Some("r".into()),
             steps: vec![
-                StepRunRow {
+                SnapshotStep {
                     step: "a/ingest".into(),
                     state: "running".into(),
                     started_at_utc: Some("2026-09-14T10:00:00.000000+00:00".into()),
                     ..Default::default()
                 },
-                StepRunRow {
+                SnapshotStep {
                     step: "b/ingest".into(),
                     state: "succeeded".into(),
                     ..Default::default()
                 },
             ],
-            metrics: vec![MetricRow {
+            metrics: vec![MetricValue {
                 step: "a/ingest".into(),
                 name: "rows_upserted_total".into(),
                 labels: "table=t".into(),
@@ -2437,23 +2501,23 @@ mod tests {
         let now = datalib_time::IsoOffsetTimestamp::now_local();
         let ago = |secs: i64| now.bump_micros(-secs * 1_000_000).to_utc_and_offset().0;
         {
-            let w = datalib_runs::RunWriter::start(
+            let w = datalib_runs::LoopWriter::start(
                 root.path(),
-                "r",
-                &ago(300),
                 None,
                 datalib_runs::Retention::default(),
             )
             .unwrap();
-            w.step(datalib_runs::StepRunRow {
+            w.invocation(datalib_runs::InvocationRow {
+                invocation_id: "i".into(),
                 step: "s".into(),
                 state: "running".into(),
                 attempt: 1,
-                started_at_utc: Some(ago(300)),
+                started_at_utc: ago(300),
                 updated_at_utc: ago(300),
                 ..Default::default()
             });
-            let metric = |name: &str, value: i64, at: String| datalib_runs::MetricRow {
+            let metric = |name: &str, value: i64, at: String| datalib_runs::InvocationMetricRow {
+                invocation_id: "i".into(),
                 step: "s".into(),
                 name: name.into(),
                 labels: "from=p".into(),

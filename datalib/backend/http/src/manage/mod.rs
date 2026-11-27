@@ -19,7 +19,7 @@ mod spend;
 mod status;
 mod summary;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -226,11 +226,11 @@ pub struct ManageRow {
     pub stop_request_ids: Vec<String>,
     /// Who turned this step off, while it is off.
     pub turned_off_by: Option<String>,
-    /// The run the step's `last_run` happened in — where its log is.
-    /// Empty when it has never run, or ran before runs had ids.
+    /// The run (the request) the step's last invocation served — where
+    /// its log is. Empty when it has never run, or last ran under an older
+    /// build, whose runs name no request.
     pub last_run_id: String,
-    /// The run in flight, when this step is in it — where its live log
-    /// is.
+    /// The open request this step is working in — where its live log is.
     pub live_run_id: Option<String>,
     /// Absolute path to reveal: the first output that exists.
     pub reveal_path: Option<String>,
@@ -1050,8 +1050,7 @@ impl RowCtx<'_> {
     }
 
     fn step_status(&self, id: &str, dropped: Option<&Diagnostic>) -> StatusView {
-        let run = self.snap.record.run.as_ref().map(|r| r.run_id.as_str());
-        let mut view = status::step_status(self.step(id), run, dropped);
+        let mut view = status::step_status(self.step(id), &self.snap.record.open_requests, dropped);
         // The step's own words, while it runs.
         if let Some(msg) = self
             .snap
@@ -1185,16 +1184,10 @@ impl RowCtx<'_> {
                 let seeds = vec![id.clone()];
                 let last_run_id = self
                     .step(&id)
-                    .and_then(|st| st.last_run.as_ref())
-                    .map(|r| r.run_id.clone())
+                    .and_then(|st| st.last_invocation.as_ref())
+                    .and_then(|r| r.requests.first().cloned())
                     .unwrap_or_default();
-                let live_run_id = self
-                    .snap
-                    .record
-                    .run
-                    .as_ref()
-                    .filter(|r| r.finished_at.is_none() && r.run_id == last_run_id)
-                    .map(|r| r.run_id.clone());
+                let live_run_id = self.step(&id).and_then(|st| st.requests.first().cloned());
                 (status, sync_offer, seeds, last_run_id, live_run_id)
             }
             Entry::Applet(_) => {
@@ -1371,7 +1364,7 @@ impl RowCtx<'_> {
         let dashboard = (matches!(e, Entry::Step(_)) && group.is_some()).then(dashboard_action);
         let choose_again = buttons::choose_again(
             &status.key,
-            self.step(&id).and_then(|st| st.last_run.as_ref()),
+            self.step(&id).and_then(|st| st.last_invocation.as_ref()),
         );
         let turned_off_by = self.step(&id).and_then(|st| st.turned_off_by.clone());
         let switch = match e {
@@ -1473,7 +1466,7 @@ impl RowCtx<'_> {
                 .collect::<Vec<_>>(),
         );
         let (mut status, status_from) = if let Some(d) = dropped {
-            (status::step_status(None, None, Some(d)), None)
+            (status::step_status(None, &BTreeSet::new(), Some(d)), None)
         } else if let Some((status, from)) = agg {
             (status, Some(from))
         } else {
