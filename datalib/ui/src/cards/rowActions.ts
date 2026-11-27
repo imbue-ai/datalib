@@ -188,8 +188,8 @@ export function rowActions<R extends ActionRow>(h: RowActionHost<R>) {
   // question is always what it was doing.
 
   /// The run whose log answers "what was this step doing": the one in
-  /// flight if the step is in it, else the one its record names, else —
-  /// for a record from before runs had ids — the newest run the store
+  /// flight if the step is in it, else its row's `last_run_id`, else —
+  /// for a row written before runs had ids — the newest run the store
   /// says it took part in.
   async function runFor(row: R): Promise<{ runId: string; live: boolean } | null> {
     if (row.live_run_id) return { runId: row.live_run_id, live: true };

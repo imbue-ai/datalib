@@ -601,7 +601,7 @@ type Answer = { ok: boolean; status: number; type: string | null; body: string }
 
 /// GETs asked in one task share one request: the cards a live frame
 /// reaches, or a card's sections mounting together, all ask in the same
-/// task, and each used to send its own. Cleared once the task is over,
+/// task. Cleared once the task is over,
 /// so a later ask, which may follow a change, always goes out.
 const askedThisTask = new Map<string, Promise<Answer>>();
 
@@ -944,9 +944,10 @@ export type Upgrade = {
   migrating: boolean;
   // The server has run its pass, or found it had none to run.
   settled: boolean;
-  // Every step the pass asks, in the order it asks them.
+  // Every step whose command the pass runs with `--prepare` appended,
+  // in the order it runs them.
   steps: PassRow[];
-  // The steps that answered that they need to run again: the roots of
+  // The steps whose `--prepare` run reported `needs_rerun`: the roots of
   // the re-render the app offers. Empty while migrating.
   rerender: string[];
 };
@@ -960,7 +961,8 @@ export type FreeSpace = {
   running: boolean;
   // Why it was not done, once it is over.
   error: string | null;
-  // Every step it asks, in order; empty until the loop takes it up.
+  // Every step whose command it runs with `--compact` or `--collect`
+  // appended, in order; empty until the loop starts it.
   steps: PassRow[];
 };
 
@@ -1075,8 +1077,8 @@ export type DagStepProgress = {
 
 // What a step is doing, or did, in one run: the runner's `RunState`,
 // generated into `./generated/enums`. The backend writes these words
-// into the record in system/supervisor.sqlite and the UI switches on
-// them.
+// into the loop's store, `system/supervisor.sqlite`, and the UI switches
+// on them.
 
 export type DagStepRun = {
   // The run it happened in — what `/api/runs/{run}/log` takes. Empty
@@ -1299,7 +1301,7 @@ export function fetchPipelineStorage(
 
 /// Free space on the data root's disk (`GET /api/pipeline/disk`). The
 /// backend looks every ten seconds whatever is running, and says so with
-/// a `disk` live frame when the number moves or the steps are held or
+/// a `disk` live frame when the number moves or the steps are paused or
 /// let go.
 export type DiskFree = {
   /// Null before the first look, or when the volume can't be measured
@@ -1307,10 +1309,11 @@ export type DiskFree = {
   available_bytes: number | null;
   total_bytes: number | null;
   /// The config's `[disk_space]` lines, defaults filled in: under the
-  /// pause line every step is held, until the resume line.
+  /// pause line the loop starts no step and stops the running ones,
+  /// until free space reaches the resume line.
   pause_below_bytes: number;
   resume_at_bytes: number;
-  /// Held: no step starts, and running ones are stopped.
+  /// Paused: no step starts, and running ones are stopped.
   low: boolean;
   /// Compacted like `OutputStorage.history`.
   history: UsageSample[];
@@ -1696,8 +1699,9 @@ export async function freeDiskSpace(dropOldVersions: boolean): Promise<"done" | 
   return r.status === 202 ? "queued" : "done";
 }
 
-/// Delete the trees of groups already gone from the config, and forget
-/// their steps ran. "queued" when one of their steps has not stopped yet.
+/// Delete the trees of groups already gone from the config, and their
+/// steps' rows in the loop's store. "queued" when one of their steps has
+/// not stopped yet.
 export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> {
   const r = await post("/api/purge", { groups });
   return r.status === 202 ? "queued" : "done";

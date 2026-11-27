@@ -14,8 +14,9 @@ import { logSource, sourceSource } from "./cardSources";
 import { Resolver } from "./resolver";
 
 /** `datalib_http::manage::EntityView`, hand-kept: a group or a step as
- *  the config and the loop's record say it is now, and its row of the
- *  Sources table, whose actions are the chip's menu. */
+ *  the config and the loop's store (`system/supervisor.sqlite`) say it
+ *  is now, and its row of the Sources table, whose actions are the
+ *  chip's menu. */
 export type EntityView = {
   label: string;
   icon: string | null;
@@ -41,7 +42,7 @@ export const entities = new Resolver<EntityView>(
 );
 
 /** Whether a live frame can have moved what a group or step chip shows:
- *  its status (the loop's record, which the Manage rows read) or its
+ *  its status (the loop's store, which the Manage rows read) or its
  *  name (the config). */
 export function movesEntities(e: RootEvent): boolean {
   return changed(e, "manage.rows") || e.kind === "config_changed";

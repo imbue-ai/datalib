@@ -495,9 +495,9 @@ export async function searchContacts(q: string): Promise<ContactSummary[]> {
   return r.contacts;
 }
 
-// Every edit forgets the handles it touched, and the other handles of a
-// contact it changed, so every document, grid and card showing them draws
-// them again from the next answer.
+// Every edit drops from `people`'s cache the handles it touched, and the
+// other handles of a contact it changed, so every document, grid and card
+// showing them draws them again from the next answer.
 
 export async function createContact(name: string, handles: string[]): Promise<string> {
   const id = (await post<{ contact_id: string }>("/contacts", { name, handles })).contact_id;

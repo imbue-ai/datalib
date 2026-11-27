@@ -6,11 +6,11 @@
 // deleted step left behind. Read from `GET /api/pipeline/storage`, which
 // the backend walks on a tick *while a sync runs* and otherwise on
 // request. The free space is `GET /api/pipeline/disk`, looked at every
-// ten seconds; while the config's `[disk_space]` floor holds the steps it
-// turns red and a toast says syncs are paused. A right-click on the size
-// offers to free up disk space (`FreeSpaceDialog.vue`); the toolbar's
-// free-space pill says how it goes, and the size drops when the walk at
-// the end of that busy period says so.
+// ten seconds; while it is under the config's `[disk_space]` floor, so
+// the loop starts no step, it turns red and a toast says syncs are
+// paused. A right-click on the size offers to free up disk space
+// (`FreeSpaceDialog.vue`); the toolbar's free-space pill says how it
+// goes, and the size drops when the walk at the end of that run says so.
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ChipMenu from "@/cards/ChipMenu.ce.vue";
 import FreeSpaceDialog from "@/components/FreeSpaceDialog.vue";
@@ -84,7 +84,7 @@ async function loadDisk() {
   const crossing = diskCrossing(wasLow, disk.value);
   wasLow = disk.value.low;
   if (crossing === "low") {
-    // Sticky: it stands for as long as the syncs are held.
+    // Sticky: it stands for as long as the syncs are paused.
     lowToast = pushToast(lowDiskMessage(disk.value), "warn", null);
   } else if (crossing === "cleared") {
     if (lowToast !== null) dismissToast(lowToast);
@@ -256,7 +256,7 @@ onBeforeUnmount(() => unsubscribe?.());
   display: flex;
   width: 140px;
 }
-/* Under the config's floor: the syncs are held, and this is why. */
+/* Under the config's floor: the syncs are paused, and this is why. */
 .root-bar-low :deep(.tg-plot) {
   background: var(--datalib-error-bg);
   box-shadow: inset 0 0 0 1px var(--datalib-error-border);

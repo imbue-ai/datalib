@@ -1320,7 +1320,7 @@ function listLoad(noun: ProbeNoun): ListLoad {
   return lists.value[noun] ?? IDLE_LIST;
 }
 
-/// Forget what was checked and loaded: the credentials it was done
+/// Clear what was checked and loaded: the credentials it was done
 /// with have just changed.
 function resetProbes() {
   check.value = { state: "idle", failure: null, report: null };

@@ -648,8 +648,8 @@ export const CATALOG: CatalogEntry[] = [
       login_flow_params: { cookieKeys: ["sessionKey"] },
     },
     // Kept to one line on purpose: the point is that clicking has a
-    // cost, not the history of how we found out (2026-08-31, the
-    // captured cookie and the everyday browser evicting each other).
+    // cost, not why (the captured cookie and the session in the person's
+    // everyday browser log each other out).
     credentialConnectWarning: "Signing in again may log out your other claude.ai session.",
     // latchkey offers a service it did not ship the generic Bearer
     // example; claude.ai's credential is the cookie.

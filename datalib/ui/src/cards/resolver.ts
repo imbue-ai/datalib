@@ -1,10 +1,10 @@
 // What a chip names, asked once for the whole app (docs/dev/chips.md
 // § Resolving). Every surface that draws chips — a document, a grid
 // cell — asks here: questions drawn in the same pass go out as one
-// request, answers are kept, and a change a person makes forgets the
-// keys it touched and tells every surface to draw them again.
+// request, answers are kept, and a change a person makes drops the keys
+// it touched from the cache and tells every surface to draw them again.
 //
-// A key is forgotten rather than updated in place: the answer after an
+// A key is dropped rather than updated in place: the answer after an
 // edit is whatever the server says next, and an answer to a question
 // asked before the edit is dropped when it lands. An answer that moves
 // on its own, like a step's status, is revalidated instead: asked again

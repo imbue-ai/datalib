@@ -367,7 +367,7 @@ function indexColumnsVisible(): boolean {
     .some((c) => (c.id === "search_indexed" || c.id === "search_embedded") && !c.hidden);
 }
 
-// The result set changed: forget every answer and ask afresh. With both
+// The result set changed: drop every answer and ask afresh. With both
 // columns hidden this still asks, with no documents, for the "N documents
 // searchable" line under the grid, which is the only thing on screen that
 // hints the columns exist.
@@ -386,7 +386,7 @@ function refreshIndexState() {
 // Who the Author, Contact and Subject chips are comes from `people`, the one resolver every
 // document and grid asks (docs/dev/chips.md § Resolving): a
 // cell that draws a handle asks as it draws, and when an answer changes —
-// it lands, or a link made anywhere forgets it — the cells are drawn again.
+// it lands, or a link made anywhere drops it — the cells are drawn again.
 // The Source cells are group chips, answered by `entities` the same way.
 const PERSON_COLUMNS = ["author_ref", "contact_ref", "subject_ref"];
 const SOURCE_COLUMN = "source_ref";

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The packages this library lists in its config: what each is, which
 // sources and applets use it, an update to review, and a box to add one.
-// The config is the record, so a copy of the library brings its packages
-// along. docs/dev/packages.md.
+// The config is where they are listed, so a copy of the library brings
+// its packages along. docs/dev/packages.md.
 import { computed, onMounted, ref } from "vue";
 import type { PackageLookup, PackageView } from "@/api";
 import PackageReview from "@/components/PackageReview.vue";

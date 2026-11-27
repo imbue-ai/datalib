@@ -85,8 +85,8 @@ onBeforeUnmount(() => (open.value = false));
 
 onMounted(() => {
   void load();
-  // The requests live beside the loop's record, and a change to either
-  // is a `dag` frame.
+  // The requests are a table in the loop's store, beside the step
+  // states, and a change to either is a `dag` frame.
   unsubscribe = subscribeLive({
     root: (e) => {
       if (changed(e, "dag")) void load();
