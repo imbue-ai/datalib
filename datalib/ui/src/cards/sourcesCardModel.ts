@@ -55,7 +55,6 @@ import { syncAllButton } from "@/config/syncAll";
 import type { TableGridApi } from "./tableGridApi";
 import type { MenuEntry } from "@/grid/menu";
 import { catalogForStep, type CatalogEntry } from "@/config/catalog";
-import { ingestLabel } from "@/config/ingestMethods";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
 import { menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { uriFromEntity } from "./chipLinks";
@@ -374,16 +373,12 @@ export function useSourcesCard(ctx: CardCtx) {
     } else {
       editBlocked = "No guided form for a step outside a group — edit it in Advanced below.";
     }
-    // "Download" or "Import", read off the step's params against what its
-    // provider declares; the server's "Ingest" only when they name no method.
-    const ingestLabelled =
-      r.group && r.phase === "ingest" ? ingestLabel(r.type?.id ?? null, r.params) : null;
     // A step is drawn as its chip, under its own short name: the row it
     // sits under already names its group.
     const entity = r.kind === "step" ? uriFromEntity("step", r.id) : null;
     return {
       ...browsing,
-      name: { ...r.name, label: ingestLabelled ?? r.name.label, entity },
+      name: { ...r.name, entity },
       editBlocked,
       editGroup: editBlocked ? null : r.group,
     };

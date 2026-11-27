@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INGEST_METHODS, ingestLabel, ingestReach, methodsHeld } from "../src/config/ingestMethods";
+import { INGEST_METHODS, ingestReach, methodsHeld } from "../src/config/ingestMethods";
 import { CATALOG } from "../src/config/catalog";
 
 describe("ingestReach", () => {
@@ -29,14 +29,6 @@ describe("ingestReach", () => {
     expect(ingestReach(null, { api: {} })).toBeNull();
     // The spellings retired with the method tables are not types.
     expect(ingestReach("slack_api", { sync: {} })).toBeNull();
-  });
-});
-
-describe("ingestLabel", () => {
-  it("says Download or Import, and nothing for a step naming no method", () => {
-    expect(ingestLabel("claude", { api: {} })).toBe("Download");
-    expect(ingestLabel("pdf", { fswalk: { path: "~/Documents" } })).toBe("Import");
-    expect(ingestLabel("pdf", {})).toBeNull();
   });
 });
 
