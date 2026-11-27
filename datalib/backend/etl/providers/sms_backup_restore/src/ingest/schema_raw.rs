@@ -3,6 +3,7 @@
 use datalib_etl::doltlite_raw::{Migration, WirePayload, WirePayloadRow};
 use datalib_etl::read_marks::ReadMarkRow;
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
+use datalib_sql::{sql, sql_id, Sql};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -43,9 +44,11 @@ pub fn sha8(s: &str) -> String {
 #[wire_payload_row(table = "sms_messages")]
 pub struct SmsMessageRow {
     pub id_and_payload: WirePayload,
-    /// Channel key — the normalized other-party phone number.
+    /// Channel key — the normalized other-party phone number. A group
+    /// MMS's `~`-joined address normalizes to every member's digits run
+    /// together.
     pub conversation_key: Option<String>,
-    /// RFC3339 (millis) event time, for sorting + month bucketing.
+    /// RFC3339 (millis) event time, for sorting.
     pub when_ts: Option<String>,
     /// `sms|mms`.
     pub kind: Option<String>,
@@ -91,13 +94,19 @@ pub const LADDER: &[Migration] = &[Migration {
 async fn move_read_flags_to_read_marks(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for ddl in ReadMarkRow::all_ddl() {
         // Audited: the DDL is the derive's, from a `&'static` table name.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
-            .execute(&mut *conn)
-            .await?;
+        Sql::dynamic(
+            sql_id!("sms_backup_restore.rung_read_marks.create_read_marks"),
+            ddl,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
-    let holds_messages: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sms_messages'",
+    let holds_messages: i64 = sql!(
+        "sms_backup_restore.rung_read_marks.find_messages_table",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'sms_messages'"
     )
+    .query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if holds_messages == 0 {
@@ -105,20 +114,24 @@ async fn move_read_flags_to_read_marks(conn: &mut sqlx::SqliteConnection) -> any
     }
     // `json_type` is SQL NULL where the key is absent and 'null' where
     // the backup said nothing; neither is a mark.
-    sqlx::query(
+    sql!(
+        "sms_backup_restore.rung_read_marks.copy_read_flags",
         "INSERT INTO read_marks (id, read_through, read) \
          SELECT id, NULL, json_extract(payload, '$.read') FROM sms_messages \
-         WHERE json_type(payload, '$.read') IN ('true', 'false')",
+         WHERE json_type(payload, '$.read') IN ('true', 'false')"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
     // Through text and back, so the stored bytes are the ones this
     // build's ingest writes for the same message and its next read
     // changes nothing.
-    sqlx::query(
+    sql!(
+        "sms_backup_restore.rung_read_marks.strip_read_flags",
         "UPDATE sms_messages SET payload = jsonb(json_remove(json(payload), '$.read')) \
-         WHERE json_type(payload, '$.read') IS NOT NULL",
+         WHERE json_type(payload, '$.read') IS NOT NULL"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
     Ok(())

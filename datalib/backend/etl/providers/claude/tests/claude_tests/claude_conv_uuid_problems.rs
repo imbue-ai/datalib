@@ -14,6 +14,7 @@ use datalib_etl_claude::synthesize::{ClaudeSynth, BASE, DETAIL_QUERY};
 use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::test_sql;
 use serde_json::json;
 use tempfile::tempdir;
 
@@ -73,7 +74,8 @@ fn detail_answers(playback: &std::path::Path, status: u16) {
 async fn stored_problems(raw: &std::path::Path) -> Vec<(String, String, String)> {
     use sqlx::Row;
     let db = RawDb::open(&db_path_for(raw)).await.unwrap();
-    let rows = sqlx::query("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+    let rows = test_sql!("SELECT scope_key, severity, reason FROM problems ORDER BY scope_key")
+        .query()
         .fetch_all(db.pool())
         .await
         .unwrap()

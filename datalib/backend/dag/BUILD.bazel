@@ -34,6 +34,7 @@ rust_library(
         "//datalib/backend/runs:datalib_runs",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/step_problems:datalib_step_problems",
@@ -81,7 +82,7 @@ rust_binary(
     edition = "2021",
     # Must match [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
-    version = "0.56.0",
+    version = "0.57.1",
     # Stamp STABLE_GIT_DESCRIBE into `datalib-pipeline --version` (release.yml
     # smoke-tests that the published tarball reports the tag). `stamp = -1`
     # defers to the --stamp flag (on under --config=release); day-to-day
@@ -125,6 +126,7 @@ rust_test(
     },
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:libc",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -144,6 +146,7 @@ rust_binary(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tokio",
@@ -160,6 +163,7 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",
@@ -213,12 +217,13 @@ rust_test(
     deps = [
         ":datalib_dag",
         "//datalib/backend/contacts:datalib_contacts",
+        "//datalib/backend/curated_overlay:datalib_curated_overlay",
         "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/handle:datalib_handle",
         "//datalib/backend/migrate_config:datalib_migrate_config",
         "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:chrono",
         "@datalib_crates//:insta",
@@ -239,6 +244,39 @@ insta_update(
     name = "manual_e2e_live_sync_golden.update",
     test = ":manual_e2e_live_sync_golden",
     test_args = ["--ignored"],
+)
+
+# A library copied as a person backs one up: the whole of it to another
+# path, an older copy put back, its raw and curated stores alone, and
+# through a backup tool that skips caches (tests/copy_restore.rs). Over
+# the Docker image's demo library, laid out by the image's own
+# stage_demo.sh.
+rust_test(
+    name = "copy_restore_test",
+    size = "medium",
+    srcs = ["tests/copy_restore.rs"],
+    data = [
+        "//datalib/backend:bin",
+        "//datalib/backend/etl/providers/claude:tng_fixture",
+        "//datalib/backend/etl/providers/contacts:tng_fixture",
+        "//datalib/backend/etl/providers/email:tng_fixture",
+        "//datalib/backend/etl/providers/google_takeout:tng_fixture",
+        "//datalib/backend/etl/providers/linkedin:tng_fixture",
+        "//datalib/backend/etl/providers/pdf:pdf_fixture",
+        "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
+        "//datalib/docker:demo/config.toml",
+        "//datalib/docker:stage_demo.sh",
+        "//tests/fixtures/curated:tng",
+    ],
+    edition = "2021",
+    deps = [
+        "//datalib/backend/curated_overlay:datalib_curated_overlay",
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:toml",
+        "@datalib_crates//:walkdir",
+    ],
 )
 
 # `manual` keeps these out of `//...`, so nothing else ever builds them.

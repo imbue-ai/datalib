@@ -27,6 +27,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::render::{render_source, RenderSource};
+use datalib_sql::test_sql;
 
 const SOURCE: &str = "synth";
 const NOW: &str = "2026-09-14T12:00:00+00:00";
@@ -332,7 +333,8 @@ impl RenderProcessor for SynthRender {
 
 async fn load_model(pool: &SqlitePool) -> Result<Model> {
     let mut model = Model::default();
-    for r in sqlx::query("SELECT id, title, author_id FROM parents")
+    for r in test_sql!("SELECT id, title, author_id FROM parents")
+        .query()
         .fetch_all(pool)
         .await?
     {
@@ -344,7 +346,8 @@ async fn load_model(pool: &SqlitePool) -> Result<Model> {
             },
         );
     }
-    for r in sqlx::query("SELECT id, parent_id, body, seq FROM children")
+    for r in test_sql!("SELECT id, parent_id, body, seq FROM children")
+        .query()
         .fetch_all(pool)
         .await?
     {
@@ -357,7 +360,8 @@ async fn load_model(pool: &SqlitePool) -> Result<Model> {
             },
         );
     }
-    for r in sqlx::query("SELECT id, name FROM authors")
+    for r in test_sql!("SELECT id, name FROM authors")
+        .query()
         .fetch_all(pool)
         .await?
     {
@@ -469,7 +473,8 @@ fn apply_to_model(model: &mut Model, m: &Mutation) {
 async fn apply_to_store(pool: &SqlitePool, m: &Mutation) -> Result<()> {
     match m {
         Mutation::InsertParent(id, p) => {
-            sqlx::query("INSERT INTO parents (id, title, author_id) VALUES (?, ?, ?)")
+            test_sql!("INSERT INTO parents (id, title, author_id) VALUES (?, ?, ?)")
+                .query()
                 .bind(id)
                 .bind(&p.title)
                 .bind(&p.author_id)
@@ -477,24 +482,28 @@ async fn apply_to_store(pool: &SqlitePool, m: &Mutation) -> Result<()> {
                 .await?;
         }
         Mutation::Retitle(id, title) => {
-            sqlx::query("UPDATE parents SET title = ? WHERE id = ?")
+            test_sql!("UPDATE parents SET title = ? WHERE id = ?")
+                .query()
                 .bind(title)
                 .bind(id)
                 .execute(pool)
                 .await?;
         }
         Mutation::DeleteParent(id) => {
-            sqlx::query("DELETE FROM children WHERE parent_id = ?")
+            test_sql!("DELETE FROM children WHERE parent_id = ?")
+                .query()
                 .bind(id)
                 .execute(pool)
                 .await?;
-            sqlx::query("DELETE FROM parents WHERE id = ?")
+            test_sql!("DELETE FROM parents WHERE id = ?")
+                .query()
                 .bind(id)
                 .execute(pool)
                 .await?;
         }
         Mutation::InsertChild(id, c) => {
-            sqlx::query("INSERT INTO children (id, parent_id, body, seq) VALUES (?, ?, ?, ?)")
+            test_sql!("INSERT INTO children (id, parent_id, body, seq) VALUES (?, ?, ?, ?)")
+                .query()
                 .bind(id)
                 .bind(&c.parent_id)
                 .bind(&c.body)
@@ -503,27 +512,31 @@ async fn apply_to_store(pool: &SqlitePool, m: &Mutation) -> Result<()> {
                 .await?;
         }
         Mutation::Rebody(id, body) => {
-            sqlx::query("UPDATE children SET body = ? WHERE id = ?")
+            test_sql!("UPDATE children SET body = ? WHERE id = ?")
+                .query()
                 .bind(body)
                 .bind(id)
                 .execute(pool)
                 .await?;
         }
         Mutation::DeleteChild(id) => {
-            sqlx::query("DELETE FROM children WHERE id = ?")
+            test_sql!("DELETE FROM children WHERE id = ?")
+                .query()
                 .bind(id)
                 .execute(pool)
                 .await?;
         }
         Mutation::RenameAuthor(id, name) => {
-            sqlx::query("INSERT OR REPLACE INTO authors (id, name) VALUES (?, ?)")
+            test_sql!("INSERT OR REPLACE INTO authors (id, name) VALUES (?, ?)")
+                .query()
                 .bind(id)
                 .bind(name)
                 .execute(pool)
                 .await?;
         }
         Mutation::DeleteAuthor(id) => {
-            sqlx::query("DELETE FROM authors WHERE id = ?")
+            test_sql!("DELETE FROM authors WHERE id = ?")
+                .query()
                 .bind(id)
                 .execute(pool)
                 .await?;
@@ -661,7 +674,8 @@ fn try_render_store_at(data_root: &Path, commit: Option<&str>) -> Option<StoreVi
 }
 
 async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
-    let mds = sqlx::query("SELECT markdown_uuid FROM markdowns WHERE source_id = ?")
+    let mds = test_sql!("SELECT markdown_uuid FROM markdowns WHERE source_id = ?")
+        .query()
         .bind(SOURCE)
         .fetch_all(pool)
         .await
@@ -670,7 +684,8 @@ async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
     for md in mds {
         let uuid: String = md.try_get(0).unwrap();
         let mut rows: Vec<(String, String)> =
-            sqlx::query("SELECT uuid, preview FROM grid_rows WHERE markdown_uuid = ?")
+            test_sql!("SELECT uuid, preview FROM grid_rows WHERE markdown_uuid = ?")
+                .query()
                 .bind(&uuid)
                 .fetch_all(pool)
                 .await
@@ -679,16 +694,16 @@ async fn index_docs(pool: &SqlitePool) -> BTreeMap<String, Doc> {
                 .map(|r| (r.try_get(0).unwrap(), r.try_get(1).unwrap()))
                 .collect();
         rows.sort();
-        let mut edges: Vec<(String, String)> = sqlx::query(
-            "SELECT edge_uuid, dst_markdown_uuid FROM edges WHERE src_markdown_uuid = ?",
-        )
-        .bind(&uuid)
-        .fetch_all(pool)
-        .await
-        .unwrap()
-        .into_iter()
-        .map(|r| (r.try_get(0).unwrap(), r.try_get(1).unwrap()))
-        .collect();
+        let mut edges: Vec<(String, String)> =
+            test_sql!("SELECT edge_uuid, dst_markdown_uuid FROM edges WHERE src_markdown_uuid = ?")
+                .query()
+                .bind(&uuid)
+                .fetch_all(pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| (r.try_get(0).unwrap(), r.try_get(1).unwrap()))
+                .collect();
         edges.sort();
         out.insert(
             uuid,

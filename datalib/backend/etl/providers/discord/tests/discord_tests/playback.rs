@@ -1,6 +1,14 @@
 //! One run after another over the tapes in [`crate::world`].
 
 use std::path::Path;
+use std::time::Duration;
+
+use datalib_etl::checkpointer::Cadence;
+use datalib_etl::control::DownloadControl;
+use datalib_etl::download_metrics::DownloadMetrics;
+use datalib_etl::processor::RunCtx;
+use datalib_etl::progress::Progress;
+use datalib_obs::diagnostics::Diagnostics;
 
 use datalib_etl::doltlite_raw::commit_run;
 use datalib_etl_discord::ingest::{self, db_path_for, schema_raw, snowflake, FetchSummary, RawDb};
@@ -10,6 +18,7 @@ use datalib_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
 
 use crate::world::{self, *};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// Every table a run's result is compared on.
 pub const TABLES: &[&str] = &[
@@ -60,17 +69,21 @@ async fn run(store: &Path, tape: &Path) -> anyhow::Result<FetchSummary> {
     run_at(store, tape, sync(), world::now()).await
 }
 
-async fn count(store: &Path, sql: &'static str) -> i64 {
+async fn count(store: &Path, sql: Sql) -> i64 {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let n = sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap();
+    let n = sql.query_scalar().fetch_one(db.pool()).await.unwrap();
     db.close().await;
     n
 }
 
 async fn payload(store: &Path, table: &str, id: &str) -> Option<Value> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let sql = format!("SELECT json(payload) FROM {table} WHERE id = ?");
-    let got: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(payload) FROM {table} WHERE id = ?"),
+    );
+    let got: Option<String> = sql
+        .query_scalar()
         .bind(id)
         .fetch_optional(db.pool())
         .await
@@ -81,7 +94,8 @@ async fn payload(store: &Path, table: &str, id: &str) -> Option<Value> {
 
 async fn problems(store: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let got = sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+    let got = test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -111,7 +125,7 @@ async fn a_first_sync_copies_every_conversation_the_account_can_read() {
     assert!(payload(&store, "channels", READY_ROOM).await.is_some());
     let unread = count(
         &store,
-        "SELECT COUNT(*) FROM messages WHERE channel_id = '7002'",
+        test_sql!("SELECT COUNT(*) FROM messages WHERE channel_id = '7002'"),
     );
     assert_eq!(unread.await, 0);
     assert_eq!(
@@ -127,7 +141,7 @@ async fn a_first_sync_copies_every_conversation_the_account_can_read() {
     );
     let held = count(
         &store,
-        "SELECT COUNT(*) FROM discord_attachments WHERE blake3 IS NOT NULL",
+        test_sql!("SELECT COUNT(*) FROM discord_attachments WHERE blake3 IS NOT NULL"),
     );
     assert_eq!(held.await, 1);
 }
@@ -251,14 +265,14 @@ async fn an_earlier_since_fetches_what_it_now_covers() {
     assert_eq!(s.messages, (BRIDGE_MESSAGES - 150) + 2, "{s:?}");
     let older = count(
         &store,
-        "SELECT COUNT(*) FROM messages WHERE channel_id = '7001'",
+        test_sql!("SELECT COUNT(*) FROM messages WHERE channel_id = '7001'"),
     );
     assert_eq!(older.await, BRIDGE_MESSAGES as i64 - 150);
     run_at(&store, &tape, from(None), world::now())
         .await
         .unwrap();
     assert_eq!(problems(&store).await, [] as [&str; 0]);
-    let all = count(&store, "SELECT COUNT(*) FROM messages");
+    let all = count(&store, test_sql!("SELECT COUNT(*) FROM messages"));
     assert_eq!(all.await, BRIDGE_MESSAGES as i64 + 5);
 }
 
@@ -374,8 +388,95 @@ async fn signing_in_as_another_account_leaves_one() {
     run(&store, &w.tape(d.path(), "picard")).await.unwrap();
     w.value["me"]["id"] = json!(RIKER);
     run(&store, &w.tape(d.path(), "riker")).await.unwrap();
-    let accounts = count(&store, "SELECT count(*) FROM account").await;
-    let sidecars = count(&store, "SELECT count(*) FROM account_bookkeeping").await;
+    let accounts = count(&store, test_sql!("SELECT count(*) FROM account")).await;
+    let sidecars = count(
+        &store,
+        test_sql!("SELECT count(*) FROM account_bookkeeping"),
+    )
+    .await;
     assert_eq!((accounts, sidecars), (1, 1));
     assert!(payload(&store, "account", RIKER).await.is_some());
+}
+
+/// A first sync where `holodeck` is configured and the server has no such
+/// channel, sealing at every point the download calls consistent or
+/// never. Returns the commits the store has and the run's deltas.
+async fn first_sync_missing_a_channel(seal_as_it_goes: bool) -> (i64, Value) {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    let tape = World::before().tape(d.path(), "before");
+    let sync = DiscordSync {
+        channels: Some(vec!["bridge".into(), "holodeck".into()]),
+        threads: false,
+        ..sync()
+    };
+    if seal_as_it_goes {
+        let control = DownloadControl {
+            checkpoint_cadence: Some(Cadence {
+                at_most_every: Duration::ZERO,
+            }),
+            ..Default::default()
+        };
+        let (progress, now) = (Progress::noop(), world::now().to_string());
+        let ctx = RunCtx::new(
+            "discord",
+            &store,
+            &now,
+            &progress,
+            &control,
+            DownloadMetrics::new(),
+            Diagnostics::new(),
+        );
+        let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+        let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());
+        let sealing = ctx.run_store(pool, Some(cas_pool), |sealer| async {
+            let opts = ingest::FetchOptions {
+                control: control.clone(),
+                sealer: Some(sealer),
+                ..options(db.clone(), sync, world::now())
+            };
+            ingest::fetch(opts).await.map(|s| s.line())
+        });
+        playback::scope(&tape, sealing).await.unwrap();
+    } else {
+        run_at(&store, &tape, sync, world::now()).await.unwrap();
+    }
+
+    let got = problems(&store).await;
+    assert!(
+        got.len() == 1 && got[0].contains("holodeck"),
+        "the store holds the one problem: {got:?}"
+    );
+    let db = RawDb::open(&db_path_for(&store)).await.unwrap();
+    let commits: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    let summary: String = test_sql!("SELECT summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query_scalar()
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
+    db.close().await;
+    let summary: Value = serde_json::from_str(&summary).unwrap();
+    (commits, summary["deltas"].clone())
+}
+
+/// The bake's run 1 counted the missing channel in its `sync_runs` deltas
+/// only when a seal landed after the listing found it, so its golden
+/// changed from one bake to the next. The deltas are counted after the
+/// run's problems are written, so they count it either way.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_runs_deltas_count_its_problem_whether_or_not_a_seal_followed_it() {
+    let (sealed, with_seals) = first_sync_missing_a_channel(true).await;
+    let (unsealed, without) = first_sync_missing_a_channel(false).await;
+    assert!(
+        sealed > unsealed,
+        "the sealing run committed as it went: {sealed} commits against {unsealed}"
+    );
+    for deltas in [&with_seals, &without] {
+        assert!(deltas.get("messages").is_some(), "{deltas}");
+        assert_eq!(deltas["problems"]["added"], 1, "{deltas}");
+    }
 }

@@ -13,6 +13,7 @@ use datalib_etl::run_problems::RunProblems;
 use datalib_source_common::glob_match;
 
 use crate::plan::{self, ColumnSpec, KeyOrigin, SourceColumn, TableKind, TableSpec, UniqueIndex};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Schema alias the source catalog is ATTACHed under. Deliberately
 /// unlikely to collide with anything a user would name a database.
@@ -40,7 +41,8 @@ pub struct MirrorOptions {
     pub exclude_columns: Vec<String>,
     pub stable_key_columns: Vec<String>,
     pub primary_keys: BTreeMap<String, Vec<String>>,
-    /// Run `dolt_gc()` at the start of the run. See [`run`].
+    /// Run `dolt_gc()` at the start of the run. A collection that fails
+    /// is logged and the run goes on.
     pub gc: bool,
     /// Tables the provider keeps in the same store beside the mirror
     /// (whatsapp's media registry). Never dropped by the per-run
@@ -249,10 +251,14 @@ async fn vacuum_into(source: &Path, dest: &Path) -> Result<()> {
     let literal = dest.display().to_string().replace('\'', "''");
     // Audited: `literal` is our own tempdir destination path with `'` doubled
     // for a SQL string literal, as the comment above explains.
-    let r = sqlx::query(sqlx::AssertSqlSafe(format!("VACUUM INTO '{literal}'")))
-        .execute(&mut conn)
-        .await
-        .with_context(|| format!("VACUUM INTO {}", dest.display()));
+    let r = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.vacuum_into_snapshot"),
+        format!("VACUUM INTO '{literal}'"),
+    )
+    .query()
+    .execute(&mut conn)
+    .await
+    .with_context(|| format!("VACUUM INTO {}", dest.display()));
     let _ = conn.close().await;
     r.map(|_| ())
 }
@@ -286,7 +292,11 @@ pub async fn run(
     if opts.gc {
         // Best-effort: a failed collection costs disk, not correctness,
         // and must not fail the backup.
-        match sqlx::query("SELECT dolt_gc()").execute(pool).await {
+        match sql!("etl.sqlite_mirror.collect_garbage", "SELECT dolt_gc()")
+            .query()
+            .execute(pool)
+            .await
+        {
             Ok(_) => tracing::info!("sqlite_mirror: collected unreachable chunks"),
             Err(e) => tracing::warn!(
                 error = %format!("{e:#}"),
@@ -314,10 +324,14 @@ pub async fn run(
     let literal = src_path.display().to_string().replace('\'', "''");
     // Audited: `literal` is the source path, `'`-escaped; the schema alias is
     // a const through `quote_ident`.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "ATTACH DATABASE '{literal}' AS {}",
-        plan::quote_ident(SRC_SCHEMA)
-    )))
+    Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.attach_source"),
+        format!(
+            "ATTACH DATABASE '{literal}' AS {}",
+            plan::quote_ident(SRC_SCHEMA)
+        ),
+    )
+    .query()
     .execute(&mut *conn)
     .await
     .with_context(|| format!("attach source {}", src_path.display()))?;
@@ -326,10 +340,11 @@ pub async fn run(
 
     // Detach even on failure, so a retry on the same pooled connection
     // doesn't trip over a stale alias.
-    let _ = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DETACH DATABASE {}",
-        plan::quote_ident(SRC_SCHEMA)
-    )))
+    let _ = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.detach_source"),
+        format!("DETACH DATABASE {}", plan::quote_ident(SRC_SCHEMA)),
+    )
+    .query()
     .execute(&mut *conn)
     .await;
     drop(conn);
@@ -522,12 +537,16 @@ async fn sole_index_key(
         .join(" OR ");
     // Audited: table and column names come out of the source's own schema
     // and go through `plan::quote_ident`; the schema alias is a const.
-    let sql = format!(
-        "SELECT EXISTS (SELECT 1 FROM {}.{} WHERE {any_null})",
-        plan::quote_ident(SRC_SCHEMA),
-        plan::quote_ident(table),
+    let sql = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.check_key_column_for_nulls"),
+        format!(
+            "SELECT EXISTS (SELECT 1 FROM {}.{} WHERE {any_null})",
+            plan::quote_ident(SRC_SCHEMA),
+            plan::quote_ident(table),
+        ),
     );
-    let has_nulls: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let has_nulls: bool = sql
+        .query_scalar()
         .fetch_one(&mut *conn)
         .await
         .with_context(|| format!("check {table}.{} for NULLs", only.name))?;
@@ -562,14 +581,18 @@ async fn verified_stable_columns(
         // Audited: table and column names come out of the source's own
         // schema and go through `plan::quote_ident`; the schema alias is
         // a const.
-        let sql = format!(
-            "SELECT COUNT(*) AS n, COUNT(DISTINCT {c}) AS distinct_n, COUNT({c}) AS non_null \
+        let sql = Sql::dynamic(
+            sql_id!("etl.sqlite_mirror.count_distinct_key_values"),
+            format!(
+                "SELECT COUNT(*) AS n, COUNT(DISTINCT {c}) AS distinct_n, COUNT({c}) AS non_null \
              FROM {s}.{t}",
-            c = plan::quote_ident(c),
-            s = plan::quote_ident(SRC_SCHEMA),
-            t = plan::quote_ident(table),
+                c = plan::quote_ident(c),
+                s = plan::quote_ident(SRC_SCHEMA),
+                t = plan::quote_ident(table),
+            ),
         );
-        let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let row = sql
+            .query()
             .fetch_one(&mut *conn)
             .await
             .with_context(|| format!("check stable key {table}.{c}"))?;
@@ -698,24 +721,36 @@ async fn rebuild_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<
     // double-quotes and escapes embedded quotes. Nothing else from the
     // catalog reaches these statements: column DEFAULTs, the one other
     // piece of SQL text `table_xinfo` reports, are not mirrored at all
-    // (see the `plan` module docs).
-    sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("create mirror table {}", spec.name))?;
+    // (`ColumnSpec::decl` says why).
+    Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.rebuild_create_table"),
+        spec.create_ddl(),
+    )
+    .query()
+    .execute(&mut *tx)
+    .await
+    .with_context(|| format!("create mirror table {}", spec.name))?;
 
-    sqlx::query(sqlx::AssertSqlSafe(spec.copy_sql(SRC_SCHEMA)))
-        .execute(&mut *tx)
-        .await
-        .with_context(|| format!("copy rows into {}", spec.name))?;
+    Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.rebuild_copy_rows"),
+        spec.copy_sql(SRC_SCHEMA),
+    )
+    .query()
+    .execute(&mut *tx)
+    .await
+    .with_context(|| format!("copy rows into {}", spec.name))?;
 
     // Count from the table rather than trusting `rows_affected` on an
     // `INSERT … SELECT`: it is the number the summary reports and the
     // tests assert, so it should be read back from what actually landed.
-    let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT COUNT(*) AS n FROM main.{}",
-        plan::quote_ident(&spec.name)
-    )))
+    let n: i64 = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.rebuild_count_rows"),
+        format!(
+            "SELECT COUNT(*) AS n FROM main.{}",
+            plan::quote_ident(&spec.name)
+        ),
+    )
+    .query()
     .fetch_one(&mut *tx)
     .await
     .with_context(|| format!("count rows in {}", spec.name))?
@@ -762,10 +797,14 @@ async fn append_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u
     // of the source's or the mirror's own schema and go through
     // `plan::quote_ident`, declared types too, inside `decl()`.
     if held.is_empty() {
-        sqlx::query(sqlx::AssertSqlSafe(spec.create_ddl()))
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("create mirror table {}", spec.name))?;
+        Sql::dynamic(
+            sql_id!("etl.sqlite_mirror.append_create_table"),
+            spec.create_ddl(),
+        )
+        .query()
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("create mirror table {}", spec.name))?;
     }
     let gained = spec
         .columns
@@ -779,11 +818,15 @@ async fn append_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u
             not_null: false,
             ..col.clone()
         };
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "ALTER TABLE main.{} ADD COLUMN {}",
-            plan::quote_ident(&spec.name),
-            added.decl()
-        )))
+        Sql::dynamic(
+            sql_id!("etl.sqlite_mirror.append_add_column"),
+            format!(
+                "ALTER TABLE main.{} ADD COLUMN {}",
+                plan::quote_ident(&spec.name),
+                added.decl()
+            ),
+        )
+        .query()
         .execute(&mut *tx)
         .await
         .with_context(|| format!("add column {} to {}", col.name, spec.name))?;
@@ -791,19 +834,26 @@ async fn append_table(conn: &mut SqliteConnection, spec: &TableSpec) -> Result<u
     // A keyed table replaces each row by its key, so an edit is a
     // modification. A keyless one has nothing to match an edited row by,
     // so it adds the rows it does not hold whole and keeps both versions.
-    let sql = if spec.pk.is_empty() {
-        spec.copy_new_sql(SRC_SCHEMA)
-    } else {
-        spec.upsert_sql(SRC_SCHEMA)
-    };
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.append_upsert_rows"),
+        if spec.pk.is_empty() {
+            spec.copy_new_sql(SRC_SCHEMA)
+        } else {
+            spec.upsert_sql(SRC_SCHEMA)
+        },
+    );
+    sql.query()
         .execute(&mut *tx)
         .await
         .with_context(|| format!("append rows into {}", spec.name))?;
-    let n: i64 = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "SELECT COUNT(*) AS n FROM main.{}",
-        plan::quote_ident(&spec.name)
-    )))
+    let n: i64 = Sql::dynamic(
+        sql_id!("etl.sqlite_mirror.append_count_rows"),
+        format!(
+            "SELECT COUNT(*) AS n FROM main.{}",
+            plan::quote_ident(&spec.name)
+        ),
+    )
+    .query()
     .fetch_one(&mut *tx)
     .await
     .with_context(|| format!("count rows in {}", spec.name))?
@@ -825,10 +875,11 @@ async fn drop_all_mirror_tables(
         if opts.is_kept(&name) {
             continue;
         }
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DROP TABLE IF EXISTS main.{}",
-            plan::quote_ident(&name)
-        )))
+        Sql::dynamic(
+            sql_id!("etl.sqlite_mirror.drop_mirror_table"),
+            format!("DROP TABLE IF EXISTS main.{}", plan::quote_ident(&name)),
+        )
+        .query()
         .execute(&mut *tx)
         .await
         .with_context(|| format!("drop mirror table {name}"))?;

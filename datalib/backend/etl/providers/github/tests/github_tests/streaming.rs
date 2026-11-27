@@ -26,6 +26,7 @@ use datalib_obs::diagnostics::Diagnostics;
 
 use crate::interrupt::{tape, Edition};
 use crate::support::REPO;
+use datalib_sql::test_sql;
 
 const NOW: &str = "2369-04-15T00:00:00+00:00";
 const LATER: &str = "2369-04-16T00:00:00+00:00";
@@ -115,7 +116,8 @@ async fn read_at(raw: &Path, commit: &str) -> (BTreeMap<String, [usize; 3]>, Has
         }
     }
     let held: Vec<(String,)> =
-        sqlx::query_as("SELECT id FROM pull_requests_bookkeeping WHERE held_version IS NOT NULL")
+        test_sql!("SELECT id FROM pull_requests_bookkeeping WHERE held_version IS NOT NULL")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();

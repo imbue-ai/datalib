@@ -129,10 +129,10 @@ fn frontend_root(data_root: &Path) -> anyhow::Result<PathBuf> {
     let root = crate::frontend::frontend_dir(data_root);
     std::fs::create_dir_all(&root)
         .map_err(|e| anyhow::anyhow!("create {}: {e}", root.display()))?;
-    // Everything under here is reproducible by restarting the applets,
-    // so cache-aware backups may skip it — except `user`, which is not.
-    // Marking the parent is close enough: the tag is advisory.
-    datalib_core::layout::mark_derived_cache(&root);
+    // `user/` below is what a person or an agent wrote, so nothing here
+    // may tell a backup to skip it; an earlier build did.
+    datalib_core::layout::unmark_cache(&root)
+        .map_err(|e| anyhow::anyhow!("remove the cache tag in {}: {e}", root.display()))?;
     Ok(root)
 }
 
@@ -518,6 +518,9 @@ impl AppletRegistry {
             APPLET_READ_TIMEOUT,
             (!is_write(method)).then_some(hangup),
         );
+        if let Ok(r) = &answer {
+            self.supervisor.note_sql_work(id, r.sql_work.as_deref());
+        }
         if answer.is_ok() && is_write(method) {
             if let Some(nudge) = self.after_writes.get() {
                 nudge.an_applet_wrote();
@@ -676,6 +679,10 @@ pub struct Supervisor {
     /// [`START_TIMEOUT`], except where a caller narrowed it.
     start_timeout: Duration,
     memory: crate::applet_memory::AppletMemory,
+    /// What each applet's statements did, by applet and name, summed from
+    /// the [`datalib_sql_work::SQL_WORK_HEADER`] of every answer since the
+    /// server started.
+    sql_work: Mutex<BTreeMap<String, datalib_sql_work::ByTag>>,
 }
 
 impl Default for Supervisor {
@@ -690,7 +697,16 @@ impl Supervisor {
             running: Mutex::new(BTreeMap::new()),
             start_timeout,
             memory: Default::default(),
+            sql_work: Mutex::new(BTreeMap::new()),
         }
+    }
+
+    fn note_sql_work(&self, id: &str, header: Option<&str>) {
+        let Some(worked) = header.and_then(|h| serde_json::from_str(h).ok()) else {
+            return;
+        };
+        let mut all = self.sql_work.lock().unwrap_or_else(|e| e.into_inner());
+        datalib_sql_work::merge_into(all.entry(id.to_string()).or_default(), &worked);
     }
 
     fn start(
@@ -917,6 +933,15 @@ impl AppletRegistry {
     pub fn memory(&self) -> BTreeMap<String, crate::applet_memory::Reading> {
         self.supervisor.memory.readings()
     }
+
+    /// What each applet's statements have done since the server started.
+    pub fn sql_work(&self) -> BTreeMap<String, datalib_sql_work::ByTag> {
+        self.supervisor
+            .sql_work
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 impl Drop for Supervisor {
@@ -937,6 +962,9 @@ pub struct ProxyResponse {
     /// What the applet says it read to answer, in
     /// [`datalib_sql_work::ROWS_READ_HEADER`].
     pub rows_read: Option<u64>,
+    /// What its statements did to answer, as JSON by name, in
+    /// [`datalib_sql_work::SQL_WORK_HEADER`].
+    pub sql_work: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -1164,6 +1192,7 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         .ok_or_else(|| format!("applet response has no status: {status_line:?}"))?;
     let mut content_type = "application/octet-stream".to_string();
     let mut rows_read = None;
+    let mut sql_work = None;
     for line in lines {
         if let Some((k, v)) = line.split_once(':') {
             let k = k.trim();
@@ -1171,6 +1200,8 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
                 content_type = v.trim().to_string();
             } else if k.eq_ignore_ascii_case(datalib_sql_work::ROWS_READ_HEADER) {
                 rows_read = v.trim().parse().ok();
+            } else if k.eq_ignore_ascii_case(datalib_sql_work::SQL_WORK_HEADER) {
+                sql_work = Some(v.trim().to_string());
             }
         }
     }
@@ -1178,6 +1209,7 @@ fn parse_response(raw: &[u8]) -> Result<ProxyResponse, String> {
         status,
         content_type,
         rows_read,
+        sql_work,
         body,
     })
 }

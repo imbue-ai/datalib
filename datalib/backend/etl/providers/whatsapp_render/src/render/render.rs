@@ -16,6 +16,7 @@ use datalib_etl_chat_common::{
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_schema::providers::Provider;
+use datalib_sql::{sql_id, Sql};
 
 /// Bump when the rendered markdown / grid_rows layout changes enough
 /// that we need every existing WhatsApp doc rebuilt. v6: the raw store
@@ -319,12 +320,15 @@ where
 {
     // Audited: `table` and `column` are `&'static str` at every callsite;
     // the commit hashes are bound.
-    let sql = format!(
-        "SELECT coalesce(to_{column}, from_{column}) FROM dolt_diff_{table} \
+    let sql = Sql::dynamic(
+        sql_id!("whatsapp_render.list_changed_column_between_commits"),
+        format!(
+            "SELECT coalesce(to_{column}, from_{column}) FROM dolt_diff_{table} \
          WHERE from_ref = ? AND to_ref = ? AND diff_type != 'unchanged' \
            AND coalesce(to_{column}, from_{column}) IS NOT NULL"
+        ),
     );
-    sqlx::query_scalar::<_, T>(sqlx::AssertSqlSafe(sql))
+    sql.query_scalar::<T>()
         .bind(from.commit().to_string())
         .bind(to.commit().to_string())
         .fetch_all(pool)
@@ -357,10 +361,13 @@ where
         // `pin` is a validated 40-hex commit hash (`Pin::at`), and the
         // IN-list is a placeholder run sized from the chunk with every id
         // bound.
-        let sql = template
-            .replace("{pin}", pin.commit())
-            .replace("{placeholders}", &placeholders);
-        let mut q = sqlx::query_scalar::<_, R>(sqlx::AssertSqlSafe(sql));
+        let sql = Sql::dynamic(
+            sql_id!("whatsapp_render.resolve_rowids_at_commit"),
+            template
+                .replace("{pin}", pin.commit())
+                .replace("{placeholders}", &placeholders),
+        );
+        let mut q = sql.query_scalar::<R>();
         for id in chunk {
             q = q.bind(id.clone());
         }
@@ -380,6 +387,7 @@ mod tests {
     use datalib_etl::doltlite_raw::{commit_run, has_dolt_extensions, open as open_doltlite};
     use sqlx::sqlite::SqlitePool;
 
+    use datalib_sql::test_sql;
     /// The slice of msgstore's schema render reads, as the mirror engine
     /// would lay it down: rowid keys, rowid foreign keys.
     const MSGSTORE_DDL: &[&str] = &[
@@ -413,10 +421,10 @@ mod tests {
             return;
         }
         for q in [
-            "SELECT dolt_config('user.name', 'datalib-test')",
-            "SELECT dolt_config('user.email', 'test@datalib.local')",
+            test_sql!("SELECT dolt_config('user.name', 'datalib-test')"),
+            test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')"),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+            q.query().execute(&pool).await.expect("dolt_config");
         }
         // Opening commits the sidecar tables already; this is a no-op
         // unless that ever stops being so.
@@ -465,10 +473,10 @@ mod tests {
 
         // dolt_commit wants a committer identity.
         for q in [
-            "SELECT dolt_config('user.name', 'datalib-test')",
-            "SELECT dolt_config('user.email', 'test@datalib.local')",
+            test_sql!("SELECT dolt_config('user.name', 'datalib-test')"),
+            test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')"),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+            q.query().execute(&pool).await.expect("dolt_config");
         }
 
         // Two chats, one message each.
@@ -502,7 +510,8 @@ mod tests {
         let pool = open_doltlite(&db_path, MSGSTORE_DDL)
             .await
             .expect("reopen doltlite");
-        sqlx::query("UPDATE message SET text_data = ? WHERE chat_row_id = 1")
+        test_sql!("UPDATE message SET text_data = ? WHERE chat_row_id = 1")
+            .query()
             .bind("hi from alice (edited)")
             .execute(&pool)
             .await
@@ -541,11 +550,11 @@ mod tests {
             .await
             .expect("reopen doltlite");
         for q in [
-            "DELETE FROM message WHERE chat_row_id = 2",
-            "DELETE FROM chat WHERE _id = 2",
-            "DELETE FROM jid WHERE _id = 2",
+            test_sql!("DELETE FROM message WHERE chat_row_id = 2"),
+            test_sql!("DELETE FROM chat WHERE _id = 2"),
+            test_sql!("DELETE FROM jid WHERE _id = 2"),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("delete bob");
+            q.query().execute(&pool).await.expect("delete bob");
         }
         commit_run(&pool, "delete bob")
             .await
@@ -592,10 +601,10 @@ mod tests {
             return;
         }
         for q in [
-            "SELECT dolt_config('user.name', 'datalib-test')",
-            "SELECT dolt_config('user.email', 'test@datalib.local')",
+            test_sql!("SELECT dolt_config('user.name', 'datalib-test')"),
+            test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')"),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+            q.query().execute(&pool).await.expect("dolt_config");
         }
         seed_chat(&pool, 1, "alice@s.whatsapp.net", "k_a1", "hi from alice").await;
         commit_run(&pool, "first mirror").await.expect("commit_run");
@@ -625,40 +634,50 @@ mod tests {
             return;
         }
         for q in [
-            "SELECT dolt_config('user.name', 'datalib-test')",
-            "SELECT dolt_config('user.email', 'test@datalib.local')",
+            test_sql!("SELECT dolt_config('user.name', 'datalib-test')"),
+            test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')"),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+            q.query().execute(&pool).await.expect("dolt_config");
         }
         seed_chat(&pool, 1, "picard@s.whatsapp.net", "k_p1", "Engage.").await;
         for q in [
             // A chat whose jid row is gone.
-            "INSERT INTO chat (_id, jid_row_id, subject) VALUES (2, 77, 'Ten Forward')",
+            test_sql!("INSERT INTO chat (_id, jid_row_id, subject) VALUES (2, 77, 'Ten Forward')"),
             // A message in no chat, a second with message 1's natural
             // key, and the msgstore seed row, which is no message.
-            "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, message_type, \
+            test_sql!(
+                "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, message_type, \
                 text_data, sort_id) VALUES \
                 (2, 99, 'k_lost', 0, 1700000000000, 0, 'Red alert.', 1), \
                 (3, 1, 'k_p1', 0, 1700000001000, 0, 'Engage, again.', 2), \
                 (4, -1, '-1', 0, NULL, 0, NULL, 0), \
-                (5, 1, 'k_p2', 0, 1700000004000, 1, NULL, 3)",
+                (5, 1, 'k_p2', 0, 1700000004000, 1, NULL, 3)"
+            ),
             // Message 1's photo is not in the backup; message 5's is.
-            "INSERT INTO message_media (message_row_id, file_path, mime_type) VALUES \
+            test_sql!(
+                "INSERT INTO message_media (message_row_id, file_path, mime_type) VALUES \
                 (1, 'Media/WhatsApp Images/IMG-ENTERPRISE.jpg', 'image/jpeg'), \
-                (5, 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 'image/jpeg')",
-            "INSERT INTO wa_media_files (blake3, relative_path, size_bytes, mime_type) VALUES \
+                (5, 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 'image/jpeg')"
+            ),
+            test_sql!(
+                "INSERT INTO wa_media_files (blake3, relative_path, size_bytes, mime_type) VALUES \
                 ('5ea85bd0fc9b4b9c5ef4d8a1a7c2e3f405b6c7d8e9fa0b1c2d3e4f5a6b7c8d9e', \
-                 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 768, 'image/jpeg')",
+                 'Media/WhatsApp Images/IMG-STARGAZER.jpg', 768, 'image/jpeg')"
+            ),
             // A reaction in no chat, one whose message is gone, and one
             // that lands.
-            "INSERT INTO message_add_on (_id, chat_row_id, key_id, from_me, \
+            test_sql!(
+                "INSERT INTO message_add_on (_id, chat_row_id, key_id, from_me, \
                 parent_message_row_id, timestamp) VALUES \
                 (1, 99, 'r1', 0, 1, 1700000002000), (2, 1, 'r2', 0, 42, 1700000003000), \
-                (3, 1, 'r3', 1, 1, 1700000005000)",
-            "INSERT INTO message_add_on_reaction (message_add_on_row_id, reaction) VALUES \
-                (1, '🖖'), (2, '🖖'), (3, '🖖')",
+                (3, 1, 'r3', 1, 1, 1700000005000)"
+            ),
+            test_sql!(
+                "INSERT INTO message_add_on_reaction (message_add_on_row_id, reaction) VALUES \
+                (1, '🖖'), (2, '🖖'), (3, '🖖')"
+            ),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("seed");
+            q.query().execute(&pool).await.expect("seed");
         }
         commit_run(&pool, "seed").await.expect("commit_run");
         pool.close().await;
@@ -718,17 +737,18 @@ mod tests {
             return;
         }
         for q in [
-            "SELECT dolt_config('user.name', 'datalib-test')",
-            "SELECT dolt_config('user.email', 'test@datalib.local')",
+            test_sql!("SELECT dolt_config('user.name', 'datalib-test')"),
+            test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')"),
         ] {
-            sqlx::query(q).execute(&pool).await.expect("dolt_config");
+            q.query().execute(&pool).await.expect("dolt_config");
         }
         // 2023-11-14, then 2023-12-14.
         seed_chat(&pool, 1, "picard@s.whatsapp.net", "k_nov", "Engage.").await;
-        sqlx::query(
+        test_sql!(
             "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, message_type, \
-                text_data, sort_id) VALUES (2, 1, 'k_dec', 1, 1702592000000, 0, 'Aye.', 2)",
+                text_data, sort_id) VALUES (2, 1, 'k_dec', 1, 1702592000000, 0, 'Aye.', 2)"
         )
+        .query()
         .execute(&pool)
         .await
         .expect("seed");
@@ -743,26 +763,29 @@ mod tests {
     /// One jid, chat and message, all sharing `rowid` — the shape the
     /// mirror engine lays down from a real msgstore.
     async fn seed_chat(pool: &SqlitePool, rowid: i64, chat_jid: &str, key_id: &str, text: &str) {
-        sqlx::query(
-            "INSERT INTO jid (_id, user, server, raw_string) VALUES (?, ?, 's.whatsapp.net', ?)",
+        test_sql!(
+            "INSERT INTO jid (_id, user, server, raw_string) VALUES (?, ?, 's.whatsapp.net', ?)"
         )
+        .query()
         .bind(rowid)
         .bind(chat_jid.split('@').next().unwrap())
         .bind(chat_jid)
         .execute(pool)
         .await
         .expect("insert jid");
-        sqlx::query("INSERT INTO chat (_id, jid_row_id, subject) VALUES (?, ?, NULL)")
+        test_sql!("INSERT INTO chat (_id, jid_row_id, subject) VALUES (?, ?, NULL)")
+            .query()
             .bind(rowid)
             .bind(rowid)
             .execute(pool)
             .await
             .expect("insert chat");
-        sqlx::query(
+        test_sql!(
             "INSERT INTO message (_id, chat_row_id, key_id, from_me, timestamp, \
                 message_type, text_data, sort_id) \
-             VALUES (?, ?, ?, 0, 1700000000000, 0, ?, 1)",
+             VALUES (?, ?, ?, 0, 1700000000000, 0, ?, 1)"
         )
+        .query()
         .bind(rowid)
         .bind(rowid)
         .bind(key_id)

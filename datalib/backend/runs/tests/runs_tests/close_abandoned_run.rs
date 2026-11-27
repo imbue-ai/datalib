@@ -6,6 +6,7 @@ use datalib_runs::{
     close_abandoned_run, open_or_create, runs, runs_path, snapshot_of, Retention, RunWriter,
     StepRunRow,
 };
+use datalib_sql::test_sql;
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
 /// Whatever the caller calls a step that never reported. This crate does
@@ -40,15 +41,17 @@ async fn abandoned(root: &std::path::Path, run_id: &str) {
     drop(writer);
 
     let pool = open_or_create(&runs_path(root)).await.expect("open");
-    sqlx::query("UPDATE runs SET finished_at_utc = NULL WHERE run_id = ?")
+    test_sql!("UPDATE runs SET finished_at_utc = NULL WHERE run_id = ?")
+        .query()
         .bind(run_id)
         .execute(&pool)
         .await
         .expect("re-open the run");
-    sqlx::query(
+    test_sql!(
         "INSERT INTO step_runs (run_id, step, state, attempt, updated_at_utc) \
-         VALUES (?, 'b/ingest', 'pending', 1, ?)",
+         VALUES (?, 'b/ingest', 'pending', 1, ?)"
     )
+    .query()
     .bind(run_id)
     .bind(T0)
     .execute(&pool)
@@ -186,7 +189,8 @@ async fn a_pinned_run_is_not_closed_before_it_began() {
     let pinned = "2369-04-15T00:00:00+00:00";
     drop(RunWriter::start(td.path(), "r1", pinned, None, Retention::default()).unwrap());
     let pool = open_or_create(&runs_path(td.path())).await.expect("open");
-    sqlx::query("UPDATE runs SET finished_at_utc = NULL WHERE run_id = 'r1'")
+    test_sql!("UPDATE runs SET finished_at_utc = NULL WHERE run_id = 'r1'")
+        .query()
         .execute(&pool)
         .await
         .expect("re-open the run");

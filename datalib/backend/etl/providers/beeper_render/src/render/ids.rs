@@ -24,9 +24,8 @@ pub fn user(source_id: &str, native_user_id: &str) -> Identity {
 }
 
 /// An event's stamp is its `timestamp_ms`, which is also the raw row's;
-/// a reaction is an event too. The events table is keyed by this, so
-/// a sync's new events land in adjacent leaves of the raw store as
-/// well as the render store.
+/// a reaction is an event too. The stamp leads the uuid, so a sync's
+/// new events land in adjacent leaves of the render store.
 pub fn event(source_id: &str, native_event_id: &str, timestamp_ms: i64) -> Identity {
     IDS.mint(
         source_id,

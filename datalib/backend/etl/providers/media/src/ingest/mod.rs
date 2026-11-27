@@ -135,7 +135,7 @@ async fn scan_tree(
     // The rescan cache, read once so the walk never touches the
     // database. Nothing is deleted here: stale rows are swept at the
     // *end* of the scan, which is what lets an interrupted run leave
-    // usable cursors behind (see `RawDb::sweep_unseen`).
+    // usable cursors behind (see the reconcile at the end of this function).
     let mut prev = opts.db.load_prev().await.context("load rescan cache")?;
 
     // Written before the walk, so an interrupted scan still leaves a
@@ -304,17 +304,6 @@ async fn scan_tree(
     Ok(summary)
 }
 
-/// A cloud placeholder: the file has a size but no allocated blocks, so its
-/// bytes are not here.
-///
-/// Reading one asks Dropbox or iCloud to materialize the file, so a first scan
-/// of an evicted library would try to pull the whole thing down. Consulted
-/// through [`file_changes_scan::scan_with`]'s admit hook, the only place that sees a stat
-/// *before* anything reads.
-///
-/// A heuristic: a filesystem reporting no block counts at all looks entirely
-/// evicted, which is why `skip_dataless` can be turned off. iCloud's `.icloud`
-/// markers need no handling — `kind::accept` never visits them.
 /// The one warning on every file the scan left in the cloud. One, because a
 /// library evicted to iCloud is most of a library. The file it names is the
 /// first by path, so an unchanged tree says the same thing and writes nothing.
@@ -335,6 +324,17 @@ fn cloud_placeholders(dataless: &[String]) -> Option<SkippedRecord> {
     })
 }
 
+/// A cloud placeholder: the file has a size but no allocated blocks, so its
+/// bytes are not here.
+///
+/// Reading one asks Dropbox or iCloud to materialize the file, so a first scan
+/// of an evicted library would try to pull the whole thing down. Consulted
+/// through [`file_changes_scan::scan_with`]'s admit hook, the only place that sees a stat
+/// *before* anything reads.
+///
+/// A heuristic: a filesystem reporting no block counts at all looks entirely
+/// evicted, which is why `skip_dataless` can be turned off. iCloud's `.icloud`
+/// markers need no handling — `kind::accept` never visits them.
 fn is_dataless(walked: &datalib_etl_files::fswalk::WalkedFile) -> bool {
     walked.no_blocks && walked.stat.size > 0
 }
@@ -518,6 +518,7 @@ mod tests {
     use super::*;
     use meta::tests::jpeg_with_date_time_original;
 
+    use datalib_sql::{test_sql, Sql};
     fn panics_on_red_alert(
         path: &Path,
         size: i64,
@@ -556,8 +557,8 @@ mod tests {
         summary
     }
 
-    async fn column(db: &RawDb, sql: &'static str) -> Vec<String> {
-        sqlx::query_scalar(sql).fetch_all(db.pool()).await.unwrap()
+    async fn column(db: &RawDb, sql: Sql) -> Vec<String> {
+        sql.query_scalar().fetch_all(db.pool()).await.unwrap()
     }
 
     /// A parser that panicked on one file ended the whole scan, and the
@@ -585,14 +586,14 @@ mod tests {
         let summary = scan(&root, &raw, &db, panics_on_red_alert).await;
         assert_eq!((summary.items, summary.errors), (2, 1));
         assert_eq!(
-            column(&db, "SELECT id FROM media_files ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM media_files ORDER BY id")).await,
             ["bridge.jpg", "ten_forward.jpg"]
         );
-        let problems: Vec<(String, String)> =
-            sqlx::query_as("SELECT scope_key, sample FROM problems")
-                .fetch_all(db.pool())
-                .await
-                .unwrap();
+        let problems: Vec<(String, String)> = test_sql!("SELECT scope_key, sample FROM problems")
+            .query_as()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         assert_eq!(
             problems,
             [(
@@ -603,11 +604,11 @@ mod tests {
 
         scan(&root, &raw, &db, identify).await;
         assert_eq!(
-            column(&db, "SELECT id FROM media_files ORDER BY id").await,
+            column(&db, test_sql!("SELECT id FROM media_files ORDER BY id")).await,
             ["bridge.jpg", "red_alert.jpg", "ten_forward.jpg"],
             "the next run tries the file again"
         );
-        assert!(column(&db, "SELECT scope_key FROM problems")
+        assert!(column(&db, test_sql!("SELECT scope_key FROM problems"))
             .await
             .is_empty());
         db.pool().close().await;

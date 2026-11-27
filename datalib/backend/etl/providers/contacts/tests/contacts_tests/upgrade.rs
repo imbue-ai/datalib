@@ -12,6 +12,7 @@ use datalib_etl_contacts::ingest::db::{addressbook_pk, ContactRow};
 use datalib_etl_contacts::ingest::schema_raw::full_ddl;
 use datalib_etl_contacts::ingest::{db_path_for, RawDb};
 use datalib_etl_web::dav::state;
+use datalib_sql::{test_sql, Sql};
 
 const OLD_UNSTORED_DDL: &str = "CREATE TABLE IF NOT EXISTS dav_unstored (
     collection TEXT NOT NULL, href TEXT NOT NULL, detail TEXT NOT NULL,
@@ -21,11 +22,8 @@ fn card(uid: &str) -> String {
     format!("BEGIN:VCARD\r\nVERSION:3.0\r\nUID:{uid}\r\nFN:{uid}\r\nEND:VCARD\r\n")
 }
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -75,7 +73,8 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
         )
         .await
         .unwrap();
-        sqlx::query("INSERT INTO dav_unstored (collection, href, detail) VALUES (?, ?, ?)")
+        test_sql!("INSERT INTO dav_unstored (collection, href, detail) VALUES (?, ?, ?)")
+            .query()
             .bind(&book)
             .bind(href("tng-data"))
             .bind("the vCard has no UID, so it cannot be stored")
@@ -102,7 +101,8 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
     let db = RawDb::open(&path).await.expect("the rung carries it");
     let pool = db.pool();
     let listed: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT collection, href, etag FROM dav_resources ORDER BY href")
+        test_sql!("SELECT collection, href, etag FROM dav_resources ORDER BY href")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap();
@@ -114,10 +114,11 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
         ],
         "a server's cards are listed; a file's is not"
     );
-    let held: Vec<(String, bool, Option<String>, Option<String>)> = sqlx::query_as(
+    let held: Vec<(String, bool, Option<String>, Option<String>)> = test_sql!(
         "SELECT id, fetched_at_utc IS NOT NULL, held_version, last_error \
-         FROM dav_resources_bookkeeping ORDER BY id",
+         FROM dav_resources_bookkeeping ORDER BY id"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .unwrap();
@@ -146,21 +147,21 @@ async fn a_store_from_before_the_listing_opens_holding_what_it_had_and_owing_the
         .collect();
     assert_eq!(owed, [href("tng-data")], "only what was never stored");
     assert!(
-        strings(pool, "SELECT scope_key FROM problems")
+        strings(pool, test_sql!("SELECT scope_key FROM problems"))
             .await
             .is_empty(),
         "the old record rows go; the next attempt writes the row that stands for it"
     );
     let tables = strings(
         pool,
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dav_unstored'",
+        test_sql!("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'dav_unstored'"),
     )
     .await;
     assert!(tables.is_empty(), "dav_unstored is gone");
     assert_eq!(
         strings(
             pool,
-            "SELECT value FROM _datalib_meta WHERE key = 'schema_version'"
+            test_sql!("SELECT value FROM _datalib_meta WHERE key = 'schema_version'")
         )
         .await,
         ["5"]

@@ -9,6 +9,7 @@ use datalib_etl_slack::recorded::History;
 use serde_json::{json, Value};
 
 use crate::support::{fetch_into, msg, record_general, stored_ts, Tree};
+use datalib_sql::test_sql;
 
 /// `datetime_to_slack_ts` of the corresponding UTC midnight — the exact
 /// `oldest` param the downloader emits for each `since` value.
@@ -37,9 +38,10 @@ fn write_history(api: &Path, oldest: &str, latest: Option<&str>, inclusive: bool
 /// `listing:` row and not a failed run.
 async fn history_problems(out: &Path) -> i64 {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let n = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:conversations.history%'",
+    let n = test_sql!(
+        "SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'listing:conversations.history%'"
     )
+    .query_scalar()
     .fetch_one(db.pool())
     .await
     .unwrap();

@@ -10,6 +10,7 @@ use datalib_etl_web::playback;
 use serde_json::Value;
 
 use crate::tape::{self, Edition};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// Every table a run's result is compared on.
 pub const TABLES: &[&str] = &[
@@ -60,8 +61,12 @@ async fn run_with(
 async fn payload(store: &Path, table: &str, id: &str) -> Option<Value> {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
     // Audited: `table` is a name this test wrote.
-    let sql = format!("SELECT json(payload) FROM \"{table}\" WHERE id = ?");
-    let p: Option<Option<String>> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT json(payload) FROM \"{table}\" WHERE id = ?"),
+    );
+    let p: Option<Option<String>> = sql
+        .query_scalar()
         .bind(id)
         .fetch_optional(db.pool())
         .await
@@ -70,9 +75,9 @@ async fn payload(store: &Path, table: &str, id: &str) -> Option<Value> {
     p.flatten().map(|p| serde_json::from_str(&p).unwrap())
 }
 
-async fn scalar(store: &Path, sql: &'static str) -> String {
+async fn scalar(store: &Path, sql: Sql) -> String {
     let db = RawDb::open(&db_path_for(store)).await.unwrap();
-    let v: String = sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap();
+    let v: String = sql.query_scalar().fetch_one(db.pool()).await.unwrap();
     db.close().await;
     v
 }
@@ -97,11 +102,13 @@ async fn a_first_sync_mirrors_the_account_and_every_completed_task() {
 
     let counts = scalar(
         &store,
-        "SELECT (SELECT COUNT(*) FROM projects) || ',' || (SELECT COUNT(*) FROM sections) \
+        test_sql!(
+            "SELECT (SELECT COUNT(*) FROM projects) || ',' || (SELECT COUNT(*) FROM sections) \
          || ',' || (SELECT COUNT(*) FROM items) || ',' || (SELECT COUNT(*) FROM notes) \
          || ',' || (SELECT COUNT(*) FROM project_notes) || ',' || (SELECT COUNT(*) FROM labels) \
          || ',' || (SELECT COUNT(*) FROM collaborators) || ',' || (SELECT COUNT(*) FROM user) \
-         || ',' || (SELECT COUNT(*) FROM completed_items)",
+         || ',' || (SELECT COUNT(*) FROM completed_items)"
+        ),
     )
     .await;
     assert_eq!(counts, "3,2,5,2,1,2,2,1,3");
@@ -121,11 +128,11 @@ async fn a_first_sync_mirrors_the_account_and_every_completed_task() {
     assert!(coils.get("day_order").is_none(), "day_order is volatile");
 
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM sync_state").await,
+        scalar(&store, test_sql!("SELECT sync_token FROM sync_state")).await,
         "tok-2"
     );
     assert_eq!(
-        scalar(&store, "SELECT lo || ' ' || hi FROM coverage").await,
+        scalar(&store, test_sql!("SELECT lo || ' ' || hi FROM coverage")).await,
         "2026-03-02T09:00:00Z 2026-10-01T00:00:00Z",
         "the whole range read, as one span"
     );
@@ -176,11 +183,11 @@ async fn a_later_sync_reads_only_what_changed() {
         "Away missions, stardate 47457"
     );
     assert_eq!(
-        scalar(&store, "SELECT sync_token FROM sync_state").await,
+        scalar(&store, test_sql!("SELECT sync_token FROM sync_state")).await,
         "tok-3"
     );
     assert_eq!(
-        scalar(&store, "SELECT lo || ' ' || hi FROM coverage").await,
+        scalar(&store, test_sql!("SELECT lo || ' ' || hi FROM coverage")).await,
         "2026-03-02T09:00:00Z 2026-10-08T00:00:00Z"
     );
 }
@@ -197,7 +204,7 @@ async fn a_run_with_nothing_new_writes_nothing() {
     let fetched = || {
         scalar(
             &store,
-            "SELECT group_concat(id || '@' || fetched_at_utc) FROM user_bookkeeping",
+            test_sql!("SELECT group_concat(id || '@' || fetched_at_utc) FROM user_bookkeeping"),
         )
     };
     let before = fetched().await;
@@ -225,7 +232,11 @@ async fn completed_tasks_are_left_alone_when_turned_off() {
     .unwrap();
     assert_eq!(s.requests, 2, "{s:?}");
     assert_eq!(
-        scalar(&store, "SELECT CAST(COUNT(*) AS TEXT) FROM completed_items").await,
+        scalar(
+            &store,
+            test_sql!("SELECT CAST(COUNT(*) AS TEXT) FROM completed_items")
+        )
+        .await,
         "0"
     );
 }

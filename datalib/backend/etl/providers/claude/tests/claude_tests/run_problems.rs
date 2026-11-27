@@ -12,6 +12,7 @@ use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
+use datalib_sql::{test_sql, Sql};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -169,13 +170,17 @@ impl Account {
 
     /// `(scope_key, sample)` of every `problems` row.
     async fn problems(&self) -> Vec<(String, String)> {
-        self.query("SELECT scope_key, sample FROM problems ORDER BY scope_key")
-            .await
+        self.query(test_sql!(
+            "SELECT scope_key, sample FROM problems ORDER BY scope_key"
+        ))
+        .await
     }
 
     async fn problems_with_severity(&self) -> Vec<(String, String)> {
-        self.query("SELECT scope_key, severity FROM problems ORDER BY scope_key")
-            .await
+        self.query(test_sql!(
+            "SELECT scope_key, severity FROM problems ORDER BY scope_key"
+        ))
+        .await
     }
 
     async fn keys(&self) -> Vec<String> {
@@ -183,16 +188,16 @@ impl Account {
     }
 
     async fn conversation_ids(&self) -> Vec<String> {
-        self.query("SELECT id, id FROM conversations ORDER BY id")
+        self.query(test_sql!("SELECT id, id FROM conversations ORDER BY id"))
             .await
             .into_iter()
             .map(|(id, _)| id)
             .collect()
     }
 
-    async fn query(&self, sql: &'static str) -> Vec<(String, String)> {
+    async fn query(&self, sql: Sql) -> Vec<(String, String)> {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
-        let rows = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+        let rows = sql.query_as().fetch_all(db.pool()).await.unwrap();
         db.close().await;
         rows
     }
@@ -541,7 +546,9 @@ async fn a_file_claude_no_longer_has_is_not_asked_for_again() {
     acct.fail(&contents(), 404);
     acct.run(|_| {}).await.unwrap();
     let rows = acct
-        .query("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+        .query(test_sql!(
+            "SELECT scope_key, reason FROM problems ORDER BY scope_key"
+        ))
         .await;
     assert_eq!(
         rows,

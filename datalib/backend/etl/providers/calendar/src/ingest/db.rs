@@ -13,6 +13,7 @@ use super::schema_raw::{
     full_ddl, AccountRow, CalendarRow, CalendlyEventRow, CalendlyInviteesRow, GoogleEventRow,
     IcsObjectRow, LADDER,
 };
+use datalib_sql::{sql, sql_id, Sql};
 
 datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
@@ -100,11 +101,15 @@ impl RawDb {
     /// The token the last listing page of this calendar left; `None`
     /// lists it whole.
     pub async fn sync_token(&self, calendar_id: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT sync_token FROM calendars WHERE id = ?")
-            .bind(calendar_id)
-            .fetch_optional(self.pool())
-            .await
-            .context("select sync_token")?;
+        let row = sql!(
+            "calendar.find_sync_token",
+            "SELECT sync_token FROM calendars WHERE id = ?"
+        )
+        .query()
+        .bind(calendar_id)
+        .fetch_optional(self.pool())
+        .await
+        .context("select sync_token")?;
         Ok(row
             .and_then(|r| r.try_get::<Option<String>, _>("sync_token").ok().flatten())
             .filter(|t| !t.is_empty()))
@@ -116,12 +121,16 @@ impl RawDb {
         calendar_id: &str,
         token: Option<&str>,
     ) -> Result<()> {
-        sqlx::query("UPDATE calendars SET sync_token = ? WHERE id = ?")
-            .bind(token)
-            .bind(calendar_id)
-            .execute(&mut **tx)
-            .await
-            .context("update sync_token")?;
+        sql!(
+            "calendar.update_sync_token",
+            "UPDATE calendars SET sync_token = ? WHERE id = ?"
+        )
+        .query()
+        .bind(token)
+        .bind(calendar_id)
+        .execute(&mut **tx)
+        .await
+        .context("update sync_token")?;
         Ok(())
     }
 
@@ -141,12 +150,15 @@ impl RawDb {
     }
 
     pub async fn ics_uids(&self, calendar_id: &str) -> Result<HashSet<String>> {
-        let uids: Vec<String> =
-            sqlx::query_scalar("SELECT uid FROM ics_objects WHERE calendar_id = ?")
-                .bind(calendar_id)
-                .fetch_all(self.pool())
-                .await
-                .context("select ics uids")?;
+        let uids: Vec<String> = sql!(
+            "calendar.list_ics_uids",
+            "SELECT uid FROM ics_objects WHERE calendar_id = ?"
+        )
+        .query_scalar()
+        .bind(calendar_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select ics uids")?;
         Ok(uids.into_iter().collect())
     }
 
@@ -169,13 +181,16 @@ impl RawDb {
         calendar_id: &str,
         href: &str,
     ) -> Result<u64> {
-        let ids: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM ics_objects WHERE calendar_id = ? AND href = ?")
-                .bind(calendar_id)
-                .bind(href)
-                .fetch_all(&mut **tx)
-                .await
-                .context("select ics object for delete")?;
+        let ids: Vec<String> = sql!(
+            "calendar.find_ics_objects_by_href",
+            "SELECT id FROM ics_objects WHERE calendar_id = ? AND href = ?"
+        )
+        .query_scalar()
+        .bind(calendar_id)
+        .bind(href)
+        .fetch_all(&mut **tx)
+        .await
+        .context("select ics object for delete")?;
         Self::delete_ids_in_tx(tx, "ics_objects", &ids).await?;
         Ok(ids.len() as u64)
     }
@@ -210,12 +225,15 @@ impl RawDb {
         account_id: &str,
         listed: &[String],
     ) -> Result<usize> {
-        let stored: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM calendars WHERE account_id = ?")
-                .bind(account_id)
-                .fetch_all(self.pool())
-                .await
-                .context("select calendars")?;
+        let stored: Vec<String> = sql!(
+            "calendar.list_calendars_of_account",
+            "SELECT id FROM calendars WHERE account_id = ?"
+        )
+        .query_scalar()
+        .bind(account_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select calendars")?;
         let gone: Vec<&String> = stored.iter().filter(|id| !listed.contains(id)).collect();
         if gone.is_empty() {
             return Ok(0);
@@ -238,27 +256,36 @@ impl RawDb {
     /// Returns how many events went.
     async fn delete_calendar(tx: &mut Transaction<'_, Sqlite>, calendar_id: &str) -> Result<usize> {
         // Keyed like the events they belong to, so they go first.
-        let invitees: Vec<String> =
-            sqlx::query_scalar("SELECT id FROM calendly_events WHERE calendar_id = ?")
-                .bind(calendar_id)
-                .fetch_all(&mut **tx)
-                .await
-                .context("select the calendar's calendly events")?;
+        let invitees: Vec<String> = sql!(
+            "calendar.list_calendly_events_of_calendar",
+            "SELECT id FROM calendly_events WHERE calendar_id = ?"
+        )
+        .query_scalar()
+        .bind(calendar_id)
+        .fetch_all(&mut **tx)
+        .await
+        .context("select the calendar's calendly events")?;
         Self::delete_calendly_invitees(tx, &invitees).await?;
         let mut events = 0;
         for table in ["ics_objects", "google_events", "calendly_events"] {
             // Audited: `table` is one of the three literals above.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {table}_bookkeeping WHERE id IN \
+            Sql::dynamic(
+                sql_id!("calendar.delete_event_sidecars_of_calendar"),
+                format!(
+                    "DELETE FROM {table}_bookkeeping WHERE id IN \
                  (SELECT id FROM {table} WHERE calendar_id = ?)"
-            )))
+                ),
+            )
+            .query()
             .bind(calendar_id)
             .execute(&mut **tx)
             .await
             .context("delete the calendar's event sidecars")?;
-            events += sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE calendar_id = ?"
-            )))
+            events += Sql::dynamic(
+                sql_id!("calendar.delete_events_of_calendar"),
+                format!("DELETE FROM {table} WHERE calendar_id = ?"),
+            )
+            .query()
             .bind(calendar_id)
             .execute(&mut **tx)
             .await
@@ -266,10 +293,16 @@ impl RawDb {
             .rows_affected();
         }
         for sql in [
-            "DELETE FROM calendars WHERE id = ?",
-            "DELETE FROM calendars_bookkeeping WHERE id = ?",
+            sql!(
+                "calendar.delete_calendar.delete_calendars",
+                "DELETE FROM calendars WHERE id = ?"
+            ),
+            sql!(
+                "calendar.delete_calendar.delete_calendars_bookkeeping",
+                "DELETE FROM calendars_bookkeeping WHERE id = ?"
+            ),
         ] {
-            sqlx::query(sql)
+            sql.query()
                 .bind(calendar_id)
                 .execute(&mut **tx)
                 .await
@@ -302,9 +335,11 @@ impl RawDb {
         &self,
         calendar_id: &str,
     ) -> Result<HashMap<String, serde_json::Value>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT event_id, json(payload) FROM google_events WHERE calendar_id = ?",
+        let rows: Vec<(String, String)> = sql!(
+            "calendar.list_google_event_payloads",
+            "SELECT event_id, json(payload) FROM google_events WHERE calendar_id = ?"
         )
+        .query_as()
         .bind(calendar_id)
         .fetch_all(self.pool())
         .await
@@ -326,10 +361,12 @@ impl RawDb {
     ) -> Result<Vec<String>> {
         let mut out = Vec::new();
         for series in series_ids {
-            let ids: Vec<String> = sqlx::query_scalar(
+            let ids: Vec<String> = sql!(
+                "calendar.list_google_occurrences_of_series",
                 "SELECT event_id FROM google_events
-                 WHERE calendar_id = ? AND recurring_event_id = ?",
+                 WHERE calendar_id = ? AND recurring_event_id = ?"
             )
+            .query_scalar()
             .bind(calendar_id)
             .bind(series)
             .fetch_all(&mut **tx)
@@ -368,12 +405,15 @@ impl RawDb {
         &self,
         calendar_id: &str,
     ) -> Result<HashMap<String, Option<String>>> {
-        let rows: Vec<(String, Option<String>)> =
-            sqlx::query_as("SELECT id, listing_hash FROM calendly_events WHERE calendar_id = ?")
-                .bind(calendar_id)
-                .fetch_all(self.pool())
-                .await
-                .context("select calendly event keys")?;
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "calendar.list_calendly_listing_hashes",
+            "SELECT id, listing_hash FROM calendly_events WHERE calendar_id = ?"
+        )
+        .query_as()
+        .bind(calendar_id)
+        .fetch_all(self.pool())
+        .await
+        .context("select calendly event keys")?;
         Ok(rows.into_iter().collect())
     }
 
@@ -383,10 +423,12 @@ impl RawDb {
         &self,
         calendar_id: &str,
     ) -> Result<Vec<datalib_etl_web::owed::Listed>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String)> = sql!(
+            "calendar.list_calendly_events_as_listed",
             "SELECT id, listing_hash FROM calendly_events \
-             WHERE calendar_id = ? AND listing_hash IS NOT NULL ORDER BY start_time, id",
+             WHERE calendar_id = ? AND listing_hash IS NOT NULL ORDER BY start_time, id"
         )
+        .query_as()
         .bind(calendar_id)
         .fetch_all(self.pool())
         .await
@@ -433,16 +475,20 @@ impl RawDb {
     ) -> Result<()> {
         for id in ids {
             // Audited: `table` is a `&'static str` at every callsite.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE id = ?"
-            )))
+            Sql::dynamic(
+                sql_id!("calendar.delete_row_by_id"),
+                format!("DELETE FROM {table} WHERE id = ?"),
+            )
+            .query()
             .bind(id)
             .execute(&mut **tx)
             .await
             .with_context(|| format!("delete {table} {id}"))?;
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {table}_bookkeeping WHERE id = ?"
-            )))
+            Sql::dynamic(
+                sql_id!("calendar.delete_sidecar_by_id"),
+                format!("DELETE FROM {table}_bookkeeping WHERE id = ?"),
+            )
+            .query()
             .bind(id)
             .execute(&mut **tx)
             .await
@@ -454,10 +500,12 @@ impl RawDb {
     // ── render reads ────────────────────────────────────────────────
 
     pub async fn load_account(&self) -> Result<Option<LoadedAccount>> {
-        let row = sqlx::query(
+        let row = sql!(
+            "calendar.read_account",
             "SELECT id, method, server_url, principal_href, login FROM accounts \
-             ORDER BY id LIMIT 1",
+             ORDER BY id LIMIT 1"
         )
+        .query()
         .fetch_optional(self.pool())
         .await
         .context("select account")?;
@@ -474,10 +522,14 @@ impl RawDb {
     }
 
     pub async fn load_calendars(&self) -> Result<Vec<LoadedCalendar>> {
-        let rows = sqlx::query("SELECT id, display_name, time_zone FROM calendars ORDER BY id")
-            .fetch_all(self.pool())
-            .await
-            .context("select calendars")?;
+        let rows = sql!(
+            "calendar.list_calendars",
+            "SELECT id, display_name, time_zone FROM calendars ORDER BY id"
+        )
+        .query()
+        .fetch_all(self.pool())
+        .await
+        .context("select calendars")?;
         Ok(rows
             .into_iter()
             .map(|r| LoadedCalendar {
@@ -492,10 +544,12 @@ impl RawDb {
     }
 
     pub async fn load_ics_objects(&self) -> Result<(Vec<LoadedIcsObject>, Vec<UnreadableRow>)> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "calendar.list_ics_objects",
             "SELECT id, calendar_id, uid, json_extract(payload, '$.ics') AS ics
-             FROM ics_objects ORDER BY id",
+             FROM ics_objects ORDER BY id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select ics_objects")?;
@@ -524,13 +578,15 @@ impl RawDb {
     pub async fn load_google_events(&self) -> Result<(Vec<LoadedGoogleEvent>, Vec<UnreadableRow>)> {
         // A row written before `etag` and `updated` moved to the sidecar
         // still has them in its payload; the overlay reads either.
-        let rows = sqlx::query(
+        let rows = sql!(
+            "calendar.list_google_events_with_volatile",
             "SELECT e.id, e.calendar_id, json(e.payload) AS payload,
                     json(b.volatile_payload) AS volatile
                FROM google_events e
                LEFT JOIN google_events_bookkeeping b ON b.id = e.id
-              ORDER BY e.id",
+              ORDER BY e.id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select google_events")?;
@@ -570,13 +626,15 @@ impl RawDb {
     pub async fn load_calendly_events(
         &self,
     ) -> Result<(Vec<LoadedCalendlyEvent>, Vec<UnreadableRow>)> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "calendar.list_calendly_events_with_invitees",
             "SELECT e.id, e.calendar_id, json(e.payload) AS payload,
                     json(i.payload) AS invitees
                FROM calendly_events e
                LEFT JOIN calendly_invitees i ON i.id = e.id
-              ORDER BY e.id",
+              ORDER BY e.id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select calendly_events")?;
@@ -617,6 +675,7 @@ mod tests {
     use super::*;
     use crate::ingest::schema_raw::{event_pk, DATA_TABLES};
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn open_creates_every_table_and_its_sidecar() {
         let dir = tempfile::tempdir().unwrap();
@@ -625,13 +684,13 @@ mod tests {
             .unwrap();
         for t in DATA_TABLES {
             for name in [t.to_string(), format!("{t}_bookkeeping")] {
-                let n: i64 = sqlx::query_scalar(
-                    "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?",
-                )
-                .bind(&name)
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+                let n: i64 =
+                    test_sql!("SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?")
+                        .query_scalar()
+                        .bind(&name)
+                        .fetch_one(db.pool())
+                        .await
+                        .unwrap();
                 assert_eq!(n, 1, "{name}");
             }
         }
@@ -689,12 +748,12 @@ mod tests {
         db.delete_ics_uids("bridge", &["staff".into()])
             .await
             .unwrap();
-        let n: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM ics_objects_bookkeeping WHERE id = ?")
-                .bind(event_pk("bridge", "staff"))
-                .fetch_one(db.pool())
-                .await
-                .unwrap();
+        let n: i64 = test_sql!("SELECT count(*) FROM ics_objects_bookkeeping WHERE id = ?")
+            .query_scalar()
+            .bind(event_pk("bridge", "staff"))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
         assert_eq!(n, 0);
         db.close().await;
     }

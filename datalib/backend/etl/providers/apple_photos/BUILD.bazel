@@ -53,6 +53,7 @@ rust_test(
         "//datalib/backend/etl/providers/apple_photos_config:datalib_etl_apple_photos_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
         "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",

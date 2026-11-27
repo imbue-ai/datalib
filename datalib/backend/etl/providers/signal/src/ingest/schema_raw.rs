@@ -4,6 +4,7 @@ use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl::read_marks::ReadMarkRow;
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Names of the entity tables, in the order they should be iterated
 /// for full-table operations (truncate, full-DDL composition, etc.).
@@ -90,8 +91,9 @@ pub fn chat_item_attachment_id_recipe(chat_item_id: &str, slot: usize) -> String
 /// tens of MB of protobuf for nothing. This lets fetch short-circuit before
 /// any of that work.
 ///
-/// PK choice: `fingerprint`, the blake3 of `metadata`, `main` and `files`
-/// joined in that order and read through the host-wide cache, so an unchanged
+/// PK choice: `fingerprint`, the blake3 of each of `metadata`, `main` and
+/// `files`, joined with `:` in that order and read through the host-wide
+/// cache, so an unchanged
 /// snapshot costs three `stat()`s and no reads. `blake3` is the digest of the
 /// three concatenated, computed only once the skip misses and kept purely so
 /// someone inspecting the table can verify which bytes these were — never read
@@ -180,33 +182,40 @@ pub const LADDER: &[Migration] = &[Migration {
 async fn move_read_flags_to_read_marks(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for ddl in ReadMarkRow::all_ddl() {
         // Audited: the DDL is the derive's, from a `&'static` table name.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("signal.rung_read_marks.create_read_marks"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
-    let holds_items: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'chat_items'",
+    let holds_items: i64 = sql!(
+        "signal.rung_read_marks.find_chat_items_table",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'chat_items'"
     )
+    .query_scalar()
     .fetch_one(&mut *conn)
     .await?;
     if holds_items == 0 {
         return Ok(());
     }
-    sqlx::query(
+    sql!(
+        "signal.rung_read_marks.copy_read_flags",
         "INSERT INTO read_marks (id, read_through, read) \
          SELECT id, NULL, json_extract(payload, ?1) FROM chat_items \
-         WHERE json_type(payload, ?1) IN ('true', 'false')",
+         WHERE json_type(payload, ?1) IN ('true', 'false')"
     )
+    .query()
     .bind(READ_IN_FRAME)
     .execute(&mut *conn)
     .await?;
     // Through text and back, so the stored bytes are the ones this
     // build's ingest writes for the same frame and the next backup
     // changes nothing.
-    sqlx::query(
+    sql!(
+        "signal.rung_read_marks.strip_read_flags",
         "UPDATE chat_items SET payload = jsonb(json_remove(json(payload), ?1)) \
-         WHERE json_type(payload, ?1) IS NOT NULL",
+         WHERE json_type(payload, ?1) IS NOT NULL"
     )
+    .query()
     .bind(READ_IN_FRAME)
     .execute(&mut *conn)
     .await?;

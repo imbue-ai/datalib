@@ -215,8 +215,9 @@ what the grid's "Copy upstream ID(s)" action reads.
 
 Two checks stand between a bad recipe and silent data loss. Beside
 them, the load refuses two documents written in one run that mint the
-same id: `grid_index::put_grid_row` names the document already
-holding it. (A row whose id an *earlier* run's document holds has
+same id: the page writer (`grid_index::apply_page`) names the
+document already holding it, and two documents of one page holding it
+both. (A row whose id an *earlier* run's document holds has
 moved, and the incoming document takes it over.)
 
 1. **`//tests/fixtures:ingested_tng_test`** recomputes every row's uuid

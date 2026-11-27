@@ -82,8 +82,6 @@ async fn read_everything(
     Ok((raw, Some(pin.commit().to_string()), changed))
 }
 
-/// The render unit key a PR's rows share: `pull_requests.id`, and the same
-/// string composed from any child row's `(repo_full_name, pr_number)`.
 /// The repository a PR is in, by the id GitHub gives it on the PR's
 /// base, which a rename keeps; by its name where the payload has no id.
 fn repository(source_id: &str, base: Option<&Value>, name: &str) -> Container {
@@ -101,6 +99,8 @@ fn repository(source_id: &str, base: Option<&Value>, name: &str) -> Container {
     }
 }
 
+/// The render unit key a PR's rows share: `pull_requests.id`, and the same
+/// string composed from any child row's `(repo_full_name, pr_number)`.
 fn pr_pk(repo: &str, num: u32) -> String {
     format!("{repo}#{num}")
 }

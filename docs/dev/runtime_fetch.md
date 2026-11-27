@@ -168,7 +168,10 @@ load a glibc library. So every `build` leg of `release.yml` waits for
 the `cuda` job, whose asset's sha256 the x86_64 gnu leg writes down.
 
 `datalib_runtime::cuda_module` decides where the module comes from, the
-first time a process opens the embedder on the GPU:
+first time a process opens the embedder on the GPU. The embedder does
+not link it: a binary hands its `find` to
+`datalib_embedder::look_for_cuda_module` at start (`datalib-step`,
+`datalib-applet`, `gpu_check`), and one that does not runs on the CPU.
 
 1. `lib/libggml-cuda.so` beside the binary, when it is there: the
    `-cuda` image, or an install that put it there by hand.

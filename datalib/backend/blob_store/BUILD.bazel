@@ -12,6 +12,7 @@ rust_library(
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:blake3",
         "@datalib_crates//:mail-parser",

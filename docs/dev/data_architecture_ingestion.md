@@ -323,11 +323,18 @@ The commits are the durable record: `dolt_diff` between any two refs
 answers this for any window, for every provider.
 
 There is also a precomputed per-run summary, and it is narrower than it
-looks. `DownloadRun::finish`
-([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) counts
-`dolt_diff_<table>` by `diff_type` for every table in the store and
+looks. A download opens its row with `DownloadRun::start`
+([`download_run.rs`](/datalib/backend/etl/src/download_run.rs)) inside
+its problem collector (`run_problems::collecting`), and hands it a
+summary with `summarize`. The collector closes the row once it has
+written the run's problems: it counts `dolt_diff_<table>` by
+`diff_type` for every table in the store, `problems` included, and
 writes `{table: {added, modified, removed}}` to
-`sync_runs.summary.deltas`.
+`sync_runs.summary.deltas`, with the status the download's own result
+decides. The order is the collector's, not the download's: a seal
+writes the problems found so far and the rest are written when the
+run ends, so a count taken any earlier would hold a run's problems
+only when a seal happened to follow them.
 
 The diff runs from the HEAD the run *started* at, which `DownloadRun`
 captures before the provider writes anything. That has to be the
@@ -550,7 +557,7 @@ Every download is shaped the same at the bottom: for some entity table `<t>`, up
 
 The principle: **every provider's download uses the shared chunked-multi-row helpers for the entity-table UPSERT, the `<t>_bookkeeping` upsert, and the CAS write.** Per-row UPSERTs are an anti-pattern outside ad-hoc maintenance code.
 
-Because those statements are built at runtime, they go through `sqlx::AssertSqlSafe` — see [`AGENTS.md`](/AGENTS.md) §"Dynamic SQL needs `AssertSqlSafe` and a reason".
+Because those statements are built at runtime, they go through `Sql::dynamic` — see [`AGENTS.md`](/AGENTS.md) §"Dynamic SQL needs a reason".
 
 ### The shared pieces, all in `datalib_etl`:
 
@@ -629,8 +636,8 @@ user list, claude's orgs and project docs).
 | github, gitlab | `listed_change_requests`, from each scope's search | the PR / MR sidecar, at `updated_at` | each scope's `updated_at` |
 | email (JMAP, Gmail) | `listed_messages`, from the delta or an enumeration; under a label filter, also the rest of each kept thread, from `thread_members` | `emails` sidecar, then the `.eml` edge | — |
 | notion | search results are the `pages` rows; in roots mode, `listed_pages` (written by the walk down from the roots on a first sync, by the search after), and the pages `tree` puts under a root | `pages` (roots mode), `page_markdown`, `page_comments`, attachment edges | the page's `last_edited_time`, as the search or the walk lists it |
-| linear | each walked connection's pages are the rows | each table's sidecar, at `updatedAt` | each connection's `updatedAt`, per selection |
-| todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from the account's `joined_at` |
+| linear | each walked connection's pages are the rows | the sidecar of each of the five tables walked page by page, at `updatedAt` | each connection's `updatedAt`, per selection |
+| todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from `since`, else the account's `joined_at` |
 | garmin | days, activities, files | each table's sidecar | activity dates |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |

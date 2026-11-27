@@ -13,6 +13,7 @@ use datalib_etl_web::interrupt::dump_tables;
 use datalib_etl_web::playback;
 
 use crate::tape::{self, Edition, DECK, DOC, SHEET, VIEW_ONLY_DOC};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 pub const TABLES: &[&str] = &[
     "files",
@@ -56,12 +57,13 @@ async fn open(store: &Path) -> RawDb {
     RawDb::open(&db_path_for(store)).await.expect("open store")
 }
 
-async fn scalar(db: &RawDb, sql: &'static str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap()
+async fn scalar(db: &RawDb, sql: Sql) -> i64 {
+    sql.query_scalar().fetch_one(db.pool()).await.unwrap()
 }
 
 async fn parts_of(db: &RawDb, capture: &str) -> Vec<(String, Option<String>)> {
-    sqlx::query_as("SELECT part, blake3 FROM capture_parts WHERE capture_id = ? ORDER BY part")
+    test_sql!("SELECT part, blake3 FROM capture_parts WHERE capture_id = ? ORDER BY part")
+        .query_as()
         .bind(capture)
         .fetch_all(db.pool())
         .await
@@ -98,13 +100,16 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
     );
 
     let db = open(&store).await;
-    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM files").await, 3);
+    assert_eq!(
+        scalar(&db, test_sql!("SELECT COUNT(*) FROM files")).await,
+        3
+    );
     // The Sheet is read-only to this account, so Drive lists it no
     // revisions and none is asked for.
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM revisions WHERE file_id = '1PicardLogSupplemental'"
+            test_sql!("SELECT COUNT(*) FROM revisions WHERE file_id = '1PicardLogSupplemental'")
         )
         .await,
         2
@@ -112,16 +117,19 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM revisions WHERE file_id = '1LaForgeDutyRoster'"
+            test_sql!("SELECT COUNT(*) FROM revisions WHERE file_id = '1LaForgeDutyRoster'")
         )
         .await,
         0
     );
-    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM comments").await, 2);
+    assert_eq!(
+        scalar(&db, test_sql!("SELECT COUNT(*) FROM comments")).await,
+        2
+    );
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM comments WHERE payload->>'$.deleted' = 1"
+            test_sql!("SELECT COUNT(*) FROM comments WHERE payload->>'$.deleted' = 1")
         )
         .await,
         1,
@@ -130,7 +138,7 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM files WHERE typeof(payload) = 'blob'"
+            test_sql!("SELECT COUNT(*) FROM files WHERE typeof(payload) = 'blob'")
         )
         .await,
         3,
@@ -139,9 +147,10 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
 
     // The Doc's capture: its native JSON byte for byte, its image by
     // where the JSON points at it, its export.
-    let (version, head, native_rev): (String, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT version, head_revision_id, native_revision_id FROM captures WHERE file_id = ?",
+    let (version, head, native_rev): (String, Option<String>, Option<String>) = test_sql!(
+        "SELECT version, head_revision_id, native_revision_id FROM captures WHERE file_id = ?"
     )
+    .query_as()
     .bind(DOC)
     .fetch_one(db.pool())
     .await
@@ -175,7 +184,8 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
         "the native JSON is kept as Google sent it, less its image link"
     );
     let volatile: String =
-        sqlx::query_scalar("SELECT json(volatile_payload) FROM captures_bookkeeping WHERE id = ?")
+        test_sql!("SELECT json(volatile_payload) FROM captures_bookkeeping WHERE id = ?")
+            .query_scalar()
             .bind(format!("{DOC}#12"))
             .fetch_one(db.pool())
             .await
@@ -202,7 +212,8 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
         .iter()
         .any(|(p, b)| p == "native.json.gz" && b.is_some()));
     let (severity, detail): (String, String) =
-        sqlx::query_as("SELECT severity, sample FROM problems WHERE scope_key = ?")
+        test_sql!("SELECT severity, sample FROM problems WHERE scope_key = ?")
+            .query_as()
             .bind(format!("files:{DECK}"))
             .fetch_one(db.pool())
             .await
@@ -211,7 +222,8 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
     assert!(detail.contains("odp"), "{detail}");
 
     let held: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, held_version FROM files_bookkeeping ORDER BY id")
+        test_sql!("SELECT id, held_version FROM files_bookkeeping ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -234,7 +246,8 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
         "{s:?}"
     );
     let exports: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, blake3 FROM revision_exports ORDER BY id")
+        test_sql!("SELECT id, blake3 FROM revision_exports ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -245,7 +258,8 @@ async fn a_first_sync_captures_every_file_in_its_native_form() {
         tape::DOC_ODT_REV1
     );
     assert_eq!(exports[1], (format!("{DOC}#29#export.odt"), None));
-    let gone: String = sqlx::query_scalar("SELECT severity FROM problems WHERE scope_key = ?")
+    let gone: String = test_sql!("SELECT severity FROM problems WHERE scope_key = ?")
+        .query_scalar()
         .bind(format!("revision_exports:{DOC}#29#export.odt"))
         .fetch_one(db.pool())
         .await
@@ -265,7 +279,8 @@ async fn every_folder_and_shared_drive_is_kept_as_listed() {
     assert_eq!((s.folders, s.drives), (4, 1), "{s:?}");
     let db = open(&store).await;
     let folders: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, json(payload) FROM folders ORDER BY id")
+        test_sql!("SELECT id, json(payload) FROM folders ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -300,7 +315,8 @@ async fn every_folder_and_shared_drive_is_kept_as_listed() {
         "parents is sorted, so a second read stores the same bytes"
     );
     let drive: String =
-        sqlx::query_scalar("SELECT payload->>'$.name' FROM drives WHERE id = '0ABridgeDrive'")
+        test_sql!("SELECT payload->>'$.name' FROM drives WHERE id = '0ABridgeDrive'")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();
@@ -324,7 +340,8 @@ async fn a_renamed_folder_is_renamed_on_the_next_run() {
     run(&t, &store).await;
     let db = open(&store).await;
     let names: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, payload->>'$.name' FROM folders ORDER BY id")
+        test_sql!("SELECT id, payload->>'$.name' FROM folders ORDER BY id")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -352,12 +369,12 @@ async fn a_moved_file_is_moved_on_the_next_run_without_a_capture() {
     let parents = |db: &RawDb| {
         let pool = db.pool().clone();
         async move {
-            let got: String =
-                sqlx::query_scalar("SELECT json(payload) FROM file_parents WHERE id = ?")
-                    .bind(DOC)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
+            let got: String = test_sql!("SELECT json(payload) FROM file_parents WHERE id = ?")
+                .query_scalar()
+                .bind(DOC)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
             serde_json::from_str::<serde_json::Value>(&got).unwrap()
         }
     };
@@ -425,7 +442,8 @@ async fn a_store_from_before_folders_gets_them_without_a_capture() {
     let db = open(&store).await;
     for table in ["folders", "drives", "file_parents"] {
         for t in [table.to_string(), format!("{table}_bookkeeping")] {
-            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE {t}")))
+            Sql::dynamic(test_sql_id!(), format!("DROP TABLE {t}"))
+                .query()
                 .execute(db.pool())
                 .await
                 .unwrap();
@@ -435,7 +453,7 @@ async fn a_store_from_before_folders_gets_them_without_a_capture() {
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM sqlite_master WHERE name IN ('folders', 'drives', 'file_parents')"
+            test_sql!("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('folders', 'drives', 'file_parents')")
         )
         .await,
         0
@@ -479,8 +497,14 @@ async fn a_store_from_before_folders_gets_them_without_a_capture() {
         "{s:?}"
     );
     let db = open(&store).await;
-    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM folders").await, 4);
-    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM file_parents").await, 3);
+    assert_eq!(
+        scalar(&db, test_sql!("SELECT COUNT(*) FROM folders")).await,
+        4
+    );
+    assert_eq!(
+        scalar(&db, test_sql!("SELECT COUNT(*) FROM file_parents")).await,
+        3
+    );
     assert_eq!(
         dump_tables(db.pool(), &["files", "captures", "capture_parts"])
             .await
@@ -512,13 +536,12 @@ async fn a_download_past_the_size_cap_is_left_out_with_a_warning() {
     let warning = |key: String| {
         let db = &db;
         async move {
-            sqlx::query_as::<_, (String, String)>(
-                "SELECT severity, sample FROM problems WHERE scope_key = ?",
-            )
-            .bind(key)
-            .fetch_one(db.pool())
-            .await
-            .unwrap()
+            test_sql!("SELECT severity, sample FROM problems WHERE scope_key = ?")
+                .query_as::<(String, String)>()
+                .bind(key)
+                .fetch_one(db.pool())
+                .await
+                .unwrap()
         }
     };
     let doc = parts_of(&db, &format!("{DOC}#12")).await;
@@ -581,7 +604,8 @@ async fn a_doc_the_account_may_not_download_is_kept_without_its_export() {
     assert_eq!(parts[1].0, "native.json.gz");
     assert!(parts[1].1.is_some());
     let (severity, detail): (String, String) =
-        sqlx::query_as("SELECT severity, sample FROM problems WHERE scope_key = ?")
+        test_sql!("SELECT severity, sample FROM problems WHERE scope_key = ?")
+            .query_as()
             .bind(format!("files:{VIEW_ONLY_DOC}"))
             .fetch_one(db.pool())
             .await
@@ -644,10 +668,11 @@ async fn an_unchanged_account_costs_the_listing_and_changes_nothing() {
     assert_eq!(dump_tables(db.pool(), TABLES).await.unwrap(), before);
     // Each run leaves its record, and the second one says it owed
     // nothing: that is what the manual e2e reads incrementality from.
-    let runs: Vec<(String, i64, i64)> = sqlx::query_as(
+    let runs: Vec<(String, i64, i64)> = test_sql!(
         "SELECT status, json_extract(summary, '$.owed'), json_extract(summary, '$.listed') \
-         FROM sync_runs ORDER BY run_id",
+         FROM sync_runs ORDER BY run_id"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .unwrap();
@@ -677,13 +702,13 @@ async fn a_new_version_is_captured_beside_the_old_one() {
     );
 
     let db = open(&store).await;
-    let captures: Vec<(String, Option<String>)> = sqlx::query_as(
-        "SELECT version, native_revision_id FROM captures WHERE file_id = ? ORDER BY id",
-    )
-    .bind(DOC)
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
+    let captures: Vec<(String, Option<String>)> =
+        test_sql!("SELECT version, native_revision_id FROM captures WHERE file_id = ? ORDER BY id")
+            .query_as()
+            .bind(DOC)
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
     assert_eq!(
         captures,
         vec![
@@ -703,18 +728,22 @@ async fn a_new_version_is_captured_beside_the_old_one() {
         tape::DOC_ODT_BEFORE,
         "the old export is still there"
     );
-    assert_eq!(scalar(&db, "SELECT COUNT(*) FROM comments").await, 3);
+    assert_eq!(
+        scalar(&db, test_sql!("SELECT COUNT(*) FROM comments")).await,
+        3
+    );
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM revisions WHERE file_id = '1PicardLogSupplemental'"
+            test_sql!("SELECT COUNT(*) FROM revisions WHERE file_id = '1PicardLogSupplemental'")
         )
         .await,
         3
     );
-    let rev41: String = sqlx::query_scalar(
-        "SELECT blake3 FROM revision_exports WHERE id = '1PicardLogSupplemental#41#export.odt'",
+    let rev41: String = test_sql!(
+        "SELECT blake3 FROM revision_exports WHERE id = '1PicardLogSupplemental#41#export.odt'"
     )
+    .query_scalar()
     .fetch_one(db.pool())
     .await
     .unwrap();
@@ -772,13 +801,13 @@ async fn an_image_is_stored_with_the_type_its_response_names() {
     run(&t, &store).await;
 
     let db = open(&store).await;
-    let blake3: String = sqlx::query_scalar(
-        "SELECT blake3 FROM capture_parts WHERE capture_id = ? AND part LIKE 'image:%'",
-    )
-    .bind(format!("{DECK}#30"))
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let blake3: String =
+        test_sql!("SELECT blake3 FROM capture_parts WHERE capture_id = ? AND part LIKE 'image:%'")
+            .query_scalar()
+            .bind(format!("{DECK}#30"))
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     let stored = db.cas().get(&blake3).await.unwrap().expect("blob");
     assert_eq!(stored.content_type.as_deref(), Some("image/svg+xml"));
     db.close().await;
@@ -809,7 +838,7 @@ async fn an_image_is_in_the_cas_before_its_capture_is_written() {
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM captures WHERE file_id = '1PicardLogSupplemental'"
+            test_sql!("SELECT COUNT(*) FROM captures WHERE file_id = '1PicardLogSupplemental'")
         )
         .await,
         0,
@@ -842,19 +871,19 @@ async fn a_kind_whose_service_is_refused_stops_alone() {
     assert_eq!((s.captured, s.left), (2, 1), "{s:?}");
 
     let db = open(&store).await;
-    let held: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM files_bookkeeping WHERE held_version IS NOT NULL ORDER BY id",
-    )
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
+    let held: Vec<String> =
+        test_sql!("SELECT id FROM files_bookkeeping WHERE held_version IS NOT NULL ORDER BY id")
+            .query_scalar()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
     assert_eq!(held, vec![DOC.to_string(), DECK.to_string()]);
-    let said: String = sqlx::query_scalar(
-        "SELECT sample FROM problems WHERE scope_key LIKE 'phase%google-sheets'",
-    )
-    .fetch_one(db.pool())
-    .await
-    .unwrap();
+    let said: String =
+        test_sql!("SELECT sample FROM problems WHERE scope_key LIKE 'phase%google-sheets'")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await
+            .unwrap();
     assert!(
         said.contains("latchkey auth browser google-sheets"),
         "{said}"
@@ -887,7 +916,8 @@ async fn exports_follow_each_kinds_list() {
 
     let db = open(&store).await;
     let exports: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM capture_parts WHERE part LIKE 'export.%' ORDER BY id")
+        test_sql!("SELECT id FROM capture_parts WHERE part LIKE 'export.%' ORDER BY id")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -918,19 +948,19 @@ async fn the_default_keeps_the_json_and_fetches_no_odf() {
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM capture_parts WHERE part LIKE 'export.%'"
+            test_sql!("SELECT COUNT(*) FROM capture_parts WHERE part LIKE 'export.%'")
         )
         .await,
         0
     );
     assert_eq!(
-        scalar(&db, "SELECT COUNT(*) FROM revision_exports").await,
+        scalar(&db, test_sql!("SELECT COUNT(*) FROM revision_exports")).await,
         0
     );
     assert_eq!(
         scalar(
             &db,
-            "SELECT COUNT(*) FROM capture_parts WHERE part = 'native.json.gz'"
+            test_sql!("SELECT COUNT(*) FROM capture_parts WHERE part = 'native.json.gz'")
         )
         .await,
         3

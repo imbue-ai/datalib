@@ -15,6 +15,7 @@ use datalib_etl_email_render::render::ids;
 use datalib_etl_email_render::render::parse::{open, EmailStore, EmailThreadRenderUnit};
 use datalib_etl_email_render::render::render::{render_store, OutlinkFormat, PageEnd};
 use datalib_etl_render::pages::PageSize;
+use datalib_sql::test_sql;
 
 /// The fixture's three-message briefing thread, keyed in hex from the
 /// decimal its `X-GM-THRID` says, `1853466712473707184`: the Gmail id of
@@ -192,19 +193,19 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
 
     // .eml bytes are in the CAS keyed by the email_blobs edge's blake3
     // (which mbox sets to the .eml's content hash at flush time).
-    let blake3: Option<String> =
-        sqlx::query_scalar("SELECT blake3 FROM email_blobs WHERE email_id = ?")
-            .bind(&hayes.id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap();
+    let blake3: Option<String> = test_sql!("SELECT blake3 FROM email_blobs WHERE email_id = ?")
+        .query_scalar()
+        .bind(&hayes.id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap();
     let blake3 = blake3.expect("email_blobs.blake3 set by mbox flush");
-    let exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
-            .bind(&blake3)
-            .fetch_one(db.cas().pool())
-            .await
-            .unwrap();
+    let exists: bool = test_sql!("SELECT EXISTS(SELECT 1 FROM cas_objects WHERE blake3 = ?)")
+        .query_scalar()
+        .bind(&blake3)
+        .fetch_one(db.cas().pool())
+        .await
+        .unwrap();
     assert!(exists);
 
     // Re-running is idempotent: same email ids on a second pass.
@@ -293,7 +294,8 @@ async fn mbox_only_labels_keeps_whole_threads() {
     .expect("mbox download fetch with label filter");
     db.commit_all("test").await.unwrap();
     let threads: Vec<(i64, Option<i64>)> =
-        sqlx::query_as("SELECT email_count, upstream_email_count FROM threads")
+        test_sql!("SELECT email_count, upstream_email_count FROM threads")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();

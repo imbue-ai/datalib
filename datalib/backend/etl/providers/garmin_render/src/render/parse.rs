@@ -12,6 +12,7 @@ use sqlx::Row;
 use datalib_etl_garmin::ingest::db_path_for;
 
 use super::daily::{pick_readiness, DayValue, Days, Extract, Show, FIELDS};
+use datalib_sql::{sql, Sql};
 
 /// One weigh-in, ascending by `timestamp_gmt` in [`ParsedGarmin::weigh_ins`].
 #[derive(Debug, Clone)]
@@ -132,7 +133,10 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
     let activities = load_activities(pool, &mut unparsed).await?;
     let activity_files = scalar(
         pool,
-        "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL",
+        sql!(
+            "garmin_render.count_activity_files_held",
+            "SELECT COUNT(*) FROM garmin_activity_files WHERE blake3 IS NOT NULL"
+        ),
     )
     .await?;
     let items = load_items(pool, &mut unparsed).await?;
@@ -152,8 +156,8 @@ async fn parse_pinned(pool: &SqlitePool, pin: &datalib_etl::pin::Pin) -> Result<
     })
 }
 
-async fn scalar(pool: &SqlitePool, sql: &'static str) -> Result<i64> {
-    sqlx::query_scalar(sql)
+async fn scalar(pool: &SqlitePool, sql: Sql) -> Result<i64> {
+    sql.query_scalar()
         .fetch_one(pool)
         .await
         .with_context(|| format!("garmin render: {sql}"))
@@ -163,10 +167,12 @@ async fn load_account(
     pool: &SqlitePool,
     unparsed: &mut Vec<Unparsed>,
 ) -> Result<(Option<String>, Option<String>)> {
-    let row = sqlx::query(
+    let row = sql!(
+        "garmin_render.read_social_profile",
         "SELECT json(payload) AS payload FROM garmin_account \
-         WHERE id = 'social_profile'",
+         WHERE id = 'social_profile'"
     )
+    .query()
     .fetch_optional(pool)
     .await
     .context("load garmin_account")?;
@@ -189,12 +195,14 @@ async fn load_account(
 }
 
 async fn load_weigh_ins(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<WeighIn>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "garmin_render.list_weigh_ins",
         "SELECT id, calendar_date, timestamp_gmt, weight_g, source_type, json(payload) AS payload \
            FROM garmin_weigh_ins \
           WHERE weight_g IS NOT NULL AND timestamp_gmt IS NOT NULL \
-          ORDER BY timestamp_gmt, id",
+          ORDER BY timestamp_gmt, id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load garmin_weigh_ins")?;
@@ -219,10 +227,12 @@ async fn load_weigh_ins(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Resu
 }
 
 async fn load_devices(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<Device>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "garmin_render.list_devices",
         "SELECT id, product_display_name, json(payload) AS payload \
-           FROM garmin_devices ORDER BY id",
+           FROM garmin_devices ORDER BY id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load garmin_devices")?;
@@ -244,11 +254,13 @@ async fn load_devices(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result
 }
 
 async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "garmin_render.count_daily_by_metric",
         "SELECT metric, COUNT(*) AS days, \
                 SUM(CASE WHEN json(payload) <> 'null' THEN 1 ELSE 0 END) AS with_data \
-           FROM garmin_daily GROUP BY metric ORDER BY metric",
+           FROM garmin_daily GROUP BY metric ORDER BY metric"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("count garmin_daily")?;
@@ -263,14 +275,16 @@ async fn load_metric_counts(pool: &SqlitePool) -> Result<Vec<MetricCount>> {
 }
 
 async fn load_activities(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<Activity>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "garmin_render.list_activities_with_details",
         "SELECT a.id, json(a.payload) AS listing, json(d.payload) AS detail, \
                 (SELECT f.blake3 FROM garmin_activity_files f \
                   WHERE f.activity_id = a.id AND f.blake3 IS NOT NULL \
                   ORDER BY f.id LIMIT 1) AS fit \
            FROM garmin_activities a LEFT JOIN garmin_activity_details d ON d.id = a.id \
-          ORDER BY a.start_time_gmt, a.id",
+          ORDER BY a.start_time_gmt, a.id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load garmin_activities")?;
@@ -291,10 +305,12 @@ async fn load_activities(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Res
 }
 
 async fn load_items(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Vec<Item>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "garmin_render.list_items",
         "SELECT id, kind, upstream_id, json(payload) AS payload \
-           FROM garmin_items ORDER BY kind, id",
+           FROM garmin_items ORDER BY kind, id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("load garmin_items")?;
@@ -350,10 +366,12 @@ async fn load_days(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Da
     for f in FIELDS {
         match f.extract {
             Extract::Path(path) if f.show == Show::Text => {
-                let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+                let rows: Vec<(String, Option<String>)> = sql!(
+                    "garmin_render.list_daily_text_field",
                     "SELECT calendar_date, CAST(json_extract(json(payload), ?) AS TEXT) \
-                       FROM garmin_daily WHERE metric = ?",
+                       FROM garmin_daily WHERE metric = ?"
                 )
+                .query_as()
                 .bind(path)
                 .bind(f.metric)
                 .fetch_all(pool)
@@ -366,10 +384,12 @@ async fn load_days(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Da
                 }
             }
             Extract::Path(path) => {
-                let rows: Vec<(String, Option<f64>)> = sqlx::query_as(
+                let rows: Vec<(String, Option<f64>)> = sql!(
+                    "garmin_render.list_daily_number_field",
                     "SELECT calendar_date, CAST(json_extract(json(payload), ?) AS REAL) \
-                       FROM garmin_daily WHERE metric = ?",
+                       FROM garmin_daily WHERE metric = ?"
                 )
+                .query_as()
                 .bind(path)
                 .bind(f.metric)
                 .fetch_all(pool)
@@ -383,10 +403,12 @@ async fn load_days(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Da
             }
             Extract::Readiness(key) => {
                 if readiness.is_none() {
-                    let rows: Vec<(String, String, Option<String>)> = sqlx::query_as(
+                    let rows: Vec<(String, String, Option<String>)> = sql!(
+                        "garmin_render.list_training_readiness",
                         "SELECT id, calendar_date, json(payload) FROM garmin_daily \
-                          WHERE metric = 'training_readiness'",
+                          WHERE metric = 'training_readiness'"
                     )
+                    .query_as()
                     .fetch_all(pool)
                     .await
                     .context("load garmin_daily training_readiness")?;
@@ -416,12 +438,14 @@ async fn load_days(pool: &SqlitePool, unparsed: &mut Vec<Unparsed>) -> Result<Da
             }
         }
     }
-    let stamps: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+    let stamps: Vec<(String, Option<String>, Option<String>)> = sql!(
+        "garmin_render.list_daily_start_times",
         "SELECT calendar_date, \
                 json_extract(json(payload), '$.wellnessStartTimeGmt'), \
                 json_extract(json(payload), '$.wellnessStartTimeLocal') \
-           FROM garmin_daily WHERE metric = 'daily_summary'",
+           FROM garmin_daily WHERE metric = 'daily_summary'"
     )
+    .query_as()
     .fetch_all(pool)
     .await
     .context("load garmin_daily offsets")?;
@@ -451,6 +475,7 @@ impl ParsedGarmin {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     /// Passes SQLite's `json()` and overflows serde_json's f64.
     const UNPARSEABLE: &str = r#"{"bmi": 22.5, "warp": 1e999}"#;
     const GOOD: &str = r#"{"bmi": 22.5, "displayName": "Data"}"#;
@@ -482,7 +507,8 @@ mod tests {
             "INSERT INTO garmin_items VALUES ('i1', 'gear', '1', ?1), ('i2', 'gear', '2', ?2)",
         ];
         for sql in inserts {
-            sqlx::query(sqlx::AssertSqlSafe(sql))
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
                 .bind(GOOD)
                 .bind(UNPARSEABLE)
                 .execute(&pool)
@@ -538,7 +564,8 @@ mod tests {
             ]
         );
 
-        sqlx::query("UPDATE garmin_account SET payload = ?")
+        test_sql!("UPDATE garmin_account SET payload = ?")
+            .query()
             .bind(GOOD)
             .execute(&pool)
             .await

@@ -14,6 +14,7 @@ use datalib_etl_web::http::{fixture_key, HttpRequest, HttpResponse, HttpService}
 use datalib_etl_web::playback;
 use datalib_etl_web::retry::{self, RetryGuard};
 use datalib_etl_web::synthesize::{write_fixture, Synthesizer};
+use datalib_sql::{test_sql, Sql};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
@@ -105,7 +106,9 @@ impl Account {
     }
 
     async fn stored_conversations(&self) -> usize {
-        self.query("SELECT id, id FROM conversations").await.len()
+        self.query(test_sql!("SELECT id, id FROM conversations"))
+            .await
+            .len()
     }
 
     fn forget(&self, req: &HttpRequest) {
@@ -167,13 +170,15 @@ impl Account {
 
     /// `(scope_key, detail)` of every `problems` row.
     async fn problems(&self) -> Vec<(String, String)> {
-        self.query("SELECT scope_key, sample FROM problems ORDER BY scope_key")
-            .await
+        self.query(test_sql!(
+            "SELECT scope_key, sample FROM problems ORDER BY scope_key"
+        ))
+        .await
     }
 
-    async fn query(&self, sql: &'static str) -> Vec<(String, String)> {
+    async fn query(&self, sql: Sql) -> Vec<(String, String)> {
         let db = RawDb::open(&db_path_for(&self.raw)).await.unwrap();
-        let rows = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+        let rows = sql.query_as().fetch_all(db.pool()).await.unwrap();
         db.close().await;
         rows
     }
@@ -244,7 +249,9 @@ async fn a_failed_listing_page_keeps_the_pages_before_it_and_prunes_nothing() {
     assert_eq!(s.listing, 100, "page 1 is kept: {s:?}");
     assert_eq!(s.pruned, 0, "an incomplete listing deletes nothing");
     let stored = acct
-        .query("SELECT id, id FROM conversations WHERE id = 'c-100'")
+        .query(test_sql!(
+            "SELECT id, id FROM conversations WHERE id = 'c-100'"
+        ))
         .await;
     assert_eq!(stored.len(), 1, "the conversation on the lost page stays");
     assert_eq!(acct.keys().await, ["listing:conversations"]);
@@ -453,7 +460,9 @@ async fn a_failed_attachment_says_why_and_is_tried_again_while_unchanged() {
         "but its attachment is tried again: {s:?}"
     );
     let attempts = acct
-        .query("SELECT id, CAST(attempt_count AS TEXT) FROM chatgpt_attachments_bookkeeping")
+        .query(test_sql!(
+            "SELECT id, CAST(attempt_count AS TEXT) FROM chatgpt_attachments_bookkeeping"
+        ))
         .await;
     assert_eq!(attempts, [("c-a#file-1".to_string(), "2".to_string())]);
 }
@@ -480,7 +489,9 @@ async fn a_file_chatgpt_no_longer_has_is_not_asked_for_again() {
     acct.answer(&file_metadata(), 404);
     acct.run(&[]).await.unwrap();
     let rows = acct
-        .query("SELECT scope_key, reason FROM problems ORDER BY scope_key")
+        .query(test_sql!(
+            "SELECT scope_key, reason FROM problems ORDER BY scope_key"
+        ))
         .await;
     assert_eq!(
         rows,

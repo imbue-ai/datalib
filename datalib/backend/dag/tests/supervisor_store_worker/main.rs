@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use datalib_dag::supervisor::record::{Record, StepRecord};
 use datalib_dag::supervisor::store::Store;
+use datalib_sql::sql;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -74,7 +75,11 @@ async fn try_write(root: &std::path::Path) -> Result<()> {
         .filename(datalib_runtime::plain_sqlite::uri(&db))
         .busy_timeout(std::time::Duration::ZERO);
     let mut conn = sqlx::SqliteConnection::connect_with(&opts).await?;
-    let answer = match sqlx::query("BEGIN IMMEDIATE").execute(&mut conn).await {
+    let answer = match sql!("dag.tests.try_begin_immediate", "BEGIN IMMEDIATE")
+        .query()
+        .execute(&mut conn)
+        .await
+    {
         Ok(_) => "got it",
         Err(_) => "held",
     };

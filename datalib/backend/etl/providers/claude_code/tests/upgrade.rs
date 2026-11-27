@@ -8,6 +8,7 @@ use datalib_etl::store_handle::RawStoreHandle as _;
 use datalib_etl_agent_sessions::{raw_ddl, RECORDS_BY_TRANSCRIPT};
 use datalib_etl_claude_code::ingest::schema_raw::{RecordRow, TranscriptRow};
 use datalib_etl_claude_code::ingest::{db_path_for, RawDb};
+use datalib_sql::{test_sql, Sql};
 
 /// `records` as the builds before the rung declared it.
 const RECORDS_BY_UUID: &str = "CREATE TABLE IF NOT EXISTS records (
@@ -16,11 +17,8 @@ const RECORDS_BY_UUID: &str = "CREATE TABLE IF NOT EXISTS records (
     transcript_id  TEXT NOT NULL
 )";
 
-async fn strings(pool: &sqlx::SqlitePool, sql: &'static str) -> Vec<String> {
-    sqlx::query_scalar::<_, String>(sql)
-        .fetch_all(pool)
-        .await
-        .unwrap()
+async fn strings(pool: &sqlx::SqlitePool, sql: Sql) -> Vec<String> {
+    sql.query_scalar::<String>().fetch_all(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -35,12 +33,13 @@ async fn a_store_keyed_by_uuid_opens_keyed_by_transcript_holding_every_record() 
     );
     let old: Vec<&str> = old.iter().map(String::as_str).collect();
     let pool = dr::open(&path, &old).await.unwrap();
-    sqlx::query(
+    test_sql!(
         "INSERT INTO records (id, payload, transcript_id) VALUES \
          ('r-2', jsonb('{\"uuid\": \"r-2\", \"text\": \"Engage.\"}'), 'picard'), \
          ('r-1', jsonb('{\"uuid\": \"r-1\", \"text\": \"Make it so.\"}'), 'riker'), \
-         ('r-3', jsonb('{\"uuid\": \"r-3\", \"text\": \"Aye, sir.\"}'), 'picard')",
+         ('r-3', jsonb('{\"uuid\": \"r-3\", \"text\": \"Aye, sir.\"}'), 'picard')"
     )
+    .query()
     .execute(&pool)
     .await
     .unwrap();
@@ -54,8 +53,10 @@ async fn a_store_keyed_by_uuid_opens_keyed_by_transcript_holding_every_record() 
     assert_eq!(
         strings(
             pool,
-            "SELECT transcript_id || '/' || id || ' ' || json(payload) FROM records \
-             ORDER BY transcript_id, id",
+            test_sql!(
+                "SELECT transcript_id || '/' || id || ' ' || json(payload) FROM records \
+             ORDER BY transcript_id, id"
+            ),
         )
         .await,
         [
@@ -71,8 +72,10 @@ async fn a_store_keyed_by_uuid_opens_keyed_by_transcript_holding_every_record() 
     assert_eq!(
         strings(
             pool,
-            "SELECT name || ':' || \"unique\" FROM pragma_index_list('records') \
-             WHERE origin = 'c' ORDER BY name",
+            test_sql!(
+                "SELECT name || ':' || \"unique\" FROM pragma_index_list('records') \
+             WHERE origin = 'c' ORDER BY name"
+            ),
         )
         .await,
         ["records_by_id:1"],
@@ -97,11 +100,16 @@ async fn a_store_keyed_by_uuid_opens_keyed_by_transcript_holding_every_record() 
     assert_eq!(
         strings(
             pool,
-            "SELECT json(payload) ->> '$.text' FROM records WHERE id = 'r-1'"
+            test_sql!("SELECT json(payload) ->> '$.text' FROM records WHERE id = 'r-1'")
         )
         .await,
         ["Make it so, Number One."]
     );
-    assert_eq!(strings(pool, "SELECT id FROM records").await.len(), 3);
+    assert_eq!(
+        strings(pool, test_sql!("SELECT id FROM records"))
+            .await
+            .len(),
+        3
+    );
     db.close_all().await;
 }

@@ -22,6 +22,7 @@ use super::db::RawDb;
 use super::schema_raw::{ChatAttachmentRow, ChatGroupRow, ChatMessageRow, ChatUserRow};
 use super::time as time_parser;
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_sql::sql;
 
 const SCOPE: &str = "google_takeout/google_chat";
 
@@ -356,11 +357,13 @@ async fn retry_unfetched_attachments(
     reread_groups: &HashSet<String>,
     acc: &mut CasEdgeAccumulator,
 ) -> Result<()> {
-    let unfetched: Vec<(String, String, String)> = sqlx::query_as(
+    let unfetched: Vec<(String, String, String)> = sql!(
+        "google_takeout.list_chat_attachments_unfetched",
         "SELECT a.message_id, a.export_name, m.group_id \
          FROM chat_attachments a JOIN chat_messages m ON m.id = a.message_id \
-         WHERE a.blake3 IS NULL",
+         WHERE a.blake3 IS NULL"
     )
+    .query_as()
     .fetch_all(db.pool())
     .await
     .context("list chat attachments with no bytes")?;

@@ -346,7 +346,8 @@ first either way, but a stage that ends gives your app a seal and a
 of guessing how far a long backfill has reached.
 
 This works for any source whose `since` backfills: Slack, Claude and
-ChatGPT, Gmail, Todoist and Garmin
+ChatGPT, Gmail, Todoist (its completed tasks only: open tasks, projects
+and comments always come whole) and Garmin
 ([config_model.md](../dev/config_model.md) § "Time windows"). A calendar
 is the exception: a windowed one is listed whole every run, and an event
 outside the window goes. The steps below use Gmail; for another source

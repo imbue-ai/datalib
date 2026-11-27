@@ -10,6 +10,7 @@ use sqlx::Row;
 use datalib_etl::doltlite_raw as dr;
 use datalib_etl::progress::Progress;
 use datalib_etl_lightroom::ingest::{self, mirror, FetchOptions, MirrorOptions, MirrorStats};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 /// Every table in these catalogs. Two of the 115 `sqlite_master` rows are
 /// SQLite's own `sqlite_stat1` / `sqlite_stat4` query-planner statistics,
@@ -81,7 +82,8 @@ fn catalog(env_var: &str) -> PathBuf {
 
 async fn scalar_i64(pool: &SqlitePool, sql: &str) -> i64 {
     // Test helper; `sql` is a literal at every callsite.
-    sqlx::query(sqlx::AssertSqlSafe(sql))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .fetch_one(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -104,7 +106,8 @@ async fn diffs(pool: &SqlitePool, table: &str, commit: &str) -> BTreeMap<String,
          WHERE to_commit = '{commit}' GROUP BY diff_type"
     );
     // Test: `table`/`commit` name a `dolt_diff_*` vtab from the fixture.
-    sqlx::query(sqlx::AssertSqlSafe(sql.as_str()))
+    Sql::dynamic(test_sql_id!(), sql.as_str())
+        .query()
         .fetch_all(pool)
         .await
         .unwrap_or_else(|e| panic!("{sql}: {e}"))
@@ -189,7 +192,8 @@ async fn sync_tables_are_keyed_on_their_unique_index() -> Result<()> {
         ("MigratedImages", vec!["localId", "ozCatalogId"]),
     ] {
         let got: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+            test_sql!("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
+                .query_scalar()
                 .bind(table)
                 .fetch_all(&pool)
                 .await?;
@@ -326,7 +330,8 @@ async fn every_earlier_state_is_still_queryable() -> Result<()> {
 
     // A photo present since catalog 00 accumulates one history row per
     // commit that touched it, and the whole chain stays readable.
-    let id: String = sqlx::query("SELECT id_global FROM Adobe_images ORDER BY id_global LIMIT 1")
+    let id: String = test_sql!("SELECT id_global FROM Adobe_images ORDER BY id_global LIMIT 1")
+        .query()
         .fetch_one(&pool)
         .await?
         .get("id_global");

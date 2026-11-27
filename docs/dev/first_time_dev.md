@@ -128,8 +128,11 @@ Runs:
 It materializes a one-shot data root from the checked-in TNG fixtures
 (`//tests/fixtures:ingested_tng`) into a tmpdir and points the backend at it,
 so you can eyeball the grid without a real on-disk root or any credentials.
-The root has the contacts app too, starting empty, so a chip can be linked
-to a contact. Every source in it is render-only: browsing and search work,
+The root has the contacts app too, holding what Picard curated
+(`tests/fixtures/curated/`): seven of the crew linked across their sources,
+Picard as "me", a merge, a group, an agent's proposal left to answer and
+three muted problems. Most people in the corpus are linked to nobody, so
+there is plenty left to curate; every edit goes with the tmpdir. Every source in it is render-only: browsing and search work,
 and syncing a source fails on its missing raw store.
 
 ```sh

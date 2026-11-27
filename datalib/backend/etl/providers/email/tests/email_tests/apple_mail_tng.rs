@@ -14,6 +14,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::section::join;
+use datalib_sql::{test_sql, Sql};
 
 const GMAIL: &str = "apple_mail_1f0b8a52";
 const FASTMAIL: &str = "apple_mail_5d3c9e70";
@@ -52,12 +53,12 @@ async fn sync(mail: &Path, work: &Path) -> FetchSummary {
     summary
 }
 
-async fn rows<T>(work: &Path, sql: &'static str) -> Vec<T>
+async fn rows<T>(work: &Path, sql: Sql) -> Vec<T>
 where
     T: for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow> + Send + Unpin,
 {
     let db = RawDb::open(&work.join("e.doltlite_db")).await.unwrap();
-    let out = sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+    let out = sql.query_as().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     out
 }
@@ -109,18 +110,25 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
     .chain([GMAIL, FASTMAIL].map(|a| (format!("{a}:{fleet}"), a.to_string())))
     .collect();
     expected.sort();
-    let emails: Vec<(String, String)> =
-        rows(work.path(), "SELECT id, account_id FROM emails ORDER BY id").await;
+    let emails: Vec<(String, String)> = rows(
+        work.path(),
+        test_sql!("SELECT id, account_id FROM emails ORDER BY id"),
+    )
+    .await;
     assert_eq!(emails, expected);
-    let accounts: Vec<(String,)> = rows(work.path(), "SELECT id FROM accounts ORDER BY id").await;
+    let accounts: Vec<(String,)> = rows(
+        work.path(),
+        test_sql!("SELECT id FROM accounts ORDER BY id"),
+    )
+    .await;
     assert_eq!(accounts, [(GMAIL.to_string(),), (FASTMAIL.to_string(),)]);
 
     // Gmail labels are rows of `labels`; Fastmail folders are files, and a
     // message in two of them is one email in both.
     let filed: Vec<(String, String)> = rows(
         work.path(),
-        "SELECT j.email_id, m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
-         ORDER BY j.email_id, m.name",
+        test_sql!("SELECT j.email_id, m.name FROM email_mailboxes j JOIN mailboxes m ON m.id = j.mailbox_id
+         ORDER BY j.email_id, m.name"),
     )
     .await;
     let filed_under = |email: &str| -> Vec<&str> {
@@ -145,14 +153,17 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
 
     // Read, answered and flagged from the index; a thread by its first
     // message.
-    let read: Vec<(String, i64)> =
-        rows(work.path(), "SELECT id, read FROM read_marks ORDER BY id").await;
+    let read: Vec<(String, i64)> = rows(
+        work.path(),
+        test_sql!("SELECT id, read FROM read_marks ORDER BY id"),
+    )
+    .await;
     let is_read = |email: String| read.iter().find(|(e, _)| *e == email).map(|(_, r)| *r);
     assert_eq!(is_read(id(GMAIL, "briefing")), Some(1));
     assert_eq!(is_read(id(GMAIL, "reply")), Some(0));
     let keywords: Vec<(String, String)> = rows(
         work.path(),
-        "SELECT email_id, keyword FROM email_keywords ORDER BY email_id, keyword",
+        test_sql!("SELECT email_id, keyword FROM email_keywords ORDER BY email_id, keyword"),
     )
     .await;
     assert_eq!(
@@ -162,15 +173,18 @@ async fn the_tng_mail_folder_is_copied_and_rendered() {
             (id(GMAIL, "schematic"), "$flagged".to_string()),
         ]
     );
-    let threads: Vec<(String, String)> =
-        rows(work.path(), "SELECT id, thread_id FROM emails ORDER BY id").await;
+    let threads: Vec<(String, String)> = rows(
+        work.path(),
+        test_sql!("SELECT id, thread_id FROM emails ORDER BY id"),
+    )
+    .await;
     let thread_of = |email: String| threads.iter().find(|(e, _)| *e == email).unwrap().1.clone();
     assert_eq!(thread_of(id(GMAIL, "reply")), id(GMAIL, "briefing"));
     assert_eq!(thread_of(id(FASTMAIL, "risa-reply")), id(FASTMAIL, "risa"));
 
     let problems: Vec<(String, String)> = rows(
         work.path(),
-        "SELECT scope_key, severity FROM problems ORDER BY scope_key",
+        test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key"),
     )
     .await;
     assert_eq!(

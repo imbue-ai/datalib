@@ -1,7 +1,7 @@
 //! ChatGPT API transport. Every request goes through
 //! [`datalib_etl_web::http::latchkey_curl`], which captures the full
 //! response (status, every header, body) and supports playback from
-//! disk fixtures. Mirrors `src/ingest/chatgpt_web.py:_curl_get`.
+//! disk fixtures.
 
 use std::future::Future;
 use std::pin::Pin;

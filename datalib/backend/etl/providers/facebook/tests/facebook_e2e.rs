@@ -16,6 +16,7 @@ use datalib_etl_facebook_render::processor::{render_source, Source};
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 fn fixture() -> PathBuf {
     let rel = std::env::var("FACEBOOK_TNG_FIXTURE").expect("FACEBOOK_TNG_FIXTURE is set by BUILD");
@@ -506,12 +507,11 @@ impl Export {
     }
 
     async fn problems(&self) -> Vec<(String, String, String, String)> {
-        sqlx::query_as(
-            "SELECT scope_key, severity, reason, sample FROM problems ORDER BY scope_key",
-        )
-        .fetch_all(self.db.pool())
-        .await
-        .unwrap()
+        test_sql!("SELECT scope_key, severity, reason, sample FROM problems ORDER BY scope_key")
+            .query_as()
+            .fetch_all(self.db.pool())
+            .await
+            .unwrap()
     }
 }
 
@@ -540,12 +540,12 @@ async fn a_uri_through_a_link_in_the_export_stores_nothing() {
 
     e.sync().await;
 
-    let edges: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT blake3 FROM media_blobs WHERE uri = ?")
-            .bind(LEAK)
-            .fetch_all(e.db.pool())
-            .await
-            .unwrap();
+    let edges: Vec<Option<String>> = test_sql!("SELECT blake3 FROM media_blobs WHERE uri = ?")
+        .query_scalar()
+        .bind(LEAK)
+        .fetch_all(e.db.pool())
+        .await
+        .unwrap();
     assert_eq!(edges, [None], "the edge says the file is not in the export");
     let problems = e.problems().await;
     assert!(
@@ -690,7 +690,8 @@ const A_POSTED_PHOTO: &str = "your_facebook_activity/posts/media/your_posts/2000
 
 impl Export {
     async fn edge_owners(&self) -> Vec<String> {
-        sqlx::query_scalar("SELECT owner_id FROM media_blobs ORDER BY owner_id")
+        test_sql!("SELECT owner_id FROM media_blobs ORDER BY owner_id")
+            .query_scalar()
             .fetch_all(self.db.pool())
             .await
             .unwrap()
@@ -698,18 +699,19 @@ impl Export {
 
     /// The id of every record, whichever table it landed in.
     async fn record_ids(&self) -> std::collections::HashSet<String> {
-        let tables: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
-                .fetch_all(self.db.pool())
-                .await
-                .unwrap();
+        let tables: Vec<String> = test_sql!("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .query_scalar()
+            .fetch_all(self.db.pool())
+            .await
+            .unwrap();
         let mut ids = std::collections::HashSet::new();
         for table in tables.iter().filter(|t| {
             !t.starts_with("media_blobs") && !t.ends_with("_bookkeeping") && *t != "ingested_files"
         }) {
             // Audited: a table name the store itself lists, quoted.
             let found: Result<Vec<String>, _> =
-                sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM \"{table}\"")))
+                Sql::dynamic(test_sql_id!(), format!("SELECT id FROM \"{table}\""))
+                    .query_scalar()
                     .fetch_all(self.db.pool())
                     .await;
             ids.extend(found.unwrap_or_default());
@@ -810,7 +812,8 @@ async fn a_file_named_again_after_a_flush_takes_the_key_its_bytes_went_in_under(
         "read once, not again after the flush: {s:?}"
     );
     let edges: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT owner_id, blake3 FROM media_blobs WHERE uri = ? ORDER BY owner_id")
+        test_sql!("SELECT owner_id, blake3 FROM media_blobs WHERE uri = ? ORDER BY owner_id")
+            .query_as()
             .bind(SHARED)
             .fetch_all(e.db.pool())
             .await
@@ -828,12 +831,12 @@ const RIKER_PHOTO: &str =
     "your_facebook_activity/messages/inbox/williamriker_1000000001/photos/300000000000001.png";
 
 async fn message(db: &RawDb, id: &str) -> serde_json::Value {
-    let payload: String =
-        sqlx::query_scalar("SELECT json(payload) FROM messenger_messages WHERE id = ?")
-            .bind(id)
-            .fetch_one(db.pool())
-            .await
-            .unwrap_or_else(|e| panic!("no message {id}: {e}"));
+    let payload: String = test_sql!("SELECT json(payload) FROM messenger_messages WHERE id = ?")
+        .query_scalar()
+        .bind(id)
+        .fetch_one(db.pool())
+        .await
+        .unwrap_or_else(|e| panic!("no message {id}: {e}"));
     serde_json::from_str(&payload).unwrap()
 }
 
@@ -877,9 +880,10 @@ async fn messenger_conversations_land_as_threads_and_messages() {
     );
     assert_eq!(rows(&e.db, MESSENGER_MESSAGES_TABLE).await.len(), 25);
 
-    let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%messages_inbox%'",
+    let tables: Vec<String> = test_sql!(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE '%messages_inbox%'"
     )
+    .query_scalar()
     .fetch_all(e.db.pool())
     .await
     .unwrap();
@@ -908,7 +912,8 @@ async fn messenger_conversations_land_as_threads_and_messages() {
     );
 
     // The photo's edge is owned by the message that sent it.
-    let owners: Vec<String> = sqlx::query_scalar("SELECT owner_id FROM media_blobs WHERE uri = ?")
+    let owners: Vec<String> = test_sql!("SELECT owner_id FROM media_blobs WHERE uri = ?")
+        .query_scalar()
         .bind(RIKER_PHOTO)
         .fetch_all(e.db.pool())
         .await
@@ -952,21 +957,25 @@ async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
             dr::bookkeeping_ddl_for("media_blobs"),
             datalib_etl_files::file_checkpoint::INGESTED_FILES_DDL.to_string(),
         ] {
-            sqlx::query(sqlx::AssertSqlSafe(ddl))
+            Sql::dynamic(test_sql_id!(), ddl)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
         }
         let old_edge = format!("{OLD_ID}#{RIKER_PHOTO}");
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO {OLD_TABLE} (id, payload) VALUES (?, jsonb(?))"
-        )))
+        Sql::dynamic(
+            test_sql_id!(),
+            format!("INSERT INTO {OLD_TABLE} (id, payload) VALUES (?, jsonb(?))"),
+        )
+        .query()
         .bind(OLD_ID)
         .bind(file.to_string())
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO media_blobs (id, owner_id, uri, blake3) VALUES (?, ?, ?, ?)")
+        test_sql!("INSERT INTO media_blobs (id, owner_id, uri, blake3) VALUES (?, ?, ?, ?)")
+            .query()
             .bind(&old_edge)
             .bind(OLD_ID)
             .bind(RIKER_PHOTO)
@@ -974,18 +983,17 @@ async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO media_blobs_bookkeeping (id, fetched_at_utc, attempt_count) \
-             VALUES (?, '2369-01-01T00:00:00Z', 1)",
+             VALUES (?, '2369-01-01T00:00:00Z', 1)"
         )
+        .query()
         .bind(&old_edge)
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
-             VALUES (?, 'x', 'y', 1, '2369-01-01T00:00:00Z')",
-        )
+        test_sql!("INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
+             VALUES (?, 'x', 'y', 1, '2369-01-01T00:00:00Z')").query()
         .bind(format!("facebook/{OLD_TABLE}"))
         .execute(&pool)
         .await
@@ -996,7 +1004,8 @@ async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
 
     let db = RawDb::open(&path).await.expect("the rung carries it");
     let names: Vec<String> =
-        sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+        test_sql!("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+            .query_scalar()
             .bind(OLD_TABLE)
             .fetch_all(db.pool())
             .await
@@ -1006,7 +1015,8 @@ async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
     assert_eq!(rows(&db, MESSENGER_MESSAGES_TABLE).await.len(), 10);
     let sender = "1000000001:12600000120000:0";
     let edges: Vec<(String, String, Option<String>)> =
-        sqlx::query_as("SELECT id, owner_id, blake3 FROM media_blobs")
+        test_sql!("SELECT id, owner_id, blake3 FROM media_blobs")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -1018,14 +1028,15 @@ async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
             Some(KEPT_BLAKE3.to_string())
         )]
     );
-    let stamped: Vec<String> = sqlx::query_scalar(
-        "SELECT id FROM media_blobs_bookkeeping WHERE fetched_at_utc IS NOT NULL",
-    )
-    .fetch_all(db.pool())
-    .await
-    .unwrap();
+    let stamped: Vec<String> =
+        test_sql!("SELECT id FROM media_blobs_bookkeeping WHERE fetched_at_utc IS NOT NULL")
+            .query_scalar()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
     assert_eq!(stamped, [format!("{sender}#{RIKER_PHOTO}")]);
-    let scopes: Vec<String> = sqlx::query_scalar("SELECT scope FROM ingested_files")
+    let scopes: Vec<String> = test_sql!("SELECT scope FROM ingested_files")
+        .query_scalar()
         .fetch_all(db.pool())
         .await
         .unwrap();
@@ -1043,7 +1054,8 @@ async fn a_store_from_before_the_messenger_tables_is_migrated_on_open() {
     .unwrap();
     assert_eq!(rows(&db, MESSENGER_MESSAGES_TABLE).await.len(), 25);
     let photo_edges: Vec<Option<String>> =
-        sqlx::query_scalar("SELECT blake3 FROM media_blobs WHERE uri = ?")
+        test_sql!("SELECT blake3 FROM media_blobs WHERE uri = ?")
+            .query_scalar()
             .bind(RIKER_PHOTO)
             .fetch_all(db.pool())
             .await

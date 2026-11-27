@@ -19,6 +19,7 @@ use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
 use datalib_etl_sqlite_mirror::mirror;
 use datalib_schema::edges::EdgeKind;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const DATA_IMAGE: &str = "$tng-data-003:ba_TNG.local-signal.localhost";
 const SCHEMATIC: &str = "media/localhostlocal-signal/TNGART01";
@@ -83,7 +84,8 @@ impl Fixture {
 
     async fn problems(&self) -> Result<Vec<(String, String)>> {
         let db = RawDb::open(&dr::db_path_for(&self.raw)).await?;
-        let rows = sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        let rows = test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await;
         db.close().await;
@@ -94,7 +96,10 @@ impl Fixture {
         let pool = mirror::open_sqlite(&self.beeper.join("index.db"), false).await?;
         for s in stmts {
             // Test: literal edits written by the test itself.
-            sqlx::query(sqlx::AssertSqlSafe(*s)).execute(&pool).await?;
+            Sql::dynamic(test_sql_id!(), *s)
+                .query()
+                .execute(&pool)
+                .await?;
         }
         pool.close().await;
         Ok(())
@@ -274,7 +279,8 @@ async fn the_bridges_message_ids_are_kept() -> Result<()> {
     fx.ingest().await?;
     let db = RawDb::open(&dr::db_path_for(&fx.raw)).await?;
     let ids: Vec<(String, String)> =
-        sqlx::query_as("SELECT mxid, id FROM message WHERE bridge_id = 'local-signal'")
+        test_sql!("SELECT mxid, id FROM message WHERE bridge_id = 'local-signal'")
+            .query_as()
             .fetch_all(db.pool())
             .await?;
     db.close().await;

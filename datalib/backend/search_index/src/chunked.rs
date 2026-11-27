@@ -12,6 +12,7 @@ use sqlx::sqlite::SqlitePool;
 
 use crate::chunk::Chunk;
 use crate::InferenceCache;
+use datalib_sql::{sql, Sql};
 
 /// The tables [`DDL`] makes, which a cache whose chunk shape moved drops.
 pub(crate) const TABLES: &[&str] = &["search_chunked", "search_chunks"];
@@ -39,13 +40,16 @@ pub(crate) const DDL: [&str; 3] = [
 /// How many documents one bound JSON array names.
 const BATCH: usize = 5_000;
 
-pub(crate) const OWED_SQL: &str = "SELECT d.markdown_uuid, d.content_hash, \
+pub(crate) const OWED_SQL: Sql = sql!(
+    "search_index.chunks.list_unembedded_chunks",
+    "SELECT d.markdown_uuid, d.content_hash, \
         c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
    FROM search_chunks c JOIN search_chunked d ON d.doc_id = c.doc_id \
   WHERE d.source_id = ?1 \
     AND NOT EXISTS (SELECT 1 FROM vectors v INDEXED BY vectors_keys \
                      WHERE v.model = ?2 AND v.hash = c.hash) \
-  ORDER BY d.markdown_uuid, c.seq";
+  ORDER BY d.markdown_uuid, c.seq"
+);
 
 /// One document's chunks as an `embed` cut them from the rendering
 /// `content_hash` names.
@@ -85,9 +89,11 @@ impl InferenceCache {
     /// `markdown_uuid → content_hash` for every document of `source_id`
     /// that has been cut.
     pub async fn chunked(&self, source_id: &str) -> Result<BTreeMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT markdown_uuid, content_hash FROM search_chunked WHERE source_id = ?",
+        let rows: Vec<(String, String)> = sql!(
+            "search_index.chunks.list_cut_documents_of_source",
+            "SELECT markdown_uuid, content_hash FROM search_chunked WHERE source_id = ?"
         )
+        .query_as()
         .bind(source_id)
         .fetch_all(&self.pool)
         .await
@@ -100,23 +106,29 @@ impl InferenceCache {
     pub async fn file_chunks(&self, docs: &[ChunkedDoc]) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         for doc in docs {
-            let doc_id: i64 = sqlx::query_scalar(
+            let doc_id: i64 = sql!(
+                "search_index.chunks.upsert_cut_document",
                 "INSERT INTO search_chunked (source_id, markdown_uuid, content_hash) \
                  VALUES (?1, ?2, ?3) \
                  ON CONFLICT (markdown_uuid) DO UPDATE \
                    SET source_id = excluded.source_id, content_hash = excluded.content_hash \
-                 RETURNING doc_id",
+                 RETURNING doc_id"
             )
+            .query_scalar()
             .bind(&doc.source_id)
             .bind(&doc.markdown_uuid)
             .bind(&doc.content_hash)
             .fetch_one(&mut *tx)
             .await
             .context("file a cut document")?;
-            sqlx::query("DELETE FROM search_chunks WHERE doc_id = ?")
-                .bind(doc_id)
-                .execute(&mut *tx)
-                .await?;
+            sql!(
+                "search_index.chunks.delete_chunks_of_document",
+                "DELETE FROM search_chunks WHERE doc_id = ?"
+            )
+            .query()
+            .bind(doc_id)
+            .execute(&mut *tx)
+            .await?;
             let rows: Vec<serde_json::Value> = doc
                 .chunks
                 .iter()
@@ -125,12 +137,14 @@ impl InferenceCache {
                     serde_json::json!([c.start, c.end, c.first_section, c.last_section, f.hash])
                 })
                 .collect();
-            sqlx::query(
+            sql!(
+                "search_index.chunks.insert_chunks_of_document",
                 "INSERT INTO search_chunks \
                  (doc_id, seq, start_byte, end_byte, first_section, last_section, hash) \
                  SELECT ?1, key, value ->> 0, value ->> 1, value ->> 2, value ->> 3, value ->> 4 \
-                   FROM json_each(?2)",
+                   FROM json_each(?2)"
             )
+            .query()
             .bind(doc_id)
             .bind(serde_json::Value::Array(rows).to_string())
             .execute(&mut *tx)
@@ -145,16 +159,16 @@ impl InferenceCache {
         for batch in markdown_uuids.chunks(BATCH) {
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let uuids = serde_json::to_string(batch)?;
-            sqlx::query(
+            sql!(
+                "search_index.chunks.delete_chunks_of_forgotten",
                 "DELETE FROM search_chunks WHERE doc_id IN (SELECT doc_id FROM search_chunked \
-                  WHERE markdown_uuid IN (SELECT value FROM json_each(?)))",
+                  WHERE markdown_uuid IN (SELECT value FROM json_each(?)))"
             )
+            .query()
             .bind(&uuids)
             .execute(&mut *tx)
             .await?;
-            sqlx::query(
-                "DELETE FROM search_chunked WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
-            )
+            sql!("search_index.chunks.delete_forgotten_documents", "DELETE FROM search_chunked WHERE markdown_uuid IN (SELECT value FROM json_each(?))").query()
             .bind(&uuids)
             .execute(&mut *tx)
             .await?;
@@ -168,10 +182,12 @@ impl InferenceCache {
     /// Forgets the documents of every source but `sources`: one taken out
     /// of the config or out of search. Returns how many went.
     pub async fn keep_chunked_sources(&self, sources: &[String]) -> Result<usize> {
-        let gone: Vec<String> = sqlx::query_scalar(
+        let gone: Vec<String> = sql!(
+            "search_index.chunks.list_cut_of_dropped_sources",
             "SELECT markdown_uuid FROM search_chunked \
-              WHERE source_id NOT IN (SELECT value FROM json_each(?))",
+              WHERE source_id NOT IN (SELECT value FROM json_each(?))"
         )
+        .query_scalar()
         .bind(serde_json::to_string(sources)?)
         .fetch_all(&self.pool)
         .await?;
@@ -188,7 +204,8 @@ impl InferenceCache {
         model: &str,
         source_id: &str,
     ) -> Result<Vec<(String, String, FiledChunk)>> {
-        let rows: Vec<(String, String, i64, i64, i64, i64, String)> = sqlx::query_as(OWED_SQL)
+        let rows: Vec<(String, String, i64, i64, i64, i64, String)> = OWED_SQL
+            .query_as()
             .bind(source_id)
             .bind(model)
             .fetch_all(&self.pool)
@@ -206,13 +223,21 @@ impl InferenceCache {
     /// kept: a cache this build has not filled chunks into yet would
     /// otherwise lose all its vectors.
     pub async fn sweep(&self, model: &str) -> Result<u64> {
-        let any: Option<i64> = sqlx::query_scalar("SELECT 1 FROM search_chunked LIMIT 1")
-            .fetch_optional(&self.pool)
-            .await?;
+        let any: Option<i64> = sql!(
+            "search_index.chunks.find_any_cut_document",
+            "SELECT 1 FROM search_chunked LIMIT 1"
+        )
+        .query_scalar()
+        .fetch_optional(&self.pool)
+        .await?;
         if any.is_none() {
-            let held: i64 = sqlx::query_scalar("SELECT count(*) FROM vectors")
-                .fetch_one(&self.pool)
-                .await?;
+            let held: i64 = sql!(
+                "search_index.chunks.count_vectors",
+                "SELECT count(*) FROM vectors"
+            )
+            .query_scalar()
+            .fetch_one(&self.pool)
+            .await?;
             if held > 0 {
                 tracing::warn!(
                     vectors = held,
@@ -221,7 +246,8 @@ impl InferenceCache {
             }
             return Ok(0);
         }
-        let gone = sqlx::query(SWEEP_SQL)
+        let gone = SWEEP_SQL
+            .query()
             .bind(model)
             .execute(&self.pool)
             .await
@@ -235,10 +261,13 @@ impl InferenceCache {
 /// (`cache::KEYS`) rather than the table, whose every page holds a 3 KB
 /// vector: a whole read of a 2.7 GB cache took 150 s cold. Only the rows
 /// found are then read, by their key.
-pub(crate) const SWEEP_SQL: &str = "\
+pub(crate) const SWEEP_SQL: Sql = sql!(
+    "search_index.chunks.delete_unnamed_vectors",
+    "\
     DELETE FROM vectors WHERE (model, hash) IN ( \
         SELECT model, hash FROM vectors INDEXED BY vectors_keys \
-         WHERE model <> ?1 OR hash NOT IN (SELECT hash FROM search_chunks))";
+         WHERE model <> ?1 OR hash NOT IN (SELECT hash FROM search_chunks))"
+);
 
 pub(crate) fn filed(
     start: i64,
@@ -261,11 +290,14 @@ pub(crate) fn filed(
 /// `markdown_uuid → content_hash` of every document cut into chunks: the
 /// rendering each was cut from.
 pub(crate) async fn read_cut(cache: &SqlitePool) -> Result<HashMap<String, String>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT markdown_uuid, content_hash FROM search_chunked")
-            .fetch_all(cache)
-            .await
-            .context("read the cut documents")?;
+    let rows: Vec<(String, String)> = sql!(
+        "search_index.chunks.list_cut_documents",
+        "SELECT markdown_uuid, content_hash FROM search_chunked"
+    )
+    .query_as()
+    .fetch_all(cache)
+    .await
+    .context("read the cut documents")?;
     Ok(rows.into_iter().collect())
 }
 
@@ -285,18 +317,24 @@ pub(crate) async fn read_filed(
         Option<i64>,
         Option<String>,
     );
-    let all = "SELECT d.markdown_uuid, d.content_hash, \
+    let all = sql!(
+        "search_index.chunks.read_all_filed_chunks",
+        "SELECT d.markdown_uuid, d.content_hash, \
                       c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
                  FROM search_chunked d LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
-                ORDER BY d.doc_id, c.seq";
+                ORDER BY d.doc_id, c.seq"
+    );
     // From the asked uuids into the unique index: `NOT ? OR … IN (…)`
     // reads every cut document whatever is asked.
-    let asked = "SELECT d.markdown_uuid, d.content_hash, \
+    let asked = sql!(
+        "search_index.chunks.read_filed_chunks_of_documents",
+        "SELECT d.markdown_uuid, d.content_hash, \
                       c.start_byte, c.end_byte, c.first_section, c.last_section, c.hash \
                  FROM json_each(?) j \
                  JOIN search_chunked d ON d.markdown_uuid = j.value \
                  LEFT JOIN search_chunks c ON c.doc_id = d.doc_id \
-                ORDER BY d.doc_id, c.seq";
+                ORDER BY d.doc_id, c.seq"
+    );
     let mut add = |rows: Vec<Row>| -> Result<()> {
         for (uuid, content_hash, start, end, first, last, hash) in rows {
             let entry = out
@@ -309,13 +347,15 @@ pub(crate) async fn read_filed(
         Ok(())
     };
     match uuids {
-        None => add(sqlx::query_as(all)
+        None => add(all
+            .query_as()
             .fetch_all(cache)
             .await
             .context("read the filed chunks")?)?,
         Some(uuids) => {
             for batch in uuids.chunks(BATCH) {
-                add(sqlx::query_as(asked)
+                add(asked
+                    .query_as()
                     .bind(serde_json::to_string(batch)?)
                     .fetch_all(cache)
                     .await
@@ -332,6 +372,7 @@ mod tests {
     use crate::chunk::{chunk_hash, four_bytes_a_token};
     use crate::{IndexDoc, IndexSection};
 
+    use datalib_sql::test_sql;
     const MODEL: &str = "gemma";
 
     fn doc(source: &str, uuid: &str, hash: &str, sections: &[(Option<&str>, &str)]) -> IndexDoc {
@@ -589,16 +630,17 @@ mod tests {
         cache.put(MODEL, &[("a".into(), vec![1.0])]).await.unwrap();
         cache.file_chunks(&[cut(&thread("h1"))]).await.unwrap();
         for sql in [
-            "DROP INDEX vectors_keys",
-            "UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'",
+            test_sql!("DROP INDEX vectors_keys"),
+            test_sql!("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'"),
         ] {
-            sqlx::query(sql).execute(&cache.pool).await.unwrap();
+            sql.query().execute(&cache.pool).await.unwrap();
         }
         cache.close().await;
         assert!(held(InferenceCache::open(&path).await.unwrap()).await);
 
         let cache = InferenceCache::open(&path).await.unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+            .query()
             .execute(&cache.pool)
             .await
             .unwrap();

@@ -51,6 +51,7 @@ filegroup(
         "//datalib/backend/lightroom_retime:python_sources",
         "//datalib/reader:python_sources",
         "//tests/fixtures:python_sources",
+        "//tests/fixtures/curated:python_sources",
         "//tools:python_sources",
     ],
     visibility = ["//visibility:public"],

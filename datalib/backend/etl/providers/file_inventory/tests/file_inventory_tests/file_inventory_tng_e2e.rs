@@ -7,6 +7,7 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::progress::Progress;
 use datalib_etl_file_inventory::ingest::{self, FetchOptions, RawDb};
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_sql::{test_sql_id, Sql};
 use sqlx::Row;
 use tempfile::TempDir;
 
@@ -45,7 +46,11 @@ async fn entry_ids(db: &RawDb) -> Vec<(String, &'static str)> {
         ("dirs", "SELECT id FROM dirs ORDER BY id"),
         ("files", "SELECT id FROM files ORDER BY id"),
     ] {
-        let rows = sqlx::query(sql).fetch_all(db.pool()).await.unwrap();
+        let rows = Sql::dynamic(test_sql_id!(), sql)
+            .query()
+            .fetch_all(db.pool())
+            .await
+            .unwrap();
         out.extend(
             rows.into_iter()
                 .map(|r| (r.try_get::<String, _>("id").unwrap(), table)),

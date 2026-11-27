@@ -11,12 +11,16 @@ rust_library(
         "src/params.rs",
         "src/recording.rs",
         "src/rows_read.rs",
+        "src/totals.rs",
     ],
     crate_name = "datalib_sql_work",
     edition = "2021",
     visibility = ["//datalib:__subpackages__"],
     deps = [
         "//datalib/backend/env:datalib_env",
+        "//datalib/backend/metrics:datalib_metrics",
+        "//datalib/backend/sql:datalib_sql",
+        "@datalib_crates//:serde",
         "@datalib_crates//:serde_json",
         # Links the SQLite (doltlite) the C calls here resolve against.
         "@datalib_crates//:sqlx",
@@ -39,6 +43,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_sql_work",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -55,6 +60,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_sql_work",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
@@ -70,6 +76,7 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_sql_work",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
@@ -84,8 +91,28 @@ rust_test(
     edition = "2021",
     deps = [
         ":datalib_sql_work",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/sqlite_open:datalib_sqlite_open",
         "@datalib_crates//:futures",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:tempfile",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+        "@datalib_crates//:tracing-subscriber",
+    ],
+)
+
+rust_test(
+    name = "sql_work_totals_test",
+    size = "small",
+    srcs = ["tests/totals.rs"],
+    edition = "2021",
+    deps = [
+        ":datalib_sql_work",
+        "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/sql:datalib_sql",
+        "//datalib/backend/sqlite_open:datalib_sqlite_open",
+        "@datalib_crates//:serde_json",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:tempfile",
         "@datalib_crates//:tokio",

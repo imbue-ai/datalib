@@ -19,6 +19,7 @@ use datalib_etl_github::synthesize::GithubSynth;
 use datalib_etl_web::http::{fixture_key, HttpRequest, HttpService};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::Synthesizer;
+use datalib_sql::test_sql;
 use serde_json::{json, Map, Value};
 use tempfile::tempdir;
 
@@ -197,7 +198,8 @@ async fn a_failed_listing_prunes_nothing() {
 async fn problems(out_db: &Path) -> Vec<(String, String, String)> {
     let db = RawDb::open(&db_path_for(out_db)).await.unwrap();
     let rows: Vec<(String, String, String)> =
-        sqlx::query_as("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, severity, sample FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(db.pool())
             .await
             .unwrap();

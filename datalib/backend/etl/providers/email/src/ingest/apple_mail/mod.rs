@@ -28,6 +28,7 @@ use super::db::RawDb;
 use super::envelope;
 use super::mbox::{bulk_insert_mailboxes, bulk_insert_threads, write_batch, PendingBatch};
 use super::schema_raw::{AccountRow, FetchedEmail, SEEN};
+use datalib_sql::sql;
 
 /// The cursor scope: which `.emlx` and attachment files this source has
 /// read, and what each hashed to.
@@ -233,19 +234,26 @@ impl Held {
 }
 
 async fn held_emails(db: &RawDb, account_id: &str) -> Result<HashMap<String, Held>> {
-    let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, thread_id FROM emails WHERE account_id = ?")
-            .bind(account_id)
-            .fetch_all(db.pool())
-            .await
-            .context("list the account's emails")?;
+    let rows: Vec<(String, String)> = sql!(
+        "email.apple_mail.list_held_emails_of_account",
+        "SELECT id, thread_id FROM emails WHERE account_id = ?"
+    )
+    .query_as()
+    .bind(account_id)
+    .fetch_all(db.pool())
+    .await
+    .context("list the account's emails")?;
     let joins = db.load_email_joins().await?;
-    let read: HashSet<String> = sqlx::query_scalar("SELECT id FROM read_marks WHERE read = 1")
-        .fetch_all(db.pool())
-        .await
-        .context("list the read marks")?
-        .into_iter()
-        .collect();
+    let read: HashSet<String> = sql!(
+        "email.apple_mail.list_read_marks",
+        "SELECT id FROM read_marks WHERE read = 1"
+    )
+    .query_scalar()
+    .fetch_all(db.pool())
+    .await
+    .context("list the read marks")?
+    .into_iter()
+    .collect();
     Ok(rows
         .into_iter()
         .map(|(id, thread_id)| {

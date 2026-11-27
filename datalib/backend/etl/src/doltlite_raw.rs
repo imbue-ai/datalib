@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use datalib_flock::{FileLock, LockError};
+use datalib_sql::{sql, sql_id, Sql};
 pub use datalib_store_meta::ladder::{run_statements, Statement};
 use datalib_store_meta::Ladder;
 pub use datalib_store_meta::{Migration, StoreKind};
@@ -291,16 +292,20 @@ pub const SHARED_LADDER: &[Migration] = &[Migration {
     name: "problems.last_seen_at_utc becomes changed_at_utc",
     apply: |conn| {
         Box::pin(async move {
-            let old: bool = sqlx::query_scalar(
+            let old: bool = sql!(
+                "etl.doltlite_raw.has_problems_last_seen_column",
                 "SELECT EXISTS(SELECT 1 FROM pragma_table_info('problems') \
-                 WHERE name = 'last_seen_at_utc')",
+                 WHERE name = 'last_seen_at_utc')"
             )
+            .query_scalar()
             .fetch_one(&mut *conn)
             .await?;
             if old {
-                sqlx::query(
-                    "ALTER TABLE problems RENAME COLUMN last_seen_at_utc TO changed_at_utc",
+                sql!(
+                    "etl.doltlite_raw.migrate_problems_last_seen_to_changed",
+                    "ALTER TABLE problems RENAME COLUMN last_seen_at_utc TO changed_at_utc"
                 )
+                .query()
                 .execute(&mut *conn)
                 .await?;
             }
@@ -410,20 +415,28 @@ async fn checkout_writer_branch(
     // Absent branch is `branch not found`, which is how we learn to
     // create it rather than a failure. Creating it is a real write, and
     // happens once per file.
-    match sqlx::query("SELECT dolt_connect_branch(?)")
-        .bind(WRITER_BRANCH)
-        .execute(&mut *conn)
-        .await
+    match sql!(
+        "etl.doltlite_raw.connect_writer_branch",
+        "SELECT dolt_connect_branch(?)"
+    )
+    .query()
+    .bind(WRITER_BRANCH)
+    .execute(&mut *conn)
+    .await
     {
         Ok(_) => {}
         // No doltlite: there are no branches to be on, and every read of
         // this store is as unpinned as every write.
         Err(e) if is_missing_function(&e) => return Ok(()),
         Err(_) => {
-            sqlx::query("SELECT dolt_checkout('-b', ?)")
-                .bind(WRITER_BRANCH)
-                .execute(&mut *conn)
-                .await?;
+            sql!(
+                "etl.doltlite_raw.create_writer_branch",
+                "SELECT dolt_checkout('-b', ?)"
+            )
+            .query()
+            .bind(WRITER_BRANCH)
+            .execute(&mut *conn)
+            .await?;
         }
     }
     // Read it back, because a selection that quietly did nothing is the
@@ -433,9 +446,13 @@ async fn checkout_writer_branch(
     // reader, mid-batch, which is what the branch exists to prevent.
     // Doltlite 0.50.3 let a failed checkout through silently (#691).
     // `file_inventory::checkout_branch` reads back for the same reason.
-    let active: String = sqlx::query_scalar("SELECT active_branch()")
-        .fetch_one(&mut *conn)
-        .await?;
+    let active: String = sql!(
+        "etl.doltlite_raw.verify_writer_branch_active",
+        "SELECT active_branch()"
+    )
+    .query_scalar()
+    .fetch_one(&mut *conn)
+    .await?;
     if active != WRITER_BRANCH {
         return Err(sqlx::Error::Configuration(
             format!(
@@ -451,7 +468,8 @@ async fn checkout_writer_branch(
 /// The commit a branch names, or `None` when this build has no doltlite
 /// or the branch does not exist yet.
 async fn branch_head(conn: &mut sqlx::SqliteConnection, branch: &str) -> Option<String> {
-    sqlx::query_scalar("SELECT dolt_hashof(?)")
+    sql!("etl.doltlite_raw.read_branch_head", "SELECT dolt_hashof(?)")
+        .query_scalar()
         .bind(branch)
         .fetch_optional(&mut *conn)
         .await
@@ -485,10 +503,14 @@ pub async fn publish_to_main(pool: &SqlitePool) -> Result<()> {
 
 /// [`publish_to_main`] on a connection the caller already holds.
 async fn publish_on(conn: &mut sqlx::SqliteConnection) -> Result<()> {
-    let active: Option<String> = sqlx::query_scalar("SELECT active_branch()")
-        .fetch_optional(&mut *conn)
-        .await
-        .unwrap_or(None);
+    let active: Option<String> = sql!(
+        "etl.doltlite_raw.read_active_branch_to_publish",
+        "SELECT active_branch()"
+    )
+    .query_scalar()
+    .fetch_optional(&mut *conn)
+    .await
+    .unwrap_or(None);
     if active.as_deref() != Some(WRITER_BRANCH) {
         return Ok(());
     }
@@ -497,11 +519,15 @@ async fn publish_on(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     // `reopening_an_untouched_store_does_not_grow_it` would notice: the
     // leak leaves `dolt_log` unchanged and `dolt_status` clean.
     if branch_head(conn, WRITER_BRANCH).await != branch_head(conn, "main").await {
-        sqlx::query("SELECT dolt_branch('-f', 'main', ?)")
-            .bind(WRITER_BRANCH)
-            .execute(&mut *conn)
-            .await
-            .context("fast-forward main to the writer branch")?;
+        sql!(
+            "etl.doltlite_raw.fast_forward_main",
+            "SELECT dolt_branch('-f', 'main', ?)"
+        )
+        .query()
+        .bind(WRITER_BRANCH)
+        .execute(&mut *conn)
+        .await
+        .context("fast-forward main to the writer branch")?;
     }
     // After `main`, and on every publish rather than only one that moved
     // it, so a crash between the two moves is finished by the next.
@@ -520,23 +546,28 @@ async fn advance_content(conn: &mut sqlx::SqliteConnection) -> Result<()> {
     if content == head || !content_moved(conn, &content, &head).await? {
         return Ok(());
     }
-    sqlx::query("SELECT dolt_branch('-f', ?, ?)")
-        .bind(CONTENT_BRANCH)
-        .bind(WRITER_BRANCH)
-        .execute(&mut *conn)
-        .await
-        .context("move the content branch")?;
+    sql!(
+        "etl.doltlite_raw.move_content_branch",
+        "SELECT dolt_branch('-f', ?, ?)"
+    )
+    .query()
+    .bind(CONTENT_BRANCH)
+    .bind(WRITER_BRANCH)
+    .execute(&mut *conn)
+    .await
+    .context("move the content branch")?;
     Ok(())
 }
 
 /// Whether any table [`moves_version`] counts changed its rows or its
 /// shape, or came or went, between two commits.
 async fn content_moved(conn: &mut sqlx::SqliteConnection, from: &str, to: &str) -> Result<bool> {
-    let tables: Vec<String> = sqlx::query_scalar(
-        // A table added or dropped has `''` on the side it is missing from.
+    let tables: Vec<String> = sql!(
+        "etl.doltlite_raw.list_content_tables_moved", // A table added or dropped has `''` on the side it is missing from.
         "SELECT coalesce(nullif(to_table_name, ''), from_table_name) FROM dolt_diff_summary \
-         WHERE from_ref = ? AND to_ref = ? AND (data_change = 1 OR schema_change = 1)",
+         WHERE from_ref = ? AND to_ref = ? AND (data_change = 1 OR schema_change = 1)"
     )
+    .query_scalar()
     .bind(from)
     .bind(to)
     .fetch_all(&mut *conn)
@@ -559,11 +590,15 @@ async fn start_content_branch(pool: &SqlitePool) -> Result<()> {
     {
         return Ok(());
     }
-    sqlx::query("SELECT dolt_branch(?, 'main')")
-        .bind(CONTENT_BRANCH)
-        .execute(&mut *conn)
-        .await
-        .context("start the content branch")?;
+    sql!(
+        "etl.doltlite_raw.create_content_branch",
+        "SELECT dolt_branch(?, 'main')"
+    )
+    .query()
+    .bind(CONTENT_BRANCH)
+    .execute(&mut *conn)
+    .await
+    .context("start the content branch")?;
     Ok(())
 }
 
@@ -1096,10 +1131,14 @@ async fn open_inner(
             // The meta table has to exist for the rung to bump the
             // version; a store from before the table is at version 0 and
             // gets it here.
-            sqlx::query(datalib_store_meta::DDL)
-                .execute(&pool)
-                .await
-                .context("create _datalib_meta before migrating")?;
+            Sql::ddl(
+                sql_id!("etl.doltlite_raw.create_meta_table"),
+                datalib_store_meta::DDL,
+            )
+            .query()
+            .execute(&pool)
+            .await
+            .context("create _datalib_meta before migrating")?;
             let climb = datalib_store_meta::ladder::Climb {
                 ladder: which,
                 from: stored,
@@ -1119,10 +1158,14 @@ async fn open_inner(
     if include_shared {
         for table in RETIRED_SHARED_TABLES {
             // Audited: `table` is one of the `&'static str` names above.
-            sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
-                .execute(&pool)
-                .await
-                .with_context(|| format!("drop the retired {table}"))?;
+            Sql::dynamic(
+                sql_id!("etl.doltlite_raw.drop_retired_shared_table"),
+                format!("DROP TABLE IF EXISTS {table}"),
+            )
+            .query()
+            .execute(&pool)
+            .await
+            .with_context(|| format!("drop the retired {table}"))?;
         }
     }
     // Tables, then indexes — see the README for why the order is
@@ -1195,7 +1238,8 @@ async fn open_inner(
         .chain(lookup_indexes)
         .chain(shared_indexes)
     {
-        sqlx::query(sqlx::AssertSqlSafe(*stmt))
+        Sql::dynamic(sql_id!("etl.doltlite_raw.apply_index_ddl"), *stmt)
+            .query()
             .execute(&pool)
             .await
             .with_context(|| {
@@ -1321,12 +1365,15 @@ pub async fn column_exists(pool: &SqlitePool, table: &str, column: &str) -> Resu
 /// Whether the store has `table`, for a reader of a store whose tables
 /// vary with what upstream had — a mirrored file from an older app.
 pub async fn table_exists(pool: &SqlitePool, table: &str) -> Result<bool> {
-    let n: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?")
-            .bind(table)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("look for table {table}"))?;
+    let n: i64 = sql!(
+        "etl.doltlite_raw.find_table_by_name",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
+    )
+    .query_scalar()
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("look for table {table}"))?;
     Ok(n > 0)
 }
 
@@ -1334,10 +1381,11 @@ pub async fn table_exists(pool: &SqlitePool, table: &str) -> Result<bool> {
 /// Every table in the file that is ours to touch.
 async fn table_is_empty(pool: &SqlitePool, table: &str) -> Result<bool> {
     // Audited: the name is quoted.
-    let any: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "SELECT EXISTS(SELECT 1 FROM {})",
-        quote_ident(table)
-    )))
+    let any: bool = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.check_table_has_rows"),
+        format!("SELECT EXISTS(SELECT 1 FROM {})", quote_ident(table)),
+    )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .with_context(|| format!("is {table} empty"))?;
@@ -1352,9 +1400,11 @@ pub fn quote_ident(name: &str) -> String {
 }
 
 async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
-    sqlx::query_scalar(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    sql!(
+        "etl.doltlite_raw.list_user_tables",
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
     )
+    .query_scalar()
     .fetch_all(pool)
     .await
     .context("list tables")
@@ -1362,10 +1412,11 @@ async fn user_tables(pool: &SqlitePool) -> Result<Vec<String>> {
 
 async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>> {
     // Audited: the name is quoted.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "PRAGMA table_xinfo({})",
-        quote_ident(table)
-    )))
+    let rows = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.read_table_columns"),
+        format!("PRAGMA table_xinfo({})", quote_ident(table)),
+    )
+    .query()
     .fetch_all(pool)
     .await
     .with_context(|| format!("table_xinfo({table})"))?;
@@ -1421,9 +1472,13 @@ async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInf
         .await
         .context("open the in-memory schema probe")?;
     // The name's first occurrence is the name itself.
-    let probe_sql = create_sql.replacen(table, PROBE, 1);
+    let probe_sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.create_schema_probe_table"),
+        create_sql.replacen(table, PROBE, 1),
+    );
     // Audited: static DDL with only its table name replaced.
-    sqlx::query(sqlx::AssertSqlSafe(probe_sql))
+    probe_sql
+        .query()
         .execute(&probe)
         .await
         .with_context(|| format!("build schema probe for {table}"))?;
@@ -1608,7 +1663,8 @@ async fn apply_table_plan(
         TablePlan::Kept => return Ok(Reconciled::Kept),
         TablePlan::Create => {
             // Audited: `create_sql` is our own static DDL.
-            sqlx::query(sqlx::AssertSqlSafe(create_sql))
+            Sql::dynamic(sql_id!("etl.doltlite_raw.create_planned_table"), create_sql)
+                .query()
                 .execute(pool)
                 .await
                 .with_context(|| format!("create {table}"))?;
@@ -1618,8 +1674,11 @@ async fn apply_table_plan(
             let mut added_all = true;
             for clause in clauses {
                 // Audited: `clause` is a slice of our own static DDL.
-                let sql = format!("ALTER TABLE {table} ADD COLUMN {clause}");
-                match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
+                let sql = Sql::dynamic(
+                    sql_id!("etl.doltlite_raw.add_planned_column"),
+                    format!("ALTER TABLE {table} ADD COLUMN {clause}"),
+                );
+                match sql.query().execute(pool).await {
                     Ok(_) => tracing::info!(
                         table,
                         column = %clause,
@@ -1659,11 +1718,16 @@ async fn apply_table_plan(
         }
     }
     // Audited: `table` is parsed from our own static DDL.
-    sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
-        .execute(pool)
-        .await
-        .with_context(|| format!("drop {table} for schema recreate"))?;
-    sqlx::query(sqlx::AssertSqlSafe(create_sql))
+    Sql::dynamic(
+        sql_id!("etl.doltlite_raw.drop_table_to_recreate"),
+        format!("DROP TABLE IF EXISTS {table}"),
+    )
+    .query()
+    .execute(pool)
+    .await
+    .with_context(|| format!("drop {table} for schema recreate"))?;
+    Sql::dynamic(sql_id!("etl.doltlite_raw.recreate_table"), create_sql)
+        .query()
         .execute(pool)
         .await
         .with_context(|| format!("recreate {table}"))?;
@@ -1691,11 +1755,15 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
             continue;
         }
         // Audited: `table` is one of the `&'static str` names above.
-        let n = sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-            .execute(pool)
-            .await
-            .with_context(|| format!("clear {table} after schema recreate"))?
-            .rows_affected();
+        let n = Sql::dynamic(
+            sql_id!("etl.doltlite_raw.delete_cursors_after_recreate"),
+            format!("DELETE FROM {table}"),
+        )
+        .query()
+        .execute(pool)
+        .await
+        .with_context(|| format!("clear {table} after schema recreate"))?
+        .rows_affected();
         if n > 0 {
             cleared.push(format!("{table}={n}"));
         }
@@ -1729,10 +1797,13 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 /// (docs/dev/doltlite.md#plain-sqlite-files-and-sqlite-compatibility).
 async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result<()> {
     // `dolt_status` is a vtab; stock SQLite errors with "no such table".
-    let dirty: std::result::Result<i64, sqlx::Error> =
-        sqlx::query_scalar("SELECT count(*) FROM dolt_status")
-            .fetch_one(pool)
-            .await;
+    let dirty: std::result::Result<i64, sqlx::Error> = sql!(
+        "etl.doltlite_raw.count_dirty_tables",
+        "SELECT count(*) FROM dolt_status"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await;
     let count = match dirty {
         Ok(n) => n,
         Err(e) if e.to_string().contains("no such table") => return Ok(()),
@@ -1747,18 +1818,28 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         "discard_dirty_working_tree: a prior writer left {count} dirty entries; \
          starting from the last commit"
     );
-    sqlx::query("SELECT dolt_reset('--hard')")
-        .execute(pool)
-        .await
-        .context("dolt_reset --hard")?;
-    sqlx::query("SELECT dolt_clean()")
-        .execute(pool)
-        .await
-        .context("dolt_clean")?;
+    sql!(
+        "etl.doltlite_raw.reset_dirty_working_set",
+        "SELECT dolt_reset('--hard')"
+    )
+    .query()
+    .execute(pool)
+    .await
+    .context("dolt_reset --hard")?;
+    sql!(
+        "etl.doltlite_raw.clean_untracked_tables",
+        "SELECT dolt_clean()"
+    )
+    .query()
+    .execute(pool)
+    .await
+    .context("dolt_clean")?;
     let status = || async {
-        sqlx::query_as::<_, (String, i64, String)>(
-            "SELECT table_name, staged, status FROM dolt_status",
+        sql!(
+            "etl.doltlite_raw.list_still_dirty_tables",
+            "SELECT table_name, staged, status FROM dolt_status"
         )
+        .query_as::<(String, i64, String)>()
         .fetch_all(pool)
         .await
         .context("re-probe dolt_status")
@@ -1768,10 +1849,14 @@ async fn discard_dirty_working_tree(pool: &SqlitePool, db_path: &Path) -> Result
         table == "sqlite_sequence" && state == "new table"
     };
     if left.iter().any(stray_counter) {
-        sqlx::query("DELETE FROM sqlite_sequence")
-            .execute(pool)
-            .await
-            .context("empty the sqlite_sequence dolt_clean cannot drop")?;
+        sql!(
+            "etl.doltlite_raw.delete_stray_sqlite_sequence",
+            "DELETE FROM sqlite_sequence"
+        )
+        .query()
+        .execute(pool)
+        .await
+        .context("empty the sqlite_sequence dolt_clean cannot drop")?;
         left = status().await?;
         left.retain(|entry| !stray_counter(entry));
     }
@@ -1799,14 +1884,20 @@ pub async fn start_run(pool: &SqlitePool, config: &Value) -> Result<i64> {
     let cfg = serde_json::to_string(config).context("serialize run config")?;
     // A store has one writer, so a run still `running` as this one starts
     // was killed before it could say how it ended.
-    sqlx::query("UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'")
-        .execute(pool)
-        .await
-        .context("close sync_runs left running")?;
-    let row = sqlx::query(
-        "INSERT INTO sync_runs (started_at_utc, tz_offset, config, status) \
-         VALUES (?, ?, ?, 'running') RETURNING run_id",
+    sql!(
+        "etl.doltlite_raw.mark_running_runs_interrupted",
+        "UPDATE sync_runs SET status = 'interrupted' WHERE status = 'running'"
     )
+    .query()
+    .execute(pool)
+    .await
+    .context("close sync_runs left running")?;
+    let row = sql!(
+        "etl.doltlite_raw.insert_running_sync_run",
+        "INSERT INTO sync_runs (started_at_utc, tz_offset, config, status) \
+         VALUES (?, ?, ?, 'running') RETURNING run_id"
+    )
+    .query()
     .bind(&now)
     .bind(&tz_offset)
     .bind(&cfg)
@@ -1825,10 +1916,12 @@ pub async fn finish_run(
 ) -> Result<()> {
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
     let s = serde_json::to_string(summary).context("serialize run summary")?;
-    sqlx::query(
+    sql!(
+        "etl.doltlite_raw.update_finished_sync_run",
         "UPDATE sync_runs SET finished_at_utc = ?, tz_offset = ?, status = ?, summary = ? \
-         WHERE run_id = ?",
+         WHERE run_id = ?"
     )
+    .query()
     .bind(&now)
     .bind(&tz_offset)
     .bind(status)
@@ -1852,9 +1945,11 @@ pub async fn has_dolt_extensions(pool: &SqlitePool) -> bool {
 }
 
 async fn has_dolt_extensions_on(conn: &mut sqlx::SqliteConnection) -> bool {
-    let res = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'",
+    let res = sql!(
+        "etl.doltlite_raw.check_dolt_commit_function",
+        "SELECT count(*) FROM pragma_function_list WHERE name = 'dolt_commit'"
     )
+    .query_scalar::<i64>()
     .fetch_one(&mut *conn)
     .await;
     matches!(res, Ok(n) if n > 0)
@@ -1903,14 +1998,21 @@ pub async fn adopt_sourceless_problems(pool: &SqlitePool, source: &str) -> Resul
         return Ok(0);
     }
     let mut tx = pool.begin().await.context("begin adopting problems")?;
-    let rows: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems WHERE source_id = ''")
-        .fetch_all(&mut *tx)
-        .await
-        .context("read the problems that name no source")?
-        .iter()
-        .map(ProblemRow::from_row)
-        .collect::<Result<_>>()?;
-    let insert = crate::bulk::insert_sql::<ProblemRow>();
+    let rows: Vec<ProblemRow> = sql!(
+        "etl.doltlite_raw.list_sourceless_problems",
+        "SELECT * FROM problems WHERE source_id = ''"
+    )
+    .query()
+    .fetch_all(&mut *tx)
+    .await
+    .context("read the problems that name no source")?
+    .iter()
+    .map(ProblemRow::from_row)
+    .collect::<Result<_>>()?;
+    let insert = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.insert_adopted_problem"),
+        crate::bulk::insert_sql::<ProblemRow>(),
+    );
     for old in &rows {
         let scope = match old.scope_kind {
             ScopeKind::Markdown => Scope::Markdown(&old.scope_key),
@@ -1942,15 +2044,19 @@ pub async fn adopt_sourceless_problems(pool: &SqlitePool, source: &str) -> Resul
             upstream_account: old.upstream_account.clone(),
             ..fresh
         };
-        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
-            .bind(&old.problem_uuid)
-            .execute(&mut *tx)
-            .await
-            .context("drop a problem that names no source")?;
+        sql!(
+            "etl.doltlite_raw.delete_sourceless_problem",
+            "DELETE FROM problems WHERE problem_uuid = ?"
+        )
+        .query()
+        .bind(&old.problem_uuid)
+        .execute(&mut *tx)
+        .await
+        .context("drop a problem that names no source")?;
         // Audited: `insert` is built from `ProblemRow`'s associated
         // consts, never from row data; every value is bound.
         adopted
-            .bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
+            .bind_into(insert.query())
             .execute(&mut *tx)
             .await
             .context("record it under the source")?;
@@ -1993,13 +2099,19 @@ pub(crate) async fn commit_on(
     }
     let started = std::time::Instant::now();
     let query = match date {
-        None => sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?)")
-            .bind(stamp_run(msg)),
-        Some(date) => {
-            sqlx::query_scalar::<_, Option<String>>("SELECT dolt_commit('-Am', ?, '--date', ?)")
-                .bind(stamp_run(msg))
-                .bind(date)
-        }
+        None => sql!(
+            "etl.doltlite_raw.commit_all",
+            "SELECT dolt_commit('-Am', ?)"
+        )
+        .query_scalar::<Option<String>>()
+        .bind(stamp_run(msg)),
+        Some(date) => sql!(
+            "etl.doltlite_raw.commit_all_at_date",
+            "SELECT dolt_commit('-Am', ?, '--date', ?)"
+        )
+        .query_scalar::<Option<String>>()
+        .bind(stamp_run(msg))
+        .bind(date),
     };
     // "nothing to commit" is a legitimate outcome: a pass that fetched
     // nothing new leaves the working set clean.
@@ -2034,10 +2146,14 @@ pub async fn head_commit(pool: &SqlitePool) -> Result<Option<String>> {
     if !has_dolt_extensions(pool).await {
         return Ok(None);
     }
-    sqlx::query_scalar::<_, String>("SELECT commit_hash FROM dolt_log() LIMIT 1")
-        .fetch_optional(pool)
-        .await
-        .context("read dolt_log head")
+    sql!(
+        "etl.doltlite_raw.read_head_commit",
+        "SELECT commit_hash FROM dolt_log() LIMIT 1"
+    )
+    .query_scalar::<String>()
+    .fetch_optional(pool)
+    .await
+    .context("read dolt_log head")
 }
 
 /// A derived store's *content version*, what its step reports to the
@@ -2062,11 +2178,15 @@ pub async fn content_version(pool: &SqlitePool) -> Result<Option<String>> {
 /// The hash of `commit`'s tree: the version a seal of `commit` reports in
 /// a store that reports [`content_version`].
 pub async fn tree_of(pool: &SqlitePool, commit: &str) -> Result<String> {
-    sqlx::query_scalar::<_, String>("SELECT dolt_hashof_db(?)")
-        .bind(commit)
-        .fetch_one(pool)
-        .await
-        .with_context(|| format!("dolt_hashof_db({commit})"))
+    sql!(
+        "etl.doltlite_raw.read_commit_tree_hash",
+        "SELECT dolt_hashof_db(?)"
+    )
+    .query_scalar::<String>()
+    .bind(commit)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("dolt_hashof_db({commit})"))
 }
 
 /// The commit a consumer's cursor names, for a diff from it: `commit` if
@@ -2082,10 +2202,14 @@ pub async fn resolve_commit(
     if !has_dolt_extensions(pool).await {
         return Ok(Some(commit.to_string()));
     }
-    match sqlx::query_scalar::<_, String>("SELECT dolt_hashof(?)")
-        .bind(commit)
-        .fetch_one(pool)
-        .await
+    match sql!(
+        "etl.doltlite_raw.check_commit_held",
+        "SELECT dolt_hashof(?)"
+    )
+    .query_scalar::<String>()
+    .bind(commit)
+    .fetch_one(pool)
+    .await
     {
         Ok(_) => return Ok(Some(commit.to_string())),
         // `dolt_hashof` says "invalid ref spec" for a commit the store
@@ -2096,9 +2220,11 @@ pub async fn resolve_commit(
     let Some(tree) = tree else {
         return Ok(None);
     };
-    sqlx::query_scalar::<_, String>(
-        "SELECT commit_hash FROM dolt_log() WHERE dolt_hashof_db(commit_hash) = ? LIMIT 1",
+    sql!(
+        "etl.doltlite_raw.find_commit_by_tree",
+        "SELECT commit_hash FROM dolt_log() WHERE dolt_hashof_db(commit_hash) = ? LIMIT 1"
     )
+    .query_scalar::<String>()
     .bind(tree)
     .fetch_optional(pool)
     .await
@@ -2118,10 +2244,12 @@ pub async fn content_tables_changed(
     from: &str,
     to: &str,
 ) -> Result<Vec<String>> {
-    let rows: Vec<String> = sqlx::query_scalar(
+    let rows: Vec<String> = sql!(
+        "etl.doltlite_raw.list_tables_with_data_changes",
         "SELECT coalesce(to_table_name, from_table_name) FROM dolt_diff_summary \
-         WHERE from_ref = ? AND to_ref = ? AND data_change = 1",
+         WHERE from_ref = ? AND to_ref = ? AND data_change = 1"
     )
+    .query_scalar()
     .bind(from)
     .bind(to)
     .fetch_all(pool)
@@ -2218,9 +2346,13 @@ pub async fn problem_counts_at_path(
         .connect_with(datalib_sqlite_open::file(db_path).read_only(true))
         .await
         .with_context(|| format!("open read-only {}", db_path.display()))?;
-    let rows = sqlx::query("SELECT severity, COUNT(*) FROM problems GROUP BY severity")
-        .fetch_all(&pool)
-        .await;
+    let rows = sql!(
+        "etl.doltlite_raw.count_problems_by_severity_at_path",
+        "SELECT severity, COUNT(*) FROM problems GROUP BY severity"
+    )
+    .query()
+    .fetch_all(&pool)
+    .await;
     pool.close().await;
     let rows = rows.context("count the store's problems")?;
     let mut out = HashMap::new();
@@ -2264,10 +2396,11 @@ pub async fn reset_store(db_path: &Path) -> Result<()> {
         for table in tables.iter().filter(|t| *t != datalib_store_meta::TABLE) {
             // Audited: the name is quoted; a mirrored store's come from
             // the source file.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {}",
-                quote_ident(table)
-            )))
+            Sql::dynamic(
+                sql_id!("etl.doltlite_raw.delete_all_rows_for_reset"),
+                format!("DELETE FROM {}", quote_ident(table)),
+            )
+            .query()
             .execute(&mut *tx)
             .await
             .with_context(|| format!("reset: empty {table}"))?;
@@ -2314,7 +2447,10 @@ pub async fn collect_garbage(db_path: &Path) -> Result<bool> {
         return Ok(false);
     }
     let pool = open_bare(db_path).await?;
-    let result = sqlx::query("SELECT dolt_gc()").execute(&pool).await;
+    let result = sql!("etl.doltlite_raw.gc_store", "SELECT dolt_gc()")
+        .query()
+        .execute(&pool)
+        .await;
     pool.close().await;
     result.with_context(|| format!("dolt_gc {}", db_path.display()))?;
     Ok(true)
@@ -2339,33 +2475,49 @@ pub async fn open_bare(db_path: &Path) -> Result<SqlitePool> {
 }
 
 async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {
-    let log: Vec<String> = sqlx::query_scalar("SELECT commit_hash FROM dolt_log()")
-        .fetch_all(pool)
-        .await
-        .context("read dolt_log")?;
+    let log: Vec<String> = sql!(
+        "etl.doltlite_raw.list_commits_to_fold",
+        "SELECT commit_hash FROM dolt_log()"
+    )
+    .query_scalar()
+    .fetch_all(pool)
+    .await
+    .context("read dolt_log")?;
     // The store's first commit and one on top of it: folded already.
     if log.len() <= 2 {
         return Ok(None);
     }
     let (head, first) = (&log[0], &log[log.len() - 1]);
     let tree = tree_of(pool, head).await?;
-    sqlx::query("SELECT dolt_reset('--soft', ?)")
-        .bind(first)
-        .execute(pool)
-        .await
-        .context("reset to the first commit")?;
+    sql!(
+        "etl.doltlite_raw.soft_reset_to_first_commit",
+        "SELECT dolt_reset('--soft', ?)"
+    )
+    .query()
+    .bind(first)
+    .execute(pool)
+    .await
+    .context("reset to the first commit")?;
     // The working set, not the stage: the commit below takes everything,
     // and the open may have left a table in it.
-    let working: String = sqlx::query_scalar("SELECT dolt_hashof_db()")
-        .fetch_one(pool)
-        .await
-        .context("dolt_hashof_db()")?;
+    let working: String = sql!(
+        "etl.doltlite_raw.read_folded_working_tree",
+        "SELECT dolt_hashof_db()"
+    )
+    .query_scalar()
+    .fetch_one(pool)
+    .await
+    .context("dolt_hashof_db()")?;
     if working != tree {
-        sqlx::query("SELECT dolt_reset('--soft', ?)")
-            .bind(head)
-            .execute(pool)
-            .await
-            .context("put the history back")?;
+        sql!(
+            "etl.doltlite_raw.restore_head_after_failed_fold",
+            "SELECT dolt_reset('--soft', ?)"
+        )
+        .query()
+        .bind(head)
+        .execute(pool)
+        .await
+        .context("put the history back")?;
         anyhow::bail!(
             "folding would change the store's tree from {tree} to {working}; left as it was"
         );
@@ -2384,14 +2536,19 @@ async fn fold_on(pool: &SqlitePool) -> Result<Option<Folded>> {
             .await
             .context("take the store's connection")?;
         if branch_head(&mut conn, CONTENT_BRANCH).await.is_some() {
-            sqlx::query("SELECT dolt_branch('-f', ?, 'HEAD')")
-                .bind(CONTENT_BRANCH)
-                .execute(&mut *conn)
-                .await
-                .context("move the content branch onto the fold")?;
+            sql!(
+                "etl.doltlite_raw.move_content_branch_onto_fold",
+                "SELECT dolt_branch('-f', ?, 'HEAD')"
+            )
+            .query()
+            .bind(CONTENT_BRANCH)
+            .execute(&mut *conn)
+            .await
+            .context("move the content branch onto the fold")?;
         }
     }
-    sqlx::query("SELECT dolt_gc()")
+    sql!("etl.doltlite_raw.gc_after_fold", "SELECT dolt_gc()")
+        .query()
         .execute(pool)
         .await
         .context("dolt_gc")?;
@@ -2412,18 +2569,23 @@ pub async fn ensure_object_row(
     table: &str,
     id: &str,
 ) -> Result<()> {
-    let data_sql = format!("INSERT INTO {table} (id) VALUES (?) ON CONFLICT(id) DO NOTHING");
+    let data_sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.insert_object_stub"),
+        format!("INSERT INTO {table} (id) VALUES (?) ON CONFLICT(id) DO NOTHING"),
+    );
     // Audited: `table` interpolated per the contract above; `id` is bound.
-    sqlx::query(sqlx::AssertSqlSafe(data_sql))
+    data_sql
+        .query()
         .bind(id)
         .execute(&mut **tx)
         .await
         .with_context(|| format!("ensure_object_row data {table}={id}"))?;
 
-    let bk_sql = format!(
+    let bk_sql = Sql::dynamic(sql_id!("etl.doltlite_raw.insert_object_stub_bookkeeping"), format!(
         "INSERT INTO {table}_bookkeeping (id, attempt_count) VALUES (?, 0) ON CONFLICT(id) DO NOTHING"
-    );
-    sqlx::query(sqlx::AssertSqlSafe(bk_sql))
+    ));
+    bk_sql
+        .query()
         .bind(id)
         .execute(&mut **tx)
         .await
@@ -2482,15 +2644,19 @@ async fn record_object_bookkeeping(
 ) -> Result<()> {
     // Keep the always-paired invariant: a failure recorded before any
     // successful fetch has no data row yet.
-    let stub_sql = format!("INSERT OR IGNORE INTO {table} (id) VALUES (?)");
+    let stub_sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.insert_attempted_object_stub"),
+        format!("INSERT OR IGNORE INTO {table} (id) VALUES (?)"),
+    );
     // Audited: `table` interpolated as an identifier; `id` is bound.
-    sqlx::query(sqlx::AssertSqlSafe(stub_sql))
+    stub_sql
+        .query()
         .bind(id)
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record_object_attempt data stub {table}={id}"))?;
     let (now, tz_offset) = datalib_time::IsoOffsetTimestamp::now_local().to_utc_and_offset();
-    let sql = match result {
+    let sql = Sql::dynamic(sql_id!("etl.doltlite_raw.upsert_object_attempt_bookkeeping"), match result {
         None => format!(
             "INSERT INTO {table}_bookkeeping \
                 (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, tz_offset)
@@ -2517,9 +2683,9 @@ async fn record_object_bookkeeping(
                 ),
             }
         ),
-    };
+    });
     // Audited: both arms interpolate only `table`; the rest is bound.
-    let q = sqlx::query(sqlx::AssertSqlSafe(sql)).bind(id).bind(&now);
+    let q = sql.query().bind(id).bind(&now);
     let q = match result {
         None => q,
         Some(err) => q.bind(err),
@@ -2610,10 +2776,12 @@ async fn record_fetch_problem(
         Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage,
     };
     let entity_id = format!("{table}:{id}");
-    let earlier = sqlx::query(
+    let earlier = sql!(
+        "etl.doltlite_raw.find_fetch_problem_of_entity",
         "SELECT * FROM problems INDEXED BY problems_by_scope \
-         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?"
     )
+    .query()
     .bind(ScopeKind::Entity.as_str())
     .bind(&entity_id)
     .bind(Stage::Fetch.as_str())
@@ -2622,10 +2790,12 @@ async fn record_fetch_problem(
     .with_context(|| format!("read the fetch problem of {entity_id}"))?
     .map(|r| ProblemRow::from_row(&r))
     .transpose()?;
-    sqlx::query(
+    sql!(
+        "etl.doltlite_raw.delete_fetch_problem_of_entity",
         "DELETE FROM problems INDEXED BY problems_by_scope \
-         WHERE scope_kind = ? AND scope_key = ? AND stage = ?",
+         WHERE scope_kind = ? AND scope_key = ? AND stage = ?"
     )
+    .query()
     .bind(ScopeKind::Entity.as_str())
     .bind(&entity_id)
     .bind(Stage::Fetch.as_str())
@@ -2641,10 +2811,13 @@ async fn record_fetch_problem(
     // reader still has something, just not the latest. The row above
     // has already bumped the attempt, and a failure leaves that stamp
     // alone.
-    let fetched_sql =
-        format!("SELECT fetched_at_utc IS NOT NULL FROM {table}_bookkeeping WHERE id = ?");
+    let fetched_sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.check_object_fetched_before"),
+        format!("SELECT fetched_at_utc IS NOT NULL FROM {table}_bookkeeping WHERE id = ?"),
+    );
     // Audited: `table` interpolated as an identifier; `id` is bound.
-    let fetched_before: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(fetched_sql))
+    let fetched_before: bool = fetched_sql
+        .query_scalar()
         .bind(id)
         .fetch_optional(&mut **tx)
         .await
@@ -2668,10 +2841,13 @@ async fn record_fetch_problem(
         None,
     )
     .stamped(earlier.as_ref(), &now, Some(&tz_offset));
-    let sql = crate::bulk::insert_sql::<ProblemRow>();
+    let sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.insert_fetch_problem"),
+        crate::bulk::insert_sql::<ProblemRow>(),
+    );
     // Audited: `sql` is built from `ProblemRow`'s associated consts,
     // never from row data; all values bound.
-    row.bind_into(sqlx::query(sqlx::AssertSqlSafe(sql)))
+    row.bind_into(sql.query())
         .execute(&mut **tx)
         .await
         .with_context(|| format!("record the fetch problem of {entity_id}"))?;
@@ -2844,12 +3020,16 @@ pub async fn set_volatile_payloads_in_tx(
         let text = serde_json::to_string(value)
             .with_context(|| format!("serialize volatile_payload {bk}={id}"))?;
         // Audited: only `bk` is interpolated; JSON text and id are bound.
-        sqlx::query(sqlx::AssertSqlSafe(std::sync::Arc::clone(&sql)))
-            .bind(text)
-            .bind(*id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("set volatile_payload {bk}={id}"))?;
+        Sql::dynamic(
+            sql_id!("etl.doltlite_raw.update_volatile_payload"),
+            std::sync::Arc::clone(&sql),
+        )
+        .query()
+        .bind(text)
+        .bind(*id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("set volatile_payload {bk}={id}"))?;
     }
     Ok(())
 }
@@ -2870,13 +3050,16 @@ pub async fn merge_volatile_payloads_in_tx(
     let mut merged = Vec::with_capacity(volatile.len());
     for (id, fresh) in volatile {
         // Audited: only `bk` is interpolated; the id is bound.
-        let stored: Option<String> =
-            sqlx::query_scalar(sqlx::AssertSqlSafe(std::sync::Arc::clone(&select)))
-                .bind(*id)
-                .fetch_optional(&mut **tx)
-                .await
-                .with_context(|| format!("read volatile_payload {bk}={id}"))?
-                .flatten();
+        let stored: Option<String> = Sql::dynamic(
+            sql_id!("etl.doltlite_raw.read_volatile_payload"),
+            std::sync::Arc::clone(&select),
+        )
+        .query_scalar()
+        .bind(*id)
+        .fetch_optional(&mut **tx)
+        .await
+        .with_context(|| format!("read volatile_payload {bk}={id}"))?
+        .flatten();
         let stored: Option<Value> = stored
             .map(|s| serde_json::from_str(&s))
             .transpose()
@@ -2968,11 +3151,15 @@ pub async fn scan_render_units(
     let started = std::time::Instant::now();
     // Audited: `render_unit_query` is a fixed projection from provider source;
     // both refs are bound, at parameter indexes 1 and 2.
-    let res = sqlx::query(sqlx::AssertSqlSafe(spec.render_unit_query))
-        .bind(from_ref)
-        .bind(&to_ref)
-        .fetch_all(pool)
-        .await;
+    let res = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.list_changed_render_units"),
+        spec.render_unit_query,
+    )
+    .query()
+    .bind(from_ref)
+    .bind(&to_ref)
+    .fetch_all(pool)
+    .await;
     let elapsed = started.elapsed();
     // A failed scan used to cold-start unconditionally, logging at `info`
     // through `tracing` — which the tests that would have caught it do not
@@ -3022,7 +3209,8 @@ pub async fn scan_render_units(
         None => false,
         // Audited: `fanout_query` is a fixed query from provider source;
         // both refs are bound.
-        Some(sql) => sqlx::query_scalar::<_, i64>(sqlx::AssertSqlSafe(sql))
+        Some(sql) => Sql::dynamic(sql_id!("etl.doltlite_raw.check_fanout_changed"), sql)
+            .query_scalar::<i64>()
             .bind(from_ref)
             .bind(&to_ref)
             .fetch_optional(pool)
@@ -3048,11 +3236,15 @@ pub async fn scan_render_units(
 
 /// The primary-key columns of `table`, in the order the key names them.
 pub async fn primary_key_columns(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
-    let rows = sqlx::query("SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
-        .bind(table)
-        .fetch_all(pool)
-        .await
-        .with_context(|| format!("pragma_table_info({table})"))?;
+    let rows = sql!(
+        "etl.doltlite_raw.list_primary_key_columns",
+        "SELECT name FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"
+    )
+    .query()
+    .bind(table)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("pragma_table_info({table})"))?;
     rows.into_iter()
         .map(|r| {
             use sqlx::Row;
@@ -3123,15 +3315,19 @@ pub async fn changed_keys(
             format!("CAST(coalesce({to}, {from}) AS TEXT)")
         })
         .collect();
-    let sql = format!(
-        "SELECT {}, diff_type FROM {} \
+    let sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.list_changed_keys"),
+        format!(
+            "SELECT {}, diff_type FROM {} \
           WHERE from_ref = ?1 AND to_ref = ?2 AND diff_type != 'unchanged'",
-        parts.join(" || '|' || "),
-        quote_ident(&format!("dolt_diff_{table}"))
+            parts.join(" || '|' || "),
+            quote_ident(&format!("dolt_diff_{table}"))
+        ),
     );
     // Audited: every name is quoted, since a mirrored table's come from
     // the source file; both refs are bound.
-    let rows = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query_as::<(String, String)>()
         .bind(from_ref)
         .bind(to_ref)
         .fetch_all(pool)
@@ -3158,10 +3354,11 @@ pub async fn emptied_between(
 ) -> Result<bool> {
     let holds_a_row = |pin: &crate::pin::Pin| {
         // Audited: `Pin::table` quotes the module name and checked the hash.
-        sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(format!(
-            "SELECT EXISTS (SELECT 1 FROM {})",
-            pin.table(table)
-        )))
+        Sql::dynamic(
+            sql_id!("etl.doltlite_raw.check_table_held_row_at"),
+            format!("SELECT EXISTS (SELECT 1 FROM {})", pin.table(table)),
+        )
+        .query_scalar::<bool>()
     };
     let held = holds_a_row(from)
         .fetch_one(pool)
@@ -3217,12 +3414,15 @@ impl KeyColumn {
 
 impl<'p> KeyLookup<'p> {
     pub async fn new(pool: &'p SqlitePool, table: &str, at: &crate::pin::Pin) -> Result<Self> {
-        let declared: Vec<(String, String)> =
-            sqlx::query_as("SELECT name, type FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk")
-                .bind(table)
-                .fetch_all(pool)
-                .await
-                .with_context(|| format!("pragma_table_info({table})"))?;
+        let declared: Vec<(String, String)> = sql!(
+            "etl.doltlite_raw.list_primary_key_types",
+            "SELECT name, type FROM pragma_table_info(?) WHERE pk > 0 ORDER BY pk"
+        )
+        .query_as()
+        .bind(table)
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("pragma_table_info({table})"))?;
         if declared.is_empty() {
             bail!("{table} has no primary key to look a row up by");
         }
@@ -3254,7 +3454,8 @@ impl<'p> KeyLookup<'p> {
             }
             // Audited: every name is quoted and the hash checked by
             // `Pin::table`; each key part is bound.
-            let mut q = sqlx::query_scalar::<_, bool>(sqlx::AssertSqlSafe(self.sql.clone()));
+            let mut q = Sql::dynamic(sql_id!("etl.doltlite_raw.check_key_held_at_pin"), &self.sql)
+                .query_scalar::<bool>();
             for (part, column) in parts.iter().zip(&self.columns) {
                 q = match column {
                     KeyColumn::Exact => q.bind(*part),
@@ -3282,14 +3483,18 @@ pub async fn record_object_error(
 }
 
 pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
-    let sql = format!(
-        "SELECT t.id FROM {table} t \
+    let sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.list_failed_object_ids"),
+        format!(
+            "SELECT t.id FROM {table} t \
          LEFT JOIN {table}_bookkeeping b ON b.id = t.id \
          WHERE b.last_error IS NOT NULL \
             OR (t.payload IS NULL AND COALESCE(b.attempt_count, 0) > 0)"
+        ),
     );
     // Audited: `table` interpolated as an identifier; no runtime values.
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .with_context(|| format!("select failed_ids({table})"))?;
@@ -3302,10 +3507,14 @@ pub async fn failed_ids(pool: &SqlitePool, table: &str) -> Result<Vec<String>> {
 pub async fn load_payloads(pool: &SqlitePool, table: &str) -> Result<Vec<Value>> {
     // `json(payload)` so we get text back whether the column holds a JSONB
     // blob or a JSON text literal.
-    let sql = format!(
-        "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
+    let sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.list_payloads"),
+        format!(
+            "SELECT json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
+        ),
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .with_context(|| format!("select {table} payloads"))?;
@@ -3335,10 +3544,14 @@ pub async fn load_payloads_with_id_if_present(
 }
 
 pub async fn load_payloads_with_id(pool: &SqlitePool, table: &str) -> Result<Vec<(String, Value)>> {
-    let sql = format!(
+    let sql = Sql::dynamic(
+        sql_id!("etl.doltlite_raw.list_payloads_with_id"),
+        format!(
         "SELECT id, json(payload) AS payload FROM {table} WHERE payload IS NOT NULL ORDER BY id"
+    ),
     );
-    let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let rows = sql
+        .query()
         .fetch_all(pool)
         .await
         .with_context(|| format!("select {table} id+payloads"))?;
@@ -3364,11 +3577,13 @@ pub async fn upsert_scope_state<'e>(
     last_seen_at: &str,
 ) -> Result<()> {
     let stamp = datalib_time::split_stamp(last_seen_at);
-    sqlx::query(
+    sql!(
+        "etl.doltlite_raw.upsert_scope_last_seen",
         "INSERT INTO sync_scope_state (scope, last_seen_at_utc, tz_offset) VALUES (?, ?, ?)
          ON CONFLICT(scope) DO UPDATE SET last_seen_at_utc = excluded.last_seen_at_utc,
-            tz_offset = excluded.tz_offset",
+            tz_offset = excluded.tz_offset"
     )
+    .query()
     .bind(scope)
     .bind(&stamp.utc)
     .bind(&stamp.tz_offset)
@@ -3389,15 +3604,18 @@ mod tests {
     use serde_json::json;
     use tempfile::tempdir;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     async fn write_then_read_back(db: &Path) -> Result<()> {
         let writer = open(db, &["CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)"]).await?;
-        sqlx::query("INSERT INTO t VALUES (1, 'row')")
+        test_sql!("INSERT INTO t VALUES (1, 'row')")
+            .query()
             .execute(&writer)
             .await?;
         commit_run(&writer, "one row").await?;
         writer.close().await;
         let reader = open_reader(db, None).await?.context("a committed store")?;
-        let v: String = sqlx::query_scalar("SELECT v FROM t")
+        let v: String = test_sql!("SELECT v FROM t")
+            .query_scalar()
             .fetch_one(reader.pool())
             .await?;
         reader.close().await;
@@ -3442,10 +3660,12 @@ mod tests {
             .await
             .unwrap();
         for sql in [
-            "CREATE TABLE crew (id ANY, payload TEXT)",
-            r#"INSERT INTO crew VALUES ('picard', '{"rank":"captain"}'), (1701, '{"rank":"ensign"}')"#,
+            test_sql!("CREATE TABLE crew (id ANY, payload TEXT)"),
+            test_sql!(
+                r#"INSERT INTO crew VALUES ('picard', '{"rank":"captain"}'), (1701, '{"rank":"ensign"}')"#
+            ),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         let err = load_payloads_with_id(&pool, "crew").await.unwrap_err();
         assert!(format!("{err:#}").contains("crew"), "{err:#}");
@@ -3539,16 +3759,17 @@ mod tests {
             .stamped(None, "2370-01-01T00:00:00.000000+00:00", Some("+02:00"))
         };
         for row in [mint("", "messages:1"), mint("riker", "messages:2")] {
-            row.bind_into(sqlx::query(sqlx::AssertSqlSafe(crate::bulk::insert_sql::<
-                ProblemRow,
-            >())))
+            row.bind_into(
+                Sql::dynamic(test_sql_id!(), crate::bulk::insert_sql::<ProblemRow>()).query(),
+            )
             .execute(&pool)
             .await
             .unwrap();
         }
         assert_eq!(adopt_sourceless_problems(&pool, "").await.unwrap(), 0);
         assert_eq!(adopt_sourceless_problems(&pool, "riker").await.unwrap(), 1);
-        let mut held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
+        let mut held: Vec<ProblemRow> = test_sql!("SELECT * FROM problems")
+            .query()
             .fetch_all(&pool)
             .await
             .unwrap()
@@ -3647,7 +3868,8 @@ mod tests {
         let path = td.path().join("entities.doltlite_db");
 
         let pool = open_test(&path).await;
-        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+        test_sql!("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3668,7 +3890,8 @@ mod tests {
 
         // Real new data moves it.
         let pool = open_test(&path).await;
-        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('b', '{}')")
+        test_sql!("INSERT INTO widgets (id, payload) VALUES ('b', '{}')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3688,7 +3911,13 @@ mod tests {
         let pool = open_test(&path).await;
         let exec = |sql: &'static str| {
             let pool = pool.clone();
-            async move { sqlx::query(sql).execute(&pool).await.unwrap() }
+            async move {
+                Sql::dynamic(test_sql_id!(), sql)
+                    .query()
+                    .execute(&pool)
+                    .await
+                    .unwrap()
+            }
         };
         exec("INSERT INTO widgets (id, payload) VALUES ('a', '{}')").await;
         commit_run(&pool, "content").await.unwrap();
@@ -3722,7 +3951,8 @@ mod tests {
         assert_eq!(content_commit(&pool).await.unwrap(), Some(v2.clone()));
 
         // A new column, even with no rows changed, is a shape a reader sees.
-        sqlx::query("ALTER TABLE widgets ADD COLUMN tag TEXT")
+        test_sql!("ALTER TABLE widgets ADD COLUMN tag TEXT")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3741,12 +3971,14 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("entities.doltlite_db");
         let pool = open_test(&path).await;
-        sqlx::query("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+        test_sql!("INSERT INTO widgets (id, payload) VALUES ('a', '{}')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         commit_run(&pool, "content").await.unwrap();
-        sqlx::query("SELECT dolt_branch('-D', ?)")
+        test_sql!("SELECT dolt_branch('-D', ?)")
+            .query()
             .bind(CONTENT_BRANCH)
             .execute(&pool)
             .await
@@ -3770,7 +4002,8 @@ mod tests {
 
         // One table and no bookkeeping, as a derived store has.
         let pool = plain_pool(&path).await;
-        sqlx::query(crate::blob_cas::CAS_OBJECTS_DDL)
+        Sql::ddl(test_sql_id!(), crate::blob_cas::CAS_OBJECTS_DDL)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3786,11 +4019,11 @@ mod tests {
         // checking for.
         let pool = plain_pool(&path).await;
         let after = head_commit(&pool).await.unwrap();
-        let tables: Vec<String> =
-            sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type = 'table'")
-                .fetch_all(&pool)
-                .await
-                .unwrap();
+        let tables: Vec<String> = test_sql!("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .query_scalar()
+            .fetch_all(&pool)
+            .await
+            .unwrap();
         pool.close().await;
         assert_eq!(after, before, "reading a version must not advance HEAD");
         assert!(
@@ -3808,7 +4041,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("entities.doltlite_db");
         let pool = plain_pool(&path).await;
-        sqlx::query("CREATE TABLE t (x INTEGER)")
+        test_sql!("CREATE TABLE t (x INTEGER)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3834,7 +4068,8 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let path = td.path().join("derived.doltlite_db");
         let pool = plain_pool(&path).await;
-        sqlx::query("CREATE TABLE t (x INTEGER)")
+        test_sql!("CREATE TABLE t (x INTEGER)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3848,19 +4083,25 @@ mod tests {
     /// Folds `pool`'s history into one commit holding HEAD's tree, the way
     /// a compaction will, and collects what only the old commits reached.
     async fn fold(pool: &SqlitePool) -> String {
-        let first: String = sqlx::query_scalar(
-            "SELECT commit_hash FROM dolt_log() WHERE message LIKE 'Initialize data repository%'",
+        let first: String = test_sql!(
+            "SELECT commit_hash FROM dolt_log() WHERE message LIKE 'Initialize data repository%'"
         )
+        .query_scalar()
         .fetch_one(pool)
         .await
         .unwrap();
-        sqlx::query("SELECT dolt_reset('--soft', ?)")
+        test_sql!("SELECT dolt_reset('--soft', ?)")
+            .query()
             .bind(&first)
             .execute(pool)
             .await
             .unwrap();
         let folded = commit_run(pool, "fold").await.unwrap().unwrap();
-        sqlx::query("SELECT dolt_gc()").execute(pool).await.unwrap();
+        test_sql!("SELECT dolt_gc()")
+            .query()
+            .execute(pool)
+            .await
+            .unwrap();
         folded
     }
 
@@ -3868,11 +4109,11 @@ mod tests {
         let pool = plain_pool(path).await;
         let mut commits = Vec::new();
         for sql in [
-            "CREATE TABLE t (id TEXT PRIMARY KEY)",
-            "INSERT INTO t VALUES ('picard')",
+            test_sql!("CREATE TABLE t (id TEXT PRIMARY KEY)"),
+            test_sql!("INSERT INTO t VALUES ('picard')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
-            commits.push(commit_run(&pool, sql).await.unwrap().unwrap());
+            sql.query().execute(&pool).await.unwrap();
+            commits.push(commit_run(&pool, sql.as_str()).await.unwrap().unwrap());
         }
         (pool, commits.try_into().unwrap())
     }
@@ -3904,10 +4145,11 @@ mod tests {
         .await
         .unwrap();
         for round in 0..4 {
-            sqlx::query(
+            test_sql!(
                 "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 500) \
-                 INSERT OR REPLACE INTO t SELECT i, hex(randomblob(200)) FROM n",
+                 INSERT OR REPLACE INTO t SELECT i, hex(randomblob(200)) FROM n"
             )
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -3929,11 +4171,13 @@ mod tests {
         );
         assert_eq!(content_version_at_path(&path).await.unwrap(), version);
         let pool = plain_pool(&path).await;
-        let commits: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+        let commits: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
-        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+        let rows: i64 = test_sql!("SELECT COUNT(*) FROM t")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -4187,12 +4431,14 @@ mod tests {
         let volatile = volatile.expect("updated is volatile");
 
         let mut tx = pool.begin().await.unwrap();
-        sqlx::query("INSERT INTO widgets (id, name, payload) VALUES ('w1', 'gadget', jsonb(?))")
+        test_sql!("INSERT INTO widgets (id, name, payload) VALUES ('w1', 'gadget', jsonb(?))")
+            .query()
             .bind(serde_json::to_string(&base).unwrap())
             .execute(&mut *tx)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('w1', 1)")
+        test_sql!("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('w1', 1)")
+            .query()
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -4201,17 +4447,17 @@ mod tests {
             .unwrap();
         tx.commit().await.unwrap();
 
-        let base_text: String =
-            sqlx::query_scalar("SELECT json(payload) FROM widgets WHERE id = 'w1'")
+        let base_text: String = test_sql!("SELECT json(payload) FROM widgets WHERE id = 'w1'")
+            .query_scalar()
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let vol_text: String =
+            test_sql!("SELECT json(volatile_payload) FROM widgets_bookkeeping WHERE id = 'w1'")
+                .query_scalar()
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let vol_text: String = sqlx::query_scalar(
-            "SELECT json(volatile_payload) FROM widgets_bookkeeping WHERE id = 'w1'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
         let base_v: Value = serde_json::from_str(&base_text).unwrap();
         let vol_v: Value = serde_json::from_str(&vol_text).unwrap();
 
@@ -4244,13 +4490,13 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let row = sqlx::query(
-            "SELECT severity, outcome, reason, sample FROM problems WHERE scope_key = ?",
-        )
-        .bind("widgets:w1")
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let row =
+            test_sql!("SELECT severity, outcome, reason, sample FROM problems WHERE scope_key = ?")
+                .query()
+                .bind("widgets:w1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(row.get::<String, _>(0), Severity::Warning.as_str());
         assert_eq!(row.get::<String, _>(1), "ok", "nothing failed");
         assert_eq!(row.get::<String, _>(2), Reason::OverSizeLimit.as_str());
@@ -4268,7 +4514,8 @@ mod tests {
             .await
             .unwrap();
         tx.commit().await.unwrap();
-        let failed = sqlx::query("SELECT severity, reason FROM problems WHERE scope_key = ?")
+        let failed = test_sql!("SELECT severity, reason FROM problems WHERE scope_key = ?")
+            .query()
             .bind("widgets:w2")
             .fetch_one(&pool)
             .await
@@ -4291,10 +4538,11 @@ mod tests {
         let rows = |pool: &SqlitePool| {
             let pool = pool.clone();
             async move {
-                sqlx::query(
+                test_sql!(
                     "SELECT severity, scope_key, sample, first_seen_at_utc FROM problems \
-                     ORDER BY scope_key",
+                     ORDER BY scope_key"
                 )
+                .query()
                 .fetch_all(&pool)
                 .await
                 .unwrap()
@@ -4408,7 +4656,8 @@ mod tests {
         )";
         {
             let pool = open(&p, &[WIDGETS_DDL, old_bk]).await.unwrap();
-            sqlx::query("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('w1', 3)")
+            test_sql!("INSERT INTO widgets_bookkeeping (id, attempt_count) VALUES ('w1', 3)")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -4425,16 +4674,14 @@ mod tests {
             "volatile_payload should have been ADDed"
         );
         // Pre-existing row survived → ALTER ADD, not a recreate.
-        let n: i64 =
-            sqlx::query_scalar("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let n: i64 = test_sql!("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
+            .query_scalar()
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(n, 3);
 
-        sqlx::query(
-            "UPDATE widgets_bookkeeping SET volatile_payload = jsonb('{\"updated\":1}') WHERE id = 'w1'",
-        )
+        test_sql!("UPDATE widgets_bookkeeping SET volatile_payload = jsonb('{\"updated\":1}') WHERE id = 'w1'").query()
         .execute(&pool)
         .await
         .unwrap();
@@ -4450,7 +4697,8 @@ mod tests {
         let p = d.path().join("col_and_index.doltlite_db");
         {
             let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
-            sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
+            test_sql!("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -4475,16 +4723,18 @@ mod tests {
             "tag should have been ADDed"
         );
         // ADD COLUMN, not a recreate: the pre-existing row survived.
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets WHERE id = 'w1'")
+        let n: i64 = test_sql!("SELECT COUNT(*) FROM widgets WHERE id = 'w1'")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(n, 1);
         // The index exists — the second DDL pass ran.
-        let idx: i64 = sqlx::query_scalar(
+        let idx: i64 = test_sql!(
             "SELECT COUNT(*) FROM sqlite_master \
-             WHERE type = 'index' AND name = 'idx_widgets_tag'",
+             WHERE type = 'index' AND name = 'idx_widgets_tag'"
         )
+        .query_scalar()
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -4506,11 +4756,11 @@ mod tests {
             return;
         }
         for sql in [
-            "INSERT INTO widgets (id) VALUES ('w1')",
-            "INSERT INTO edges VALUES ('e1', 'aa')",
-            "INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES ('s', 't')",
+            test_sql!("INSERT INTO widgets (id) VALUES ('w1')"),
+            test_sql!("INSERT INTO edges VALUES ('e1', 'aa')"),
+            test_sql!("INSERT INTO sync_scope_state (scope, last_seen_at_utc) VALUES ('s', 't')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         start_run(&pool, &json!({})).await.unwrap();
         commit_run(&pool, "setup").await.unwrap();
@@ -4527,14 +4777,15 @@ mod tests {
             commits_before + 1,
             "the reset is one commit, and the reopen finds nothing to change"
         );
-        let deleted: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM dolt_diff_widgets WHERE diff_type = 'removed'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let deleted: i64 =
+            test_sql!("SELECT COUNT(*) FROM dolt_diff_widgets WHERE diff_type = 'removed'")
+                .query_scalar()
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(deleted, 1, "the row reads as deleted, not as a table gone");
-        let logged: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~1')")
+        let logged: i64 = test_sql!("SELECT COUNT(*) FROM dolt_at_sync_runs('HEAD~1')")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -4557,11 +4808,11 @@ mod tests {
             return;
         }
         for sql in [
-            r#"CREATE TABLE "odd""; DROP TABLE ""edges" (id TEXT PRIMARY KEY)"#,
-            r#"INSERT INTO "odd""; DROP TABLE ""edges" VALUES ('o1')"#,
-            "INSERT INTO edges VALUES ('e1', 'aa')",
+            test_sql!(r#"CREATE TABLE "odd""; DROP TABLE ""edges" (id TEXT PRIMARY KEY)"#),
+            test_sql!(r#"INSERT INTO "odd""; DROP TABLE ""edges" VALUES ('o1')"#),
+            test_sql!("INSERT INTO edges VALUES ('e1', 'aa')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         commit_run(&pool, "setup").await.unwrap();
         pool.close().await;
@@ -4584,12 +4835,14 @@ mod tests {
             pool.close().await;
             return;
         }
-        sqlx::query(r#"CREATE TABLE "odd t" ("my ""key" TEXT PRIMARY KEY, v TEXT)"#)
+        test_sql!(r#"CREATE TABLE "odd t" ("my ""key" TEXT PRIMARY KEY, v TEXT)"#)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         let from = commit_run(&pool, "empty").await.unwrap().unwrap();
-        sqlx::query(r#"INSERT INTO "odd t" VALUES ('k1', 'a')"#)
+        test_sql!(r#"INSERT INTO "odd t" VALUES ('k1', 'a')"#)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -4616,17 +4869,18 @@ mod tests {
             pool.close().await;
             return;
         }
-        sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'a'), ('w2', 'b')")
+        test_sql!("INSERT INTO widgets (id, name) VALUES ('w1', 'a'), ('w2', 'b')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         let from = commit_run(&pool, "two widgets").await.unwrap().unwrap();
         for sql in [
-            "UPDATE widgets SET name = 'c' WHERE id = 'w1'",
-            "DELETE FROM widgets WHERE id = 'w2'",
-            "INSERT INTO widgets (id, name) VALUES ('w3', 'd')",
+            test_sql!("UPDATE widgets SET name = 'c' WHERE id = 'w1'"),
+            test_sql!("DELETE FROM widgets WHERE id = 'w2'"),
+            test_sql!("INSERT INTO widgets (id, name) VALUES ('w3', 'd')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         let to = commit_run(&pool, "one of each").await.unwrap().unwrap();
         let mut got = changed_keys(&pool, "widgets", &from, &to).await.unwrap();
@@ -4670,15 +4924,18 @@ mod tests {
             "this build links doltlite"
         );
         for sql in [
-            "INSERT INTO ints (n, v) VALUES (7, 'x'), (12, 'y')",
-            "INSERT INTO pairs (a, b, v) VALUES ('p', 3, 'x')",
-            "INSERT INTO kept (id) VALUES ('k')",
+            test_sql!("INSERT INTO ints (n, v) VALUES (7, 'x'), (12, 'y')"),
+            test_sql!("INSERT INTO pairs (a, b, v) VALUES ('p', 3, 'x')"),
+            test_sql!("INSERT INTO kept (id) VALUES ('k')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         let from = Pin::at(commit_run(&pool, "rows").await.unwrap().unwrap()).unwrap();
-        for sql in ["DELETE FROM ints", "DELETE FROM pairs"] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+        for sql in [
+            test_sql!("DELETE FROM ints"),
+            test_sql!("DELETE FROM pairs"),
+        ] {
+            sql.query().execute(&pool).await.unwrap();
         }
         let to = Pin::at(commit_run(&pool, "emptied").await.unwrap().unwrap()).unwrap();
 
@@ -4718,12 +4975,11 @@ mod tests {
     }
 
     async fn count(pool: &SqlitePool, table: &str) -> i64 {
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT COUNT(*) FROM \"{table}\""
-        )))
-        .fetch_one(pool)
-        .await
-        .unwrap()
+        Sql::dynamic(test_sql_id!(), format!("SELECT COUNT(*) FROM \"{table}\""))
+            .query_scalar()
+            .fetch_one(pool)
+            .await
+            .unwrap()
     }
 
     /// A column the DDL no longer declares cannot be reached by ADD, so a
@@ -4737,7 +4993,8 @@ mod tests {
         let p = d.path().join("recreate.doltlite_db");
         {
             let pool = open(&p, &[STALE_WIDGETS_DDL]).await.unwrap();
-            sqlx::query("INSERT INTO widgets (id, legacy_col) VALUES ('w1', 'x')")
+            test_sql!("INSERT INTO widgets (id, legacy_col) VALUES ('w1', 'x')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -4767,7 +5024,8 @@ mod tests {
         // Untouched: the column and the row are still there, and the
         // shape the DDL that wrote it declares still opens it.
         let pool = open(&p, &[STALE_WIDGETS_DDL]).await.unwrap();
-        let v: String = sqlx::query_scalar("SELECT legacy_col FROM widgets WHERE id = 'w1'")
+        let v: String = test_sql!("SELECT legacy_col FROM widgets WHERE id = 'w1'")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -4783,7 +5041,8 @@ mod tests {
             !cols.iter().any(|c| c.name == "legacy_col"),
             "legacy_col should be gone after drop+recreate"
         );
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+        let n: i64 = test_sql!("SELECT COUNT(*) FROM widgets")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -4805,18 +5064,20 @@ mod tests {
                 let pool = open_curated(&p, &[old_ddl.as_str()], kind, &[])
                     .await
                     .unwrap();
-                sqlx::query(
+                test_sql!(
                     "INSERT INTO problems (problem_uuid, source_id, stage, severity, outcome, \
                      reason, scope_kind, scope_key, sample, first_seen_at_utc, last_seen_at_utc) \
                      VALUES ('p1', 'tng', 'fetch', 'warning', 'ok', 'not_found', 'entity', \
                      'media_blobs:a#b.mp4', 'gone', '2364-04-01T00:00:00Z', \
-                     '2364-04-02T00:00:00Z')",
+                     '2364-04-02T00:00:00Z')"
                 )
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
                 // A build before the shared ladder recorded no position on it.
-                sqlx::query("DELETE FROM _datalib_meta WHERE key = 'shared_schema_version'")
+                test_sql!("DELETE FROM _datalib_meta WHERE key = 'shared_schema_version'")
+                    .query()
                     .execute(&pool)
                     .await
                     .unwrap();
@@ -4830,14 +5091,16 @@ mod tests {
             }
             .unwrap_or_else(|e| panic!("{name}: {e:#}"));
             let changed: String =
-                sqlx::query_scalar("SELECT changed_at_utc FROM problems WHERE problem_uuid = 'p1'")
+                test_sql!("SELECT changed_at_utc FROM problems WHERE problem_uuid = 'p1'")
+                    .query_scalar()
                     .fetch_one(&pool)
                     .await
                     .unwrap_or_else(|e| panic!("{name}: {e:#}"));
             assert_eq!(changed, "2364-04-02T00:00:00Z", "{name}");
             let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
             assert_eq!(meta.shared_schema_version, 1, "{name}");
-            let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+            let messages: Vec<String> = test_sql!("SELECT message FROM dolt_log()")
+                .query_scalar()
                 .fetch_all(&pool)
                 .await
                 .unwrap();
@@ -4869,7 +5132,8 @@ mod tests {
             name: "t.n becomes t.m",
             apply: |c| {
                 Box::pin(async move {
-                    sqlx::query("ALTER TABLE t RENAME COLUMN n TO m")
+                    test_sql!("ALTER TABLE t RENAME COLUMN n TO m")
+                        .query()
                         .execute(&mut *c)
                         .await?;
                     Ok(())
@@ -4878,7 +5142,8 @@ mod tests {
         }];
         {
             let pool = open(&p, &[V0]).await.unwrap();
-            sqlx::query("INSERT INTO t VALUES ('a', 'kept')")
+            test_sql!("INSERT INTO t VALUES ('a', 'kept')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -4889,14 +5154,16 @@ mod tests {
         let pool = open_migrating(&p, &[V1], LADDER)
             .await
             .expect("the rung carries it");
-        let m: String = sqlx::query_scalar("SELECT m FROM t WHERE id = 'a'")
+        let m: String = test_sql!("SELECT m FROM t WHERE id = 'a'")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(m, "kept");
         let meta = datalib_store_meta::read(&pool).await.unwrap().unwrap();
         assert_eq!(meta.schema_version, 1);
-        let messages: Vec<String> = sqlx::query_scalar("SELECT message FROM dolt_log()")
+        let messages: Vec<String> = test_sql!("SELECT message FROM dolt_log()")
+            .query_scalar()
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -4911,7 +5178,8 @@ mod tests {
 
         // Again: nothing pending, nothing committed.
         let pool = open_migrating(&p, &[V1], LADDER).await.unwrap();
-        let again: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+        let again: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -4983,7 +5251,8 @@ mod tests {
         for (name, before, after) in cases {
             let p = d.path().join(format!("{name}.doltlite_db"));
             let pool = open(&p, &[before]).await.unwrap();
-            sqlx::query("INSERT INTO t (id) VALUES ('x')")
+            test_sql!("INSERT INTO t (id) VALUES ('x')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -5023,7 +5292,8 @@ mod tests {
         )";
         {
             let pool = open(&p, &[BEFORE]).await.unwrap();
-            sqlx::query("INSERT INTO t (id, payload) VALUES ('a', '{\"kind\":\"x\"}')")
+            test_sql!("INSERT INTO t (id, payload) VALUES ('a', '{\"kind\":\"x\"}')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -5031,7 +5301,8 @@ mod tests {
             pool.close().await;
         }
         let pool = open(&p, &[AFTER]).await.expect("additive");
-        let (n, kind): (i64, String) = sqlx::query_as("SELECT n, kind FROM t WHERE id = 'a'")
+        let (n, kind): (i64, String) = test_sql!("SELECT n, kind FROM t WHERE id = 'a'")
+            .query_as()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -5043,13 +5314,15 @@ mod tests {
         // And the second open finds nothing to do: the shapes agree.
         pool.close().await;
         let pool = open(&p, &[AFTER]).await.unwrap();
-        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+        let before: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
         pool.close().await;
         let pool = open(&p, &[AFTER]).await.unwrap();
-        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+        let after: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -5068,7 +5341,8 @@ mod tests {
 
         const GADGETS: &str = "CREATE TABLE IF NOT EXISTS gadgets (id TEXT PRIMARY KEY)";
         let pool = open(&p, &[WIDGETS_DDL, GADGETS]).await.unwrap();
-        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+        let rows: i64 = test_sql!("SELECT COUNT(*) FROM widgets")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -5177,24 +5451,24 @@ mod tests {
         let pool = open(p, ddl).await.unwrap();
         // The file checkpoint's table, which `datalib_etl_files` creates;
         // only its name and a row in it matter here.
-        sqlx::query(
+        test_sql!(
             "CREATE TABLE ingested_files (scope TEXT, rel_path TEXT, blake3 TEXT, \
-             size_bytes INTEGER, last_finished_at_utc TEXT, PRIMARY KEY (scope, rel_path))",
+             size_bytes INTEGER, last_finished_at_utc TEXT, PRIMARY KEY (scope, rel_path))"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
+        test_sql!("INSERT INTO widgets (id, name) VALUES ('w1', 'gadget')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         upsert_scope_state(&pool, "widgets/walk", "2026-09-18T10:00:00+00:00")
             .await
             .unwrap();
-        sqlx::query(
-            "INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
-             VALUES ('widgets/files', 'a.json', 'aa', 1, '2026-09-18T10:00:00+00:00')",
-        )
+        test_sql!("INSERT INTO ingested_files (scope, rel_path, blake3, size_bytes, last_finished_at_utc) \
+             VALUES ('widgets/files', 'a.json', 'aa', 1, '2026-09-18T10:00:00+00:00')").query()
         .execute(&pool)
         .await
         .unwrap();
@@ -5204,7 +5478,8 @@ mod tests {
 
     async fn cursor_counts(pool: &SqlitePool) -> (i64, i64) {
         let n = |sql: &'static str| async move {
-            sqlx::query_scalar::<_, i64>(sql)
+            Sql::dynamic(test_sql_id!(), sql)
+                .query_scalar::<i64>()
                 .fetch_one(pool)
                 .await
                 .unwrap()
@@ -5228,7 +5503,8 @@ mod tests {
         let pool = open_with(&p, &[WIDGETS_DDL], OnSchemaBreak::Rebuild)
             .await
             .unwrap();
-        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+        let rows: i64 = test_sql!("SELECT COUNT(*) FROM widgets")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -5250,7 +5526,8 @@ mod tests {
         store_with_cursors(&p, &[WIDGETS_DDL]).await;
 
         let pool = open(&p, &[STALE_WIDGETS_DDL]).await.unwrap();
-        let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM widgets")
+        let rows: i64 = test_sql!("SELECT COUNT(*) FROM widgets")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -5267,16 +5544,18 @@ mod tests {
         let d = tempdir().unwrap();
         let p = d.path().join("retired.doltlite_db");
         let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
-        sqlx::query(
+        test_sql!(
             "CREATE TABLE sync_scope_config (scope TEXT PRIMARY KEY, config TEXT NOT NULL, \
-             updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)",
+             updated_at_utc TEXT NOT NULL, tz_offset TEXT NULL)"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query(
-            "INSERT INTO sync_scope_config VALUES ('widgets', '{}', '2026-09-18T10:00:00Z', NULL)",
+        test_sql!(
+            "INSERT INTO sync_scope_config VALUES ('widgets', '{}', '2026-09-18T10:00:00Z', NULL)"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -5284,9 +5563,7 @@ mod tests {
         pool.close().await;
 
         let pool = open(&p, &[WIDGETS_DDL]).await.unwrap();
-        let left: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
-        )
+        let left: i64 = test_sql!("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'").query_scalar()
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -5301,7 +5578,8 @@ mod tests {
         open_test(&p).await.close().await;
         // Re-opening doesn't error, and the shared tables exist.
         let pool = open_test(&p).await;
-        sqlx::query("SELECT COUNT(*) FROM sync_runs")
+        test_sql!("SELECT COUNT(*) FROM sync_runs")
+            .query()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -5328,23 +5606,26 @@ mod tests {
     async fn diagnostic_print_sqlite_identity() {
         let d = tempdir().unwrap();
         let pool = open_test(&d.path().join("probe.doltlite_db")).await;
-        let ver: String = sqlx::query_scalar("SELECT sqlite_version()")
+        let ver: String = test_sql!("SELECT sqlite_version()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
-        let src: String = sqlx::query_scalar("SELECT sqlite_source_id()")
+        let src: String = test_sql!("SELECT sqlite_source_id()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
-        let scalar_count: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM pragma_function_list WHERE name LIKE 'dolt_%'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let scalar_count: i64 =
+            test_sql!("SELECT count(*) FROM pragma_function_list WHERE name LIKE 'dolt_%'")
+                .query_scalar()
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         // Also call `dolt_commit` directly — eponymous functions don't always
         // appear in pragma_function_list.
-        let direct_call = sqlx::query("SELECT dolt_commit('-Am', 'probe')")
+        let direct_call = test_sql!("SELECT dolt_commit('-Am', 'probe')")
+            .query()
             .execute(&pool)
             .await;
         eprintln!(
@@ -5377,17 +5658,20 @@ mod tests {
 
         // Per-session committer identity, so dolt_commit doesn't error on a
         // missing user.email.
-        sqlx::query("SELECT dolt_config('user.name', 'datalib-test')")
+        test_sql!("SELECT dolt_config('user.name', 'datalib-test')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_config('user.email', 'test@datalib.local')")
+        test_sql!("SELECT dolt_config('user.email', 'test@datalib.local')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
 
         // Give dolt something to record.
-        sqlx::query("INSERT INTO widgets (id, name) VALUES ('w1', 'first')")
+        test_sql!("INSERT INTO widgets (id, name) VALUES ('w1', 'first')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -5403,7 +5687,8 @@ mod tests {
         // confirms the version-control SQL surface is really live, not just
         // that the function exists.
         let logged_msg: String =
-            sqlx::query_scalar("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
+            test_sql!("SELECT message FROM dolt_log() WHERE commit_hash = ? LIMIT 1")
+                .query_scalar()
                 .bind(&hash)
                 .fetch_one(&pool)
                 .await
@@ -5443,7 +5728,8 @@ mod tests {
         assert_eq!(failed, vec!["w1".to_string()]);
 
         let attempts: i64 =
-            sqlx::query_scalar("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
+            test_sql!("SELECT attempt_count FROM widgets_bookkeeping WHERE id = 'w1'")
+                .query_scalar()
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -5482,21 +5768,23 @@ mod tests {
                 continue;
             }
 
-            sqlx::query("SELECT dolt_config('user.name', 'pool-probe')")
+            test_sql!("SELECT dolt_config('user.name', 'pool-probe')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("SELECT dolt_config('user.email', 'pool-probe@x')")
+            test_sql!("SELECT dolt_config('user.email', 'pool-probe@x')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
 
             // Return the sqlx error rather than panicking, so the failure mode
             // at each pool size is observable.
-            let try_exec = |sql: &'static str| {
+            let try_exec = |sql: Sql| {
                 let pool = pool.clone();
                 async move {
-                    sqlx::query(sql)
+                    sql.query()
                         .execute(&pool)
                         .await
                         .map(|_| ())
@@ -5506,16 +5794,17 @@ mod tests {
 
             let mut errs: Vec<String> = Vec::new();
             for sql in [
-                "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
-                "INSERT INTO widgets_bookkeeping (id, fetched_at_utc, attempt_count) VALUES ('w1', '2026-06-03T00:00:00Z', 0)",
+                test_sql!("INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)"),
+                test_sql!("INSERT INTO widgets_bookkeeping (id, fetched_at_utc, attempt_count) VALUES ('w1', '2026-06-03T00:00:00Z', 0)"),
             ] {
-                if let Err(e) = try_exec(sql).await {
+                if let Err(e) = try_exec(sql.clone()).await {
                     errs.push(format!("setup `{sql}`: {e}"));
                 }
             }
 
             let h1: Result<Option<String>, String> =
-                sqlx::query_scalar("SELECT dolt_commit('-Am', 'pool-probe-first')")
+                test_sql!("SELECT dolt_commit('-Am', 'pool-probe-first')")
+                    .query_scalar()
                     .fetch_optional(&pool)
                     .await
                     .map_err(|e| e.to_string());
@@ -5523,25 +5812,27 @@ mod tests {
             // Delete + reinsert IDENTICAL data, plus a new fetched_at_utc — the
             // integration-test shape.
             for sql in [
-                "DELETE FROM widgets",
-                "DELETE FROM widgets_bookkeeping",
-                "INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)",
-                "INSERT INTO widgets_bookkeeping (id, fetched_at_utc, attempt_count) VALUES ('w1', '2026-06-03T00:00:05Z', 0)",
+                test_sql!("DELETE FROM widgets"),
+                test_sql!("DELETE FROM widgets_bookkeeping"),
+                test_sql!("INSERT INTO widgets (id, name, payload) VALUES ('w1', 'one', NULL)"),
+                test_sql!("INSERT INTO widgets_bookkeeping (id, fetched_at_utc, attempt_count) VALUES ('w1', '2026-06-03T00:00:05Z', 0)"),
             ] {
-                if let Err(e) = try_exec(sql).await {
+                if let Err(e) = try_exec(sql.clone()).await {
                     errs.push(format!("reset `{sql}`: {e}"));
                 }
             }
 
             // Second commit — the call that errored at max_conns>=2.
             let h2: Result<Option<String>, String> =
-                sqlx::query_scalar("SELECT dolt_commit('-Am', 'pool-probe-second')")
+                test_sql!("SELECT dolt_commit('-Am', 'pool-probe-second')")
+                    .query_scalar()
                     .fetch_optional(&pool)
                     .await
                     .map_err(|e| e.to_string());
 
             let messages: Result<Vec<String>, String> =
-                sqlx::query_scalar("SELECT message FROM dolt_log() ORDER BY date ASC")
+                test_sql!("SELECT message FROM dolt_log() ORDER BY date ASC")
+                    .query_scalar()
                     .fetch_all(&pool)
                     .await
                     .map_err(|e| e.to_string());
@@ -5642,18 +5933,18 @@ mod tests {
             return;
         }
         for sql in [
-            "INSERT INTO notes VALUES ('n1', 'b1')",
-            "INSERT INTO notes VALUES ('n2', 'b2')",
-            "INSERT INTO users VALUES ('u1', 'ann')",
+            test_sql!("INSERT INTO notes VALUES ('n1', 'b1')"),
+            test_sql!("INSERT INTO notes VALUES ('n2', 'b2')"),
+            test_sql!("INSERT INTO users VALUES ('u1', 'ann')"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         let first = commit_run(&pool, "two notes").await.unwrap().unwrap();
         for sql in [
-            "DELETE FROM notes WHERE id = 'n2'",
-            "UPDATE users SET name = 'anne' WHERE id = 'u1'",
+            test_sql!("DELETE FROM notes WHERE id = 'n2'"),
+            test_sql!("UPDATE users SET name = 'anne' WHERE id = 'u1'"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         let second = commit_run(&pool, "n2 gone, ann renamed")
             .await
@@ -5701,7 +5992,8 @@ mod tests {
         if !has_dolt_extensions(&pool).await {
             return;
         }
-        sqlx::query("INSERT INTO notes VALUES ('n1', 'b1')")
+        test_sql!("INSERT INTO notes VALUES ('n1', 'b1')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -5753,7 +6045,8 @@ mod tests {
         if !has_dolt_extensions(&owner).await {
             return;
         }
-        sqlx::query("INSERT INTO t VALUES (1)")
+        test_sql!("INSERT INTO t VALUES (1)")
+            .query()
             .execute(&owner)
             .await
             .unwrap();
@@ -5764,7 +6057,8 @@ mod tests {
             .await
             .unwrap()
             .expect("a committed store is readable");
-        let err = sqlx::query("INSERT INTO t VALUES (2)")
+        let err = test_sql!("INSERT INTO t VALUES (2)")
+            .query()
             .execute(reader.pool())
             .await
             .expect_err("a reader must not be able to write the store");
@@ -5775,7 +6069,8 @@ mod tests {
 
         // The views were installed at open, on a read-only connection.
         assert_eq!(reader.pin().commit(), commit);
-        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM t")
+        let n: i64 = test_sql!("SELECT COUNT(*) FROM t")
+            .query_scalar()
             .fetch_one(reader.pool())
             .await
             .unwrap();
@@ -5787,7 +6082,8 @@ mod tests {
         // shared bookkeeping tables do not get committed on the way in.
         let empty = tmp.path().join("empty.doltlite_db");
         let w = open_derived(&empty, &[], StoreKind::Raw).await.unwrap();
-        sqlx::query("CREATE TABLE u (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE u (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&w)
             .await
             .unwrap();
@@ -5815,30 +6111,36 @@ mod tests {
         if !has_dolt_extensions(&a).await {
             return;
         }
-        sqlx::query("INSERT INTO t VALUES (1, 'sealed')")
+        test_sql!("INSERT INTO t VALUES (1, 'sealed')")
+            .query()
             .execute(&a)
             .await
             .unwrap();
         commit_run(&a, "baseline").await.unwrap();
-        let before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+        let before: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(&a)
             .await
             .unwrap();
         // The crash: an insert, an update, and a table created but never
         // committed.
-        sqlx::query("INSERT INTO t VALUES (2, 'torn')")
+        test_sql!("INSERT INTO t VALUES (2, 'torn')")
+            .query()
             .execute(&a)
             .await
             .unwrap();
-        sqlx::query("UPDATE t SET v = 'rewritten' WHERE id = 1")
+        test_sql!("UPDATE t SET v = 'rewritten' WHERE id = 1")
+            .query()
             .execute(&a)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE half_made (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE half_made (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&a)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO half_made VALUES (9)")
+        test_sql!("INSERT INTO half_made VALUES (9)")
+            .query()
             .execute(&a)
             .await
             .unwrap();
@@ -5851,12 +6153,14 @@ mod tests {
         )
         .await
         .unwrap();
-        let after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_log()")
+        let after: i64 = test_sql!("SELECT COUNT(*) FROM dolt_log()")
+            .query_scalar()
             .fetch_one(&b)
             .await
             .unwrap();
         assert_eq!(after, before, "open() must not commit what it found dirty");
-        let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, v FROM t ORDER BY id")
+        let rows: Vec<(i64, String)> = test_sql!("SELECT id, v FROM t ORDER BY id")
+            .query_as()
             .fetch_all(&b)
             .await
             .unwrap();
@@ -5865,17 +6169,18 @@ mod tests {
             vec![(1, "sealed".to_string())],
             "the working set is the last commit again"
         );
-        let tables: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'half_made'",
-        )
-        .fetch_all(&b)
-        .await
-        .unwrap();
+        let tables: Vec<String> =
+            test_sql!("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'half_made'")
+                .query_scalar()
+                .fetch_all(&b)
+                .await
+                .unwrap();
         assert!(
             tables.is_empty(),
             "an untracked table the crash left is dropped"
         );
-        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
+        let dirty: i64 = test_sql!("SELECT COUNT(*) FROM dolt_status")
+            .query_scalar()
             .fetch_one(&b)
             .await
             .unwrap();
@@ -5903,8 +6208,13 @@ mod tests {
         if !has_dolt_extensions(&dead).await {
             return;
         }
-        sqlx::query(ddl).execute(&dead).await.unwrap();
-        sqlx::query("INSERT INTO runs (v) VALUES ('never sealed')")
+        Sql::ddl(test_sql_id!(), ddl)
+            .query()
+            .execute(&dead)
+            .await
+            .unwrap();
+        test_sql!("INSERT INTO runs (v) VALUES ('never sealed')")
+            .query()
             .execute(&dead)
             .await
             .unwrap();
@@ -5914,7 +6224,8 @@ mod tests {
             .await
             .expect("a store that never sealed opens again");
         assert_clean_and_empty(&b, "runs").await;
-        let next: i64 = sqlx::query_scalar("INSERT INTO runs (v) VALUES ('x') RETURNING id")
+        let next: i64 = test_sql!("INSERT INTO runs (v) VALUES ('x') RETURNING id")
+            .query_scalar()
             .fetch_one(&b)
             .await
             .unwrap();
@@ -5923,19 +6234,23 @@ mod tests {
     }
 
     async fn assert_clean_and_empty(pool: &SqlitePool, table: &str) {
-        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            // A literal table name from the test above.
-            "SELECT COUNT(*) FROM {table}"
-        )))
+        let rows: i64 = Sql::dynamic(
+            test_sql_id!(),
+            format!(
+                // A literal table name from the test above.
+                "SELECT COUNT(*) FROM {table}"
+            ),
+        )
+        .query_scalar()
         .fetch_one(pool)
         .await
         .unwrap();
         assert_eq!(rows, 0, "what was never sealed is gone");
-        let dirty: Vec<(String, String)> =
-            sqlx::query_as("SELECT table_name, status FROM dolt_status")
-                .fetch_all(pool)
-                .await
-                .unwrap();
+        let dirty: Vec<(String, String)> = test_sql!("SELECT table_name, status FROM dolt_status")
+            .query_as()
+            .fetch_all(pool)
+            .await
+            .unwrap();
         assert_eq!(dirty, vec![], "and the schema is committed, as on any open");
     }
 
@@ -5947,11 +6262,14 @@ mod tests {
     async fn a_raw_store_gets_the_problems_index_without_a_new_shape() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("raw.doltlite_db");
-        let index_count = "SELECT count(*) FROM sqlite_master \
-                           WHERE type = 'index' AND name = 'problems_by_scope'";
+        let index_count = test_sql!(
+            "SELECT count(*) FROM sqlite_master \
+                           WHERE type = 'index' AND name = 'problems_by_scope'"
+        );
 
         let before = open(&path, &[WIDGETS_DDL]).await.unwrap();
-        sqlx::query("DROP INDEX problems_by_scope")
+        test_sql!("DROP INDEX problems_by_scope")
+            .query()
             .execute(&before)
             .await
             .expect("the open created the index");
@@ -5966,10 +6284,7 @@ mod tests {
         before.close().await;
 
         let after = open(&path, &[WIDGETS_DDL]).await.unwrap();
-        let n: i64 = sqlx::query_scalar(index_count)
-            .fetch_one(&after)
-            .await
-            .unwrap();
+        let n: i64 = index_count.query_scalar().fetch_one(&after).await.unwrap();
         assert_eq!(n, 1, "the next open creates the index");
         let meta = datalib_store_meta::read(&after).await.unwrap().unwrap();
         assert_eq!(
@@ -6016,7 +6331,8 @@ mod tests {
 
         // At HEAD, through a pinned reader: the rows rode the schema commit.
         let reader = open_reader(&path, None).await.unwrap().expect("committed");
-        let pinned: i64 = sqlx::query_scalar("SELECT count(*) FROM _datalib_meta")
+        let pinned: i64 = test_sql!("SELECT count(*) FROM _datalib_meta")
+            .query_scalar()
             .fetch_one(reader.pool())
             .await
             .unwrap();
@@ -6030,7 +6346,8 @@ mod tests {
         assert_ne!(meta.schema_hash, hash1, "a DDL change moves the hash");
         // Newest first without an ORDER BY, as `head_commit` reads it:
         // `date` is whole seconds and this test fits inside one.
-        let message: String = sqlx::query_scalar("SELECT message FROM dolt_log() LIMIT 1")
+        let message: String = test_sql!("SELECT message FROM dolt_log() LIMIT 1")
+            .query_scalar()
             .fetch_one(&b)
             .await
             .unwrap();
@@ -6043,7 +6360,11 @@ mod tests {
         // A store from before the table existed reads as absent.
         let old = tmp.path().join("old.doltlite_db");
         let c = connect_pool(&old, Access::ReadWrite, true).await.unwrap();
-        sqlx::query(T1).execute(&c).await.unwrap();
+        Sql::ddl(test_sql_id!(), T1)
+            .query()
+            .execute(&c)
+            .await
+            .unwrap();
         assert_eq!(datalib_store_meta::read(&c).await.unwrap(), None);
         c.close().await;
     }
@@ -6063,12 +6384,14 @@ mod tests {
         if !has_dolt_extensions(&a).await {
             return;
         }
-        sqlx::query("INSERT INTO t VALUES (1, 'kept')")
+        test_sql!("INSERT INTO t VALUES (1, 'kept')")
+            .query()
             .execute(&a)
             .await
             .unwrap();
         // What a newer release would have written.
-        sqlx::query("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+        test_sql!("UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'")
+            .query()
             .execute(&a)
             .await
             .unwrap();
@@ -6091,7 +6414,8 @@ mod tests {
 
         // Untouched: the row and the column are still there.
         let reader = open_reader(&path, None).await.unwrap().unwrap();
-        let v: String = sqlx::query_scalar("SELECT v FROM t WHERE id = 1")
+        let v: String = test_sql!("SELECT v FROM t WHERE id = 1")
+            .query_scalar()
             .fetch_one(reader.pool())
             .await
             .unwrap();
@@ -6109,7 +6433,8 @@ mod tests {
             parts.join(".")
         };
         let c = connect_pool(&path, Access::ReadWrite, true).await.unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+        test_sql!("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+            .query()
             .bind(&patch)
             .execute(&c)
             .await
@@ -6138,13 +6463,15 @@ mod tests {
             if !has_dolt_extensions(&pool).await {
                 return;
             }
-            sqlx::query("INSERT INTO widgets VALUES ('w1', 'gadget'), ('w2', 'widget')")
+            test_sql!("INSERT INTO widgets VALUES ('w1', 'gadget'), ('w2', 'widget')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
             commit_run(&pool, "data").await.unwrap();
             // The crash: a row written after the last commit.
-            sqlx::query("INSERT INTO widgets VALUES ('w3', 'torn')")
+            test_sql!("INSERT INTO widgets VALUES ('w3', 'torn')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -6152,27 +6479,30 @@ mod tests {
         }
 
         let pool = open(&path, &[V2]).await.unwrap();
-        let (head, message): (String, String) = sqlx::query_as(
-            "SELECT commit_hash, message FROM dolt_log() ORDER BY date DESC LIMIT 1",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        let (head, message): (String, String) =
+            test_sql!("SELECT commit_hash, message FROM dolt_log() ORDER BY date DESC LIMIT 1")
+                .query_as()
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert!(
             message.starts_with("schema: apply DDL"),
             "the newest commit is the schema commit, got {message:?}"
         );
         let rows_in_diff: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM dolt_diff_widgets WHERE to_commit = ?")
+            test_sql!("SELECT COUNT(*) FROM dolt_diff_widgets WHERE to_commit = ?")
+                .query_scalar()
                 .bind(&head)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
         assert_eq!(rows_in_diff, 0, "a schema commit's row diff is empty");
         // Audited: the hash came from dolt_log a moment ago; the table is a literal.
-        let at_head: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT id FROM dolt_at_widgets('{head}') ORDER BY id"
-        )))
+        let at_head: Vec<String> = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT id FROM dolt_at_widgets('{head}') ORDER BY id"),
+        )
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -6201,7 +6531,8 @@ mod tests {
         if !has_dolt_extensions(&pool).await {
             return;
         }
-        let active: String = sqlx::query_scalar("SELECT active_branch()")
+        let active: String = test_sql!("SELECT active_branch()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -6220,7 +6551,8 @@ mod tests {
         )
         .await
         .unwrap();
-        let active: String = sqlx::query_scalar("SELECT active_branch()")
+        let active: String = test_sql!("SELECT active_branch()")
+            .query_scalar()
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -6257,12 +6589,14 @@ mod tests {
         }
         // The writer is on its own branch, and a checkout somewhere else
         // again is still only this connection's business.
-        sqlx::query("SELECT dolt_checkout('-b', ?)")
+        test_sql!("SELECT dolt_checkout('-b', ?)")
+            .query()
             .bind("elsewhere")
             .execute(&first)
             .await
             .unwrap();
-        let active: String = sqlx::query_scalar("SELECT active_branch()")
+        let active: String = test_sql!("SELECT active_branch()")
+            .query_scalar()
             .fetch_one(&first)
             .await
             .unwrap();
@@ -6270,11 +6604,13 @@ mod tests {
         first.close().await;
 
         let second = connect_pool(&path, Access::ReadOnly, false).await.unwrap();
-        let active: String = sqlx::query_scalar("SELECT active_branch()")
+        let active: String = test_sql!("SELECT active_branch()")
+            .query_scalar()
             .fetch_one(&second)
             .await
             .unwrap();
-        let default: String = sqlx::query_scalar("SELECT dolt_default_branch()")
+        let default: String = test_sql!("SELECT dolt_default_branch()")
+            .query_scalar()
             .fetch_one(&second)
             .await
             .unwrap();
