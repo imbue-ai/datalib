@@ -1786,20 +1786,23 @@ def _check_runner_names_no_step_program(root: Path) -> int:
 
 # --- Check 24: the server names datalib's own step program where listed --
 #
-# `datalib-http` should give `datalib-step` nothing a package's program
-# could not get the same way (docs/dev/plans/decoupling_followups.md).
-# It still does in a few places, each an open item of that plan; this is
-# the list of them, and it only shrinks: a file that no longer names the
-# program has to leave it, and a file not on it may not start.
+# `datalib-http` gives `datalib-step` nothing a package's program could
+# not get the same way, but for what AGENTS.md §"Three programs, one
+# repo" allows: knowing the sources it offers and how to write and probe
+# them, finding it by name, and the starter config. This lists the files
+# where the server does that. A file not on it may not name the program,
+# and a listed file that no longer does has to leave the list.
 _SERVER_SRC = "datalib/backend/http/src/"
 _SERVER_STEP_PROGRAM_FILES = {
-    # Item 2: "Check connection" runs `datalib-step probe`, found by name.
-    "datalib/backend/http/src/binaries.rs": "item 2",
-    "datalib/backend/http/src/probe.rs": "item 2",
-    # Item 3: the app writes datalib-step's steps; the starter config is
-    # one of them.
-    "datalib/backend/http/src/starter.rs": "item 3",
-    "datalib/backend/http/src/step_program.rs": "items 2 and 3",
+    # Finding `datalib-step` by name, to run `datalib-step probe <type>`
+    # for "Check connection".
+    "datalib/backend/http/src/binaries.rs": "finding it by name",
+    "datalib/backend/http/src/probe.rs": "probing its sources",
+    # The starter config names it in its `[[programs]]` entry and steps.
+    "datalib/backend/http/src/starter.rs": "the starter config",
+    # How a command that runs it is recognized, and the group types and
+    # ids its configs give meaning to.
+    "datalib/backend/http/src/step_program.rs": "writing its steps",
 }
 
 
@@ -1814,7 +1817,7 @@ def server_step_program_problems(mentions: dict[str, list[int]]) -> list[str]:
         for line in lines
     ]
     problems += [
-        f"  {rel}: no longer names {_STEP_PROGRAM} ({why} is done there); take it off "
+        f"  {rel}: no longer names {_STEP_PROGRAM} (listed for {why}); take it off "
         "_SERVER_STEP_PROGRAM_FILES"
         for rel, why in sorted(_SERVER_STEP_PROGRAM_FILES.items())
         if not mentions.get(rel)

@@ -423,6 +423,41 @@ structs and nothing else) so anything that needs to *understand* a
 config can link it without the machinery. The `<p>_render` split is the same move (see §"Ingest and render are
 separate crates").
 
+## Three programs, one repo
+
+**`datalib-http`, `datalib-pipeline` and `datalib-step` are separate
+programs that happen to live in one repo.** The runner,
+`datalib-pipeline`, names no program at all: everything it does with a
+step comes from the step's config entry and the step protocol
+(`docs/dev/step_protocol.md`), and lint check 23 refuses the string
+`datalib-step` in `datalib/backend/dag/src` outside tests. New
+behaviour is a protocol extension (a config key, a verb, an event or an
+environment variable) that any program may adopt, and the program that
+needs it is then taught to use it.
+
+The server and the UI give `datalib-step` nothing a package's program
+could not get the same way, except what is listed here:
+
+1. **The sources it offers.** The "Add source" forms
+   (`datalib/ui/src/config/catalog.ts`), the steps each source gets and
+   how each reads and locks (`datalib/ui/src/config/sourceSteps.ts`),
+   and how each is probed.
+2. **Finding it by name.** The server runs `datalib-step probe <type>`
+   for "Check connection", finding the program through
+   `$DATALIB_STEP_BIN` or next to its own binary, and the wizard writes
+   `datalib-step run …` commands.
+3. **The starter config** (`datalib/backend/http/src/starter.rs`): its
+   `[[programs]]` entry for `datalib-step` and the shared steps every
+   source feeds.
+4. **What its configs give meaning to.** The Manage screen sorts steps
+   by `datalib-step`'s function names and treats a `diff` group and the
+   time-series index specially (`datalib/backend/http/src/manage/`), and
+   the UI's views call Datalib's own applets by id.
+
+Lint check 24 lists the server files that name `datalib-step`; a file
+off that list may not. Anything beyond these four is a protocol
+extension, not a fifth exception.
+
 ## The sync pipeline
 
 `datalib-pipeline sync <config.toml>` runs a DAG of subprocess steps. A `[[groups]]`
