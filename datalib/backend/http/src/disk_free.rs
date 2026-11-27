@@ -83,7 +83,7 @@ impl DiskFreeMonitor {
     pub async fn observe(&self, space: Space, floor: DiskFloor, now_iso: &str) -> Observed {
         let now = datalib_time::split_stamp(now_iso);
         let mut st = self.state.write().await;
-        let held = floor.holds(st.held, space.available);
+        let held = floor.pauses(st.held, space.available);
         let crossed = held != st.held;
         let floor_moved = st.floor != Some(floor);
         st.last = Some(space);

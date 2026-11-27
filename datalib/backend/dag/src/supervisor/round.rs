@@ -2026,7 +2026,7 @@ impl DiskWatch {
             None => None,
             Some((floor, Ok(s))) => {
                 self.unmeasured = false;
-                floor.holds(self.low, s.available).then_some(LowDisk {
+                floor.pauses(self.low, s.available).then_some(LowDisk {
                     available: s.available,
                     floor,
                 })
