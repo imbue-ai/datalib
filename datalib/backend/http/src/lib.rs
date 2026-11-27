@@ -830,12 +830,12 @@ const UNIFIED_GRID_AND_SEARCH_INDEX_APPLET: &str = "unified_grid_and_search_inde
 /// Browse opens its table.
 pub(crate) const CONTACTS_APPLET: &str = "datalib_contacts";
 
-fn configured_source_count(fringe: &[String]) -> usize {
+fn configured_source_count(ids: &[String]) -> usize {
     let prefix = format!(
         "{}/",
         datalib_core::layout::UNIFIED_GRID_AND_SEARCH_INDEX_DIR
     );
-    fringe.iter().filter(|id| !id.starts_with(&prefix)).count()
+    ids.iter().filter(|id| !id.starts_with(&prefix)).count()
 }
 
 #[derive(Debug, Serialize)]
@@ -2474,7 +2474,7 @@ mod tests {
         assert!((119.0..130.0).contains(&drain.secs), "{drain:?}");
     }
 
-    fn fringe_of(text: &str) -> Vec<String> {
+    fn source_ids_of(text: &str) -> Vec<String> {
         let checked = datalib_dag::config::check_text(text);
         assert!(
             checked.is_clean(),
@@ -2520,12 +2520,12 @@ mod tests {
     /// the confusion `POST /api/config/init` exists to end.
     #[test]
     fn a_scaffolded_root_reports_no_sources() {
-        let fringe = fringe_of(STARTER_CONFIG);
+        let ids = source_ids_of(STARTER_CONFIG);
         assert_eq!(
-            fringe,
+            ids,
             ["unified_grid_and_search_index/unified_grid_and_search_index"]
         );
-        assert_eq!(configured_source_count(&fringe), 0);
+        assert_eq!(configured_source_count(&ids), 0);
     }
 
     /// ...and a real source counts, while the index steps beside it
@@ -2536,7 +2536,7 @@ mod tests {
             "{}\n[[steps]]\nid = \"slack/raw\"\ncommand = \"c\"\n",
             STARTER_CONFIG
         );
-        assert_eq!(configured_source_count(&fringe_of(&text)), 1);
+        assert_eq!(configured_source_count(&source_ids_of(&text)), 1);
     }
 
     /// TOML is the only format the server accepts; a legacy config
@@ -2544,7 +2544,7 @@ mod tests {
     #[test]
     fn only_toml_is_accepted() {
         assert_eq!(
-            fringe_of("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n"),
+            source_ids_of("[[steps]]\nid = \"x/raw\"\ncommand = \"s\"\n"),
             ["x/raw"]
         );
         for legacy in [
