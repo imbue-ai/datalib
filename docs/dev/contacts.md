@@ -350,8 +350,10 @@ per document in `document_contacts` (`markdown_uuid`, `record_id`,
 `seen_items`, `last_seen_at`; `seen_items` is null where the source
 counts nothing). In a library of 309,481 rows there were 2,081 distinct
 records. A re-render replaces its document's `document_contacts` rows,
-and a record no document carries is deleted at the end of a run of the
-step that changed anything.
+and a record no document carries is deleted once at the end of each
+run of `unified_grid_and_search_index` that committed anything, in a
+commit of its own (`refresh_people` in `etl/render/src/grid_index.rs`,
+which calls `contact_records::sweep`).
 
 These tables are a part of the grid index's file of their own
 (`grid_index::Part::Contacts`), with a cursor per source

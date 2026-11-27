@@ -538,8 +538,10 @@ A source's `embed` (input:
 documents into chunks with the model's tokenizer, files them in the
 inference cache and fills their vectors; it fetches the model when it
 is missing, and only once it has a document to cut or a chunk to
-embed. Each `embed` reports what of its own source it left without
-vectors. Nothing of a source's reads a step that reads
+embed. Each `embed` reports the chunks of its own source it left
+without vectors, as the metric `search_chunks_not_embedded{source=…}`:
+the chunks the cache had no vector for when it began, less those it
+embedded (`datalib_step/src/index_steps.rs`). Nothing of a source's reads a step that reads
 every source, and that is what lets each source's `embed` finish on its
 own: the runner does not count a step as finished while anything
 upstream of it is still running, so a step downstream of a fan-in would finish only

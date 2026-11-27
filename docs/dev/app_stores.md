@@ -174,10 +174,12 @@ makes ordinary; `runs_two_process_test` is the measurement.
 Who writes which line of it, how to add one, and how to read it is
 [`logging.md`](logging.md).
 
-## The three stores `datalib-http` owns
+## The two stores `datalib-http` owns
 
-Remote media is doltlite; disk stats is plain SQLite.
-`datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
+Remote media (`system/remote_media.doltlite_db`) is doltlite; disk
+stats (`system/disk_stats.sqlite`) is plain SQLite. The bytes of a
+fetched remote image are files under `system/remote_media/`, named by
+their sha256, and are not a store. `datalib-http` opens each through `sqlx::sqlite::SqlitePool` and wraps
 them in `AppStore` (`datalib/backend/core/src/app_store.rs`), the
 implementation of the `AppRepo` trait in `repo.rs`. The same pool serves
 reads and writes.

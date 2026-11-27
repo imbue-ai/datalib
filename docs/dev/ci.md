@@ -389,9 +389,10 @@ reads (#674).
 change to a shared crate, rebuilds hundreds of opt-mode Rust actions
 and re-runs most of the suite. A rising median means cold runs got
 more frequent, not that anything got slower. The levers on a cold run
-are its blast radius, the tests a change makes it rebuild, which can be
-measured before pushing, and what
-each rebuilt binary costs (the next paragraph):
+are its blast radius, the test targets that depend on a crate the
+change touched, each of which is linked again and run again, counted
+before pushing by the queries below; and what each rebuilt binary costs
+(the next paragraph):
 
 ```bash
 bazelisk query 'kind(".*_test", rdeps(//..., //datalib/backend/etl:datalib_etl))'

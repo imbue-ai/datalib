@@ -61,7 +61,10 @@ Retention is `[run_history]` in `config.toml`
 — the server's and the pages'. `disk_usage_days` is for the disk
 samples in `system/disk_stats.sqlite`, not this store.
 
-The store is not load-bearing. A store from an older schema version is
+Nothing the loop decides reads this store: which steps are due and
+what each last succeeded with are in `system/supervisor.sqlite`. So
+losing it loses the logs, metrics and run history the app shows, and
+nothing else. A store from an older schema version is
 upgraded in place, keeping its rows. One that will not open, or is at a
 version this build has no upgrade from (a newer build's, say), is
 emptied and remade; the old file is first copied to

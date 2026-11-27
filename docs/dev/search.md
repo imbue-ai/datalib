@@ -168,9 +168,11 @@ Two things statistics cannot say:
 - **A range** (`near:` is seven, ORed) has no figure, so it carries a
   `likelihood`.
 
-Dropping an index drops its rank, so what remakes the indexes writes the
-ranks again, and before making them: making one is what has an open reader
-read them.
+Dropping an index deletes its row of `sqlite_stat1`, so the code that
+makes the indexes again (`init_schema` and `create_search_indexes` in
+`etl/render/src/grid_index.rs`) writes the ranks first and makes the
+indexes after: making an index changes the schema, and that is what
+makes a connection already open read `sqlite_stat1` again.
 
 ### What SQLite's planner does
 
@@ -191,7 +193,8 @@ that changes one says which:
 - **Our SQLite is built without `STAT4`**, so statistics are one average
   per column: it cannot tell a source of 585,000 rows from one of 2,000.
 - **Declared statistics are believed whatever the table holds**, so an
-  empty file plans as a full one, and a test can hold it.
+  empty file plans as a full one, and a test can check a plan on an
+  empty file.
 
 ### Why not `ANALYZE`
 

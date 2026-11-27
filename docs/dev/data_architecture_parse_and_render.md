@@ -1302,9 +1302,9 @@ Perseus breaks this rule: it stamps each section 2026-01-01 plus an offset deriv
 Some upstream object types genuinely don't have a meaningful timestamp:
 
 - **Contacts (vCards).** A person doesn't have a creation event; they exist. The vCard's `REV` field is sometimes set, but most contacts lack one.
-- **Immutable corpora** such as a classical text: the corpus is upstream-frozen, and per-section "timestamps" would be nonsense.
+- **Immutable corpora** such as a classical text: the corpus is upstream-frozen, and per-section "timestamps" would be nonsense. Perseus, the one such source, is the exception named above: its render gives every section a made-up stamp.
 
-For these `created_at` is **null**, and `before:`/`after:` exclude the row — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `created_at` for each.
+For these `created_at` is **null** (Perseus aside), and `before:`/`after:` exclude the row — the principle is "**event-shaped** rows get real timestamps," not "every row everywhere." A new provider should decide explicitly which of its row types are event-shaped and document the source of `created_at` for each.
 
 ## See also
 
