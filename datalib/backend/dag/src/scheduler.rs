@@ -68,11 +68,12 @@ pub struct Runner {
     pub lock_slots: BTreeMap<String, usize>,
     pub sink: Arc<dyn EventSink>,
     pub retry: RetryPolicy,
-    /// Extra environment applied to every subprocess step — run-wide
-    /// settings like `PATH` (with the binary dir prepended) and the
-    /// pinned `DATALIB_DAG_NOW`. A step's own `env:` entries win
-    /// on key collision.
-    pub child_env: Arc<BTreeMap<String, String>>,
+    /// Extra environment applied to every subprocess step — settings
+    /// for the whole busy period like `PATH` (with the binary dir
+    /// prepended) and the pinned `DATALIB_DAG_NOW`. A step's own `env:`
+    /// entries win on key collision. [`Runner::run_forever`] replaces it
+    /// as each period opens.
+    child_env: std::sync::RwLock<Arc<BTreeMap<String, String>>>,
     /// Flipped to `true` to stop the round: running steps get SIGINT on
     /// their process group and nothing new starts.
     pub stop: Option<tokio::sync::watch::Receiver<bool>>,
@@ -93,7 +94,7 @@ impl Runner {
             lock_slots: BTreeMap::new(),
             sink: Arc::new(NoopSink),
             retry: RetryPolicy::default(),
-            child_env: Arc::new(BTreeMap::new()),
+            child_env: Default::default(),
             stop: None,
             stop_grace: crate::step::STOP_GRACE,
             reload: None,
@@ -116,9 +117,21 @@ impl Runner {
         self
     }
 
-    pub fn child_env(mut self, env: BTreeMap<String, String>) -> Self {
-        self.child_env = Arc::new(env);
+    pub fn child_env(self, env: BTreeMap<String, String>) -> Self {
+        self.set_steps_env(Arc::new(env));
         self
+    }
+
+    /// The environment a step started now gets on top of the host's.
+    pub(crate) fn steps_env(&self) -> Arc<BTreeMap<String, String>> {
+        self.child_env
+            .read()
+            .expect("the steps' environment")
+            .clone()
+    }
+
+    pub(crate) fn set_steps_env(&self, env: Arc<BTreeMap<String, String>>) {
+        *self.child_env.write().expect("the steps' environment") = env;
     }
 
     /// `--parallelism N`: N downloads and N renders at once, whatever the
@@ -363,7 +376,7 @@ impl Runner {
             &argv,
             env,
             params.as_deref(),
-            &self.child_env,
+            &self.steps_env(),
             1,
             &ctx,
             &self.sink,
