@@ -89,7 +89,8 @@ impl Step {
         self
     }
 
-    /// Starts once what it reads has settled, not on each seal.
+    /// Starts once no step upstream of it is running or waiting, not on
+    /// each seal.
     pub fn after_inputs_settle(mut self) -> Step {
         self.start = Some("after_inputs_settle");
         self
@@ -112,13 +113,13 @@ pub enum Seen {
     Event(Event),
     /// Something announced to the store's listeners.
     Heard(String),
-    /// What the host did: a busy period opened or closed.
+    /// What the host did: a run opened or closed.
     Host(String),
     /// The loop returned an error.
     Broke(String),
 }
 
-/// What the store says now: the record, every invocation, and requests.
+/// What the store says now: the `Record`, every invocation, and requests.
 pub struct State {
     pub record: Record,
     pub invocations: Vec<(InvocationRow, Option<InvocationEnd>)>,
@@ -237,7 +238,7 @@ impl Harness {
         Harness::build(steps, clocks, locks, false).await
     }
 
-    /// Each busy period also writes the run store, as the server's does:
+    /// Each run also writes the run store, as the server's does:
     /// for a scenario about what a person reads there.
     pub async fn recording(steps: &[Step]) -> Harness {
         Harness::build(steps, Clocks::default(), "", true).await
@@ -337,7 +338,7 @@ impl Harness {
     }
 
     fn config_text(&self, steps: &[Step], locks: &str) -> String {
-        // The puppet answers `--reset` itself.
+        // The puppet handles `--reset` itself.
         let mut text = format!(
             "[[programs]]\ncommand = {:?}\nverbs = [\"reset\"]\n\n{WIDE_DEFAULTS}{locks}",
             self.puppet_bin
@@ -478,7 +479,7 @@ impl Harness {
         .await
     }
 
-    /// Wait for the loop's busy period to end, as the host says.
+    /// Wait for the loop's run to end, as the host says.
     pub async fn period_over(&mut self) {
         self.wait("the busy period to end", |s| {
             matches!(s, Seen::Host(l) if l == "busy period over").then_some(())
@@ -515,8 +516,9 @@ impl Harness {
         }
     }
 
-    /// Like `wait`, but `None` once `pid` has exited without answering: a
-    /// puppet the loop killed at the end of its stop grace never will.
+    /// Like `wait`, but `None` once `pid` has exited before `pick` matched
+    /// anything: a puppet the loop killed at the end of its stop grace
+    /// never will.
     /// The loop reports each process it reaps, so every report is a
     /// moment to look again.
     pub async fn wait_while_alive<T>(
@@ -686,7 +688,7 @@ impl Harness {
     }
 
     /// A sync of everything, with the roots the server's Sync all opens
-    /// one on: the config's fringe.
+    /// one on: the config's steps with no declared inputs.
     pub async fn sync_all(&mut self) -> String {
         let path = config::root_config_path(self.root.path());
         let (checked, _) = config::load_graded(&path).unwrap();
@@ -750,7 +752,7 @@ impl Harness {
             .await
     }
 
-    /// Stop the host as Ctrl-C does, and wait for it to let go.
+    /// Stop the host as Ctrl-C does, and wait for it to return.
     pub async fn stop_host(&mut self) {
         let _ = self.stop.send(true);
         if let Some(host) = self.host.take() {
@@ -775,9 +777,9 @@ impl Harness {
 struct Periods {
     root: PathBuf,
     report: mpsc::UnboundedSender<Seen>,
-    /// The open period's run store record, when it writes one.
+    /// The run store writer for the open run, when it writes one.
     record: Arc<PeriodSink>,
-    /// Whether a busy period writes the run store too.
+    /// Whether a run writes the run store too.
     write_run_store: bool,
 }
 
@@ -813,7 +815,7 @@ impl LoopHost for Periods {
         Ok(env.vars)
     }
 
-    /// Dropping the run store's writer flushes and joins: the period is
+    /// Dropping the run store's writer flushes and joins: the run is
     /// over once what it wrote can be read.
     fn close(&self, _run_id: &str) {
         drop(self.record.point_at(None));
@@ -853,7 +855,7 @@ fn describe(e: &Event) -> String {
 
 /// Whether `pid` is a live process (a zombie counts: it is not reaped).
 fn alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only asks.
+    // SAFETY: signal 0 only checks whether the process exists.
     unsafe { libc::kill(pid, 0) == 0 }
 }
 

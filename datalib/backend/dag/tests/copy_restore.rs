@@ -529,7 +529,7 @@ fn cp_skipping_caches(from: &Path, to: &Path) -> Vec<PathBuf> {
 
 /// A backup tool that skips cache directories copies the whole library.
 /// Nothing in one may be marked as a cache: a tree left out of a backup
-/// stays missing after a restore, because the loop's record in `system/`
+/// stays missing after a restore, because the loop's store in `system/`
 /// says its step is up to date. A tag an earlier build left on each render
 /// tree and the index tree is gone after the next sync's prepare pass.
 #[test]

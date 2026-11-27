@@ -1,7 +1,7 @@
 //! Seven processes on one `system/supervisor.sqlite` at once — people
-//! opening requests, the loop saving its record, the server reading both
-//! — and every write lands, every write is announced, and the file is in
-//! the rollback-journal mode the docs say it is.
+//! opening requests, the loop saving its `steps` rows, the server reading
+//! both — and every write lands, every write is announced, and the file is
+//! in the rollback-journal mode the docs say it is.
 
 use std::collections::BTreeMap;
 use std::path::Path;
