@@ -278,6 +278,10 @@ struct Mailbox<'a> {
     deferred: BTreeMap<String, Vec<String>>,
     /// Requests asked to stop, closed only once a save has let go of them.
     stopped: Vec<String>,
+    /// A request named a step the config file has and this graph does
+    /// not: the loop re-reads the file before it waits again, rather than
+    /// waiting for the server's watch to say it moved.
+    reload: bool,
 }
 
 /// An open request as the loop holds it: its row's id, its roots by id,
@@ -387,6 +391,7 @@ impl Runner {
             started: false,
             deferred: BTreeMap::new(),
             stopped: Vec::new(),
+            reload: false,
         };
         let mut record = Recorded::load(store).await?;
         let mut state = record.saved.clone();
@@ -533,6 +538,10 @@ impl Runner {
                     &mut slots,
                 )
                 .await?;
+                if std::mem::take(&mut mailbox.reload) {
+                    config_moved = true;
+                    continue;
+                }
                 if let Some(host) = host.filter(|_| period.is_none()) {
                     if !open.is_empty() || !wipes.is_empty() || prepare.is_some() {
                         let start = super::host::period_start(
@@ -1263,12 +1272,19 @@ impl Runner {
                 opened: Seq(*seq),
             });
         };
+        let on_disk = |roots: &[String]| {
+            self.reload
+                .as_ref()
+                .and_then(|s| s.load().ok())
+                .is_some_and(|g| roots.iter().all(|r| g.by_id.contains_key(r)))
+        };
         let Mailbox {
             store,
             seen,
             started,
             deferred,
             stopped,
+            reload,
         } = mailbox;
         {
             {
@@ -1305,7 +1321,11 @@ impl Runner {
                     }
                     let unknown = row.roots.iter().find(|r| !graph.by_id.contains_key(*r));
                     if let Some(unknown) = unknown {
-                        if !first {
+                        // The config file can be ahead of the graph: the
+                        // server says it moved only once its watch sees it,
+                        // and a request written just after can arrive first.
+                        let ahead = first && on_disk(&row.roots);
+                        if !first || ahead {
                             let lacked = row
                                 .roots
                                 .iter()
@@ -1313,6 +1333,7 @@ impl Runner {
                                 .cloned()
                                 .collect();
                             if deferred.insert(row.id.clone(), lacked).is_none() {
+                                *reload |= ahead;
                                 self.sink.emit(&Event::Log {
                                     step: unknown.clone(),
                                     level: crate::events::LogLevel::Info,
@@ -2518,6 +2539,55 @@ mod tests {
             assert_eq!(outcome(&other, id).await, Some(Some(RequestOutcome::Done)));
         }
         assert_eq!((t.runs(0), t.runs(1)), (1, 0));
+    }
+
+    /// The sync driver's `syncs_under_a_floor_of_zero` on 2026-11-27: the
+    /// server saved a config that adds a source and opened a request for it
+    /// at once, and the request reached the idle loop before the server's
+    /// watch said the config moved. It was closed failed for naming a step
+    /// the loop did not have; it waits for the file's config instead.
+    #[tokio::test]
+    async fn a_request_for_a_step_the_config_file_has_but_the_loop_has_not_heard_of_runs() {
+        let t = Three::new();
+        let graph = Graph::build(vec![t.step(0)]).unwrap();
+        let config = Swappable::new(&graph);
+        let (stop, rx) = watch::channel(false);
+        let root = t.root.path().to_path_buf();
+        let runner = Runner::new(&root)
+            .sink(t.events.clone())
+            .reload_from(config.clone())
+            .stop_on(rx);
+        let told = Arc::new(Told::default());
+        let host = told.clone();
+        let task = tokio::spawn(async move {
+            let store = Store::open(&root).await?;
+            let ran = runner.run_forever(&graph, &store, &*host).await;
+            store.close().await;
+            ran
+        });
+        let other = Store::open(t.root.path()).await.unwrap();
+        // The loop is up and idle before the config moves.
+        let warm = other.open_request(&["a/raw".into()], "ui").await.unwrap();
+        t.go.store(true, Ordering::SeqCst);
+        while outcome(&other, &warm).await.is_none() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+
+        config.set(vec![t.step(0), t.step(1)]);
+        let id = other.open_request(&["b/raw".into()], "ui").await.unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while outcome(&other, &id).await.is_none() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the request never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(outcome(&other, &id).await, Some(Some(RequestOutcome::Done)));
+        assert_eq!(t.runs(1), 1);
+
+        stop.send(true).unwrap();
+        task.await.unwrap().unwrap();
     }
 
     /// A config saved mid-edit can drop a step that is downloading. It is
