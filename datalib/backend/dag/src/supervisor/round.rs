@@ -1658,7 +1658,7 @@ impl Runner {
     fn finish_ended(&self, graph: &Graph, state: &mut Record, s: &mut Slot, i: usize, e: Ended) {
         self.sink.emit(&Event::Metric {
             step: graph.steps[i].id.clone(),
-            name: datalib_metrics::FAILED_PASSES.to_string(),
+            name: datalib_metrics::FAILED_PROCESSES.to_string(),
             labels: BTreeMap::new(),
             value: i64::from(s.failed_passes),
         });

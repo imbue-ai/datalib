@@ -1442,7 +1442,7 @@ pub async fn dag_snapshot(
 
     let problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await?,
-        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await?,
+        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PROCESSES).await?,
     );
     // Read-only, from the index and the mutes store (problem_mutes/README.md).
     let problem_rows = datalib_problem_mutes::counts(root)

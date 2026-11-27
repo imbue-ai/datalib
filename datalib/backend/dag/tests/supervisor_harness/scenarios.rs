@@ -588,7 +588,7 @@ async fn a_failed_invocation_that_runs_again_is_an_error_and_a_count() {
         "{errors:?}"
     );
     let failed: Vec<(String, i64)> =
-        datalib_runs::latest_metric(&root, datalib_metrics::FAILED_PASSES)
+        datalib_runs::latest_metric(&root, datalib_metrics::FAILED_PROCESSES)
             .await
             .unwrap()
             .into_iter()
