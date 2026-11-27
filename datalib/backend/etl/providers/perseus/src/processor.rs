@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the perseus source (download + render).
+//! The `DataProcessor`s for the perseus source (download + render).
 
 use std::path::PathBuf;
 
@@ -20,7 +20,8 @@ pub async fn migrate(_raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `github` — fetch the TEI files.
+/// One download processor, fetching the TEI files, when `github` is
+/// set; none otherwise.
 pub fn plan_ingest(ctx: PlanContext, config: PerseusConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let input_path = config.common.raw_path().to_path_buf();
