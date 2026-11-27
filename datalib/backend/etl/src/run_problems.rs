@@ -88,7 +88,7 @@ where
 /// What the downloads in one step did not finish, for the step to end on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunEnd {
-    /// What the first download that stopped asking said.
+    /// What the first download that gave up said.
     pub gave_up: Option<String>,
     /// The listings and phases that failed while the rest went on, each
     /// with its failure.

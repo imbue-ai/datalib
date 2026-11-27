@@ -978,7 +978,7 @@ impl std::error::Error for SchemaBreak {}
 /// committed — a file its writer has only just created, no commit, or none
 /// holding a table — yields `None` rather
 /// than a reader onto its working set; the caller decides what that means
-/// (a consumer does nothing that pass).
+/// (a consumer does nothing in that run).
 ///
 /// A store a reader is handed is in this build's shape: the launch's prepare
 /// pass migrates every raw store, and a render refuses one it could not
@@ -1456,7 +1456,8 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
 ///
 /// The probe runs **in memory**, never against the store being opened: a
 /// create+drop nets to nothing in the working tree but still appends chunks
-/// nobody collects, so it made every `open` cost bytes. See the README.
+/// nobody collects, so it would make every `open` cost bytes. See the
+/// README.
 async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInfo>> {
     const PROBE: &str = "__datalib_schema_probe__";
     // A fresh in-memory database per call, not a shared scratch pool: the
@@ -3078,8 +3079,8 @@ pub async fn merge_volatile_payloads_in_tx(
 /// Two sets, because "what to render" and "what the diff named" part ways
 /// when a fan-out table changed: then every render unit renders, but the ones
 /// the diff named are still the only ones that can have vanished, and a
-/// provider that stopped probing them left every document deleted in
-/// that range in the store for good.
+/// provider that did not probe them would leave every document deleted
+/// in that range in the store for good.
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
     /// The render units to load and render. `None` → every render unit: no cursor,
@@ -3162,11 +3163,11 @@ pub async fn scan_render_units(
     .fetch_all(pool)
     .await;
     let elapsed = started.elapsed();
-    // A failed scan used to cold-start unconditionally, logging at `info`
-    // through `tracing` — which the tests that would have caught it do not
-    // capture. That is the AGENTS.md hazard exactly: it *succeeded*,
+    // A failed scan must not cold-start unconditionally, logging at `info`
+    // through `tracing`, which the tests that would catch it do not
+    // capture. That is the AGENTS.md hazard exactly: it *succeeds*,
     // re-rendering everything and reaching the right answer the slow way, so
-    // a render unit query broken by a rename survived a whole review.
+    // a render unit query broken by a rename goes unnoticed.
     //
     // But the two causes are not the same thing, and only one is a bug.
     //
@@ -3878,7 +3879,7 @@ mod tests {
         let v1 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
         pool.close().await;
 
-        // A wave that pulls nothing new: commit_run finds a clean tree and
+        // A run that pulls nothing new: commit_run finds a clean tree and
         // returns None, but HEAD — and so the version — holds.
         let pool = open_test(&path).await;
         assert!(commit_run(&pool, "second").await.unwrap().is_none());
@@ -6330,7 +6331,7 @@ mod tests {
         let hash1 = meta.schema_hash.clone();
         a.close().await;
 
-        // At HEAD, through a pinned reader: the rows rode the schema commit.
+        // At HEAD, through a pinned reader: the rows are in the schema commit.
         let reader = open_reader(&path, None).await.unwrap().expect("committed");
         let pinned: i64 = test_sql!("SELECT count(*) FROM _datalib_meta")
             .query_scalar()

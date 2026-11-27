@@ -260,23 +260,20 @@ pub async fn delete_owned_in_tx(
 
 /// Note that a prune took place, loudly when it was a big one.
 ///
-/// This used to be a veto: a prune taking most of a collection was refused
-/// on the theory that our own enumeration narrowing — a new page cap, a
-/// changed filter, a downgraded token — looks exactly like a mass deletion.
-/// The premise was right and the conclusion was wrong. Deleting a row here
-/// is a commit, so the previous commit still has it: `dolt_diff_<table>`
-/// names what went and `dolt_at_<table>('HEAD^1')` reads it back (see
-/// `docs/dev/doltlite.md`). Nothing is lost, so there is nothing to protect
-/// against by refusing.
+/// A prune taking most of a collection is not refused, though our own
+/// enumeration narrowing — a new page cap, a changed filter, a downgraded
+/// token — looks exactly like a mass deletion. Deleting a row here is a
+/// commit, so the previous commit still has it: `dolt_diff_<table>` names
+/// what went and `dolt_at_<table>('HEAD^1')` reads it back (see
+/// `docs/dev/doltlite.md`). Nothing is lost, so there is nothing to
+/// protect against by refusing.
 ///
-/// Refusing was also worse than it looked. It left the store holding rows
-/// upstream no longer has, with nothing recording the divergence, and its
-/// remedy was a full re-download — a bigger hammer than the prune it
-/// blocked. A version-controlled store means we can afford to act on our
-/// best reading and let the history be the safety net.
+/// Refusing would leave the store holding rows upstream no longer has,
+/// with nothing recording the divergence, and its remedy would be a full
+/// re-download.
 ///
-/// What survives is the signal, because an unusually large prune really is
-/// worth a look, whichever explanation turns out to be right.
+/// A large prune is still logged, because it is worth a look, whichever
+/// explanation turns out to be right.
 pub fn record(collection: &str, held: usize, gone: usize) {
     if gone == 0 {
         return;
@@ -443,7 +440,7 @@ mod tests {
     }
 
     /// `prune_scope` must delete inside its scope and nowhere else. The
-    /// scope is the whole safety story now that nothing vetoes a large
+    /// scope is the whole safety story, since nothing refuses a large
     /// prune: a scope that leaks deletes rows the caller never enumerated.
     #[tokio::test(flavor = "multi_thread")]
     async fn prune_scope_deletes_only_inside_its_scope() {

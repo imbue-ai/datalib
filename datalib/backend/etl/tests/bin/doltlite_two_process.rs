@@ -204,8 +204,9 @@ async fn read(args: &Args) -> Result<Value> {
     }))
 }
 
-/// What `unified_grid_and_search_index` does to a render store on every streaming pass, in a
-/// loop: open read-only at HEAD, diff, read, close. Every step is a read, so none of it should cost a writer
+/// What `unified_grid_and_search_index` does to a render store on every
+/// run under streaming, in a loop: open read-only at HEAD, diff, read,
+/// close. Every step is a read, so none of it should cost a writer
 /// anything -- this is the role that finds out. `--dolt-status` adds a
 /// `SELECT * FROM dolt_status` to every round.
 async fn churn(args: &Args) -> Result<Value> {
@@ -300,7 +301,7 @@ async fn history(args: &Args) -> Result<Value> {
     }))
 }
 
-/// The commit this pass read at.
+/// The commit this round read at.
 async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) -> Result<String> {
     let pool = reader.pool();
     let pin = reader.pin();
@@ -334,7 +335,7 @@ async fn one_pinned_pass(reader: &doltlite_raw::Reader, cursor: Option<&str>) ->
 /// `AGENTS.md` warns about, and the one the two-process scenarios do not
 /// reach. Both opens are bounded, so a pool that really does wait for the
 /// other reports a timeout instead of hanging out the test's clock.
-/// Nowadays the second open is refused outright; this reports what it
+/// The second open is refused outright; this reports what it
 /// said, and that the first still commits.
 async fn double_open(args: &Args) -> Result<Value> {
     let db = args.path("db")?;

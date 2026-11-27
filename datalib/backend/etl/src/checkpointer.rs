@@ -21,13 +21,13 @@ use std::time::{Duration, Instant};
 /// consistent point and does not grow — the e2e specs that set it want
 /// to see each write sealed.
 ///
-/// There is no debounce half. A "seal once writes have been quiet" rule
+/// There is no debounce. A "seal once writes have been quiet" rule
 /// cannot fire from a producer that only asks *as* it writes, and every
-/// producer here does — so the dial existed and turned nothing. A burst that
+/// producer here does. A burst that
 /// ends is published by the next write past the ceiling, or by the run
 /// finishing, which is the last seal.
 ///
-/// The dial is the user's. How much latency to trade for how much `dolt_log`
+/// The setting is the user's. How much latency to trade for how much `dolt_log`
 /// is exactly the kind of call a person should get to make — what is *not*
 /// theirs is whether a step can cope with chunked commits at all, which is a
 /// fact about the step.

@@ -329,7 +329,7 @@ mod tests {
 
     /// A sink that just counts how many times `finish_and_clear` fired, so a
     /// test can assert a wrapping sink (e.g. `FanOut`) forwards the call
-    /// instead of silently hitting the no-op default trait method..
+    /// instead of silently hitting the no-op default trait method.
     #[derive(Default, Clone)]
     struct RecordingSink {
         finish_and_clear: Arc<AtomicUsize>,

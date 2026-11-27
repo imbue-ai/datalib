@@ -51,7 +51,7 @@ pub struct CasObject {
 }
 
 /// One entry for [`BlobCas::put_many`]: bytes, and the caller's own name
-/// for them (`id`), which is what `put_many` answers by. It carries no
+/// for them (`id`), which `put_many` returns each key under. It carries no
 /// hash: the CAS names bytes by hashing them itself, so a key can never
 /// disagree with the bytes stored under it.
 #[derive(Debug, Clone, Copy)]
@@ -316,8 +316,8 @@ impl BlobCas {
     }
 
     /// Store each item under the hash of its bytes, in one transaction of
-    /// chunked multi-row `INSERT OR IGNORE`, and answer each item's `id`
-    /// with the key its bytes are under. The transaction's `COMMIT` is the
+    /// chunked multi-row `INSERT OR IGNORE`, and return, for each item's
+    /// `id`, the key its bytes are under. The transaction's `COMMIT` is the
     /// blobs' commit: a caller writing edge rows after this returns names
     /// only bytes already on disk.
     pub async fn put_many<K: Eq + Hash>(

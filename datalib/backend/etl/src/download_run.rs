@@ -617,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn unchanged_tables_stay_out_of_the_deltas() {
-        // Every table is diffed now, so a table nobody touched has to be
+        // Every table is diffed, so a table nobody touched has to be
         // dropped explicitly or it pads every summary with zeroes.
         const DDL: &str = "CREATE TABLE IF NOT EXISTS quiet (id TEXT PRIMARY KEY)";
         let dir = tempfile::tempdir().unwrap();

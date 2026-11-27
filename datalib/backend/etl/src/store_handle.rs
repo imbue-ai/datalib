@@ -13,9 +13,8 @@ use sqlx::sqlite::SqlitePool;
 /// Implement it with `#[derive(RawStoreHandle)]`, which reads the struct's
 /// fields: a store added later is picked up without anyone remembering to
 /// list it. Writing [`pools`](RawStoreHandle::pools) by hand puts that
-/// back in a person's hands, which is the mistake this exists to remove —
-/// `RawStoreSession::finish` named one of its two pools and left the
-/// other open for exactly that reason.
+/// back in a person's hands, and a list kept by hand can name one of two
+/// pools and leave the other open.
 #[async_trait::async_trait]
 pub trait RawStoreHandle {
     /// Every pool this handle opened, in declaration order.

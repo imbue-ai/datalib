@@ -165,7 +165,8 @@ pub type Finish = Box<
 /// publish it, and delete the branch. Where the draft and the writer
 /// both changed a cell, the draft's value is kept, and every other
 /// change on either side survives. `finish` runs between the merge and
-/// the commit. `None` when nothing changed; the branch goes either way.
+/// the commit. `None` when nothing changed; the branch is deleted either
+/// way.
 pub async fn save(
     pool: &SqlitePool,
     branch: &str,
@@ -313,9 +314,9 @@ async fn draft_wins(conn: &mut SqliteConnection) -> Result<()> {
 }
 
 /// The statements that resolve `table`'s conflicts, the draft winning:
-/// a row the draft deleted is deleted, a row the writer deleted and the draft
-/// changed comes back as the draft has it, and in a row both kept each
-/// cell the draft changed takes the draft's value. `columns` is every
+/// a row the draft deleted is deleted, a row the writer deleted and the
+/// draft changed comes back as the draft has it, and in a row both kept
+/// each cell the draft changed takes the draft's value. `columns` is every
 /// column, with whether it is part of the key.
 fn draft_wins_sql(table: &str, columns: &[(String, bool)]) -> Vec<String> {
     let t = quote_ident(table);
