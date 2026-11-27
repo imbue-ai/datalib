@@ -66,7 +66,7 @@ import {
   runChipAction,
   type Chip,
 } from "@/cards/chipActions";
-import { type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
+import { type InvocationInfo, type ProcessInfo, type RunInfo, type RunLogLine } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import {
   fieldsWithoutSource,
@@ -80,12 +80,13 @@ import { changed, subscribeLive } from "@/live";
 import { compareStamps, formatRelative, formatShortStamp } from "@/config/timeFormat";
 import { TEXT_ONLY_GRID } from "@/grid/textOnly";
 
-const { fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
+const { fetchInvocations, fetchLog, fetchProcesses, fetchRuns, healthSnapshot } = useApi();
 
 const props = defineProps<{
-  /// The run the panel opens on, or `*` for every run.
+  /// The run the panel opens on — a request or a job, or a run an older
+  /// build recorded — or `*` for every run.
   runId: string;
-  /// The step the panel opens on: its newest attempt's process, once
+  /// The step the panel opens on: its newest invocation in the run, once
   /// the run has one, else its lines by name.
   step: string | null;
   /// A launch of the server to open on instead of a run — the one
@@ -103,7 +104,12 @@ const props = defineProps<{
 /// What the panel is showing, for the caller's header.
 export type LogScope =
   | { kind: "all" }
-  | { kind: "run"; run: RunInfo; process: ProcessInfo | null }
+  | {
+      kind: "run";
+      run: RunInfo;
+      invocation: InvocationInfo | null;
+      process: ProcessInfo | null;
+    }
   | { kind: "launch"; launch: ProcessInfo };
 
 const emit = defineEmits<{
@@ -153,14 +159,25 @@ const launch = computed(() =>
       ) ?? null)
     : null,
 );
-/// The processes of the run on screen: its runner and its steps'
-/// attempts, newest first.
+/// The invocations of the run on screen, oldest first: what a request or
+/// a job started. None for a run an older build recorded.
+const runInvocations = ref<InvocationInfo[]>([]);
+/// The processes of an older build's run on screen: its runner and its
+/// steps' attempts, newest first. Its second picker offers these.
 const runProcesses = ref<ProcessInfo[]>([]);
-/// The second picker: one of the run's processes, the runner by its id
-/// or a step's attempt by its step and number, or the whole run (`null`).
+/// The second picker, for a request or a job: one of its invocations,
+/// or all of them (`null`).
+const currentInvocation = computed(() => {
+  const id = scope.value.invocation;
+  if (!scope.value.run || !id) return null;
+  return runInvocations.value.find((i) => i.invocation_id === id) ?? null;
+});
+/// The second picker, for an older build's run: one of its processes,
+/// the runner by its id or a step's attempt by its step and number, or
+/// the whole run (`null`).
 const currentProcess = computed(() => {
   const s = scope.value;
-  if (!s.run) return null;
+  if (!s.run || runInvocations.value.length) return null;
   return (
     runProcesses.value.find((p) =>
       s.step ? p.step === s.step && p.attempt === s.attempt : p.process_id === s.processId,
@@ -174,6 +191,7 @@ const currentProcess = computed(() => {
 const live = computed(() => {
   if (launchId.value) return !launch.value || launch.value.finished_at_utc == null;
   if (allRuns.value) return runs.value.some((x) => x.finished_at_utc == null);
+  if (currentInvocation.value) return currentInvocation.value.finished_at_utc == null;
   if (currentProcess.value) return currentProcess.value.finished_at_utc == null;
   const r = runs.value.find((x) => x.run_id === runId.value);
   return !r || r.finished_at_utc == null;
@@ -504,22 +522,31 @@ async function loadRuns() {
   }
 }
 
-/// The processes of `run`, newest first, for the second picker.
+/// What the second picker offers for `run`: a request's or a job's
+/// invocations, or an older build's run's processes.
 async function loadProcesses(run: string | null) {
   if (!run) {
+    runInvocations.value = [];
     runProcesses.value = [];
     return;
   }
   try {
-    runProcesses.value = await fetchProcesses({ run, limit: 1000 });
+    runInvocations.value = await fetchInvocations(run);
+    runProcesses.value = runInvocations.value.length
+      ? []
+      : await fetchProcesses({ run, limit: 1000 });
   } catch {
+    runInvocations.value = [];
     runProcesses.value = [];
   }
 }
 
-/// A run, opened on a step: its newest attempt, or the step by name
-/// before it has one.
+/// A run, opened on a step: its newest invocation there; for an older
+/// build's run, its newest attempt; or the step by name before it has
+/// either.
 function onStep(run: string, step: string): Scope {
+  const invocation = runInvocations.value.filter((i) => i.step === step).at(-1);
+  if (invocation) return { ...EVERYTHING, run, invocation: invocation.invocation_id };
   const newest = runProcesses.value.find((p) => p.step === step);
   return { ...EVERYTHING, run, step, attempt: newest?.attempt ?? null };
 }
@@ -532,7 +559,14 @@ function announce() {
   const run = runs.value.find((r) => r.run_id === runId.value);
   emit(
     "scope-changed",
-    run ? { kind: "run", run, process: currentProcess.value } : { kind: "all" },
+    run
+      ? {
+          kind: "run",
+          run,
+          invocation: currentInvocation.value,
+          process: currentProcess.value,
+        }
+      : { kind: "all" },
   );
 }
 
@@ -554,6 +588,19 @@ async function pickScope(ev: Event) {
         : { ...EVERYTHING, run: value };
   await loadProcesses(next.run);
   rescope(next.run && props.step ? onStep(next.run, props.step) : next);
+}
+
+function pickInvocation(ev: Event) {
+  const id = (ev.target as HTMLSelectElement).value;
+  rescope({ ...EVERYTHING, run: scope.value.run, invocation: id || null });
+}
+
+/// How an invocation reads in its picker: its step, when it started, and
+/// how it stands.
+function invocationLabel(i: InvocationInfo): string {
+  const verb = i.verb ? ` --${i.verb}` : "";
+  const attempts = i.attempt > 1 ? ` · ${i.attempt} attempts` : "";
+  return `${i.step}${verb} · ${formatShortStamp(i.started_at_utc)} · ${i.state}${attempts}`;
 }
 
 function pickProcess(ev: Event) {
@@ -623,14 +670,29 @@ function shortRunId(id: string): string {
   return id.split("-")[0] ?? id;
 }
 
-/// How a run reads in the picker: when it started, and whether it is
-/// still going — the id itself is in the header for whoever needs it.
+/// How a run reads in the picker: what it was, when it started, and how
+/// it stands — the id itself is in the header for whoever needs it.
 function runLabel(r: RunInfo): string {
   const when = pickerWhen(r.started_at_utc);
-  const kind =
-    r.kind === "migrate" ? "Updating data · " : r.kind === "shrink" ? "Giving back disk · " : "";
-  return `${kind}${r.finished_at_utc == null ? `${when} · running` : when}`;
+  const kind = RUN_KINDS[r.kind ?? ""] ?? "";
+  const by = r.by ? ` by ${r.by}` : "";
+  const state = r.finished_at_utc == null ? " · running" : r.outcome ? ` · ${r.outcome}` : "";
+  const old = r.old ? " · from an older Datalib" : "";
+  return `${kind}${by} · ${when}${state}${old}`;
 }
+
+/// What a run was, as its picker entry starts: a sync someone asked for,
+/// a job, or a run an older build recorded under its own word.
+const RUN_KINDS: Record<string, string> = {
+  sync: "Sync",
+  reset: "Reset",
+  purge: "Removing a source",
+  compact: "Giving back disk",
+  collect: "Giving back disk",
+  prepare: "Updating data",
+  migrate: "Updating data",
+  shrink: "Giving back disk",
+};
 
 function levelClass(line: RunLogLine | undefined): string {
   const l = line?.level;
@@ -801,6 +863,16 @@ function columnSet(): Column<RunLogLine>[] {
       sortComparer: (a, b, dir) => compareStamps(a, b) * (dir ?? 1),
     },
     {
+      id: "invocation_id",
+      name: "Invocation",
+      field: "invocation_id",
+      width: 100,
+      hidden: true,
+      formatter: runIdShort,
+      sortable: true,
+      ...groupable("Invocation", "invocation_id"),
+    },
+    {
       id: "run_id",
       name: "Run",
       field: "run_id",
@@ -923,6 +995,7 @@ function columnSet(): Column<RunLogLine>[] {
 // column's name in the log's vocabulary (`datalib_runs::query::KEYS`);
 // a column with none, like Time, offers nothing.
 const QUERY_KEYS: Partial<Record<keyof RunLogLine, string>> = {
+  invocation_id: "invocation",
   run_id: "run",
   process: "process",
   git_hash: "commit",
@@ -962,7 +1035,7 @@ function cellUnderMenu(args: MenuFromCellCallbackArgs): {
   const raw = line[field];
   if (raw == null || raw === "") return null;
   const value = String(raw);
-  const shown = field === "run_id" ? shortRunId(value) : value;
+  const shown = field === "run_id" || field === "invocation_id" ? shortRunId(value) : value;
   return { header: String(column.name ?? key), key, value, shown };
 }
 
@@ -1161,11 +1234,14 @@ onMounted(async () => {
   // processes first, so a step opens on its attempt rather than on the
   // run and then jumps; the pickers' lists with them, so the header can
   // say what opened.
+  // A scope the opening query names (`invocation:` from a commit's
+  // history) is kept, within the run it was opened on.
+  const asked = scopeOf(query.value);
   let opening: Scope = props.launchId
     ? { ...EVERYTHING, processId: props.launchId }
     : props.runId === ALL_RUNS
-      ? EVERYTHING
-      : { ...EVERYTHING, run: props.runId };
+      ? asked
+      : { ...asked, run: props.runId };
   await Promise.all([loadProcesses(opening.run), loadRuns()]);
   // A step opened with no run — a step chip's "Show its log" — opens on
   // the step's newest run, as its Sources row does; one that never ran,
@@ -1265,7 +1341,19 @@ onUnmounted(() => {
         <option :value="ALL_RUNS">everything the store holds</option>
       </select>
       <select
-        v-if="runId && runProcesses.length"
+        v-if="runId && runInvocations.length"
+        class="rl-run"
+        :value="currentInvocation?.invocation_id ?? ''"
+        aria-label="Which invocation of the run"
+        @change="pickInvocation"
+      >
+        <option value="">every invocation of the run</option>
+        <option v-for="i in runInvocations" :key="i.invocation_id" :value="i.invocation_id">
+          {{ invocationLabel(i) }}
+        </option>
+      </select>
+      <select
+        v-else-if="runId && runProcesses.length"
         class="rl-run"
         :value="currentProcess?.process_id ?? ''"
         aria-label="Which process of the run"
@@ -1289,6 +1377,7 @@ onUnmounted(() => {
         Nothing logged yet<span v-if="launch?.process === 'ui'"> by this page</span
         ><span v-else-if="launch?.process === 'dag'"> by this runner</span
         ><span v-else-if="launchId"> by this server</span
+        ><span v-else-if="currentInvocation"> by this invocation</span
         ><span v-else-if="currentProcess"> by this process</span
         ><span v-else-if="runId"> for this run</span>.
       </template>

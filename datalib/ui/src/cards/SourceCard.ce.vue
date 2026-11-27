@@ -11,8 +11,10 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch, type Directive 
 import {
   UNIFIED_GRID_AND_SEARCH_INDEX,
   type Dashboard,
+  type InvocationInfo,
   type ManageResponse,
   type ManageRow,
+  type RunInfo,
 } from "@/api";
 import { useApi } from "./cardApi";
 import { rowMenu, type MenuAction } from "@/config/rowMenu";
@@ -25,7 +27,7 @@ import TimeChart from "./TimeChart.ce.vue";
 import { groupCharts, groupSpan, stepCharts, type Chart } from "./dashboardCharts";
 import { groupBrowseOpts, menuTarget, rowActions, withBrowse, type ActionRow } from "./rowActions";
 import { renderBadges, renderQuantity, renderStatus } from "./cellRenderers";
-import { sourceCardOpts, type SourceTab, type SourceViewOpts } from "./cardSources";
+import { logSource, sourceCardOpts, type SourceTab, type SourceViewOpts } from "./cardSources";
 import { uriFromEntity } from "./chipLinks";
 import EntityChip from "./EntityChip.ce.vue";
 import GridCard from "./GridCard.ce.vue";
@@ -211,9 +213,28 @@ const topCharts = computed(() =>
 const logCount = (s: { warnings: unknown[]; errors: unknown[] } | null) =>
   s ? { warnings: s.warnings.length, errors: s.errors.length } : null;
 
-function runLabel(r: { started_at_utc: string; finished_at_utc: string | null }): string {
+/// A run in the picker: who asked, when, and how it stands. A run an
+/// older Datalib recorded says so.
+function runLabel(r: RunInfo): string {
   const when = formatShortStamp(r.started_at_utc);
-  return r.finished_at_utc ? when : `${when} (running)`;
+  const by = r.by ? ` · ${r.by}` : "";
+  const state = r.finished_at_utc ? (r.outcome ? ` · ${r.outcome}` : "") : " (running)";
+  const old = r.old ? " · from an older Datalib" : "";
+  return `${when}${by}${state}${old}`;
+}
+
+/// The invocations the run shown started, oldest first: each step's
+/// processes for it, a streaming one's one per seal it read.
+const invocations = ref<InvocationInfo[]>([]);
+const invocationsOf = (step: string) => invocations.value.filter((i) => i.step === step);
+
+function openInvocationLog(i: InvocationInfo) {
+  props.ctx.host.openCards(
+    logSource({
+      run: run.value?.run_id ?? null,
+      q: `min_level:info invocation:${i.invocation_id}`,
+    }),
+  );
 }
 
 // ── Loading ──────────────────────────────────────────────────────────
@@ -234,8 +255,10 @@ async function loadDashboard() {
   const seq = ++dashSeq;
   try {
     const d = await api.fetchGroupDashboard(group, pickedRun.value);
+    const started = d.run && !d.run.old ? await api.fetchInvocations(d.run.run_id) : [];
     if (seq !== dashSeq) return;
     dash.value = d;
+    invocations.value = started;
     loadError.value = null;
   } catch (e) {
     loadError.value = (e as Error).message;
@@ -601,6 +624,20 @@ onUnmounted(() => {
           <p v-if="charts.length === 0" class="sd-empty">
             This step reported no numbers in this run.
           </p>
+          <ul v-if="invocationsOf(row.id).length" class="sd-invocations">
+            <li v-for="i in invocationsOf(row.id)" :key="i.invocation_id" class="sd-note">
+              <button
+                class="sd-link"
+                :title="`Show the log of invocation ${i.invocation_id}`"
+                @click="openInvocationLog(i)"
+              >
+                {{ formatShortStamp(i.started_at_utc) }}</button>{{
+                i.verb ? ` · --${i.verb}` : ""
+              }}
+              · {{ i.state }}<template v-if="i.attempt > 1"> · {{ i.attempt }} attempts</template
+              ><template v-if="i.error"> · {{ i.error }}</template>
+            </li>
+          </ul>
         </template>
       </article>
 
@@ -792,6 +829,19 @@ onUnmounted(() => {
   margin: 0;
   color: var(--datalib-muted);
   font-size: var(--datalib-font-size-small);
+}
+.sd-invocations {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.sd-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--datalib-accent);
+  font: inherit;
+  cursor: pointer;
 }
 .sd-empty {
   margin: 0;

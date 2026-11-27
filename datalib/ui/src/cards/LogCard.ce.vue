@@ -27,6 +27,7 @@ const title = computed(() => {
   const s = scope.value;
   if (s?.kind === "launch") return s.launch.process === "ui" ? "Page log" : "Server log";
   if (s?.kind === "run") {
+    if (s.invocation) return `Log · ${s.invocation.step}`;
     const p = s.process;
     if (p?.step) return `Log · ${p.step}`;
     if (p) return "Log · the runner";
@@ -38,11 +39,12 @@ const title = computed(() => {
 
 props.ctx.setTitle(title.value);
 props.ctx.setHelp(`
-<p>The lines one process wrote — a step's attempt (its own output and
-what the runner said about it), the runner, a launch of the server, or
-a page of the app (what was done there, as the page reported it) — or
-every line of a run. The two pickers move between runs, launches, pages
-and processes; the query bar narrows the lines (<code>level:warn
+<p>The lines one invocation of a step wrote (its own output and what the
+runner said about it), or the runner, a launch of the server, or a page
+of the app (what was done there, as the page reported it) — or every
+line of a run, which is a sync someone asked for or a job such as a
+reset, with the invocations started for it. The two pickers move between
+runs, launches, pages and a run's invocations; the query bar narrows the lines (<code>level:warn
 -target:sqlx "a phrase"</code>, <code>min_level:info</code> for a level
 and above). Right-click a cell to keep only, or exclude, its value;
 drag a column header into the bar above the grid to group by it.</p>

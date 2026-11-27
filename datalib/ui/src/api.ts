@@ -1045,14 +1045,14 @@ export type DagStep = {
   inputs: string[];
   outputs: string[];
   deps: string[];
-  // What this step did the last time a run reached it, from the
-  // runner's own state — so a run started from a terminal shows up here
+  // What this step did the last time a sync reached it, from the
+  // runner's own state — so a sync started from a terminal shows up here
   // exactly like one the app kicked off. Null when never reached.
   last_run: DagStepRun | null;
-  // What it is doing in the run currently in flight. Null means the
-  // scheduler hasn't reached it, which reads as queued.
+  // What it is doing, or did, for the sync `run` names. Null means that
+  // sync has not reached it, which reads as queued.
   current_state: DagRunState | null;
-  // What the step has reported in the current run, from the run store
+  // What the step's newest invocation has reported, from the run store
   // (system/runs/runs.sqlite). Null when it has reported nothing — which is
   // not zero, and should read as a spinner rather than an empty bar.
   progress: DagStepProgress | null;
@@ -1066,7 +1066,7 @@ export type DagStep = {
 export type DagStepProgress = {
   msg: string | null;
   metrics: Record<string, number>;
-  // `warn` and `error` log lines so far this run.
+  // `warn` and `error` log lines so far in its newest invocation.
   errors: number;
   // For a running step: seconds since any metric moved (since it
   // started, if none did), and since it last logged. A long progress
@@ -1082,9 +1082,13 @@ export type DagStepProgress = {
 // on them.
 
 export type DagStepRun = {
-  // The run it happened in — what `/api/runs/{run}/log` takes. Empty
-  // for a record written before runs had ids.
+  // The run (the request) its last invocation served — what
+  // `/api/runs/{run}/log` takes. Empty for an outcome an older build
+  // recorded.
   run_id: string;
+  // That invocation, what `invocation:` in the log's search takes. Empty
+  // for an outcome an older build recorded.
+  invocation_id: string;
   started_at: string;
   finished_at: string | null;
   // Empty while the step is still running.
@@ -1093,6 +1097,8 @@ export type DagStepRun = {
   error: string | null;
 };
 
+// The sync in flight — the oldest open request — or the one that closed
+// last.
 export type DagRun = {
   run_id: string;
   started_at: string;
@@ -1537,6 +1543,7 @@ export type DashboardSeries = { name: string; labels: string; points: Sample[] }
 export type DashboardStep = {
   id: string;
   /// Took part in the run shown; nothing below is set when it did not.
+  /// What is set is its newest invocation in that run.
   in_run: boolean;
   state: string | null;
   attempt: number | null;
@@ -1723,17 +1730,58 @@ export async function purgeGroups(groups: string[]): Promise<"done" | "queued"> 
 // page of the app in a tab (what `telemetry.ts` reported from it).
 export type LogProcess = "dag" | "step" | "http" | "applet" | "ui";
 
-// One run. A job started from the app has the job's id as its run id.
+// One run: a request (a sync someone asked for) or a job (a reset,
+// freeing disk, the prepare pass), with the invocations started for it;
+// or a run an older build recorded per stretch of the loop being busy
+// (`old`), shown as it was recorded.
 export type RunInfo = {
   run_id: string;
   started_at_utc: string;
+  // Null while it is open.
   finished_at_utc: string | null;
   tz_offset: string | null;
-  // What the run is for, and why it started; null for a run an older build
-  // recorded.
-  kind: RunKind | null;
+  // `sync` for a request; the job's kind (`reset`, `compact`, `collect`,
+  // `purge`, `prepare`) for a job; an old run's own word.
+  kind: RunKind | string | null;
+  // A sentence: who asked, and for what.
   reason: string | null;
+  // Who opened it; null for an old run.
+  by: string | null;
+  // How it ended: `done`, `failed` or `stopped`; null while open, and for
+  // an old run.
+  outcome: string | null;
+  old: boolean;
 };
+
+// One invocation: one process the loop started for one step, its retries
+// included, as the run store keeps it.
+export type InvocationInfo = {
+  invocation_id: string;
+  step: string;
+  group_id: string | null;
+  // The verb appended to its command for one a job started (`prepare`,
+  // `reset`, …); null for a step's own run.
+  verb: string | null;
+  // `running`, then how it ended.
+  state: DagRunState | string;
+  attempt: number;
+  started_at_utc: string;
+  finished_at_utc: string | null;
+  // The `DATALIB_DAG_NOW` it was handed.
+  now: string | null;
+  error: string | null;
+  msg: string | null;
+  exit_code: number | null;
+  signal: number | null;
+  updated_at_utc: string;
+  tz_offset: string | null;
+};
+
+// The invocations started for one request or job, oldest first; none for
+// an old run.
+export function fetchInvocations(run: string, signal?: AbortSignal): Promise<InvocationInfo[]> {
+  return getJson<InvocationInfo[]>(`/api/runs/${encodeURIComponent(run)}/invocations`, signal);
+}
 
 // One process the store holds: a run of the runner, one attempt of one
 // of its steps, a launch of the server, an applet it started, or a page.
@@ -1741,8 +1789,11 @@ export type RunInfo = {
 export type ProcessInfo = {
   process_id: string;
   process: LogProcess | string;
-  // The run it belonged to; null for the server and a page.
+  // The run an older build filed it under; null for every process this
+  // build records.
   run_id: string | null;
+  // For a step's attempt: the invocation it is an attempt of.
+  invocation_id: string | null;
   // For a step's attempt: which step, which attempt.
   step: string | null;
   attempt: number | null;
@@ -1763,9 +1814,10 @@ export type ProcessInfo = {
   peak_rss_bytes: number | null;
 };
 
-// Processes newest first; `run` narrows to one run's (its runner and
-// its steps' attempts), `process` to one kind (`http`: the server's
-// launches; `ui`: pages of the app).
+// Processes newest first; `run` narrows to one run's (the attempts of a
+// request's or job's invocations, or an old run's runner and steps),
+// `process` to one kind (`http`: the server's launches; `ui`: pages of
+// the app).
 export function fetchProcesses(
   opts: { run?: string; process?: string; limit?: number } = {},
   signal?: AbortSignal,
@@ -1784,14 +1836,18 @@ export function fetchProcesses(
 export type RunLogLine = {
   // Assigned by the store, monotone within it; the tail cursor.
   seq: number;
-  // Null for a line written outside any run: the server's own.
+  // The run an older build filed the line under; null for every line this
+  // build writes.
   run_id: string | null;
+  // The invocation of `step` the line is about; null for a line about
+  // none (the runner's or the server's own) and for an old run's.
+  invocation_id: string | null;
   // The process that wrote it.
   process_id: string;
   // A word this build may not know, like `level`; null when the store
   // no longer has the process.
   process: LogProcess | string | null;
-  // Null for a line about the run, or the server, rather than one step.
+  // Null for a line about the runner, or the server, rather than one step.
   step: string | null;
   // The config's `[[groups]]` entry the step is filed under; null for a
   // line with no step, or a step outside any group.
@@ -1815,7 +1871,8 @@ export type RunLogLine = {
   git_hash: string | null;
 };
 
-// Recent runs, newest first; with `step`, only the runs it took part in.
+// Recent runs, newest first; with `step`, only the runs an invocation of
+// it served (and old runs it took part in).
 export function fetchRuns(
   opts: { step?: string; limit?: number } = {},
   signal?: AbortSignal,

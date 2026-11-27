@@ -232,6 +232,12 @@ async function copyLine() {
             >
           </dd>
         </template>
+        <template v-if="line.invocation_id">
+          <dt>invocation</dt>
+          <dd>
+            <code>{{ line.invocation_id }}</code>
+          </dd>
+        </template>
         <template v-if="line.run_id">
           <dt>run</dt>
           <dd>
