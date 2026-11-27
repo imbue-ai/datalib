@@ -340,7 +340,7 @@ pub async fn delete_emails_in_tx(tx: &mut Transaction<'_, Sqlite>, ids: &[String
         .bind(id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget the problems of email {id}"))?;
+        .with_context(|| format!("delete the problems of email {id}"))?;
         for sql in [
             sql!(
                 "email.delete_emails_in_tx.delete_email_mailboxes",

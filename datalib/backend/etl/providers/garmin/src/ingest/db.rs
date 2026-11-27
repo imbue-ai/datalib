@@ -286,7 +286,7 @@ impl RawDb {
         .bind(end)
         .execute(self.pool())
         .await
-        .context("forget failed garmin_daily days outside the window")?;
+        .context("delete failed garmin_daily days outside the window")?;
         Ok(done.rows_affected())
     }
 

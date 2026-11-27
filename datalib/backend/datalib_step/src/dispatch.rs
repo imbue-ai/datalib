@@ -1069,7 +1069,7 @@ mod tests {
                 continue;
             };
             let Processors::Render(processors) = planned.processors else {
-                panic!("{ty}: a render phase planned another wave");
+                panic!("{ty}: a render phase planned other than render processors");
             };
             assert_eq!(
                 processors.is_empty(),

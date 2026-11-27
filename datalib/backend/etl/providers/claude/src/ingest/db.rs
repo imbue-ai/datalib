@@ -271,7 +271,7 @@ impl RawDb {
         .bind(uuid)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget conversation {uuid}"))?;
+        .with_context(|| format!("delete conversation {uuid}"))?;
         Ok(())
     }
 }
@@ -601,7 +601,7 @@ impl RawDb {
         .bind(id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget cowork session {id}"))?;
+        .with_context(|| format!("delete cowork session {id}"))?;
         Ok(())
     }
 

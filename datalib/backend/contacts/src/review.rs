@@ -194,7 +194,7 @@ async fn person_says(
         .bind(label)
         .execute(&mut **tx)
         .await
-        .context("forget a label")?;
+        .context("delete a label")?;
         return Ok(stored.is_some());
     };
     let settled = stored.is_some_and(|r| r.applies == applies && r.reviewed_at_utc.is_some());

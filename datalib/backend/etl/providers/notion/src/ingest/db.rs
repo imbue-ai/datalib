@@ -483,7 +483,7 @@ impl RawDb {
             .bind(id)
             .execute(&mut *tx)
             .await
-            .with_context(|| format!("forget the page stub {id}"))?;
+            .with_context(|| format!("delete the page stub {id}"))?;
             owed::delete_gone(&mut tx, PAGES, id).await?;
         }
         tx.commit().await?;
@@ -878,7 +878,7 @@ impl RawDb {
         .bind(edge_id)
         .execute(&mut **tx)
         .await
-        .with_context(|| format!("forget attachment {edge_id}"))?;
+        .with_context(|| format!("delete attachment {edge_id}"))?;
         Ok(())
     }
 

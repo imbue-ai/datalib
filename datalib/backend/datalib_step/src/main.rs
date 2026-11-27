@@ -205,7 +205,7 @@ struct Run {
     collect: bool,
     /// Appended by `datalib-pipeline check` and the app's config save: plan
     /// the params a sync would, open and write nothing, and refuse them or
-    /// answer with warnings (`step_protocol.md` § Check).
+    /// print warnings (`step_protocol.md` § Check).
     #[arg(long)]
     check: bool,
 }

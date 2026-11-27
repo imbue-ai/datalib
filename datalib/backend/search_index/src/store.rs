@@ -204,7 +204,7 @@ impl Index {
         .bind(serde_json::to_string(sources)?)
         .execute(&self.pool)
         .await
-        .context("forget the passes of sources no longer searched")?;
+        .context("delete the search_sources rows of sources no longer searched")?;
         Ok(gone.len())
     }
 

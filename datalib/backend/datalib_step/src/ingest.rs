@@ -22,7 +22,7 @@ pub async fn run(
         Processors::Ingest(processors) => processors,
         Processors::Kept => return keep(planned, tree_rel, emitter).await,
         Processors::Render(_) => anyhow::bail!(
-            "the download driver was handed source {:?}'s render wave",
+            "the download driver was handed source {:?}'s render processors",
             planned.name
         ),
     };

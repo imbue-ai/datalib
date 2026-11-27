@@ -307,7 +307,7 @@ async fn draft_wins(conn: &mut SqliteConnection) -> Result<()> {
                 .query()
                 .execute(&mut *conn)
                 .await
-                .with_context(|| format!("settle a conflict in {table}: {stmt}"))?;
+                .with_context(|| format!("resolve a conflict in {table}: {stmt}"))?;
         }
     }
     Ok(())

@@ -119,7 +119,7 @@ impl Phase {
 pub fn columns() -> Vec<ColumnSpec> {
     vec![
         ColumnSpec::new("name", "Name", ColumnType::Identity)
-            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) in its problems list, leaving out the ones you muted; double-click them for exactly those rows. In grey, what only its log holds: each pass of its last run that failed and was run again, and what a step that keeps no problems list counted. On System, the yellow number is the config's warnings; double-click it for the config.")
+            .describe("What the config calls it, led by the mark of the service a source mirrors or the glyph of what a step does; its id — for a group, the folder under the data root — is on hover. After it, in red and yellow, the errors (records dropped) and warnings (records kept with something lost) in its problems list, leaving out the ones you muted; double-click them for exactly those rows. In grey, what only its log holds: each time in its last run that its process failed and was started again because what it reads changed, and what a step that keeps no problems list counted. On System, the yellow number is the config's warnings; double-click it for the config.")
             .editable()
             .badges("problems"),
         ColumnSpec::new("actions", "Actions", ColumnType::Actions)
