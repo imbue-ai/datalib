@@ -292,15 +292,17 @@ A new build of a program can change the shape of what its steps wrote:
 for `datalib-step`, a raw store's tables, a render store's, the grid
 index's. The runner knows none of those shapes, nor when a program
 changed; each step answers for its own. **Each time the loop starts**,
-it asks every step whose program's `[[programs]]` entry lists the
-`prepare` verb, producers first, one at a time, each invoked once with
-`--prepare` appended (`docs/dev/step_protocol.md` § Prepare). In a host's
-loop (`Runner::run_forever`: the http server's `datalib-pipeline serve`)
-the pass runs beside everything else: a step it has not yet asked, and
-every step that reads one, waits (`waiting_for = "prepare"`), and the
-rest run as requests want them. A `datalib-pipeline` sync on its own
-asks every step first, through `Runner::prepare`, before it serves
-anything. Since it asks at every start,
+it runs every step whose program's `[[programs]]` entry lists the
+`prepare` verb once, with `--prepare` appended to its command
+(`docs/dev/step_protocol.md` § Prepare). In a host's loop
+(`Runner::run_forever`: the http server's `datalib-pipeline serve`) the
+pass runs beside everything else. A step's `--prepare` starts once the
+`--prepare` of every step upstream of it has exited, and up to four run
+at once (`round::PREPARES_AT_ONCE`). A step whose `--prepare` has not
+exited, and every step downstream of one, does not start a normal run
+(`waiting_for = "prepare"`); the rest run as requests want them. A
+`datalib-pipeline` sync on its own runs every step's `--prepare` first,
+one at a time, through `Runner::prepare`, before it serves anything. Since it asks at every start,
 a step answers quickly when there is nothing to do. It answers in one
 of four ways:
 

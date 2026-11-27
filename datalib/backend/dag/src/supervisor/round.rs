@@ -201,29 +201,64 @@ enum Done {
     Prepared(String, Result<StepOutcome, InvokeError>),
 }
 
+/// How many `--prepare` processes the pass runs at once. Most exit at once
+/// with nothing to do, but after an upgrade that moved many raw stores each
+/// one rewrites its store, and all of them at once would crowd the disk the
+/// loop's other steps are using.
+const PREPARES_AT_ONCE: usize = 4;
+
 /// The prepare pass at the start of [`Runner::run_forever`]: every step
-/// whose program takes the verb, asked one at a time, producers first,
-/// while the rest of the loop goes on. What it has not yet asked, and what
-/// reads that, waits.
+/// whose program takes the verb is run once with `--prepare` appended. A
+/// step's `--prepare` starts once that of every step upstream of it has
+/// exited, up to [`PREPARES_AT_ONCE`] at a time, while the rest of the loop
+/// goes on. A step whose `--prepare` has not exited, and every step
+/// downstream of one, does not start a normal run.
 struct PreparePass {
-    to_ask: std::collections::VecDeque<String>,
-    asking: Option<String>,
+    /// In graph order.
+    not_started: Vec<String>,
+    running: BTreeSet<String>,
     /// Who had each step turned off as the pass began: one the runner
-    /// turned off for refusing is turned back on once it answers.
+    /// turned off for refusing is turned back on once its `--prepare`
+    /// exits without refusing.
     turned_off_before: BTreeMap<String, String>,
 }
 
 impl PreparePass {
-    /// The steps that may not start yet: each it has to ask, and what
-    /// reads one.
+    /// The steps that may not start a normal run yet: each whose
+    /// `--prepare` has not exited, and every step downstream of one.
     fn holds(&self, graph: &Graph) -> Vec<bool> {
-        let roots: Vec<usize> = self
-            .to_ask
+        graph.downstream_of(&self.not_finished(graph))
+    }
+
+    fn not_finished(&self, graph: &Graph) -> Vec<usize> {
+        self.not_started
             .iter()
-            .chain(&self.asking)
+            .chain(&self.running)
             .filter_map(|id| graph.by_id.get(id).copied())
+            .collect()
+    }
+
+    /// The steps whose `--prepare` may start now, in graph order: no step
+    /// upstream of one, however far back, has a `--prepare` still to
+    /// start or still running.
+    fn startable(&self, graph: &Graph) -> Vec<String> {
+        let after: Vec<usize> = self
+            .not_finished(graph)
+            .into_iter()
+            .flat_map(|i| graph.dependents[i].iter().copied())
             .collect();
-        graph.downstream_of(&roots)
+        let behind = graph.downstream_of(&after);
+        let room = PREPARES_AT_ONCE.saturating_sub(self.running.len());
+        self.not_started
+            .iter()
+            .filter(|id| graph.by_id.get(*id).is_some_and(|&i| !behind[i]))
+            .take(room)
+            .cloned()
+            .collect()
+    }
+
+    fn is_over(&self) -> bool {
+        self.running.is_empty() && self.not_started.is_empty()
     }
 }
 
@@ -574,16 +609,11 @@ impl Runner {
             }
             if period.is_some() {
                 if let (Some(pass), Some(host)) = (prepare.as_mut(), host) {
-                    if pass.asking.is_none() {
-                        if let Some(task) = self.ask_next(graph, pass, host) {
-                            set.spawn(task);
-                        }
+                    for task in self.start_what_it_can(graph, pass, host) {
+                        set.spawn(task);
                     }
                 }
-                if prepare
-                    .as_ref()
-                    .is_some_and(|p| p.asking.is_none() && p.to_ask.is_empty())
-                {
+                if prepare.as_ref().is_some_and(PreparePass::is_over) {
                     prepare = None;
                     if let Some(host) = host {
                         host.prepare_done();
@@ -906,7 +936,7 @@ impl Runner {
                         Done::Prepared(step, answer) => {
                             // A stop drops the pass, not the answer in flight.
                             let turned_off_before = prepare.as_mut().and_then(|pass| {
-                                pass.asking = None;
+                                pass.running.remove(&step);
                                 pass.turned_off_before.get(&step).cloned()
                             });
                             let host = host.expect("only a host's loop prepares");
@@ -966,30 +996,33 @@ impl Runner {
         );
         host.prepare_plan(&asked);
         Ok(Some(PreparePass {
-            to_ask: asked.into(),
-            asking: None,
+            not_started: asked,
+            running: BTreeSet::new(),
             turned_off_before: store.turned_off().await?,
         }))
     }
 
-    /// The next step the pass asks, as a task, or `None` when none is
-    /// left that this graph has.
-    fn ask_next(
+    /// A `--prepare` task for each step [`PreparePass::startable`] names.
+    /// A step this graph no longer has is dropped from the pass.
+    fn start_what_it_can(
         &self,
         graph: &Graph,
         pass: &mut PreparePass,
         host: &dyn LoopHost,
-    ) -> Option<impl std::future::Future<Output = Done> + Send + 'static> {
-        while let Some(step) = pass.to_ask.pop_front() {
-            let Some(&i) = graph.by_id.get(&step) else {
-                continue;
-            };
-            host.prepare_step(&step, PassState::Running, None);
-            let task = self.verb_task(&graph.steps[i], crate::step::Verb::Prepare);
-            pass.asking = Some(step.clone());
-            return Some(async move { Done::Prepared(step, task.await) });
-        }
-        None
+    ) -> Vec<impl std::future::Future<Output = Done> + Send + 'static> {
+        pass.not_started.retain(|id| graph.by_id.contains_key(id));
+        let startable = pass.startable(graph);
+        pass.not_started.retain(|id| !startable.contains(id));
+        startable
+            .into_iter()
+            .map(|step| {
+                host.prepare_step(&step, PassState::Running, None);
+                let task =
+                    self.verb_task(&graph.steps[graph.by_id[&step]], crate::step::Verb::Prepare);
+                pass.running.insert(step.clone());
+                async move { Done::Prepared(step, task.await) }
+            })
+            .collect()
     }
 
     /// One step's answer to `--prepare`, in the loop's record: a new
@@ -2169,6 +2202,82 @@ mod tests {
             .await
             .unwrap();
         assert!(!td.path().join("gone").exists());
+    }
+
+    /// The prepare pass runs several `--prepare` processes at once, and
+    /// starts a step's only after every upstream step's has exited, even
+    /// through a step that does not take the verb. It once ran one at a
+    /// time, so a step waited for every `--prepare` ahead of it in graph
+    /// order.
+    #[test]
+    fn the_prepare_pass_runs_a_few_at_once_and_each_after_its_upstream() {
+        let step = |id: &str, input: Option<&str>, prepares: bool| {
+            let mut spec = StepSpec::new(
+                id,
+                StepRun::in_process(|_| async { Ok(crate::step::StepOutcome::default()) }),
+            );
+            if let Some(i) = input {
+                spec = spec.input(i);
+            }
+            if prepares {
+                spec.verbs.insert(crate::step::Verb::Prepare);
+            }
+            spec
+        };
+        let mut steps = vec![
+            step("a/ingest", None, true),
+            step("x/mid", Some("a/ingest"), false),
+            step("a/render", Some("x/mid"), true),
+        ];
+        let others = ["b/ingest", "c/ingest", "d/ingest", "e/ingest"];
+        steps.extend(others.iter().map(|id| step(id, None, true)));
+        let graph = Graph::build(steps).unwrap();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut asked = super::super::upgrade::steps_to_ask(&graph);
+        asked.sort();
+        assert_eq!(
+            asked,
+            ids(&["a/ingest", "a/render", "b/ingest", "c/ingest", "d/ingest", "e/ingest"])
+        );
+        // One graph order of the six, fixed so the test does not depend on
+        // which one `Graph::build` picks.
+        let mut pass = PreparePass {
+            not_started: ids(&[
+                "b/ingest", "c/ingest", "d/ingest", "e/ingest", "a/ingest", "a/render",
+            ]),
+            running: BTreeSet::new(),
+            turned_off_before: BTreeMap::new(),
+        };
+        let start = |pass: &mut PreparePass| {
+            let now = pass.startable(&graph);
+            pass.not_started.retain(|id| !now.contains(id));
+            pass.running.extend(now.iter().cloned());
+            now
+        };
+
+        assert_eq!(
+            start(&mut pass),
+            ids(&["b/ingest", "c/ingest", "d/ingest", "e/ingest"]),
+            "four at once"
+        );
+        assert_eq!(start(&mut pass), ids(&[]), "no room for a fifth");
+        pass.running.remove("b/ingest");
+        assert_eq!(
+            start(&mut pass),
+            ids(&["a/ingest"]),
+            "one `--prepare` exited"
+        );
+        pass.running.clear();
+        pass.running.insert("a/ingest".into());
+        assert_eq!(
+            start(&mut pass),
+            ids(&[]),
+            "a/render is downstream of a/ingest through x/mid, and a/ingest's `--prepare` is running"
+        );
+        pass.running.clear();
+        assert_eq!(start(&mut pass), ids(&["a/render"]));
+        pass.running.clear();
+        assert!(pass.is_over());
     }
 
     /// Wait for what the next assertion is about, with a deadline that
