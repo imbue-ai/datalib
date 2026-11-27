@@ -40,7 +40,7 @@ function valueAt(params: Record<string, unknown>, path: string): unknown {
   return cur;
 }
 
-export function methodsHeld(
+export function methodsSelected(
   type: string | null | undefined,
   params: Record<string, unknown>,
 ): IngestMethod[] {
@@ -56,9 +56,9 @@ export function ingestReach(
   type: string | null | undefined,
   params: Record<string, unknown>,
 ): Reach | null {
-  const held = methodsHeld(type, params);
-  if (held.some((m) => m.reach === "origin")) return "origin";
-  return held.length ? "local" : null;
+  const selected = methodsSelected(type, params);
+  if (selected.some((m) => m.reach === "origin")) return "origin";
+  return selected.length ? "local" : null;
 }
 
 /// The word the Manage row uses for an ingest step: "Download" for a
