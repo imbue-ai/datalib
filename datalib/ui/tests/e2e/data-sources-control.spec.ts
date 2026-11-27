@@ -27,8 +27,8 @@ import {
   pipelineRow as row,
   readRow,
   rowMenuEntry,
-  settleRow,
-  settleRunner,
+  untilRowFinishesNewRun,
+  untilNoSyncThenReload,
   stampOf,
   stampsBefore,
   statusOf,
@@ -248,7 +248,7 @@ async function drainRequests(page: Page) {
       message: "a request never closed",
     })
     .toBe(0);
-  await settleRunner(page, 60_000);
+  await untilNoSyncThenReload(page, 60_000);
 }
 
 let original = "";
@@ -376,10 +376,10 @@ test.describe("sources run independently", () => {
     // ── every source finishes, in whatever order the loop ran them ────
     release();
     for (const [id, before] of Object.entries({ ...was, ...claudeWas, ...pdfsWas })) {
-      const st = await settleRow(page, id, before, 180_000);
+      const st = await untilRowFinishesNewRun(page, id, before, 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
-    await settleRunner(page, 60_000);
+    await untilNoSyncThenReload(page, 60_000);
     for (const s of [CHATGPT, CLAUDE, PDFS]) await untilClosed(request, s, ["done"]);
   });
 
@@ -506,12 +506,12 @@ test.describe("sources run independently", () => {
     expect(other?.state, `${CLAUDE.id}'s request after stopping ${CHATGPT.id}`).toBe("open");
     release();
     for (const id of [ingestOf(CLAUDE), renderOf(CLAUDE)]) {
-      const st = await settleRow(page, id, was[id], 180_000);
+      const st = await untilRowFinishesNewRun(page, id, was[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     // Its rows are done; the request still owns the index pass behind them.
     await untilClosed(request, CLAUDE, ["done"], 120_000);
-    await settleRunner(page, 60_000);
+    await untilNoSyncThenReload(page, 60_000);
 
     // ── edit the stopped source, then start it again ──────────────────
     // The edit is what a person would do here — narrow the source —
@@ -526,10 +526,10 @@ test.describe("sources run independently", () => {
     // Released, the restart is over in well under a second — too quick
     // for a poll to see it Running. The stamps moving is the proof it ran.
     for (const id of [ingestOf(CHATGPT), renderOf(CHATGPT), INDEX]) {
-      const st = await settleRow(page, id, again[id], 180_000);
+      const st = await untilRowFinishesNewRun(page, id, again[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
-    await settleRunner(page, 60_000);
+    await untilNoSyncThenReload(page, 60_000);
     await untilClosed(request, CHATGPT, ["done"]);
     // Two requests for this source now: the one that was stopped, and
     // the one that finished. Neither is the other's.
@@ -622,7 +622,7 @@ test.describe("steering one source among several", () => {
     const was = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS), INDEX]);
     await start(page, PDFS);
     for (const id of [ingestOf(PDFS), renderOf(PDFS)]) {
-      const st = await settleRow(page, id, was[id], 120_000);
+      const st = await untilRowFinishesNewRun(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await untilClosed(page.request, PDFS, ["done"]);
@@ -636,7 +636,7 @@ test.describe("steering one source among several", () => {
     await expect(inSyncs).toHaveAttribute("aria-checked", "true");
     const again = await stampsBefore(page, [INDEX]);
     await start(page, PDFS);
-    const st = await settleRow(page, INDEX, again[INDEX], 120_000);
+    const st = await untilRowFinishesNewRun(page, INDEX, again[INDEX], 120_000);
     expect(st, `${INDEX} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
   });
 });

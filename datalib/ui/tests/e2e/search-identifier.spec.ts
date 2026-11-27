@@ -4,7 +4,7 @@
 // back first, since no newer row names it.
 
 import { test, expect, type Page } from "@playwright/test";
-import { EVERY_ROW, SEARCH_ROWS, searchAndSettle, type GridApi } from "./grid-helpers";
+import { EVERY_ROW, SEARCH_ROWS, searchAndAwaitResults, type GridApi } from "./grid-helpers";
 
 const firstUuid = (page: Page) =>
   page.evaluate(() =>
@@ -31,6 +31,6 @@ test("a pasted uuid is a filter: its row comes back first", async ({ page, reque
 
   await page.goto(EVERY_ROW);
   await expect(page.locator(SEARCH_ROWS).first()).toBeVisible({ timeout: 15_000 });
-  await searchAndSettle(page, uuid!);
+  await searchAndAwaitResults(page, uuid!);
   await expect.poll(() => firstUuid(page)).toBe(uuid);
 });

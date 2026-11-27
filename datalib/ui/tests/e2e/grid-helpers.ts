@@ -85,7 +85,7 @@ export type GridApi = {
 };
 
 /// Wait until nothing the grid asked for is still on its way.
-export async function gridSettled(page: Page) {
+export async function untilGridLoaded(page: Page) {
   await expect
     .poll(
       () => page.evaluate(() => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.busy()),
@@ -280,11 +280,11 @@ export async function expectGridPainted(grid: Locator, what: string, timeout = 1
 }
 
 // How long a search may take to come back.
-export const SEARCH_SETTLE = 90_000;
+export const SEARCH_TIMEOUT = 90_000;
 
 // Type a query and wait until the grid has actually painted *its*
 // results.
-export async function searchAndSettle(
+export async function searchAndAwaitResults(
   page: Page,
   q: string,
   opts: { grid?: Locator; timeout?: number } = {},
@@ -292,7 +292,7 @@ export async function searchAndSettle(
   const grid = opts.grid ?? page.locator(".grid-wrap");
   await runSearch(page, q);
   await expect(grid).toHaveAttribute("data-shown-query", q, {
-    timeout: opts.timeout ?? SEARCH_SETTLE,
+    timeout: opts.timeout ?? SEARCH_TIMEOUT,
   });
 }
 
@@ -422,8 +422,9 @@ export const pipelineRow = (page: Page, id: string) =>
 export const groupRow = (page: Page, id: string) => pipelineRow(page, `group:${id}`);
 
 /// Open a tree row so the rows under it exist. Idempotent, and the
-/// grid remembers what was opened across a remount — which `settle`
-/// does — so one call per group per test is enough.
+/// grid remembers what was opened across a remount — which
+/// `untilRowFinishesAndSyncIdle` does — so one call per group per test
+/// is enough.
 ///
 /// The click and the check are retried as a pair. A save remounts the
 /// table, and a click that lands on the chevron of a row the grid is
@@ -594,7 +595,7 @@ export const TERMINAL = /^(Succeeded|Up to date|Failed|Blocked|Interrupted|Stopp
 /// How long a row may take to show a terminal status with a new stamp: a
 /// real `datalib-pipeline` run over the fixture corpus on a cold action
 /// cache.
-export const ROW_SETTLE = 60_000;
+export const ROW_RUN_TIMEOUT = 60_000;
 
 /// Record every status a set of rows *passes through*, from now until
 /// the page navigates.
@@ -683,7 +684,7 @@ export async function statusLog(page: Page, id: string): Promise<string[]> {
 }
 
 /// Wait for a row to finish a run newer than the one it was showing.
-async function settleRowOnly(
+async function pollUntilRowFinishesNewRun(
   page: Page,
   id: string,
   before: string | null,
@@ -719,7 +720,7 @@ async function settleRowOnly(
 /// Wait until no sync is running — the server's loop is idle, or, before
 /// it has the lock, no `datalib-pipeline` holds it — then remount so the page
 /// is not a beat behind it.
-export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
+export async function untilNoSyncThenReload(page: Page, timeout = ROW_RUN_TIMEOUT) {
   await expect
     .poll(
       async () => {
@@ -736,16 +737,16 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
 /// Resolves once the wall clock is in a later second than when it was
 /// called. A stamp is to the second, and the server's loop starts a sync
 /// the moment it is asked: without this, a run started straight after
-/// another can carry the same stamp, and `settleRow`, which waits for the
-/// stamp to move, waits for ever. Every stamp read before calling this is
+/// another can carry the same stamp, and `untilRowFinishesNewRun`, which
+/// waits for the stamp to move, waits for ever. Every stamp read before calling this is
 /// of a run already over, so a run started after it stamps later.
 export async function untilTheSecondTurns() {
   const now = Math.floor(Date.now() / 1000);
   await expect.poll(() => Math.floor(Date.now() / 1000), { intervals: [50] }).toBeGreaterThan(now);
 }
 
-/// Every row's stamp, keyed by id — the reading `settleRow` compares
-/// against. Taken for the whole set before the click that starts a run,
+/// Every row's stamp, keyed by id — the reading `untilRowFinishesNewRun`
+/// compares against. Taken for the whole set before the click that starts a run,
 /// which it holds until a run started then would stamp later.
 export async function stampsBefore(
   page: Page,
@@ -761,37 +762,38 @@ export async function stampsBefore(
 /// status beside a stamp other than its `before`, then until no sync is
 /// running, and reload the page. Returns each row's terminal status,
 /// keyed by id.
-export async function settleRows(
+export async function untilRowsFinishAndSyncIdle(
   page: Page,
   ids: readonly string[],
   before: Record<string, string | null>,
-  timeout = ROW_SETTLE,
+  timeout = ROW_RUN_TIMEOUT,
 ): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  for (const id of ids) out[id] = await settleRowOnly(page, id, before[id] ?? null, timeout);
-  await settleRunner(page, timeout);
+  for (const id of ids)
+    out[id] = await pollUntilRowFinishesNewRun(page, id, before[id] ?? null, timeout);
+  await untilNoSyncThenReload(page, timeout);
   for (const id of ids) await readRow(page, id, timeout);
   return out;
 }
 
-/// `settleRows` for one row, without the remount.
-export async function settleRow(
+/// `untilRowsFinishAndSyncIdle` for one row, without the remount.
+export async function untilRowFinishesNewRun(
   page: Page,
   id: string,
   before: string | null,
-  timeout = ROW_SETTLE,
+  timeout = ROW_RUN_TIMEOUT,
 ): Promise<string> {
-  return settleRowOnly(page, id, before, timeout);
+  return pollUntilRowFinishesNewRun(page, id, before, timeout);
 }
 
-/// One row's form of `settleRows`.
-export async function settle(
+/// One row's form of `untilRowsFinishAndSyncIdle`.
+export async function untilRowFinishesAndSyncIdle(
   page: Page,
   id: string,
   before: string | null,
-  timeout = ROW_SETTLE,
+  timeout = ROW_RUN_TIMEOUT,
 ): Promise<string> {
-  return (await settleRows(page, [id], { [id]: before }, timeout))[id];
+  return (await untilRowsFinishAndSyncIdle(page, [id], { [id]: before }, timeout))[id];
 }
 
 /** A document card's rendered body. It is drawn inside the card's
@@ -859,7 +861,7 @@ export async function runSearch(page: Page, text: string) {
   // until then, Enter has no search to change and opens a new tab.
   if (decodeURIComponent(page.url()).includes("searchView(")) {
     await expect(page.locator(".command-box")).toHaveAttribute("data-on-search-card", "true", {
-      timeout: SEARCH_SETTLE,
+      timeout: SEARCH_TIMEOUT,
     });
   }
   await typeInto(field, text);

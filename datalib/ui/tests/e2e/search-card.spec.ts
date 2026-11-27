@@ -6,12 +6,12 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   firstRowUuid,
   GRID,
-  gridSettled,
+  untilGridLoaded,
   openRowByUuid,
   runSearch,
   shownCards,
   stubStream,
-  SEARCH_SETTLE,
+  SEARCH_TIMEOUT,
 } from "./grid-helpers";
 
 // In the tab shown: a tab switched away from keeps its cards mounted.
@@ -136,7 +136,7 @@ test("the panel writes the query a person could have typed", async ({ page }) =>
   await page.goto(GRID);
   await runSearch(page, "warp core");
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await openPanel(page);
 
@@ -145,7 +145,7 @@ test("the panel writes the query a person could have typed", async ({ page }) =>
   await meaning.click();
   await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:off");
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:off", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(page.getByTestId("search-cutoff")).toHaveCount(0);
 
@@ -160,7 +160,7 @@ test("the panel writes the query a person could have typed", async ({ page }) =>
   await expect(input(page)).toHaveAttribute("data-query", "warp core semantic:0.4 is:document");
   await perDocument.click();
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core semantic:0.4", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
 
   // A filter is started, not run: its values are offered.
@@ -262,7 +262,7 @@ test("a search says above its results what it could not reach, in either view", 
   asked.length = 0;
   await runSearch(page, "warp core");
   await expect(listShows(page)).toHaveAttribute("data-shown-query", "warp core", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(notices).toHaveText(["Part of this search could not answer"]);
   expect(asked.filter((u) => u.searchParams.get("q") === "warp core").length).toBe(1);
@@ -270,13 +270,13 @@ test("a search says above its results what it could not reach, in either view", 
 
   await viewTab(page, "Table").click();
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "warp core", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(notices).toHaveCount(1);
 
   await runSearch(page, "tea semantic:off");
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "tea semantic:off", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(notices).toHaveCount(0);
 
@@ -290,7 +290,7 @@ test("after a search, Enter on a row picked by a click opens the row", async ({ 
   await page.goto(GRID);
   await runSearch(page, "is:document");
   await expect(tableShows(page)).toHaveAttribute("data-shown-query", "is:document");
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const uuid = await firstRowUuid(page);
   await openRowByUuid(page, uuid);
   await expect(page.locator(".chat-preview").first()).toBeVisible({ timeout: 10_000 });

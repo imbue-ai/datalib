@@ -18,10 +18,10 @@ import {
   readRow,
   rowMenuEntry,
   SEARCH_ROWS,
-  searchAndSettle,
+  searchAndAwaitResults,
   searchGrid,
-  settle,
-  settleRows,
+  untilRowFinishesAndSyncIdle,
+  untilRowsFinishAndSyncIdle,
   stampOf,
   stampsBefore,
   statusOf,
@@ -260,7 +260,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // Download, render and index all run — a sync of a source also runs
     // everything downstream of it, and the index step is the reason the
     // grid below has anything in it.
-    const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);
+    const firstDone = await untilRowsFinishAndSyncIdle(page, SYNCED_ROWS, firstRun);
     expect(firstDone["pdfs/ingest"]).toBe("Succeeded");
     expect(firstDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
     expect(firstDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
@@ -327,7 +327,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     const secondRun = await stampsBefore(page, SYNCED_ROWS);
     await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
-    const secondDone = await settleRows(page, SYNCED_ROWS, secondRun);
+    const secondDone = await untilRowsFinishAndSyncIdle(page, SYNCED_ROWS, secondRun);
     expect(secondDone["pdfs/ingest"]).toBe("Succeeded");
     expect(secondDone["pdfs/render_markdown"]).toMatch(/^(Succeeded|Up to date)$/);
     expect(secondDone["unified_grid_and_search_index/unified_grid_and_search_index"]).toMatch(
@@ -422,7 +422,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     // ── 4. re-running one source leaves the other alone ──────────────
     const pdfBefore = await stampOf(page, "pdfs/ingest");
     await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
-    expect(await settle(page, "pdfs/ingest", pdfBefore)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", pdfBefore)).toBe("Succeeded");
     expect(
       await statusOf(page, "signal/ingest"),
       "a sync of pdfs must not give signal a history it never earned",
@@ -434,7 +434,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const was = await stampsBefore(page, ALL);
 
     await page.getByRole("button", { name: "Sync everything" }).click();
-    const done = await settleRows(page, ALL, was);
+    const done = await untilRowsFinishAndSyncIdle(page, ALL, was);
     for (const id of ALL) {
       expect(done[id], `${id} after Sync everything`).toMatch(/^(Succeeded|Up to date)$/);
     }
@@ -452,7 +452,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
 
     // ── 6. and the Signal messages are searchable ────────────────────
     await openExplore(page);
-    await searchAndSettle(page, "source:signal");
+    await searchAndAwaitResults(page, "source:signal");
     const signalRows = await gridRows(page);
     expect(signalRows.length, "the Signal messages should be indexed").toBeGreaterThan(0);
     expect(

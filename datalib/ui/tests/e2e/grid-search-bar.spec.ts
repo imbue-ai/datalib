@@ -7,7 +7,7 @@ import {
   EVERY_ROW,
   actOnRowByUuid,
   firstRowUuid,
-  gridSettled,
+  untilGridLoaded,
   SEARCH_MENU,
   SEARCH_ROWS,
   searchHeader,
@@ -40,7 +40,7 @@ test("a shift-click sorts by a second column too", async ({ page, request }) => 
   await searchHeader(page, "kind").click();
   await searchHeader(page, "touched_at").click({ modifiers: ["Shift"] });
   await expect.poll(() => topRows(page, 10)).toEqual(expected);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   expect(await topRows(page, 10)).toEqual(expected);
 });
 
@@ -105,7 +105,7 @@ test("a column pinned from its header menu stays pinned across a reload", async 
 
   await page.reload();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await expect(source).toHaveClass(/\bslick-column-pinned-left\b/);
 });
 
@@ -132,7 +132,7 @@ test("a cell's right-click keeps only its value, in any column", async ({ page }
     // A term splits at its first colon, so the stamp's own need no quotes.
     `touched_at:${touched}`,
   );
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const held = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.rows().map((r) => r.touched_at),
   );
@@ -165,6 +165,6 @@ test("a page landing while the menu is open leaves it open", async ({ page }) =>
   expect(held.length, "the page above the top row was asked for").toBeGreaterThan(0);
   holding = false;
   for (const r of held.splice(0)) await r.continue();
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await expect(searchMenuItem(page, /Keep only Touched=/)).toBeVisible();
 });

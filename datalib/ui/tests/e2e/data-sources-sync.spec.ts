@@ -33,9 +33,9 @@ import {
   pipelineRow as row,
   recordStatuses,
   savedConfig,
-  settle,
-  settleRow,
-  settleRunner,
+  untilRowFinishesAndSyncIdle,
+  untilRowFinishesNewRun,
+  untilNoSyncThenReload,
   showColumn,
   shownCards,
   stampOf as lastSyncedOf,
@@ -135,7 +135,8 @@ async function writeConfig(page: Page, text: string) {
 
 /// The step rows this file drives live under groups, and a group's
 /// steps have rows only while it is open. Opened once per test; the
-/// grid remembers across the remounts `settle` does.
+/// grid remembers across the remounts `untilRowFinishesAndSyncIdle`
+/// does.
 async function writeConfigAndOpenGroups(page: Page, text: string) {
   await writeConfig(page, text);
   for (const id of ["pdfs", "docs", "unsynced"]) await expandGroup(page, id);
@@ -237,7 +238,7 @@ ${applets()}`;
     // Give docs a real history to protect.
     const docsWas = await lastSyncedOf(page, "docs/ingest");
     await syncBtn(page, "docs/ingest").click();
-    expect(await settle(page, "docs/ingest", docsWas)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "docs/ingest", docsWas)).toBe("Succeeded");
     const docsStatus = await statusOf(page, "docs/ingest");
     const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
@@ -246,7 +247,7 @@ ${applets()}`;
     // write "not selected" over docs' row.
     const pdfsWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
-    expect(await settle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");
 
     expect(
       await statusOf(page, "docs/ingest"),
@@ -330,11 +331,12 @@ ${applets()}`;
     );
 
     release();
-    // `settleRow`, not `settle`: the log lives in the page, and
-    // `settle` remounts, which would throw it away. The before-stamp is
-    // still passed — a terminal status on its own is matched by the
+    // `untilRowFinishesNewRun`, not `untilRowFinishesAndSyncIdle`: the
+    // log lives in the page, and `untilRowFinishesAndSyncIdle` reloads
+    // it, which would throw the log away. The before-stamp is still
+    // passed — a terminal status on its own is matched by the
     // *previous* run's frame.
-    await settleRow(page, TAPED_UP, was[TAPED_UP]);
+    await untilRowFinishesNewRun(page, TAPED_UP, was[TAPED_UP]);
     const seen = await since(TAPED_UP, beforeUp);
     expect(
       seen.length,
@@ -388,7 +390,9 @@ ${applets()}`;
     // The render step follows the download it depends on: it may not
     // reach a terminal state before its input does. The download is
     // already terminal here, so waiting on the render is bounded.
-    expect(await settleRow(page, TAPED_DOWN, was[TAPED_DOWN])).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await untilRowFinishesNewRun(page, TAPED_DOWN, was[TAPED_DOWN])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
     const downstreamFinal = await since(TAPED_DOWN, beforeDown);
     expect(
       statusWord(downstreamFinal[downstreamFinal.length - 1]),
@@ -397,9 +401,10 @@ ${applets()}`;
     expectSanePaints(await paints(), "the Pipeline table, through a sync");
 
     // The run itself has to be over before the next test writes a
-    // config into this root — the half of `settleRows` that `settleRow`
-    // leaves out. Cheap here: every row is already terminal.
-    await settleRunner(page);
+    // config into this root — the wait `untilRowsFinishAndSyncIdle`
+    // does after the rows and `untilRowFinishesNewRun` leaves out.
+    // Cheap here: every row is already terminal.
+    await untilNoSyncThenReload(page);
   });
 
   test("Status's time holds still under a minute, then crosses to 1 minute ago", async ({
@@ -425,7 +430,7 @@ ${applets()}`;
     await writeConfigAndOpenGroups(page, config());
     const countUpWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
-    expect(await settle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", countUpWas)).toBe("Succeeded");
 
     const cell = row(page, "pdfs/ingest").locator(LAST_UPDATE_AT);
     await expect(cell).toHaveText("seconds ago");
@@ -509,12 +514,20 @@ ${applets()}`;
       "pdfs/render_markdown",
     ]);
     await syncBtn(page, "docs/ingest").click();
-    expect(await settle(page, "docs/ingest", sortWas["docs/ingest"])).toBe("Succeeded");
-    await syncBtn(page, "pdfs/ingest").click();
-    expect(await settle(page, "pdfs/ingest", sortWas["pdfs/ingest"])).toBe("Succeeded");
-    expect(await settle(page, "pdfs/render_markdown", sortWas["pdfs/render_markdown"])).toMatch(
-      /^(Succeeded|Up to date)$/,
+    expect(await untilRowFinishesAndSyncIdle(page, "docs/ingest", sortWas["docs/ingest"])).toBe(
+      "Succeeded",
     );
+    await syncBtn(page, "pdfs/ingest").click();
+    expect(await untilRowFinishesAndSyncIdle(page, "pdfs/ingest", sortWas["pdfs/ingest"])).toBe(
+      "Succeeded",
+    );
+    expect(
+      await untilRowFinishesAndSyncIdle(
+        page,
+        "pdfs/render_markdown",
+        sortWas["pdfs/render_markdown"],
+      ),
+    ).toMatch(/^(Succeeded|Up to date)$/);
 
     /// Rows top to bottom, each with the exact stamp it claims — read
     /// off `title`, so the check is against instants rather than the
@@ -632,7 +645,7 @@ command = "/bin/sh -c 'echo walking page 1 >&2; echo listing failed: 429 too man
 
     const was = await lastSyncedOf(page, "flaky/ingest");
     await syncBtn(page, "flaky/ingest").click();
-    expect(await settle(page, "flaky/ingest", was)).toBe("Failed");
+    expect(await untilRowFinishesAndSyncIdle(page, "flaky/ingest", was)).toBe("Failed");
     await expandGroup(page, "flaky");
 
     const cell = row(page, "flaky/ingest").locator('[col-id="status"] .tg-status');
@@ -779,7 +792,7 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     expect(await lastSuccessOf(page, "soured/ingest")).toBeNull();
 
     await syncBtn(page, "soured/ingest").click();
-    expect(await settle(page, "soured/ingest", null)).toBe("Succeeded");
+    expect(await untilRowFinishesAndSyncIdle(page, "soured/ingest", null)).toBe("Succeeded");
     await expandGroup(page, "soured");
     const succeeded = await lastSyncedOf(page, "soured/ingest");
     expect(succeeded).not.toBeNull();
@@ -800,10 +813,11 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     await untilTheSecondTurns();
     await syncBtn(page, "soured/ingest").click();
-    // Before `settle`, which reloads the page and would ask afresh: this
-    // is the chip drawn before the sync, following it.
+    // Before `untilRowFinishesAndSyncIdle`, which reloads the page and
+    // would ask afresh: this is the chip drawn before the sync,
+    // following it.
     await expect(stepChip).toHaveClass(/entity-failed/, { timeout: 30_000 });
-    expect(await settle(page, "soured/ingest", succeeded)).toBe("Failed");
+    expect(await untilRowFinishesAndSyncIdle(page, "soured/ingest", succeeded)).toBe("Failed");
     await expandGroup(page, "soured");
     const failed = await lastSyncedOf(page, "soured/ingest");
     expect(failed).not.toBe(succeeded);
@@ -829,8 +843,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    await settleRow(page, render, was[render]);
+    await untilRowFinishesNewRun(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await untilRowFinishesNewRun(page, render, was[render]);
     await expect.poll(items, { message: "the sync counted no items" }).not.toMatch(/^0?$/);
 
     // The confirm says what a reset does, and the history is why it can
@@ -846,12 +860,14 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     // Nothing more to click: the render catches up on the emptied store
     // by itself and takes its documents out.
-    expect(await settleRow(page, render, rendered[render])).toMatch(/^(Succeeded|Up to date)$/);
+    expect(await untilRowFinishesNewRun(page, render, rendered[render])).toMatch(
+      /^(Succeeded|Up to date)$/,
+    );
     await expect.poll(items, { message: "the items stayed after a reset" }).toBe("0");
     // The download keeps no history of its own: its next Sync starts from
     // nothing.
     expect(await statusOf(page, "pdfs/ingest")).toBe("Never run");
-    await settleRunner(page);
+    await untilNoSyncThenReload(page);
   });
 
   test("Reset on a render renders its items again at once", async ({ page }) => {
@@ -864,8 +880,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    await settleRow(page, render, was[render]);
+    await untilRowFinishesNewRun(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await untilRowFinishesNewRun(page, render, was[render]);
     await expect.poll(items, { message: "the sync counted no items" }).not.toMatch(/^0?$/);
     const counted = await items();
 
@@ -874,10 +890,10 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     await pickRowMenu(page, row(page, render), "Reset…", page.getByText("Reset Render markdown."));
     // Rebuilt from what is downloaded, with nothing more to click; the
     // download itself is untouched.
-    expect(await settleRow(page, render, rendered[render])).toBe("Succeeded");
+    expect(await untilRowFinishesNewRun(page, render, rendered[render])).toBe("Succeeded");
     await expect.poll(items).toBe(counted);
     expect(await statusOf(page, "pdfs/ingest")).toBe("Succeeded");
-    await settleRunner(page);
+    await untilNoSyncThenReload(page);
   });
 
   test("a render whose code_version moved syncs on its own, and not while up to date", async ({
@@ -889,9 +905,9 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
 
     const was = await stampsBefore(page, ["pdfs/ingest", render]);
     await syncBtn(page, "pdfs/ingest").click();
-    await settleRow(page, "pdfs/ingest", was["pdfs/ingest"]);
-    await settleRow(page, render, was[render]);
-    await settleRunner(page);
+    await untilRowFinishesNewRun(page, "pdfs/ingest", was["pdfs/ingest"]);
+    await untilRowFinishesNewRun(page, render, was[render]);
+    await untilNoSyncThenReload(page);
     // Up to date, a Sync of it would do nothing, so it is disabled and
     // says so.
     await expect(btn).toBeDisabled();
@@ -910,8 +926,8 @@ command = "/bin/sh -c 'mkdir -p $DATALIB_DAG_STEP; if [ -e ${once} ]; then echo 
     const before = await stampsBefore(page, ["pdfs/ingest", render]);
     expect(before["pdfs/ingest"], "the download ran above").not.toBeNull();
     await btn.click();
-    await settleRow(page, render, before[render]);
-    await settleRunner(page);
+    await untilRowFinishesNewRun(page, render, before[render]);
+    await untilNoSyncThenReload(page);
     expect(await lastSyncedOf(page, "pdfs/ingest"), "the download ran too").toBe(
       before["pdfs/ingest"],
     );

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { GRID, searchAndSettle } from "./grid-helpers";
+import { GRID, searchAndAwaitResults } from "./grid-helpers";
 
 // Two contracts a single ranked query has to satisfy. They share
 // the same setup (open page → type free-text → the search ranks it → score
@@ -20,7 +20,7 @@ test.describe("ranked search: score-desc sort + scroll-to-top", () => {
   // but the applet restarts on config changes and `data-sources-sync`
   // (which sorts earlier) rewrites config.toml — so this may still land
   // on a freshly respawned daemon and pay the model load again. See
-  // `SEARCH_SETTLE`.
+  // `SEARCH_TIMEOUT`.
   test.setTimeout(180_000);
 
   test("score column is non-increasing and viewport lands at row 0", async ({ page }) => {
@@ -39,14 +39,14 @@ test.describe("ranked search: score-desc sort + scroll-to-top", () => {
 
     // 2. Type a free-text query — the search ranks it.
     //
-    // `searchAndSettle` absorbs the search latency, so the two
+    // `searchAndAwaitResults` absorbs the search latency, so the two
     // assertions below are about the *result*, not about waiting: the
     // score column exists only on ranked rows, so once the grid is
     // painting this query, its presence is the proof that the query
     // routed. Gating on the header with a 90s timeout used to conflate
     // those two things — a slow daemon and a query that never reached
     // the search failed identically.
-    await searchAndSettle(page, "grey earl");
+    await searchAndAwaitResults(page, "grey earl");
 
     const scoreHeader = page.locator('.grid-box .slick-header-column[col-id="score"]');
     await expect(scoreHeader).toBeVisible();
