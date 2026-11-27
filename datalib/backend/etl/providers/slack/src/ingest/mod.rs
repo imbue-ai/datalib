@@ -1048,7 +1048,7 @@ fn refresh_sweep_key(channel_id: &str) -> String {
 /// first page of an open-topped stretch, the newest message it holds)
 /// down to its own oldest message, and the last page down to the
 /// stretch's bottom.
-fn settled(stretch: &Span, top: Option<&str>, page: &[String], last: bool) -> Option<Span> {
+fn covered_by_page(stretch: &Span, top: Option<&str>, page: &[String], last: bool) -> Option<Span> {
     let hi = top.or(page.iter().max().map(String::as_str))?;
     let lo = if last {
         stretch.lo.as_str()
@@ -1408,7 +1408,7 @@ impl Mirror<'_> {
         // cover up to, so it covers the one point where it began: that
         // tells "read, nothing there" from "never read".
         let found_nothing = open_top && walk.top.is_none() && in_stretch.is_empty();
-        let covered = settled(&stretch.span, walk.top.as_deref(), &in_stretch, last)
+        let covered = covered_by_page(&stretch.span, walk.top.as_deref(), &in_stretch, last)
             .or_else(|| {
                 (last && found_nothing).then(|| Span::new(&stretch.span.lo, &stretch.span.lo))
             })
@@ -2723,11 +2723,11 @@ mod tests {
     /// message up to its newest, each next one down to its own oldest,
     /// the last down to `since`.
     #[test]
-    fn each_page_settles_from_its_oldest_message_up_to_the_page_before() {
+    fn each_page_covers_from_its_oldest_message_up_to_the_page_before() {
         let cold = span(SINCE, END_OF_TIME);
         let keys = |ts: &[&str]| ts.iter().map(|t| ts_key(t)).collect::<Vec<_>>();
         assert_eq!(
-            settled(
+            covered_by_page(
                 &cold,
                 None,
                 &keys(&["1735689600.000300", "1735689600.000200"]),
@@ -2737,12 +2737,12 @@ mod tests {
         );
         let top = ts_key("1735689600.000200");
         assert_eq!(
-            settled(&cold, Some(&top), &keys(&["1735689600.000100"]), false),
+            covered_by_page(&cold, Some(&top), &keys(&["1735689600.000100"]), false),
             Some(span("1735689600.000100", "1735689600.000200"))
         );
         let top = ts_key("1735689600.000100");
         assert_eq!(
-            settled(&cold, Some(&top), &keys(&["1735689600.000000"]), true),
+            covered_by_page(&cold, Some(&top), &keys(&["1735689600.000000"]), true),
             Some(span(SINCE, "1735689600.000100"))
         );
     }
@@ -2750,12 +2750,18 @@ mod tests {
     /// An open-topped walk that found nothing names no message to cover
     /// up to; `Mirror::page` covers the point it began at instead.
     #[test]
-    fn an_empty_walk_of_the_open_top_settles_nothing() {
-        assert_eq!(settled(&span(SINCE, END_OF_TIME), None, &[], true), None);
+    fn an_empty_walk_of_the_open_top_covers_nothing() {
+        assert_eq!(
+            covered_by_page(&span(SINCE, END_OF_TIME), None, &[], true),
+            None
+        );
         // A closed stretch that came back empty was read whole.
         let below = span(SINCE, "1735689600.000100");
         let top = ts_key("1735689600.000100");
-        assert_eq!(settled(&below, Some(&top), &[], true), Some(below.clone()));
+        assert_eq!(
+            covered_by_page(&below, Some(&top), &[], true),
+            Some(below.clone())
+        );
     }
 
     /// A stretch with a top, `context_after`'s window: the top is asked

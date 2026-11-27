@@ -14,7 +14,7 @@ use datalib_etl_web::coverage::Span;
 use datalib_etl_web::http::LatchkeySettings;
 
 use super::shapes::M_SEARCH;
-use super::{call, key_ts, settled};
+use super::{call, covered_by_page, key_ts};
 
 /// Slack serves no page of a search past this one.
 const MAX_PAGES: u64 = 100;
@@ -137,7 +137,7 @@ impl<Q: Fn(&Span) -> String> SearchWalk<Q> {
             .filter_map(|m| m.get("ts").and_then(Value::as_str).map(super::ts_key))
             .filter(|key| *key >= self.stretch.lo && *key <= self.stretch.hi)
             .collect();
-        let covered = settled(&self.stretch, self.top.as_deref(), &in_stretch, last);
+        let covered = covered_by_page(&self.stretch, self.top.as_deref(), &in_stretch, last);
         if last {
             self.done = true;
         } else {
@@ -191,7 +191,7 @@ mod tests {
     /// of its stretch asks again below that; one that covered none of it
     /// says so rather than asking the same thing for good.
     #[tokio::test]
-    async fn past_the_last_page_a_walk_asks_again_below_what_it_settled() {
+    async fn past_the_last_page_a_walk_asks_again_below_what_it_covered() {
         let mut lowered = past_the_last_page("70");
         assert!(next(&mut lowered).await.is_err(), "the tape is empty");
         assert_eq!(lowered.stretch, Span::new("20", "70"));
