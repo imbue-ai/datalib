@@ -51,13 +51,16 @@ mod nodes;
 mod page;
 mod planner_ranks;
 
-/// Serializes concurrent writers against one doltlite index pool, and
-/// optionally batches every write into one transaction.
+/// Serializes concurrent writers against one store's pool, and optionally
+/// batches every write into one transaction. A render store, which is
+/// doltlite, takes [`WriteLock::new`]; the grid index, plain SQLite, takes
+/// [`WriteLock::for_index`].
 ///
-/// Doltlite runs one write at a time per file, so per-task pool connections
-/// calling `apply_one` would queue for it and, past the busy timeout, fail
-/// with `database is locked`. Batching matters as much: every transaction
-/// rewrites each page it touched (docs/dev/doltlite.md#what-a-write-costs).
+/// Both engines run one write at a time per file, so per-task pool
+/// connections calling `apply_one` would queue for it and, past the busy
+/// timeout, fail with `database is locked`. Batching matters as much: in
+/// doltlite every transaction rewrites each page it touched
+/// (docs/dev/doltlite.md#what-a-write-costs).
 ///
 /// The counters answer "where is the time going": `total_wait` high against
 /// wall time means writers are queuing, and `total_hold / acquisitions` is the
@@ -1047,8 +1050,9 @@ pub async fn open_index(db_path: &Path) -> Result<SqlitePool> {
 
 /// Opens the index as its owner when some of its parts are in another
 /// shape and the rest are this build's, which empties the moved parts and
-/// keeps the rest readable while the step fills them again: what the
-/// launch's prepare pass does before it asks for that run. Whether it did.
+/// keeps the rest readable while the step fills them again. The index
+/// step's `--prepare` calls it, then reports `needs_rerun`, so the loop
+/// runs the step to fill them. Whether it emptied any.
 pub async fn empty_moved_parts(db_path: &Path) -> Result<bool> {
     if !matches!(refill_of(db_path).await?, Refill::Parts(_)) {
         return Ok(false);

@@ -100,7 +100,10 @@ mod tests {
     #[test]
     fn iso_stamps_carry_an_explicit_offset() {
         // An epoch-derived timestamp renders as UTC with an explicit
-        // `+00:00`, never without an offset.
+        // `+00:00`. Garmin's render uses it for a page's own stamps, which
+        // take an explicit offset; only a message's time is written `Z`
+        // when its source names no clock (docs/user/rendered_documents.md
+        // §"A time").
         let s = iso(1_781_481_609_000).unwrap();
         assert!(s.starts_with("2026-"), "{s}");
         assert!(s.ends_with("+00:00"), "{s}");

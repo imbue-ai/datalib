@@ -203,9 +203,10 @@ pub enum ReadScope {
 
 /// One raw row a parse could not read: the table and id that name it
 /// in the raw store, and what the payload looked like. What a provider
-/// records instead of `continue`ing past the row — the half of R1
-/// ("drop, count, log; never abort, never hide") that a silent skip
-/// loses.
+/// records instead of `continue`ing past the row, so the row is counted
+/// and reported rather than only dropped
+/// (`docs/dev/data_architecture_parse_and_render.md` §"R1 — Drop, count,
+/// log; never abort, never hide").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unparsed {
     pub table: &'static str,

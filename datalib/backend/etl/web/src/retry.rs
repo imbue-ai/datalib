@@ -206,10 +206,10 @@ tokio::task_local! {
     static GUARD: Arc<RetryGuard>;
 }
 
-/// Install `guard` as the ambient retry-guard context for the duration of
-/// `fut`. The chokepoint (and report-in providers) invoked anywhere within
-/// `fut` on the same task accumulate into it. Everything outside any
-/// `scope` is a no-op.
+/// Install `guard` as the retry guard for the duration of `fut`: every
+/// request through `datalib_etl_web::http` made within `fut` on the same
+/// task counts against it. A request outside any `scope` gets a fresh
+/// guard of its own ([`current_or_default`]).
 pub async fn scope<F>(guard: Arc<RetryGuard>, fut: F) -> F::Output
 where
     F: Future,
