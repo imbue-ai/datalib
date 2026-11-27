@@ -1448,7 +1448,7 @@ mod tests {
     #[tokio::test]
     async fn a_re_run_mark_clearing_tells_the_page_to_read_its_pass_again() {
         let td = tempfile::tempdir().unwrap();
-        let store = datalib_dag::supervisor::store::Store::open(td.path())
+        let store = datalib_supervisor_store::store::Store::open(td.path())
             .await
             .unwrap();
         let unmarked = store.load_state().await.unwrap();

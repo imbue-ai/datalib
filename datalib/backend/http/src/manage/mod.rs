@@ -1499,7 +1499,7 @@ impl RowCtx<'_> {
                             .states
                             .get(id)
                             .filter(|_| run_under_way)
-                            .and_then(|s| datalib_dag::RunState::parse(s)),
+                            .and_then(|s| datalib_supervisor_store::run_state::RunState::parse(s)),
                     )
                 })
                 .collect::<Vec<_>>(),

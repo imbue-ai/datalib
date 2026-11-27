@@ -6,7 +6,7 @@
 //! rules in prose. A group's bytes come from its own measured series,
 //! never a sum of its children's.
 
-use datalib_dag::RunState;
+use datalib_supervisor_store::run_state::RunState;
 
 use super::status::{compare_stamps, StatusView};
 
