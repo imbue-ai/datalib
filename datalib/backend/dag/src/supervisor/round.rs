@@ -204,19 +204,29 @@ enum Done {
     Prepared(String, Result<StepOutcome, InvokeError>),
 }
 
+/// How many `--prepare` processes the pass runs at once. Most exit at once
+/// with nothing to do, but after an upgrade that moved many raw stores each
+/// one rewrites its store, and all of them at once would crowd the disk the
+/// loop's other steps are using.
+const PREPARES_AT_ONCE: usize = 4;
+
 /// The prepare pass at the start of [`Runner::run_forever`]: every step
-/// whose program takes the verb, asked one at a time, producers first,
-/// while the rest of the loop goes on. What it has not yet asked, and what
-/// reads that, waits.
+/// whose program takes the verb is run once with `--prepare` appended. A
+/// step's `--prepare` starts once that of every step upstream of it has
+/// exited, up to [`PREPARES_AT_ONCE`] at a time, while the rest of the loop
+/// goes on. A step whose `--prepare` has not exited, and every step
+/// downstream of one, does not start a normal run.
 struct PreparePass {
     /// Its row in the store's `jobs`, whose `job_steps` say how it stands
     /// with each step, in `order`.
     job: String,
     order: Vec<String>,
-    to_ask: std::collections::VecDeque<String>,
-    asking: Option<String>,
+    /// In graph order.
+    not_started: Vec<String>,
+    running: BTreeSet<String>,
     /// Who had each step turned off as the pass began: one the runner
-    /// turned off for refusing is turned back on once it answers.
+    /// turned off for refusing is turned back on once its `--prepare`
+    /// exits without refusing.
     turned_off_before: BTreeMap<String, String>,
 }
 
@@ -225,19 +235,44 @@ impl PreparePass {
         self.order
             .iter()
             .position(|s| s == step)
-            .expect("the pass asks only the steps it planned")
+            .expect("the pass runs --prepare only for the steps it planned")
     }
 
-    /// The steps that may not start yet: each it has to ask, and what
-    /// reads one.
+    /// The steps that may not start a normal run yet: each whose
+    /// `--prepare` has not exited, and every step downstream of one.
     fn holds(&self, graph: &Graph) -> Vec<bool> {
-        let roots: Vec<usize> = self
-            .to_ask
+        graph.downstream_of(&self.not_finished(graph))
+    }
+
+    fn not_finished(&self, graph: &Graph) -> Vec<usize> {
+        self.not_started
             .iter()
-            .chain(&self.asking)
+            .chain(&self.running)
             .filter_map(|id| graph.by_id.get(id).copied())
+            .collect()
+    }
+
+    /// The steps whose `--prepare` may start now, in graph order: no step
+    /// upstream of one, however far back, has a `--prepare` still to
+    /// start or still running.
+    fn startable(&self, graph: &Graph) -> Vec<String> {
+        let after: Vec<usize> = self
+            .not_finished(graph)
+            .into_iter()
+            .flat_map(|i| graph.dependents[i].iter().copied())
             .collect();
-        graph.downstream_of(&roots)
+        let behind = graph.downstream_of(&after);
+        let room = PREPARES_AT_ONCE.saturating_sub(self.running.len());
+        self.not_started
+            .iter()
+            .filter(|id| graph.by_id.get(*id).is_some_and(|&i| !behind[i]))
+            .take(room)
+            .cloned()
+            .collect()
+    }
+
+    fn is_over(&self) -> bool {
+        self.running.is_empty() && self.not_started.is_empty()
     }
 }
 
@@ -584,12 +619,12 @@ impl Runner {
                 }
             }
             if period.is_some() {
-                if let Some(pass) = prepare.as_mut().filter(|p| p.asking.is_none()) {
-                    if let Some(task) = self.ask_next(graph, store, pass).await? {
+                if let Some(pass) = prepare.as_mut() {
+                    for task in self.start_what_it_can(graph, store, pass).await? {
                         set.spawn(task);
                     }
                 }
-                if let Some(pass) = prepare.take_if(|p| p.asking.is_none() && p.to_ask.is_empty()) {
+                if let Some(pass) = prepare.take_if(|p| p.is_over()) {
                     store.close_job(&pass.job, None).await?;
                     if self.open_the_reruns(graph, store, &state).await? {
                         mailbox.seen = None;
@@ -909,7 +944,7 @@ impl Runner {
                         Done::Prepared(step, answer) => {
                             // A stop drops the pass, not the answer in flight.
                             let at = prepare.as_mut().map(|pass| {
-                                pass.asking = None;
+                                pass.running.remove(&step);
                                 (pass.job.clone(), pass.ord(&step),
                                     pass.turned_off_before.get(&step).cloned())
                             });
@@ -979,42 +1014,49 @@ impl Runner {
         Ok(Some(PreparePass {
             job,
             order: asked.clone(),
-            to_ask: asked.into(),
-            asking: None,
+            not_started: asked,
+            running: BTreeSet::new(),
             turned_off_before: store.turned_off().await?,
         }))
     }
 
-    /// The next step the pass asks, as a task, or `None` when none is
-    /// left that this graph has.
-    async fn ask_next(
+    /// A `--prepare` task for each step [`PreparePass::startable`] names,
+    /// each marked running in the job. A step this graph no longer has is
+    /// dropped from the pass, marked failed.
+    async fn start_what_it_can(
         &self,
         graph: &Graph,
         store: &Store,
         pass: &mut PreparePass,
-    ) -> Result<Option<impl std::future::Future<Output = Done> + Send + 'static>> {
-        while let Some(step) = pass.to_ask.pop_front() {
-            let Some(&i) = graph.by_id.get(&step) else {
-                let why = "the config no longer has this step";
-                store
-                    .set_job_step(
-                        &pass.job,
-                        pass.ord(&step),
-                        PassState::Failed,
-                        Some(why),
-                        None,
-                    )
-                    .await?;
-                continue;
-            };
+    ) -> Result<Vec<impl std::future::Future<Output = Done> + Send + 'static>> {
+        let (kept, gone): (Vec<String>, Vec<String>) = std::mem::take(&mut pass.not_started)
+            .into_iter()
+            .partition(|id| graph.by_id.contains_key(id));
+        pass.not_started = kept;
+        for step in gone {
+            let why = "the config no longer has this step";
+            store
+                .set_job_step(
+                    &pass.job,
+                    pass.ord(&step),
+                    PassState::Failed,
+                    Some(why),
+                    None,
+                )
+                .await?;
+        }
+        let startable = pass.startable(graph);
+        pass.not_started.retain(|id| !startable.contains(id));
+        let mut tasks = Vec::new();
+        for step in startable {
             store
                 .set_job_step(&pass.job, pass.ord(&step), PassState::Running, None, None)
                 .await?;
-            let task = self.verb_task(&graph.steps[i], crate::step::Verb::Prepare);
-            pass.asking = Some(step.clone());
-            return Ok(Some(async move { Done::Prepared(step, task.await) }));
+            let task = self.verb_task(&graph.steps[graph.by_id[&step]], crate::step::Verb::Prepare);
+            pass.running.insert(step.clone());
+            tasks.push(async move { Done::Prepared(step, task.await) });
         }
-        Ok(None)
+        Ok(tasks)
     }
 
     /// One step's answer to `--prepare`, in the loop's record: a new
@@ -2210,6 +2252,84 @@ mod tests {
             .await
             .unwrap();
         assert!(!td.path().join("gone").exists());
+    }
+
+    /// The prepare pass runs several `--prepare` processes at once, and
+    /// starts a step's only after every upstream step's has exited, even
+    /// through a step that does not take the verb. It once ran one at a
+    /// time, so a step waited for every `--prepare` ahead of it in graph
+    /// order.
+    #[test]
+    fn the_prepare_pass_runs_a_few_at_once_and_each_after_its_upstream() {
+        let step = |id: &str, input: Option<&str>, prepares: bool| {
+            let mut spec = StepSpec::new(
+                id,
+                StepRun::in_process(|_| async { Ok(crate::step::StepOutcome::default()) }),
+            );
+            if let Some(i) = input {
+                spec = spec.input(i);
+            }
+            if prepares {
+                spec.verbs.insert(crate::step::Verb::Prepare);
+            }
+            spec
+        };
+        let mut steps = vec![
+            step("a/ingest", None, true),
+            step("x/mid", Some("a/ingest"), false),
+            step("a/render", Some("x/mid"), true),
+        ];
+        let others = ["b/ingest", "c/ingest", "d/ingest", "e/ingest"];
+        steps.extend(others.iter().map(|id| step(id, None, true)));
+        let graph = Graph::build(steps).unwrap();
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let mut asked = super::super::upgrade::steps_to_ask(&graph);
+        asked.sort();
+        assert_eq!(
+            asked,
+            ids(&["a/ingest", "a/render", "b/ingest", "c/ingest", "d/ingest", "e/ingest"])
+        );
+        // One graph order of the six, fixed so the test does not depend on
+        // which one `Graph::build` picks.
+        let mut pass = PreparePass {
+            job: "job".into(),
+            order: Vec::new(),
+            not_started: ids(&[
+                "b/ingest", "c/ingest", "d/ingest", "e/ingest", "a/ingest", "a/render",
+            ]),
+            running: BTreeSet::new(),
+            turned_off_before: BTreeMap::new(),
+        };
+        let start = |pass: &mut PreparePass| {
+            let now = pass.startable(&graph);
+            pass.not_started.retain(|id| !now.contains(id));
+            pass.running.extend(now.iter().cloned());
+            now
+        };
+
+        assert_eq!(
+            start(&mut pass),
+            ids(&["b/ingest", "c/ingest", "d/ingest", "e/ingest"]),
+            "four at once"
+        );
+        assert_eq!(start(&mut pass), ids(&[]), "no room for a fifth");
+        pass.running.remove("b/ingest");
+        assert_eq!(
+            start(&mut pass),
+            ids(&["a/ingest"]),
+            "one `--prepare` exited"
+        );
+        pass.running.clear();
+        pass.running.insert("a/ingest".into());
+        assert_eq!(
+            start(&mut pass),
+            ids(&[]),
+            "a/render is downstream of a/ingest through x/mid, and a/ingest's `--prepare` is running"
+        );
+        pass.running.clear();
+        assert_eq!(start(&mut pass), ids(&["a/render"]));
+        pass.running.clear();
+        assert!(pass.is_over());
     }
 
     /// Wait for what the next assertion is about, with a deadline that
