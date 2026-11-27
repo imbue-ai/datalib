@@ -300,7 +300,12 @@ impl Ctx<'_> {
         flush: usize,
         flush_bytes: usize,
     ) -> Result<owed::Drained> {
-        let counted_ahead = self.counted_ahead.lock().unwrap().remove(table).unwrap_or(0);
+        let counted_ahead = self
+            .counted_ahead
+            .lock()
+            .unwrap()
+            .remove(table)
+            .unwrap_or(0);
         let owed_here = owed.len() as u64;
         // A page counted ahead as owing this whose record the store turns
         // out to hold owes nothing, and leaves the queue.
