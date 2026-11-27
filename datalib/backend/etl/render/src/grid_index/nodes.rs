@@ -9,7 +9,7 @@
 //!
 //! Only the nodes a pass touched are rewritten ([`super::WriteLock`] keeps
 //! them): a node whose accounts changed, or whose grid row moved between
-//! documents, which is what [`SETTLE`] chooses by.
+//! documents, which is what [`WRITE_FROM_BEST_ACCOUNT`] chooses by.
 
 use std::sync::LazyLock;
 
@@ -35,7 +35,7 @@ const AT_ONCE: usize = 4_000;
 /// the document that holds the node's own grid row, which knows it best,
 /// else its newest, the one with the greatest `markdown_uuid`, whose
 /// stamp-led ids make that the latest. A node already so is not written.
-pub(super) static SETTLE: LazyLock<Sql> = LazyLock::new(|| {
+pub(super) static WRITE_FROM_BEST_ACCOUNT: LazyLock<Sql> = LazyLock::new(|| {
     let columns: Vec<&str> = std::iter::once(NodeRow::ID_COLUMN)
         .chain(NodeRow::TYPED_COLUMNS.iter().copied())
         .collect();
@@ -148,9 +148,9 @@ pub(super) fn node_row(unrowed: &Unrowed) -> Option<GridRow> {
     })
 }
 
-/// What [`settle`] did to the touched nodes.
+/// What [`rewrite_touched`] did to the touched nodes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub(super) struct Settled {
+pub(super) struct Rewritten {
     pub touched: usize,
     /// Nodes written and removed.
     pub changed: u64,
@@ -161,23 +161,23 @@ pub(super) struct Settled {
 }
 
 /// For the nodes the transaction touched: rewrite each `nodes` row from
-/// the documents' accounts ([`SETTLE`]), delete the nodes no document
+/// the documents' accounts ([`WRITE_FROM_BEST_ACCOUNT`]), delete the nodes no document
 /// carries and the grid rows written for them, and write a grid row for
 /// each node that has none.
-pub(super) async fn settle(
+pub(super) async fn rewrite_touched(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     write_lock: &WriteLock,
-) -> Result<Settled> {
+) -> Result<Rewritten> {
     let touched = write_lock.take_touched_nodes();
-    let mut settled = Settled {
+    let mut rewritten = Rewritten {
         touched: touched.len(),
         ..Default::default()
     };
     for some in touched.chunks(AT_ONCE) {
         let set = serde_json::to_string(some)?;
         // Audited: built from `NodeRow`'s associated consts alone.
-        for sql in [SETTLE.clone(), UNCARRIED] {
-            settled.changed += sql
+        for sql in [WRITE_FROM_BEST_ACCOUNT.clone(), UNCARRIED] {
+            rewritten.changed += sql
                 .query()
                 .bind(&set)
                 .execute(&mut **conn)
@@ -191,7 +191,7 @@ pub(super) async fn settle(
             .fetch_all(&mut **conn)
             .await
             .context("drop the node rows no document carries")?;
-        settled.rows_dropped += dropped.len();
+        rewritten.rows_dropped += dropped.len();
         write_lock.note_changed(dropped);
         let unrowed: Vec<Unrowed> = WITHOUT_A_ROW
             .query_as()
@@ -213,7 +213,7 @@ pub(super) async fn settle(
             rows.push(row);
         }
         super::page::write_grid_rows(conn, write_lock, &rows).await?;
-        settled.rows_kept += rows.len();
+        rewritten.rows_kept += rows.len();
     }
-    Ok(settled)
+    Ok(rewritten)
 }

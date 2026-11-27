@@ -1657,7 +1657,7 @@ async fn retire_source(
         let remade = remove_documents(write_lock, source, &documents, Some(held), progress).await?;
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
-        nodes::settle(conn, write_lock)
+        nodes::rewrite_touched(conn, write_lock)
             .await
             .with_context(|| format!("drop {source}'s nodes"))?;
         if remade {
@@ -2046,15 +2046,15 @@ async fn apply_source(
         let mut guard = write_lock.acquire().await?;
         let conn = guard.conn();
         if !to_read.is_empty() || !removed.is_empty() {
-            let settled = nodes::settle(conn, write_lock)
+            let rewritten = nodes::rewrite_touched(conn, write_lock)
                 .await
                 .with_context(|| format!("settle {stanza}'s nodes"))?;
             tracing::debug!(
                 source = %stanza,
-                touched = settled.touched,
-                changed = settled.changed,
-                rows_kept = settled.rows_kept,
-                rows_dropped = settled.rows_dropped,
+                touched = rewritten.touched,
+                changed = rewritten.changed,
+                rows_kept = rewritten.rows_kept,
+                rows_dropped = rewritten.rows_dropped,
                 "nodes settled"
             );
         }
@@ -2712,12 +2712,12 @@ mod open_index_tests {
         pool.close().await;
     }
 
-    /// Every statement `nodes::settle` runs reads each node by its uuid, also
+    /// Every statement `nodes::rewrite_touched` runs reads each node by its uuid, also
     /// while a build has the read indexes dropped, which is when it runs.
     /// Read by anything wider it was seconds on each source of a large
     /// index (#1926), or quadratic in a first build.
     #[tokio::test]
-    async fn the_nodes_are_settled_by_their_uuids_through_a_build() {
+    async fn the_nodes_are_rewritten_by_their_uuids_through_a_build() {
         let td = tempfile::tempdir().unwrap();
         let pool = open_index(&td.path().join("db.sqlite"))
             .await
@@ -2730,7 +2730,7 @@ mod open_index_tests {
         assert_searched_by_index(
             &pool,
             &[
-                nodes::SETTLE.clone(),
+                nodes::WRITE_FROM_BEST_ACCOUNT.clone(),
                 nodes::UNCARRIED,
                 nodes::ORPHANED,
                 nodes::WITHOUT_A_ROW,
@@ -4352,7 +4352,7 @@ mod source_cursor_tests {
     /// comes, changes or goes, and a page whose document goes while its
     /// subpages still name it becomes a row of its own.
     #[tokio::test(flavor = "multi_thread")]
-    async fn touched_nodes_settle_as_a_build_from_nothing_would() {
+    async fn touched_nodes_are_rewritten_as_a_build_from_nothing_would() {
         use datalib_schema::data_nodes::{DataNodeRow, Lineage};
         let td = tempdir().unwrap();
         let root = td.path();
@@ -5495,7 +5495,7 @@ mod work_tests {
         assert!(
             alone
                 .keys()
-                .any(|(sql, _)| sql == super::nodes::SETTLE.as_str()),
+                .any(|(sql, _)| sql == super::nodes::WRITE_FROM_BEST_ACCOUNT.as_str()),
             "the pass settles no nodes; this test checks nothing: {:#?}",
             alone.keys()
         );
