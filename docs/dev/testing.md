@@ -861,16 +861,18 @@ suite. Write what you find as a dated audit under `audits/`. Write counts and ti
 (AGENTS.md §"Real data stays out of the repo").
 
 Everything is plain SQLite. Open it with `sqlite3 -readonly`, the
-grid index (with the search index's `search_*` tables) included. Run
-ids are in `runs`. What to look at, and where:
+grid index (with the search index's `search_*` tables) included.
+Invocations are in `invocations`, and which request each served in
+`invocation_requests`; the requests are in `supervisor.sqlite`. What to
+look at, and where:
 
 | question | where it shows |
 |---|---|
-| how long each step really took | `supervisor.sqlite` `invocations`. `step_runs` gives a step that ran more than once the run's end as its finish. |
+| how long each step really took | the run store's `invocations`, one row per process, `started_at_utc` to `finished_at_utc`. |
 | did a step redo everything, and why | `msg = 'rendering every document'`: `why`, and `changed`, which names the params that moved. `"the source's keywords are done"`, one line per source the index step re-keyed: a `put` far above what the sync changed means its documents' content churned. |
 | did an incremental pass stay small | render's `reverse lookup from the changed rows to the render units`: `stale_render_units` far above `changed_rows` is a fan-out. Each download's `the download is done` summary, compared run to run. |
 | who a step reached | `target = 'http.outbound'` at `info`: per host, at the first request, each minute and in all |
-| why a run started | `runs.kind` and `runs.reason`, and the run's first line |
+| why an invocation started | its first line, `started for <request ids>`, and those requests' rows in `supervisor.sqlite` (`opened_by`, `roots`) |
 | where a render's time went | `msg LIKE 'where the render%'` (`load_ms`, `parse_ms`, `render_ms`, `write_ms`; each page at `debug`), and `msg LIKE 'the render took%'` for any source |
 | where a step's time went | `event = 'http_request'` (debug), one line per request with its `url` (without the query), `status` and `duration_ms`, from every source that reaches a web service. Summed per ten minutes, a sum close to the wall time means one request at a time. A Slack download also logs each batch of threads and of files with its `elapsed_ms`. An embed's last line, `the search index's embeddings are done`, gives its chunks and KB per second. |
 | what rate limits cost | `msg LIKE 'HTTP 429%'`, with its `retry_after_ms` |

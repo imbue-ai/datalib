@@ -107,8 +107,8 @@ curl -H "Authorization: Bearer $(cat <data_root>/system/api-token)" \
 Each step's `phase` is where it stands for your request: `pending` (it
 has work left: waiting its turn, or the loop has not taken the request
 on yet), `running`, or `done` (nothing left for it). Once a root is
-`done`, `last_run.status` says how its run ended: `succeeded`, `failed`
-or `stopped`. A step turned off is done without running, and its
+`done`, `last_run.status` says how its last invocation ended:
+`succeeded`, `failed` or `stopped`. A step turned off is done without running, and its
 `state` says `off`. A step whose `state` is `waiting` names what
 kind of thing holds it in `waiting_for` (`upstream`, `reader`, `lock`,
 `disk_space`, `config`) and which one in `state_detail`. `disk_space`
@@ -226,13 +226,13 @@ plain SQLite that any `sqlite3` reads:
 
 ```sh
 sqlite3 <data_root>/system/runs/runs.sqlite \
-  "SELECT run_id, name, value, updated_at_utc FROM metrics
+  "SELECT invocation_id, name, value, updated_at_utc FROM invocation_metrics
     WHERE step = 'gmail/ingest' AND name IN ('done_total', 'queued') AND labels = ''
     ORDER BY updated_at_utc DESC LIMIT 2"
 ```
 
-`metrics` holds each series' newest value per run, and `metric_samples`
-holds the same series over time, for a rate or an ETA of your own. A
+`invocation_metrics` holds each series' newest value per invocation, and
+`invocation_metric_samples` holds the same series over time, for a rate or an ETA of your own. A
 `queued` with a `from=<step>` label is something else: the seals of
 that producer this step has not read yet. Other ways to watch the same
 numbers:
@@ -240,8 +240,9 @@ numbers:
 - The `datalib-pipeline` that runs the loop prints `progress_length` and
   `progress_inc` events on stderr. One that follows another's loop
   prints only its request's outcome.
-- With the app up, `GET /api/runs/{run}/steps` gives each step's state
-  and current metrics, and `GET /api/sync/stream` pushes a frame
+- With the app up, `GET /api/runs/{run}/steps` gives each step's newest
+  invocation in that run (a request or a job), its state and current
+  metrics, and `GET /api/sync/stream` pushes a frame
   whenever any of it moves.
 - `GET /metrics` serves them for Prometheus as `datalib_step_queued`
   and `datalib_step_done_total`, beside
@@ -625,7 +626,7 @@ bar's grammar: `source:gmail severity:error`, with `outcome:`,
 `reason:`, `stage:` and `field:` too. There a download's problem is
 linked to the document its record renders into, once render has run.
 Each step's counts are its `problems` series in the run store's
-`metrics`, one per `severity=` label; they are the errors and warnings
+`invocation_metrics`, one per `severity=` label; they are the errors and warnings
 cell on the Manage screen, less the problems a person muted there
 (`muted:yes` lists those; `POST /problems/mute`,
 [applets.md](applets.md)). A muted problem is still in its table.

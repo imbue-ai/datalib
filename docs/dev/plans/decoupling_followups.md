@@ -10,8 +10,8 @@ other type's is still `datalib-step probe`), item 8 (applets and probes
 get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
 crate of its own is decided, not done) and item 9 (the lint checks are
 in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
-in section 10, steps 1 to 3 are done (#2033, #2034, #2036, #2038,
-#2040); steps 4 to 6 are not.
+in section 10, steps 1 to 4 are done (#2033, #2034, #2036, #2038,
+#2040, and invocations for step 4); steps 5 and 6 are not.
 
 ## The end state
 
@@ -430,7 +430,8 @@ A **run** in the UI's sense, if we keep the word, is a request.
 wants a group id gets its request ids.
 
 Each invocation's environment is built when it starts, from the
-config as it is then. `DATALIB_DAG_NOW` is open question 1.
+config as it is then. `DATALIB_DAG_NOW` is open question 1 (answered:
+per request).
 
 #### One host, and clients
 
@@ -504,9 +505,23 @@ Each step ships alone, and the harness stays green throughout.
    runs the same host as `datalib-pipeline serve`
    (`serve::run_until_idle`) until nothing is open. **(done)**
 4. **Invocations and requests replace runs** in the run store, the
-   record, the server's routes and the UI. This is the largest step.
-   The run store is history, not data a person built, so the old rows
-   can stay readable without being migrated; that needs deciding.
+   record, the server's routes and the UI. **(done)** The run store's
+   `invocations`, `invocation_requests`, `invocation_metrics` and
+   `invocation_metric_samples` hold what each process of a step did and
+   which requests it served, and `log` and `processes` name the
+   invocation; nothing writes `runs`, `step_runs`, `metrics` or
+   `metric_samples` any more, and readers read an older build's rows in
+   them as they are, beside the invocations (decided: kept readable, not
+   migrated). The record's `current_run` is gone and each step's
+   `last_run` is `last_invocation`, naming the invocation and the
+   requests it served. `LoopHost` builds the steps' environment before
+   each tick that starts something and hears busy and idle; nothing
+   records the busy period. The step is handed `DATALIB_DAG_INVOCATION_ID`,
+   and `DATALIB_DAG_RUN_ID` with the same id for a step that reads the
+   old name; commits end ` invocation=<id>`, and the history still reads
+   an older commit's ` run=<id>`. The app's "run" is a request (or a
+   job) with its invocations; `GET /api/runs` lists requests, jobs and
+   old runs.
 5. **One state vocabulary per question.** Drop `RunReport`,
    `StepStatus`, `LastWanted`, `PassEnd`/`StepFinish`,
    `failed_passes` and `RunKind::Migrate`.
@@ -520,15 +535,18 @@ now outside the loop.
 
 ### Open questions
 
-1. **What `DATALIB_DAG_NOW` should mean.** Its purpose is that every
-   output stamped in one sync agrees on the time. Per request is the
-   natural replacement. A step serving two requests then needs a rule
-   for which one's time applies, such as the oldest open request it
-   serves.
-2. **Does the UI need runs at all?** The Runs card and the log card
-   group by run. Grouping by request matches what a person did; grouping
-   by invocation matches what a process did. Before we choose, we need
-   to know which one people look at.
+1. **What `DATALIB_DAG_NOW` should mean. (answered: per request.)**
+   Its purpose is that every output stamped in one sync agrees on the
+   time. It is the time the request was opened. An invocation that
+   serves several requests gets the time of the oldest open request it
+   serves, and one a job started (a `--prepare`, a reset's `--reset`, a
+   compaction's `--compact`) gets the time the job was opened. `--now`
+   still replaces it for every invocation.
+2. **Does the UI need runs at all? (answered: it groups by request.)**
+   The Runs card and the log card show requests, each with its
+   invocations under it, and where the UI says "run" it means a request
+   (or a job). A run an older build recorded is shown as one entry with
+   its steps, as it was recorded; nothing rewrites it.
 3. **Does the prepare pass block every request, or only the steps it
    has not reached? (answered: only those.)** The pass runs inside a
    host's loop beside everything else, up to four `--prepare` processes

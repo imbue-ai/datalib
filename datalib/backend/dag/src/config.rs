@@ -65,9 +65,9 @@ pub struct DagConfig {
     /// Variables handed to every step, below each step's own `env`.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
-    /// How much of the run store (`system/runs/runs.sqlite`: every run's step
-    /// states, log lines and metrics) to keep. Omitted means the defaults
-    /// in [`RunHistory`].
+    /// How much of the run store (`system/runs/runs.sqlite`: every
+    /// invocation, its log lines and metrics) to keep. Omitted means the
+    /// defaults in [`RunHistory`].
     #[serde(default)]
     pub run_history: Option<RunHistory>,
     /// The lowest level of its own lines every process of this root
@@ -85,16 +85,19 @@ pub struct DagConfig {
 }
 
 /// The retention rule for `system/runs/runs.sqlite`, as a person writes it in
-/// `config.toml`. Both run limits apply; the app server's own log
-/// lines, which belong to no run, have their own two. The disk samples in
+/// `config.toml`. Both limits on invocations apply; the runner's and the
+/// app server's own log lines, which belong to no invocation, have their
+/// own two. The disk samples in
 /// `system/disk_stats.sqlite` have one more.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunHistory {
-    /// Keep at most this many runs, newest first.
+    /// Keep the invocations of at most this many requests and jobs,
+    /// newest first.
     #[serde(default = "RunHistory::default_max_runs")]
     pub max_runs: u32,
-    /// Drop a run older than this many days, however few runs there are.
+    /// Drop an invocation older than this many days, however few there
+    /// are.
     #[serde(default = "RunHistory::default_max_age_days")]
     pub max_age_days: u32,
     /// Drop a server log line older than this many days.

@@ -74,14 +74,16 @@ log_level = "trace"
 pause_below_bytes = "10 GB"
 resume_at_bytes = "15 GB"
 
-# How much of the run store (`system/runs/runs.sqlite`: every run's step
-# states, log lines and metrics) to keep. Both limits apply; omit the
-# table for the defaults, which are these.
+# How much of the run store (`system/runs/runs.sqlite`: every invocation
+# of a step, its log lines and metrics) to keep. Both limits apply: an
+# invocation goes once it is older than `max_age_days`, or once none of
+# the newest `max_runs` syncs (and jobs, such as a reset) it served is
+# kept. Omit the table for the defaults, which are these.
 [run_history]
 max_runs = 100
 max_age_days = 30
-# The app server's own log lines belong to no run and rotate faster:
-# these are their limits.
+# The runner's and the app server's own log lines belong to no
+# invocation and rotate faster: these are their limits.
 process_log_days = 3
 process_log_lines = 200000
 # How long to keep the disk samples in `system/disk_stats.sqlite` (each
