@@ -5,11 +5,12 @@ The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
 is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but
 one constant; item 5 is closed as not a coupling, and item 4 as
-Datalib's own tool. Half done: item 2 (a package's probe runs, every
-other type's is still `datalib-step probe`), item 8 (applets and probes
-get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
-crate of its own is decided, not done) and item 9 (the lint checks are
-in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
+Datalib's own tool. Items 2 and 3 are closed as allowed: the app may
+know the sources `datalib-step` offers and find it by name (AGENTS.md
+§"Three programs, one repo"). Item 9 is done, with those exceptions in
+the rule. Half done: item 8 (applets and probes get their params in
+`DATALIB_DAG_PARAMS`; the config model's move to a crate of its own is
+decided, not done). Of the reconciler
 in section 10, steps 1 to 3 are done (#2033, #2034, #2036, #2038,
 #2040); steps 4 to 6 are not.
 
@@ -190,6 +191,13 @@ the config file's lenient reading.
 ## When the decoupling is done
 
 ### 9. State the principle in `AGENTS.md`
+
+**Done** (AGENTS.md §"Three programs, one repo"), with four exceptions
+in place of items 2 and 3: the app may know the sources `datalib-step`
+offers (their forms, their steps and how to probe them), find it by
+name, write the starter config, and read what its configs give meaning
+to. Lint check 24 lists the server files that do so, as exceptions
+rather than open items. What follows is the plan as it was written.
 
 Once items 1 to 8 and the step protocol redesign have landed, add the
 rule to `AGENTS.md`, where every contributor reads it, and not before:
@@ -514,9 +522,9 @@ Each step ships alone, and the harness stays green throughout.
 
 The step protocol (#1894) already made verbs something a program
 declares (`[[programs]].verbs`) and sends `--prepare` at every start.
-Here those verbs become jobs: the loop runs a prepare job by invoking
-each step whose program declares the verb, as `Runner::prepare` does
-now outside the loop.
+Here those verbs became jobs: the loop runs its prepare job by invoking
+each step whose program declares the verb, and a reset, a compaction or
+a collection is a job the loop carries out the same way.
 
 ### Open questions
 
