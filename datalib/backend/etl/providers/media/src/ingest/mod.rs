@@ -133,7 +133,7 @@ async fn scan_tree(
         .with_context(|| format!("parse the run's now {:?}", opts.now))?;
 
     // The rescan cache, read once so the walk never touches the
-    // database. Nothing is deleted here: stale rows are swept at the
+    // database. Nothing is deleted here: stale rows are deleted at the
     // *end* of the scan, which is what lets an interrupted run leave
     // usable cursors behind (see the reconcile at the end of this function).
     let mut prev = opts.db.load_prev().await.context("load rescan cache")?;
@@ -456,8 +456,8 @@ async fn scan_playlists(
             summary.hls_skipped += 1;
             tracing::debug!(path = %f.rel, "media_playlist_is_hls");
             // A file that *became* an HLS manifest since the last scan
-            // must lose its old playlist row, which the cache-consuming
-            // pass above would otherwise have spared.
+            // must lose its old playlist row. Its path was taken out of
+            // `prev.playlists` above, so the reconcile would keep it.
             opts.db
                 .delete_playlists(std::slice::from_ref(&f.rel))
                 .await?;

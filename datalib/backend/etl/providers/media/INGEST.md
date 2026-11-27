@@ -1,7 +1,7 @@
 # media — download
 
 Scans a local directory tree for audio, images, video and M3U
-playlists, records what each file is, hoists the metadata worth
+playlists, records what each file is, copies the metadata worth
 querying into typed columns, and computes a second hash over the part
 of each file that is not metadata.
 
@@ -345,10 +345,17 @@ library costs a million `stat` calls per scan — cheap (a few seconds)
 but not zero.
 
 `a_rescan_after_edits_changes_exactly_what_it_should` in
-`tests/media_e2e.rs` pins the accounting: six kinds of edit — a retag, a
-touch-without-edit, a duplicate copy, a new file, a deletion, and a
-shortened playlist — followed by a rescan that hashes exactly five files
-and identifies exactly two new items.
+`tests/media_e2e.rs` pins the accounting. It makes six kinds of edit:
+
+- a retag,
+- a touch without an edit,
+- a duplicate copy,
+- a new file,
+- a deletion,
+- a shortened playlist.
+
+The rescan that follows hashes exactly five files and identifies
+exactly two new items.
 
 ## What the reconcile does not delete
 
@@ -403,7 +410,7 @@ The scan goes on, and what it could not do is a `problems` row:
   wrote. An item that never identified is not in `media_items`, so every
   scan tries it again, and the row goes with the first that succeeds.
 
-Both sets are replaced whole each scan, which is right because each
+Both kinds of row are replaced whole each scan, which is right because each
 scan walks the whole tree and retries everything it could not read —
 except a file it did not try: one under an entry its walk could not
 read, or declined as a cloud placeholder, keeps its row. A row's
@@ -551,8 +558,8 @@ signal is identical and whose metadata is not — because those are what
 prove the payload hash does its job. It also carries two BMFF files that
 hold *both* kinds of metadata: `holodeck_clip.mp4` (a music video with
 `ilst` tags and a capture date) and `bridge_recital.m4a` (an audio file
-with a recording date), which are what caught the class-chosen reader
-dropping half of each.
+with a recording date), which check that choosing the reader by the
+item's class does not drop half of each.
 
 `lofty` refuses a BMFF file outright — "failed to parse Mp4 file", no
 further detail — if its `stsd` sample entry is a stub rather than a
@@ -560,11 +567,16 @@ real 28-byte `AudioSampleEntry`, or if `mdia` has no `hdlr` atom naming
 the track `soun`. Our own parser needs neither, so a fixture has to
 satisfy `lofty` too.
 
-The corpus also carries a byte-identical copy in a second folder, an untagged file that must land on the same
-payload hash as its tagged sibling, a truncated MP3, a file whose
-extension we index and whose bytes we cannot parse, an HLS manifest
-wearing the `.m3u8` extension, a Latin-1 playlist, and a `readme.txt`
-that must never appear in any table.
+The corpus also carries:
+
+- a byte-identical copy in a second folder;
+- an untagged file that must land on the same payload hash as its
+  tagged sibling;
+- a truncated MP3;
+- a file whose extension we index and whose bytes we cannot parse;
+- an HLS manifest with the `.m3u8` extension;
+- a Latin-1 playlist;
+- a `readme.txt` that must never appear in any table.
 
 Those assertions have been checked in the failing direction, not only
 the passing one: breaking `mp3.frames.v1` to hash the whole file, and

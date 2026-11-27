@@ -1,4 +1,4 @@
-//! Hoisting the metadata worth querying into typed columns.
+//! Copying the metadata worth querying into typed columns.
 
 use std::path::Path;
 

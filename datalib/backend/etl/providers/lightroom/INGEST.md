@@ -691,12 +691,22 @@ that backup is a problem on the Manage row until a newer one arrives.
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
-open. `tests/backups_folder.rs` covers the order, the dates, the
-messages, the ledger, a late older backup, the filter change, the live
-catalog on top, an unchanged catalog committing nothing, a HEAD left
-behind put right, a deleted newest backup, backups known by their
-bytes, a backup that will not mirror and a stopped run, against zipped
-copies of the TNG catalog.
+open.
+
+`tests/backups_folder.rs` checks these against zipped copies of the TNG
+catalog:
+
+- the order, dates and messages of the commits;
+- the `lightroom_snapshots` rows;
+- a late older backup;
+- a changed filter;
+- the live catalog on top;
+- an unchanged catalog committing nothing;
+- a HEAD left behind, put right;
+- a deleted newest backup;
+- backups known by their bytes;
+- a backup that will not mirror;
+- a stopped run.
 
 ## Store size and `gc`
 

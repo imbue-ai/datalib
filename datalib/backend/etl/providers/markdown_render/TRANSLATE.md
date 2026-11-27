@@ -37,9 +37,9 @@ keyword search reads. Its date is `modified_at`; there is no
 A note's render unit is its path, and it reads two rows: its own
 `markdown_files` row and the `markdown_scan_meta` row. A run renders the
 paths whose rows the diff since the cursor names, and the ones the
-driver found stale (a new scan root makes every note stale). A path it
-was asked for that has no row any more is declared with nothing, so its
-document goes. Pinned by
+render driver found stale (a new scan root makes every note stale). A
+path it was asked for that has no row any more is passed to
+`declare_empty`, so its document is deleted. Pinned by
 `an_edit_a_move_and_a_delete_render_only_those_notes` in
 `../markdown/tests/markdown_e2e.rs`.
 

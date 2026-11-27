@@ -37,7 +37,8 @@ rust_test(
 )
 
 # A folder of backups against the TNG catalog: oldest first, one dated
-# commit each, the ledger, refusals, and a filter change.
+# commit each, the `lightroom_snapshots` rows, refusals, and a filter
+# change.
 rust_test(
     name = "backups_folder",
     size = "small",
