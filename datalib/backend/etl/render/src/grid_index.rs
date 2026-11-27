@@ -506,7 +506,7 @@ async fn record_unreadable_store(
 pub enum Part {
     /// The rows, documents, edges, nodes, filings, photos, problems,
     /// cursors and terms. Emptying it empties [`Part::Contacts`] too: the
-    /// people ride on the grid's documents, and a document the refill no
+    /// people are kept per grid document, and a document the refill no
     /// longer finds would leave its people behind.
     Grid,
     /// The people the documents carry (`contact_records`), with a cursor
@@ -1231,8 +1231,8 @@ pub async fn close_index(pool: SqlitePool) -> Result<()> {
 }
 
 /// Raise the index's generation inside the transaction on `conn`, which
-/// changed what a reader sees, and return it. This is the index's seal:
-/// what a doltlite commit was.
+/// changed what a reader sees, and return it. This is the index's seal,
+/// in place of a doltlite commit.
 async fn bump_generation(conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>) -> Result<i64> {
     sql!(
         "etl.render.grid.bump_generation",
@@ -1433,7 +1433,7 @@ pub async fn build_grid_index(
 /// source with no store yet is skipped: its render step has not produced
 /// one.
 ///
-/// **Each source is asked what changed, not read whole**, via `dolt_diff`
+/// **Each source's store is diffed, not read whole**, via `dolt_diff`
 /// between the commit `source_cursors` last consumed and the store's HEAD,
 /// so a document a source stopped holding can be named and deleted.
 ///
@@ -1771,8 +1771,8 @@ enum SourceRead {
         /// longer does.
         removed: Vec<String>,
         /// The commit read and its tree. `None` when `dolt_log()` did not
-        /// answer, and an unwritten cursor cold-starts the next pass — the
-        /// safe direction.
+        /// answer, and an unwritten cursor makes the next pass read the
+        /// store whole — the safe direction.
         head: Option<(String, String)>,
         /// `to_read` is every document the store holds.
         whole: bool,

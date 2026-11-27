@@ -1,9 +1,9 @@
 //! The per-source render output store: one doltlite database holding
 //! every row a source's render produced, plus what render could not do.
 //!
-//! The index reads it by asking `dolt_diff` what moved since the commit it
-//! last consumed, which is also how a document a source stopped holding gets
-//! named and deleted.
+//! The index reads it by querying `dolt_diff` for what changed since the
+//! commit it last read, which is also how a document a source stopped
+//! holding gets named and deleted.
 //!
 //! Every write goes through a SQL transaction that leaves the store in a
 //! state a consumer may read — a document whole with its rows, edges and
@@ -1118,7 +1118,8 @@ impl IndexedMarkdownStore {
     }
 
     /// Every `markdowns` row, ordered by id: what the search index reads to
-    /// learn which documents it owes and where their sections lie.
+    /// learn which documents it still has to index and where their
+    /// sections lie.
     pub fn markdown_rows(&self) -> Result<Vec<datalib_schema::markdowns::MarkdownRow>> {
         blocking(async {
             sql!(
@@ -1667,7 +1668,7 @@ impl IndexedMarkdownStore {
     }
 
     /// Problems not attached to any document — a payload that would not
-    /// deserialize has no `markdown_uuid` to hang off. Keyed by the
+    /// deserialize has no `markdown_uuid` to be filed under. Keyed by the
     /// raw-store entity id, `<table>:<id>`. `whole_tables` names the
     /// tables the caller read every row of: their entity-scoped
     /// problems are replaced by `problems`, so an entity that reads

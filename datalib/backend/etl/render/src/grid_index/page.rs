@@ -41,7 +41,7 @@ pub(super) async fn apply_page(write_lock: &WriteLock, page: &[RenderedMarkdown]
 /// What a run of documents, each named once, writes: the checks every
 /// document has to pass, made before anything is written.
 struct Checked<'a> {
-    /// Documents that end with no rows: absent, and their rows go.
+    /// Documents that end with no rows: absent, and their rows are deleted.
     empty: Vec<String>,
     kept: Vec<&'a RenderedMarkdown>,
 }
@@ -113,7 +113,7 @@ async fn apply_run(write_lock: &WriteLock, run: &[&RenderedMarkdown]) -> Result<
     let checked = check(run)?;
     // Inside `begin_transaction` every guard hands back the same
     // connection, so the page joins the batch; otherwise it auto-commits
-    // statement by statement, as a single document always did.
+    // statement by statement, as a single document does.
     let mut guard = write_lock.acquire().await?;
     let pool_conn = guard.conn();
     if !checked.empty.is_empty() {

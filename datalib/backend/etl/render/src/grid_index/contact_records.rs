@@ -28,7 +28,8 @@ pub(super) const DDL: &[&str] = &[
      digits TEXT NOT NULL, PRIMARY KEY (record_id, digits)) WITHOUT ROWID",
     // The render commit each source's contacts are in line with: the
     // grid's cursor's, written with it, or absent when these tables were
-    // made new and the source's contacts are owed (`grid_index::Part`).
+    // made new and the source's contacts are still to be written
+    // (`grid_index::Part`).
     "CREATE TABLE IF NOT EXISTS contact_cursors (source_id TEXT PRIMARY KEY, \
      store_commit TEXT NOT NULL)",
 ];
@@ -104,7 +105,7 @@ pub(super) const INDEXES: &[&str] = &[
      ON contact_record_numbers (substr(digits, -7))",
 ];
 
-/// A record goes when the last document that carries it does. Until a
+/// A record is deleted when the last document that carries it is. Until a
 /// pass ends with this, one nothing carries is there to be joined to
 /// nothing.
 pub(super) const ORPHANED: &[&str] = &[
