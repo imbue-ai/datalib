@@ -6,7 +6,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use datalib_dag::supervisor::record::{Record, StepRecord};
+use datalib_dag::supervisor::record::{LoopState, StepRow};
 use datalib_dag::supervisor::store::RequestRow;
 use datalib_dag::supervisor::tick::{StateKind, WaitKind};
 use serde::Serialize;
@@ -73,8 +73,8 @@ pub struct RequestProgress {
 /// serving it; once one does, a step that does not is done with it. In the moment between
 /// that last save and the close, every step reads pending, never done
 /// too early.
-pub fn phase(request: &RequestRow, record: &Record, step: Option<&StepRecord>) -> RequestStepPhase {
-    let names = |s: &StepRecord| s.requests.contains(&request.id);
+pub fn phase(request: &RequestRow, record: &LoopState, step: Option<&StepRow>) -> RequestStepPhase {
+    let names = |s: &StepRow| s.requests.contains(&request.id);
     if request.closed.is_some() {
         return RequestStepPhase::Done;
     }
@@ -118,7 +118,7 @@ pub async fn get(
         return Err((StatusCode::NOT_FOUND, format!("no request {id}")));
     };
     let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
-    let record = store.load_record().await.map_err(internal)?;
+    let record = store.load_state().await.map_err(internal)?;
     let mut progress = live_progress(
         &s.root,
         record.current_run.as_ref().map(|r| r.run_id.as_str()),
@@ -163,16 +163,16 @@ mod tests {
         }
     }
 
-    fn step(state: StateKind, requests: &[&str]) -> StepRecord {
-        StepRecord {
+    fn step(state: StateKind, requests: &[&str]) -> StepRow {
+        StepRow {
             state: Some(state),
             requests: requests.iter().map(|r| r.to_string()).collect(),
             ..Default::default()
         }
     }
 
-    fn record(steps: &[(&str, StepRecord)]) -> Record {
-        Record {
+    fn record(steps: &[(&str, StepRow)]) -> LoopState {
+        LoopState {
             steps: steps
                 .iter()
                 .map(|(id, s)| (id.to_string(), s.clone()))

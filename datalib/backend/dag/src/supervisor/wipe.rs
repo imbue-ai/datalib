@@ -1,11 +1,11 @@
 //! What a wipe — a reset, a purge, a compaction or a collection (`store::JobKind`) — touches, when
-//! the loop may carry it out, and what it leaves in the loop's `Record`. Pure; the
+//! the loop may carry it out, and what it leaves in the loop's `LoopState`. Pure; the
 //! loop (`round.rs`) stops the steps, runs the reset and deletes the trees.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::Graph;
-use crate::supervisor::record::{Record, StepRecord};
+use crate::supervisor::record::{LoopState, StepRow};
 use crate::supervisor::store::JobKind;
 
 /// The steps of `graph` a wipe keeps from running: none of them may run
@@ -150,8 +150,8 @@ pub fn after_reset(graph: &Graph, targets: &[String]) -> Vec<String> {
 /// A step just reset: at `version`, so what reads it sees something new,
 /// and with no history, so its next run starts from nothing. Whether it is
 /// turned off is a person's setting, and stays.
-pub fn emptied(was: Option<&StepRecord>, version: String) -> StepRecord {
-    StepRecord {
+pub fn emptied(was: Option<&StepRow>, version: String) -> StepRow {
+    StepRow {
         version: Some(version),
         turned_off_by: was.and_then(|w| w.turned_off_by.clone()),
         ..Default::default()
@@ -159,7 +159,7 @@ pub fn emptied(was: Option<&StepRecord>, version: String) -> StepRecord {
 }
 
 /// Deletes from `record` the steps that write under `groups`.
-pub fn remove_group_steps(record: &mut Record, groups: &[String]) {
+pub fn remove_group_steps(record: &mut LoopState, groups: &[String]) {
     record
         .steps
         .retain(|step, _| !groups.iter().any(|g| g == tree_group(step)));
@@ -343,7 +343,7 @@ mod tests {
     /// A reset step keeps no history, but a person's switch stays.
     #[test]
     fn a_reset_step_loses_its_runs_but_not_its_switch() {
-        let was = StepRecord {
+        let was = StepRow {
             version: Some("v1".into()),
             succeeded: true,
             fingerprint: "fp".into(),
@@ -362,9 +362,9 @@ mod tests {
     /// step had succeeded.
     #[test]
     fn a_purge_removes_every_step_of_its_groups() {
-        let mut record = Record::default();
+        let mut record = LoopState::default();
         for id in ["gone/raw", "gone/render", "keep/raw", "gonelike/raw"] {
-            record.steps.insert(id.into(), StepRecord::default());
+            record.steps.insert(id.into(), StepRow::default());
         }
         remove_group_steps(&mut record, &strings(&["gone"]));
         let left: Vec<&String> = record.steps.keys().collect();

@@ -65,7 +65,7 @@ pub const DEQUEUED: &str = "dequeued_total";
 /// process's outcome, so this is
 /// where an earlier failure stays visible; the Manage screen counts each
 /// one as a warning on the step's row.
-pub const FAILED_PASSES: &str = "failed_passes";
+pub const FAILED_PROCESSES: &str = "failed_passes";
 
 /// What an `embed` step's Modal Sandboxes have cost this run, in
 /// millionths of a dollar at Modal's list price, by `gpu`: a running total

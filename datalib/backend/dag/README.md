@@ -370,10 +370,12 @@ button that runs them, while any step the pass marked `needs_rerun` has
 not run since. The pass is a job in `system/supervisor.sqlite` of kind
 `prepare`, which the loop opens as it starts and closes when it is done,
 with a row per step it runs `--prepare` for (`job_steps`);
-`/api/config`'s `upgrade`
-reads it, and each change is announced as `pass_changed` on
-`/api/sync/stream`;
-freeing disk space is drawn by the same pill (§"Resets and purges").
+`/api/config`'s `upgrade` reads it, and reads the steps it marked
+`needs_rerun` from the same store. Every commit to
+`system/supervisor.sqlite` is announced as `pass_changed` on
+`/api/sync/stream`, so the screen and the pill go as soon as the last
+re-run succeeds. Freeing disk space is drawn by the same pill
+(§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
 renamed to its new path, with its steps' rows in
@@ -921,7 +923,7 @@ root run the newer one.
 A run must record a state for *every* step in scope (including ones that
 were skipped or blocked and never "ran"), a `finished_at_utc` that tells
 a completed run from a crashed one, and per-step timings. The loop keeps
-a copy of the second set of tables in memory (`record::Record`) and
+a copy of the second set of tables in memory (`record::LoopState`) and
 saves only what changed since
 its last save (`record::changes`), after every tick and every event, not
 only on terminal states; a Manage row's Status is `steps.state`, read
@@ -951,5 +953,5 @@ serving it. A step stopped with its request reads Stopping until its
 process has exited. `POST /api/requests`
 opens one request per group its roots belong to, so each source's sync
 has a Stop of its own, and answers only once some step's `requests`
-column names each new request or it has closed (`Store::taken_on`), so the rows read
+column names each new request or it has closed (`Store::serving_started`), so the rows read
 after a Sync already show them.

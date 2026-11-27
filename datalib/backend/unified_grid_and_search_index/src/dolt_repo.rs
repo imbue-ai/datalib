@@ -199,6 +199,17 @@ pub const AUTHORED_SQL: Sql = sql!(
      GROUP BY author_handle, source_id"
 );
 
+/// How many rows each handle wrote under each name, and its newest: what
+/// the contacts list counts and sorts by, read from the author index.
+pub const AUTHORS_SQL: Sql = sql!(
+    "unified_grid_and_search_index.count_rows_by_every_author",
+    "\
+    SELECT author_handle, author, count(*) AS n, MAX(created_at_utc) AS last_at \
+      FROM grid_rows INDEXED BY grid_rows_by_author \
+     WHERE author_handle > '' \
+     GROUP BY author_handle, author"
+);
+
 #[derive(sqlx::FromRow)]
 struct PersonRecord {
     handle: String,
@@ -1702,6 +1713,27 @@ impl IndexRepo for DoltRepo {
                 is_document: r.try_get("is_document").unwrap_or(false),
             })
             .collect())
+    }
+
+    async fn authors(&self) -> Result<Vec<crate::authors::Author>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(Vec::new());
+        };
+        let rows: Vec<(String, Option<String>, i64, Option<String>)> = AUTHORS_SQL
+            .query_as()
+            .fetch_all(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("count what everyone wrote: {e}")))?;
+        Ok(crate::authors::authors(
+            rows.into_iter()
+                .map(|(handle, author, n, last_at)| crate::authors::AuthorRow {
+                    handle,
+                    author,
+                    items: n.max(0) as u64,
+                    last_at,
+                })
+                .collect(),
+        ))
     }
 
     async fn people(
