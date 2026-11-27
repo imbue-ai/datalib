@@ -237,7 +237,7 @@ let viewPicked = initialState.has("view");
 // The list mounts the first time it is shown, and stays.
 const listSeen = ref(view.value === "list");
 // `query` once typing has paused: what the list and the chips ask for.
-const settledQuery = ref(query.value);
+const lastRunQuery = ref(query.value);
 // The table has not asked for the query on screen: it was hidden.
 let tableBehind = false;
 
@@ -888,7 +888,7 @@ function answered(q: string, outcome: "rows" | "refused" | "failed", more = {}) 
 }
 
 /// Whether the search has words to rank, so no sort means best match.
-const ranksFreeText = computed(() => freeText(settledQuery.value) !== "");
+const ranksFreeText = computed(() => freeText(lastRunQuery.value) !== "");
 /// A selection restored from the URL may be further down the list than
 /// the first page; the grid loads through it. Typing a new search gives
 /// up on it.
@@ -1259,11 +1259,11 @@ watch(query, (q, before) => {
   const ranked = rowsSpec === null ? isSearch : rankedTable();
   debounceTimer = setTimeout(
     () => {
-      if (sameSearch(q, settledQuery.value)) {
+      if (sameSearch(q, lastRunQuery.value)) {
         loading.value = false;
         return;
       }
-      settledQuery.value = q;
+      lastRunQuery.value = q;
       void runSearch(q);
     },
     // The toolbar's box asks only when it means it, on Enter.
@@ -2543,7 +2543,7 @@ if (inToolbar) {
   const registered = registerSearchCard({
     id: props.ctx.cardId,
     query,
-    settled: settledQuery,
+    lastRun: lastRunQuery,
     run: (q) => {
       query.value = q;
     },
@@ -2644,7 +2644,7 @@ onBeforeUnmount(() => {
       v-if="listSeen"
       v-show="view === 'list'"
       :ctx="ctx"
-      :query="inScope(settledQuery)"
+      :query="inScope(lastRunQuery)"
       :active="view === 'list'"
       :sort="sortOrder"
       :within="scope ? name : null"

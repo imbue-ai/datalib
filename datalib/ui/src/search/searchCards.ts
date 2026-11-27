@@ -9,7 +9,7 @@ export type SearchCard = {
   /** The query, which the card owns. */
   query: Ref<string>;
   /** The query as last run. */
-  settled: Ref<string>;
+  lastRun: Ref<string>;
   run(q: string): void;
 };
 
