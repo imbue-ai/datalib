@@ -4,7 +4,7 @@
 //! puts right when it takes the lock.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use datalib_runs::{RunKind, RunStart};
@@ -23,31 +23,18 @@ pub struct StepEnv {
     pub log_filter: String,
 }
 
-/// `binary_dir` is the host's override of the config's `binary_dir`;
-/// `extra_path` goes on `PATH` after it, ahead of the host's own `PATH`.
+/// `binary_dir` is the host's override of the config's `binary_dir`.
 /// `now` and `run_id` are pinned for the busy period: every stamped
 /// output agrees on them.
 pub fn step_env(
     cfg: &DagConfig,
     binary_dir: Option<&Path>,
-    extra_path: &[PathBuf],
+    data_root: &Path,
     now: &str,
     run_id: &str,
 ) -> Result<StepEnv> {
     let mut vars = BTreeMap::new();
-    // So a `command` can name a program in the binary directory bare.
-    let dirs: Vec<PathBuf> = crate::config::resolve_binary_dir(cfg, binary_dir)
-        .into_iter()
-        .chain(extra_path.iter().cloned())
-        .collect();
-    if !dirs.is_empty() {
-        let host_path = std::env::var_os("PATH");
-        let all = dirs
-            .into_iter()
-            .chain(host_path.iter().flat_map(std::env::split_paths));
-        let joined = std::env::join_paths(all).context("build the steps' PATH")?;
-        vars.insert("PATH".into(), joined.to_string_lossy().into_owned());
-    }
+    vars.insert("PATH".into(), step_path(cfg, binary_dir, data_root)?);
     vars.insert(ENV_RUN_ID.into(), run_id.to_string());
     vars.insert(ENV_NOW.into(), now.to_string());
     // A step's stdout is a pipe, and Python block-buffers a pipe by
@@ -61,6 +48,21 @@ pub fn step_env(
     let log_filter = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.log_filter());
     vars.insert("RUST_LOG".into(), log_filter.clone());
     Ok(StepEnv { vars, log_filter })
+}
+
+/// The `PATH` a step's program is looked up on and runs with: the binary
+/// directory, then the library's own `system/bin/`, then the host's
+/// `PATH` (`docs/dev/step_protocol.md` § "The config entry"). The
+/// library's directory is listed whether or not it exists yet: an agent
+/// may make it between runs, and a missing entry costs nothing.
+pub fn step_path(cfg: &DagConfig, binary_dir: Option<&Path>, data_root: &Path) -> Result<String> {
+    let host_path = std::env::var_os("PATH");
+    let all = crate::config::resolve_binary_dir(cfg, binary_dir)
+        .into_iter()
+        .chain([data_root.join(datalib_runtime::layout::BIN_DIR_REL)])
+        .chain(host_path.iter().flat_map(std::env::split_paths));
+    let joined = std::env::join_paths(all).context("build the steps' PATH")?;
+    Ok(joined.to_string_lossy().into_owned())
 }
 
 /// The run store's record of one busy period. `None` when the store
@@ -318,11 +320,11 @@ mod tests {
     #[test]
     fn the_configs_env_reaches_every_step() {
         let with = crate::config::parse("[env]\nSOME_KNOB = \"8,256\"\n").unwrap();
-        let env = step_env(&with, None, &[], "now", "run").unwrap();
+        let env = step_env(&with, None, Path::new("/root"), "now", "run").unwrap();
         assert_eq!(env.vars["SOME_KNOB"], "8,256");
 
         let without = crate::config::parse("").unwrap();
-        let env = step_env(&without, None, &[], "now", "run").unwrap();
+        let env = step_env(&without, None, Path::new("/root"), "now", "run").unwrap();
         assert!(!env.vars.contains_key("SOME_KNOB"));
     }
 }

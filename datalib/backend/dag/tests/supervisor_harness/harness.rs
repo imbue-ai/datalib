@@ -804,7 +804,7 @@ impl LoopHost for Periods {
         let (checked, _) = self.graph().ok_or("the config does not load")?;
         let run_id = datalib_dag::scheduler::new_run_id();
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs();
-        let env = host::step_env(&checked.cfg, None, &[], &now, &run_id).unwrap();
+        let env = host::step_env(&checked.cfg, None, &self.root, &now, &run_id).unwrap();
         if self.write_run_store {
             let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, start)
                 .expect("open the run store");
