@@ -379,7 +379,7 @@ async fn the_join_tables_are_keyed_on_their_unique_pair() -> Result<()> {
     Ok(())
 }
 
-/// A store the mirror has never filled — the migrate pass opened it, or
+/// A store the mirror has never filled — the `--prepare` run opened it, or
 /// a download that then could not read `chat.db` — renders nothing and
 /// consumes no commit, and the first mirror into it renders as a cold
 /// start (#1251).
@@ -398,8 +398,8 @@ async fn a_store_the_mirror_never_filled_renders_nothing() -> Result<()> {
     Ok(())
 }
 
-/// A message no chat holds used to be dropped with only a debug log
-/// line; it is reported, and says which of the two ways it got there.
+/// A message no chat holds is reported as a problem, not only as a debug
+/// log line, and says which of the two ways it got there.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_message_in_no_chat_is_reported() -> Result<()> {
     let fx = Fixture::new();
@@ -452,8 +452,8 @@ async fn a_message_in_no_chat_is_reported() -> Result<()> {
     Ok(())
 }
 
-/// Riker's chat spans two months, and was one document a month, each
-/// minted from its month. It is one document, keyed on the chat itself.
+/// Riker's chat spans two months. It is one document, keyed on the chat
+/// itself, not one document a month minted from its month.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_chat_spanning_two_months_is_one_document() -> Result<()> {
     let fx = Fixture::new();

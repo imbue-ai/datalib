@@ -1,6 +1,6 @@
 //! Provider-owned config schema for the `apple_messages` source: Apple's
 //! Messages app, read from its own `chat.db`. Schema-only (serde +
-//! anyhow), so the orchestrator can name [`AppleMessagesConfig`] without
+//! anyhow), so `datalib-step` can name [`AppleMessagesConfig`] without
 //! linking the provider.
 
 use std::path::{Path, PathBuf};
