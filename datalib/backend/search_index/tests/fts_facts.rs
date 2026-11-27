@@ -4,8 +4,9 @@
 //! rowid. Where a fact holds only because of an option, a control table
 //! without the option shows the check would fail.
 
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteConnection};
-use sqlx::{AssertSqlSafe, Connection, Row};
+use sqlx::{Connection, Row};
 
 const SENTENCE: &str = "the quarterly budget review moved to thursday afternoon";
 
@@ -22,7 +23,8 @@ async fn open(dir: &tempfile::TempDir) -> (SqliteConnection, std::path::PathBuf)
 }
 
 async fn exec(c: &mut SqliteConnection, sql: &str) -> Result<(), String> {
-    sqlx::query(AssertSqlSafe(sql.to_string()))
+    Sql::dynamic(test_sql_id!(), sql)
+        .query()
         .execute(c)
         .await
         .map(|_| ())
@@ -34,9 +36,11 @@ async fn ok(c: &mut SqliteConnection, sql: &str) {
 }
 
 async fn insert(c: &mut SqliteConnection, table: &str, rowid: i64, title: &str, body: &str) {
-    sqlx::query(AssertSqlSafe(format!(
-        "INSERT INTO {table}(rowid, title, body) VALUES (?, ?, ?)"
-    )))
+    Sql::dynamic(
+        test_sql_id!(),
+        format!("INSERT INTO {table}(rowid, title, body) VALUES (?, ?, ?)"),
+    )
+    .query()
     .bind(rowid)
     .bind(title)
     .bind(body)
@@ -46,9 +50,11 @@ async fn insert(c: &mut SqliteConnection, table: &str, rowid: i64, title: &str, 
 }
 
 async fn matching(c: &mut SqliteConnection, table: &str, query: &str) -> Vec<i64> {
-    sqlx::query_scalar(AssertSqlSafe(format!(
-        "SELECT rowid FROM {table} WHERE {table} MATCH ? ORDER BY rowid"
-    )))
+    Sql::dynamic(
+        test_sql_id!(),
+        format!("SELECT rowid FROM {table} WHERE {table} MATCH ? ORDER BY rowid"),
+    )
+    .query_scalar()
     .bind(query)
     .fetch_all(c)
     .await
@@ -59,7 +65,8 @@ async fn matching(c: &mut SqliteConnection, table: &str, query: &str) -> Vec<i64
 async fn the_engine_is_new_enough_for_contentless_delete() {
     let dir = tempfile::tempdir().unwrap();
     let (mut c, _) = open(&dir).await;
-    let version: String = sqlx::query_scalar("SELECT sqlite_version()")
+    let version: String = test_sql!("SELECT sqlite_version()")
+        .query_scalar()
         .fetch_one(&mut c)
         .await
         .unwrap();
@@ -91,7 +98,8 @@ async fn a_contentless_table_keeps_no_copy_of_the_text() {
     ok(&mut c, CONTENTLESS).await;
     insert(&mut c, "t", 1, "budget", SENTENCE).await;
 
-    let body: Option<String> = sqlx::query_scalar("SELECT body FROM t WHERE rowid = 1")
+    let body: Option<String> = test_sql!("SELECT body FROM t WHERE rowid = 1")
+        .query_scalar()
         .fetch_one(&mut c)
         .await
         .unwrap();
@@ -130,11 +138,14 @@ async fn bm25_ranks_a_contentless_table() {
     insert(&mut c, "t", 4, "budget", "nothing about it in the body").await;
 
     let ranked = |title_weight: f64| {
-        let sql = format!(
-            "SELECT rowid, bm25(t, {title_weight}, 1.0) AS s FROM t \
+        let sql = Sql::dynamic(
+            test_sql_id!(),
+            format!(
+                "SELECT rowid, bm25(t, {title_weight}, 1.0) AS s FROM t \
               WHERE t MATCH 'budget' ORDER BY s"
+            ),
         );
-        sqlx::query(AssertSqlSafe(sql))
+        sql.query()
     };
     let rows = ranked(1.0).fetch_all(&mut c).await.unwrap();
     let order: Vec<i64> = rows.iter().map(|r| r.get("rowid")).collect();

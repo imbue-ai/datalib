@@ -30,6 +30,7 @@ use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{self, BatchError, Fetched, Fetcher, Loop, Outcome};
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 use serde_json::Value;
@@ -218,7 +219,7 @@ async fn sync_collecting<F: Forge>(
     found: RunProblems,
 ) -> Result<F::Summary> {
     let _ = datalib_etl_web::latchkey::ensure_curl_router();
-    let run = DownloadRun::start(forge.pool(), &opts.run_config).await?;
+    let run = DownloadRun::start(&found, forge.pool(), &opts.run_config).await?;
     let fetcher = ChangeRequests {
         forge,
         client,
@@ -228,7 +229,7 @@ async fn sync_collecting<F: Forge>(
     let result = work(forge, client, &opts, &found, &fetcher).await;
     let mut summary = fetcher.summary.into_inner();
     forge.record_requests(&mut summary, client.request_count());
-    run.finish(found.ended_early(), &result, &summary).await;
+    run.summarize(&summary);
     result?;
     Ok(summary)
 }
@@ -308,11 +309,14 @@ async fn work<F: Forge>(
 
 /// The listing as stored, by key.
 async fn listing(pool: &SqlitePool) -> Result<Vec<owed::Listed>> {
-    let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as("SELECT id, updated_at FROM listed_change_requests ORDER BY id")
-            .fetch_all(pool)
-            .await
-            .context("read the listing")?;
+    let rows: Vec<(String, Option<String>)> = sql!(
+        "etl.forge_ingest_common.list_listed_change_requests",
+        "SELECT id, updated_at FROM listed_change_requests ORDER BY id"
+    )
+    .query_as()
+    .fetch_all(pool)
+    .await
+    .context("read the listing")?;
     Ok(rows
         .into_iter()
         .map(|(id, updated_at)| owed::Listed::new(id, updated_at))
@@ -333,12 +337,15 @@ async fn never_fetched_first(
     for chunk in owed.chunks(datalib_etl::bulk::SQL_CHUNK) {
         // Audited: `table` is a provider's `&'static str`; the
         // placeholders are one `?` per key, every key bound.
-        let sql = format!(
-            "SELECT id, fetched_at_utc IS NOT NULL, attempt_count \
+        let sql = Sql::dynamic(
+            sql_id!("etl.forge_ingest_common.list_fetch_state_of_listed"),
+            format!(
+                "SELECT id, fetched_at_utc IS NOT NULL, attempt_count \
              FROM {table}_bookkeeping WHERE id IN ({})",
-            vec!["?"; chunk.len()].join(",")
+                vec!["?"; chunk.len()].join(",")
+            ),
         );
-        let mut q = sqlx::query_as::<_, (String, bool, i64)>(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query_as::<(String, bool, i64)>();
         for l in chunk {
             q = q.bind(&l.key);
         }
@@ -640,13 +647,15 @@ async fn store_listing<F: Forge>(
     for l in listed {
         let key = forge.item_key(&l.container, l.number);
         let version = (!l.updated_at.is_empty()).then_some(l.updated_at.as_str());
-        sqlx::query(
+        sql!(
+            "etl.forge_ingest_common.upsert_listed_change_request",
             "INSERT INTO listed_change_requests (id, updated_at) VALUES (?, ?) \
              ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at \
              WHERE excluded.updated_at IS NOT NULL \
                AND (listed_change_requests.updated_at IS NULL \
-                    OR excluded.updated_at > listed_change_requests.updated_at)",
+                    OR excluded.updated_at > listed_change_requests.updated_at)"
         )
+        .query()
         .bind(&key)
         .bind(version)
         .execute(&mut *tx)
@@ -666,11 +675,15 @@ async fn store_listing<F: Forge>(
 /// Upstream no longer has `key`: it leaves the listing. A copy the
 /// store holds stays, as the last one there was.
 async fn forget_listed(tx: &mut Transaction<'_, Sqlite>, key: &str) -> Result<()> {
-    sqlx::query("DELETE FROM listed_change_requests WHERE id = ?")
-        .bind(key)
-        .execute(&mut **tx)
-        .await
-        .with_context(|| format!("unlist {key}"))?;
+    sql!(
+        "etl.forge_ingest_common.delete_listed_change_request",
+        "DELETE FROM listed_change_requests WHERE id = ?"
+    )
+    .query()
+    .bind(key)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("unlist {key}"))?;
     Ok(())
 }
 
@@ -774,35 +787,51 @@ pub async fn rung_listed_minus_held(
     stamp: fn(&IsoOffsetTimestamp) -> String,
 ) -> Result<()> {
     let has = |table: &'static str| {
-        sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+        sql!(
+            "etl.forge_ingest_common.rung_held.find_table",
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)"
         )
+        .query_scalar::<bool>()
         .bind(table)
     };
     for ddl in [LISTED_DDL, coverage::DDL] {
-        sqlx::query(ddl).execute(&mut *conn).await?;
+        Sql::dynamic(
+            sql_id!("etl.forge_ingest_common.rung_held.create_listing_tables"),
+            ddl,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
-    let has_column: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')",
+    let has_column: bool = sql!(
+        "etl.forge_ingest_common.rung_held.find_held_version_column",
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?) WHERE name = 'held_version')"
     )
+    .query_scalar()
     .bind(format!("{table}_bookkeeping"))
     .fetch_one(&mut *conn)
     .await?;
     if !has_column {
         // Audited: `table` is a provider's `&'static str`.
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"
-        )))
+        Sql::dynamic(
+            sql_id!("etl.forge_ingest_common.rung_held.add_held_version_column"),
+            format!("ALTER TABLE {table}_bookkeeping ADD COLUMN held_version TEXT NULL"),
+        )
+        .query()
         .execute(&mut *conn)
         .await?;
     }
     // Audited: both interpolate only `table`.
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "UPDATE {table}_bookkeeping SET held_version = \
+    Sql::dynamic(
+        sql_id!("etl.forge_ingest_common.rung_held.backfill_held_version"),
+        format!(
+            "UPDATE {table}_bookkeeping SET held_version = \
             (SELECT t.updated_at FROM {table} t WHERE t.id = {table}_bookkeeping.id) \
          WHERE fetched_at_utc IS NOT NULL AND last_error IS NULL \
            AND id IN (SELECT id FROM {table} WHERE payload IS NOT NULL)"
-    )))
+        ),
+    )
+    .query()
     .execute(&mut *conn)
     .await?;
     for sql in [
@@ -816,15 +845,21 @@ pub async fn rung_listed_minus_held(
         ),
     ] {
         // Audited: only `table` is interpolated.
-        sqlx::query(sqlx::AssertSqlSafe(sql))
-            .execute(&mut *conn)
-            .await?;
+        Sql::dynamic(
+            sql_id!("etl.forge_ingest_common.rung_held.backfill_listing"),
+            sql,
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     if has("problems").fetch_one(&mut *conn).await? {
-        sqlx::query(
+        sql!(
+            "etl.forge_ingest_common.rung_held.delete_over_size_problems",
             "DELETE FROM problems WHERE scope_kind = ? AND stage = ? AND reason = ? \
-             AND scope_key LIKE ? || ':%'",
+             AND scope_key LIKE ? || ':%'"
         )
+        .query()
         .bind(datalib_problems::ScopeKind::Entity.as_str())
         .bind(datalib_problems::Stage::Fetch.as_str())
         .bind(datalib_problems::Reason::OverSizeLimit.as_str())
@@ -833,27 +868,42 @@ pub async fn rung_listed_minus_held(
         .await?;
     }
     if has("sync_scope_state").fetch_one(&mut *conn).await? {
-        let cursors: Vec<(String, String)> =
-            sqlx::query_as("SELECT scope, last_seen_at_utc FROM sync_scope_state")
-                .fetch_all(&mut *conn)
-                .await?;
+        let cursors: Vec<(String, String)> = sql!(
+            "etl.forge_ingest_common.rung_held.list_scope_cursors",
+            "SELECT scope, last_seen_at_utc FROM sync_scope_state"
+        )
+        .query_as()
+        .fetch_all(&mut *conn)
+        .await?;
         for (scope, at) in cursors {
             let at = datalib_time::parse_strict(&at)
                 .with_context(|| format!("the cursor of {scope}: {at:?}"))?;
-            sqlx::query("INSERT OR REPLACE INTO coverage (scope, lo, hi) VALUES (?, '', ?)")
-                .bind(coverage_scope(&scope))
-                .bind(stamp(&at))
-                .execute(&mut *conn)
-                .await?;
-        }
-        sqlx::query("DELETE FROM sync_scope_state")
+            sql!(
+                "etl.forge_ingest_common.rung_held.insert_cursor_coverage",
+                "INSERT OR REPLACE INTO coverage (scope, lo, hi) VALUES (?, '', ?)"
+            )
+            .query()
+            .bind(coverage_scope(&scope))
+            .bind(stamp(&at))
             .execute(&mut *conn)
             .await?;
+        }
+        sql!(
+            "etl.forge_ingest_common.rung_held.clear_sync_scope_state",
+            "DELETE FROM sync_scope_state"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     if has("sync_scope_config").fetch_one(&mut *conn).await? {
-        sqlx::query("DELETE FROM sync_scope_config")
-            .execute(&mut *conn)
-            .await?;
+        sql!(
+            "etl.forge_ingest_common.rung_held.clear_sync_scope_config",
+            "DELETE FROM sync_scope_config"
+        )
+        .query()
+        .execute(&mut *conn)
+        .await?;
     }
     Ok(())
 }
@@ -919,10 +969,12 @@ pub async fn prune_children(
 
 /// The account the store was synced as: its one `self_identity` row.
 pub async fn load_self_identity(pool: &SqlitePool) -> Result<Option<Value>> {
-    let row = sqlx::query(
+    let row = sql!(
+        "etl.forge_ingest_common.read_self_identity",
         "SELECT id, json(payload) AS payload FROM self_identity \
-         WHERE payload IS NOT NULL ORDER BY id LIMIT 1",
+         WHERE payload IS NOT NULL ORDER BY id LIMIT 1"
     )
+    .query()
     .fetch_optional(pool)
     .await
     .context("select self_identity")?;
@@ -964,6 +1016,7 @@ pub fn numeric_id(payload: &Value, what: &str) -> Result<String> {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// A window of 1,000,000 days put the floor in the year -712, which
     /// went to the search as a date; one of `u32::MAX` days panicked in
     /// the subtraction.
@@ -1179,7 +1232,8 @@ mod tests {
             .unwrap();
         let mut tx = pool.begin().await.unwrap();
         for (id, at) in [("o/r#1", T2), ("o/r#2", T3), ("o/r#3", T1), ("o/r#4", T1)] {
-            sqlx::query("INSERT INTO listed_change_requests (id, updated_at) VALUES (?, ?)")
+            test_sql!("INSERT INTO listed_change_requests (id, updated_at) VALUES (?, ?)")
+                .query()
                 .bind(id)
                 .bind(at)
                 .execute(&mut *tx)
@@ -1217,7 +1271,8 @@ mod tests {
         let pool = datalib_etl::doltlite_raw::open(&d.path().join("f.doltlite_db"), &ddl)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO self_identity (id, payload) VALUES ('me', ?)")
+        test_sql!("INSERT INTO self_identity (id, payload) VALUES ('me', ?)")
+            .query()
             .bind(r#"{"login": "picard"}"#)
             .execute(&pool)
             .await
@@ -1228,7 +1283,8 @@ mod tests {
             .expect("a parsed self");
         assert_eq!(me["login"], "picard");
 
-        sqlx::query("UPDATE self_identity SET payload = ?")
+        test_sql!("UPDATE self_identity SET payload = ?")
+            .query()
             .bind(UNPARSEABLE)
             .execute(&pool)
             .await
@@ -1236,7 +1292,8 @@ mod tests {
         let err = load_self_identity(&pool).await.unwrap_err();
         assert!(format!("{err:#}").contains("row me"), "{err:#}");
 
-        let row = sqlx::query("SELECT id, json(payload) AS payload FROM self_identity")
+        let row = test_sql!("SELECT id, json(payload) AS payload FROM self_identity")
+            .query()
             .fetch_one(&pool)
             .await
             .unwrap();

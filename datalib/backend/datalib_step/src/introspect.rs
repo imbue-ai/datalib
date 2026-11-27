@@ -44,6 +44,7 @@ use datalib_schema::data_nodes::{DataNodeRow, Lineage};
 use datalib_schema::grid_rows::GridRow;
 use datalib_schema::measurements::{MeasurementKind, SourceMeasurementRow};
 use datalib_schema::providers::Provider;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// The `grid_rows.source_label`: one label for every source's measurements, as the Source column shows them.
 ///
@@ -177,10 +178,12 @@ fn is_datalib_bookkeeping(table: &str) -> bool {
 }
 
 async fn table_names(pool: &SqlitePool) -> Result<Vec<String>> {
-    let rows = sqlx::query(
+    let rows = sql!(
+        "datalib_step.introspect.list_tables",
         "SELECT name FROM sqlite_master WHERE type = 'table' \
-         AND name NOT LIKE 'sqlite_%' ORDER BY name",
+         AND name NOT LIKE 'sqlite_%' ORDER BY name"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("list tables")?;
@@ -207,8 +210,12 @@ async fn row_count(pool: &SqlitePool, table: &str) -> Result<i64> {
     // Audited: `table` came from `sqlite_master` on this same connection,
     // so it is an identifier the engine itself just handed us; there is no
     // caller-supplied text in the string.
-    let sql = format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\""));
-    let row = sqlx::query(sqlx::AssertSqlSafe(sql))
+    let sql = Sql::dynamic(
+        sql_id!("datalib_step.introspect.count_table_rows"),
+        format!("SELECT COUNT(*) FROM \"{}\"", table.replace('"', "\"\"")),
+    );
+    let row = sql
+        .query()
         .fetch_one(pool)
         .await
         .with_context(|| format!("count {table}"))?;
@@ -500,6 +507,7 @@ pub fn counts_unchanged(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// The table `ddl` creates, for a `CREATE TABLE IF NOT EXISTS <name> (`;
     /// `None` for anything else.
     fn table_name_in(ddl: &str) -> Option<&str> {
@@ -738,16 +746,19 @@ mod tests {
         std::fs::create_dir_all(&raw).unwrap();
         let db = raw.join("entities.doltlite_db");
         let pool = datalib_core::store::open_pool(&db).await.unwrap();
-        sqlx::query("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+        test_sql!("CREATE TABLE messages (id INTEGER PRIMARY KEY, body TEXT)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("CREATE TABLE threads (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE threads (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         for i in 0..3 {
-            sqlx::query("INSERT INTO messages (id, body) VALUES (?, 'hi')")
+            test_sql!("INSERT INTO messages (id, body) VALUES (?, 'hi')")
+                .query()
                 .bind(i)
                 .execute(&pool)
                 .await
@@ -828,13 +839,15 @@ mod tests {
         // A run's worth of bookkeeping, so the excluded tables are
         // non-empty and their absence from the report is a real
         // exclusion rather than an empty-table coincidence.
-        sqlx::query(
-            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t', '{}', 'ok')",
+        test_sql!(
+            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t', '{}', 'ok')"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO messages (id) VALUES ('m1')")
+        test_sql!("INSERT INTO messages (id) VALUES ('m1')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -880,13 +893,15 @@ mod tests {
         };
 
         let pool = open().await.expect("first run");
-        sqlx::query(
-            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t1', '{}', 'ok')",
+        test_sql!(
+            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t1', '{}', 'ok')"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO messages (id) VALUES ('m1')")
+        test_sql!("INSERT INTO messages (id) VALUES ('m1')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -897,9 +912,10 @@ mod tests {
 
         // A second run: another `sync_runs` row, no new content.
         let pool = open().await.expect("second run");
-        sqlx::query(
-            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t2', '{}', 'ok')",
+        test_sql!(
+            "INSERT INTO sync_runs (started_at_utc, config, status) VALUES ('t2', '{}', 'ok')"
         )
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -914,7 +930,8 @@ mod tests {
 
         // …and real new data still does.
         let pool = open().await.expect("third run");
-        sqlx::query("INSERT INTO messages (id) VALUES ('m2')")
+        test_sql!("INSERT INTO messages (id) VALUES ('m2')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();

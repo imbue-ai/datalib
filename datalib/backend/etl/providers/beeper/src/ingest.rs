@@ -13,6 +13,7 @@ use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl_files::fswalk;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::SqliteConnection;
 
 pub const MEDIA_FILES: &str = "beeper_media_files";
@@ -55,10 +56,14 @@ async fn drop_reshaped_tables(conn: &mut SqliteConnection) -> Result<()> {
         "beeper_media_attachments_bookkeeping",
     ] {
         // Audited: `table` is a literal from the list above.
-        sqlx::query(sqlx::AssertSqlSafe(format!("DROP TABLE IF EXISTS {table}")))
-            .execute(&mut *conn)
-            .await
-            .with_context(|| format!("drop {table}"))?;
+        Sql::dynamic(
+            sql_id!("beeper.drop_reshaped_table"),
+            format!("DROP TABLE IF EXISTS {table}"),
+        )
+        .query()
+        .execute(&mut *conn)
+        .await
+        .with_context(|| format!("drop {table}"))?;
     }
     Ok(())
 }
@@ -201,12 +206,16 @@ async fn copy_media(db: &RawDb, media_root: &Path, found: &RunProblems) -> Resul
     if !media_root.is_dir() {
         return Ok(0);
     }
-    let held: HashSet<String> = sqlx::query_scalar("SELECT rel_path FROM beeper_media_files")
-        .fetch_all(db.pool())
-        .await
-        .context("read beeper_media_files")?
-        .into_iter()
-        .collect();
+    let held: HashSet<String> = sql!(
+        "beeper.list_media_paths",
+        "SELECT rel_path FROM beeper_media_files"
+    )
+    .query_scalar()
+    .fetch_all(db.pool())
+    .await
+    .context("read beeper_media_files")?
+    .into_iter()
+    .collect();
     let (files, errors) = fswalk::walk_files(media_root, &[], None, |_| true)?;
     if let Some(first) = errors.first() {
         found.phase(
@@ -261,10 +270,12 @@ async fn store_media(db: &RawDb, files: Vec<(String, Vec<u8>)>) -> Result<usize>
         .context("put media files into the blob store")?;
     let mut tx = db.pool().begin().await.context("begin media files tx")?;
     for (rel, bytes) in &files {
-        sqlx::query(
+        sql!(
+            "beeper.insert_media_file",
             "INSERT OR IGNORE INTO beeper_media_files (rel_path, blake3, size_bytes) \
-             VALUES (?, ?, ?)",
+             VALUES (?, ?, ?)"
         )
+        .query()
         .bind(rel)
         .bind(&keys[rel.as_str()])
         .bind(bytes.len() as i64)

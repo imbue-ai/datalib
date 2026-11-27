@@ -16,6 +16,7 @@ use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::pages::PageSize;
 use datalib_etl_render::section::join;
+use datalib_sql::{test_sql, Sql};
 
 const STANZA: &str = "codex";
 const THREAD_1: &str = "41b8781c-6a77-7fbf-9c78-8125d1a37f24";
@@ -30,8 +31,8 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex_tng")
 }
 
-async fn count(pool: &sqlx::SqlitePool, sql: &'static str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+async fn count(pool: &sqlx::SqlitePool, sql: Sql) -> i64 {
+    sql.query_scalar().fetch_one(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -63,12 +64,15 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!((s.not_transcripts, s.unreadable), (0, 0));
     assert_eq!(s.records, 35 - 1 + 11 + 14 + 29);
     let pool = db.pool();
-    assert_eq!(count(pool, "SELECT COUNT(*) FROM transcripts").await, 4);
+    assert_eq!(
+        count(pool, test_sql!("SELECT COUNT(*) FROM transcripts")).await,
+        4
+    );
     // Every line is a row; its type is read off the payload.
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records WHERE payload->>'$.type' = 'session_meta'"
+            test_sql!("SELECT COUNT(*) FROM records WHERE payload->>'$.type' = 'session_meta'")
         )
         .await,
         4
@@ -76,30 +80,31 @@ async fn the_tng_fixture_ingests_and_renders() {
     // The line types only the newer Codex writes are stored like any
     // other; nothing renders them.
     for (kind, n) in [("world_state", 2), ("token_usage_record", 2)] {
-        let got: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM records WHERE payload->>'$.type' = ?")
-                .bind(kind)
-                .fetch_one(pool)
-                .await
-                .unwrap();
+        let got: i64 = test_sql!("SELECT COUNT(*) FROM records WHERE payload->>'$.type' = ?")
+            .query_scalar()
+            .bind(kind)
+            .fetch_one(pool)
+            .await
+            .unwrap();
         assert_eq!(got, n, "{kind}");
     }
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records WHERE payload->>'$.payload.type' = 'function_call'"
+            test_sql!(
+                "SELECT COUNT(*) FROM records WHERE payload->>'$.payload.type' = 'function_call'"
+            )
         )
         .await,
         3
     );
     let (title, cwd, parent, rel): (Option<String>, Option<String>, Option<String>, String) =
-        sqlx::query_as(
-            "SELECT title, cwd, parent_thread_id, rel_path FROM transcripts WHERE id = ?",
-        )
-        .bind(THREAD_1)
-        .fetch_one(pool)
-        .await
-        .unwrap();
+        test_sql!("SELECT title, cwd, parent_thread_id, rel_path FROM transcripts WHERE id = ?")
+            .query_as()
+            .bind(THREAD_1)
+            .fetch_one(pool)
+            .await
+            .unwrap();
     assert_eq!(
         title.as_deref(),
         Some("The deflector dish drifts 0.3 degrees every hour. Find out why and fix it."),
@@ -109,11 +114,12 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(parent, None);
     assert!(rel.starts_with("sessions/2364/04/11/rollout-"), "{rel}");
     let (agent_title, agent_parent, agent_records): (Option<String>, Option<String>, i64) =
-        sqlx::query_as(
+        test_sql!(
             "SELECT t.title, t.parent_thread_id, \
              (SELECT COUNT(*) FROM records r WHERE r.transcript_id = t.id) \
-             FROM transcripts t WHERE t.id = ?",
+             FROM transcripts t WHERE t.id = ?"
         )
+        .query_as()
         .bind(AGENT_1)
         .fetch_one(pool)
         .await
@@ -125,14 +131,16 @@ async fn the_tng_fixture_ingests_and_renders() {
     );
     assert_eq!(agent_parent.as_deref(), Some(THREAD_1));
     assert_eq!(agent_records, 11);
-    let (rel2,): (String,) = sqlx::query_as("SELECT rel_path FROM transcripts WHERE id = ?")
+    let (rel2,): (String,) = test_sql!("SELECT rel_path FROM transcripts WHERE id = ?")
+        .query_as()
         .bind(THREAD_2)
         .fetch_one(pool)
         .await
         .unwrap();
     assert!(rel2.starts_with("archived_sessions/"), "{rel2}");
     // Payloads are JSONB; `json()` gives the text back.
-    let meta: (String,) = sqlx::query_as("SELECT json(payload) FROM transcripts WHERE id = ?")
+    let meta: (String,) = test_sql!("SELECT json(payload) FROM transcripts WHERE id = ?")
+        .query_as()
         .bind(THREAD_1)
         .fetch_one(pool)
         .await
@@ -147,13 +155,13 @@ async fn the_tng_fixture_ingests_and_renders() {
 
     // The 0.155 thread has no `user_message` event to take a title
     // from; the message's own `user.text` tag is what names it.
-    let (title3, cli3): (Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT title, json(payload)->>'$.cli_version' FROM transcripts WHERE id = ?",
-    )
-    .bind(THREAD_3)
-    .fetch_one(pool)
-    .await
-    .unwrap();
+    let (title3, cli3): (Option<String>, Option<String>) =
+        test_sql!("SELECT title, json(payload)->>'$.cli_version' FROM transcripts WHERE id = ?")
+            .query_as()
+            .bind(THREAD_3)
+            .fetch_one(pool)
+            .await
+            .unwrap();
     assert_eq!(
         title3.as_deref(),
         Some("Audit the warp core containment logs and tell me what you find.")
@@ -162,7 +170,9 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM records WHERE payload->>'$.payload.type' = 'user_message'"
+            test_sql!(
+                "SELECT COUNT(*) FROM records WHERE payload->>'$.payload.type' = 'user_message'"
+            )
         )
         .await,
         4,

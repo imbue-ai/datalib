@@ -11,6 +11,7 @@ use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_web::owed::{self, Listed};
 
 use super::schema_raw::{full_ddl, ActivityRow, FILE_KIND_FIT, LADDER};
+use datalib_sql::{sql, sql_id, Sql};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
 
@@ -41,9 +42,11 @@ impl RawDb {
         binds: &[&str],
         keep: &HashSet<&str>,
     ) -> Result<Vec<String>> {
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "SELECT id FROM {table} WHERE {filter_sql}"
-        )));
+        let mut q = Sql::dynamic(
+            sql_id!("garmin.list_ids_for_prune"),
+            format!("SELECT id FROM {table} WHERE {filter_sql}"),
+        )
+        .query();
         for b in binds {
             q = q.bind(*b);
         }
@@ -157,10 +160,12 @@ impl RawDb {
     /// a detail is listed for. A row no listing by this build has named
     /// has no version and is listed for nothing until one does.
     pub async fn listed_activities(&self) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String)> = sql!(
+            "garmin.list_listed_activities",
             "SELECT id, listing_hash FROM garmin_activities \
-             WHERE listing_hash IS NOT NULL ORDER BY start_time_gmt DESC, id",
+             WHERE listing_hash IS NOT NULL ORDER BY start_time_gmt DESC, id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("select the garmin activities as listed")?;
@@ -175,13 +180,15 @@ impl RawDb {
     /// is listed for. An edge with bytes is never listed again, since the
     /// original upload does not change when the activity is edited.
     pub async fn activity_files_without_bytes(&self) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String)> = sql!(
+            "garmin.list_activity_files_without_bytes",
             "SELECT a.id || '#fit', a.listing_hash \
              FROM garmin_activities a \
              LEFT JOIN garmin_activity_files f ON f.id = a.id || '#fit' \
              WHERE a.listing_hash IS NOT NULL AND f.blake3 IS NULL \
-             ORDER BY a.start_time_gmt DESC, a.id",
+             ORDER BY a.start_time_gmt DESC, a.id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("select the garmin activities without a file")?;
@@ -226,11 +233,15 @@ impl RawDb {
                 continue;
             }
             // Audited: `table` and `owner` are literals from the list above.
-            let ids: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "SELECT id FROM {table} WHERE blake3 IN \
+            let ids: Vec<String> = Sql::dynamic(
+                sql_id!("garmin.find_file_edges_sharing_blake3"),
+                format!(
+                    "SELECT id FROM {table} WHERE blake3 IN \
                  (SELECT blake3 FROM {table} WHERE blake3 IS NOT NULL \
                   GROUP BY blake3 HAVING COUNT(DISTINCT {owner}) > 1) ORDER BY id"
-            )))
+                ),
+            )
+            .query_scalar()
             .fetch_all(self.pool())
             .await
             .with_context(|| format!("find shared hashes in {table}"))?;
@@ -241,9 +252,11 @@ impl RawDb {
             let mut tx = self.pool().begin().await?;
             for id in &ids {
                 // Audited: `table` is a literal from the list above; `id` is bound.
-                sqlx::query(sqlx::AssertSqlSafe(format!(
-                    "UPDATE {table} SET blake3 = NULL WHERE id = ?"
-                )))
+                Sql::dynamic(
+                    sql_id!("garmin.clear_shared_file_blake3"),
+                    format!("UPDATE {table} SET blake3 = NULL WHERE id = ?"),
+                )
+                .query()
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
@@ -260,11 +273,13 @@ impl RawDb {
     /// no longer asks for them, so no run will fetch them and clear the
     /// row. Returns how many went.
     pub async fn forget_daily_problems_outside(&self, since: &str, end: &str) -> Result<u64> {
-        let done = sqlx::query(
+        let done = sql!(
+            "garmin.delete_daily_problems_outside_range",
             "DELETE FROM problems WHERE scope_kind = ? AND stage = ? \
              AND scope_key LIKE 'garmin_daily:%' \
-             AND substr(scope_key, instr(scope_key, '#') + 1) NOT BETWEEN ? AND ?",
+             AND substr(scope_key, instr(scope_key, '#') + 1) NOT BETWEEN ? AND ?"
         )
+        .query()
         .bind(datalib_problems::ScopeKind::Entity.as_str())
         .bind(datalib_problems::Stage::Fetch.as_str())
         .bind(since)
@@ -276,11 +291,15 @@ impl RawDb {
     }
 
     pub async fn marker(&self, scope: &str) -> Result<Option<String>> {
-        let row = sqlx::query("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
-            .bind(scope)
-            .fetch_optional(self.pool())
-            .await
-            .with_context(|| format!("select marker {scope}"))?;
+        let row = sql!(
+            "garmin.read_sync_marker",
+            "SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?"
+        )
+        .query()
+        .bind(scope)
+        .fetch_optional(self.pool())
+        .await
+        .with_context(|| format!("select marker {scope}"))?;
         row.map(|r| r.try_get::<String, _>("last_seen_at_utc"))
             .transpose()
             .context("sync_scope_state last_seen_at_utc")
@@ -305,7 +324,8 @@ async fn delete_ids_in(
             format!("DELETE FROM {table}_bookkeeping WHERE id IN ({placeholders})"),
         ] {
             // Audited: `table` is `&'static str`; every id is bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(stmt));
+            let mut q =
+                Sql::dynamic(sql_id!("garmin.delete_rows_and_bookkeeping_by_id"), stmt).query();
             for id in chunk {
                 q = q.bind(id);
             }
@@ -314,10 +334,14 @@ async fn delete_ids_in(
         // A row that is gone cannot fail to fetch any more.
         // Audited: `placeholders` is a `?,?,?` run sized from the
         // chunk; every key is bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DELETE FROM problems INDEXED BY problems_by_scope \
+        let mut q = Sql::dynamic(
+            sql_id!("garmin.delete_entity_problems_by_id"),
+            format!(
+                "DELETE FROM problems INDEXED BY problems_by_scope \
              WHERE scope_kind = ? AND scope_key IN ({placeholders})"
-        )))
+            ),
+        )
+        .query()
         .bind(datalib_problems::ScopeKind::Entity.as_str());
         for id in chunk {
             q = q.bind(format!("{table}:{id}"));

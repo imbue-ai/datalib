@@ -15,9 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use datalib_contacts::{ContactKind, Store};
 use datalib_dag::RunState;
-use datalib_handle::Handle;
+use datalib_sql::{test_sql, test_sql_id, Sql};
 use datalib_store_dump::{cell_value, open_readonly, store_as_jsonl, Keep};
 use insta::{assert_json_snapshot, assert_snapshot};
 use serde_json::Value;
@@ -558,6 +557,11 @@ fn manual_e2e_live_sync_golden() {
         data_root.display()
     );
 
+    // What a person curated comes with the root, as it would into an
+    // upgrade: the stores the last bake left, laid over this one's data.
+    let curated_src = src_config.with_file_name(datalib_contacts::CURATED_DIR);
+    datalib_curated_overlay::copy_in(&curated_src, &data_root);
+
     let now = "2026-05-21T18:00:00Z";
     let run1 = run_pipeline(&bin, &cfg_path, &run_root, now, &["sync"]);
     assert!(
@@ -604,32 +608,28 @@ fn manual_e2e_live_sync_golden() {
             .is_file(),
         "backend index DB must live at unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
     );
-    // Only the genuinely-derived index dirs are tagged as rebuildable cache so
-    // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
-    // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
-    // walk below). `system/` must NOT be tagged — job logs are operational
-    // history, not rebuildable from raw.
-    assert!(
-        data_root
-            .join("unified_grid_and_search_index/CACHEDIR.TAG")
-            .is_file(),
-        "unified_grid_and_search_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
-    );
-    assert!(
-        !data_root.join("system/CACHEDIR.TAG").exists(),
-        "system/ (operational history) must NOT be tagged as cache"
-    );
+    // A backup tool that skips cache directories would leave a library
+    // that no sync makes whole (`docs/user/backing_up.md`), so nothing in
+    // one is marked as a cache, and a tag an earlier bake left is removed.
+    let tags: Vec<_> = WalkDir::new(&data_root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name() == "CACHEDIR.TAG")
+        .map(|e| e.path().display().to_string())
+        .collect();
+    assert!(tags.is_empty(), "the library marks caches: {tags:?}");
 
     // Snapshot each group's stores, mirroring the on-disk per-group layout:
     // `ingest/`, `render_markdown/`, a time-series source's
     // `render_time_series/` and the time-series index's `time_series_index/`.
-    // `system/` and the grid and search index are skipped.
+    // `system/` and the grid and search index are skipped, and so is
+    // `datalib_curated/`, which is no group: it is checked below.
     let mut stanzas: Vec<String> = std::fs::read_dir(&data_root)
         .expect("read data_root")
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name != "system")
+        .filter(|name| name != "system" && name != datalib_contacts::CURATED_DIR)
         .collect();
     stanzas.sort();
 
@@ -714,26 +714,36 @@ fn manual_e2e_live_sync_golden() {
         });
     }
 
-    // ── The contacts app: links a person made, which nothing rebuilds ──
+    // ── What a person curated: opened by this build, laid over the data ──
     //
-    // Made once run 1 has put the handles in the index, and checked after
-    // run 3's reset: no step may write `datalib_curated/`, so the store
-    // must come through runs 2 and 3 row for row, and each handle it links
-    // must still be in the re-downloaded data.
-    let contact_specs = read_contact_specs(&src_config.with_file_name("contacts.toml"));
-    assert_handles_indexed(&data_root, &contact_specs, "run 1");
-    let contacts = make_contacts(&data_root, &contact_specs);
-    let contacts_store = datalib_contacts::store_path(&data_root);
-    let contacts_before = dump_store(&contacts_store);
+    // Checked again after run 3's reset: no step may write
+    // `datalib_curated/`, so the stores must come through runs 2 and 3 row
+    // for row, and lie over the re-downloaded data as they did over run 1's.
+    datalib_curated_overlay::open_as_owners(&data_root);
+    datalib_curated_overlay::assert_every_table_has_a_row(&data_root);
+    let curated_before = datalib_curated_overlay::dumps(&data_root);
+    let overlay_before =
+        datalib_curated_overlay::overlay(&bin_dir().join("datalib-applet"), &data_root);
     insta::with_settings!({
         snapshot_path => snap_base().join(datalib_contacts::CURATED_DIR).display().to_string(),
         prepend_module_to_snapshot => false,
-        description => "datalib_curated/datalib_contacts/contacts.doltlite_db",
     }, {
-        assert_json_snapshot!(
-            datalib_contacts::APP_DIR,
-            contacts_for_snapshot(contacts_before.clone(), &contacts)
-        );
+        for (store, dump) in &curated_before {
+            insta::with_settings!({ description => store.as_str() }, {
+                let name = Path::new(store)
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|n| n.to_str())
+                    .expect("a curated store's app dir");
+                assert_json_snapshot!(name, dump);
+            });
+        }
+        insta::with_settings!({
+            description => "what each curated store reaches in this root's data: \
+                            a contact's sources, from:me's, each mute's problem",
+        }, {
+            assert_json_snapshot!("overlay", overlay_before);
+        });
     });
 
     // ── Second run: incrementality check ──────────────────────────────
@@ -831,13 +841,18 @@ fn manual_e2e_live_sync_golden() {
     assert_step_statuses_ok(&run3.run_summary().expect("run 3 run_summary"));
 
     assert!(
-        dump_store(&contacts_store) == contacts_before,
-        "the contacts store changed across run 2 and run 3's reset; no step may \
+        datalib_curated_overlay::dumps(&data_root) == curated_before,
+        "a curated store changed across run 2 and run 3's reset; no step may \
          write {}",
-        contacts_store.display()
+        data_root.join(datalib_contacts::CURATED_DIR).display()
     );
-    assert_handles_indexed(&data_root, &contact_specs, "run 3's re-download");
-    assert_contacts_resolve(&contacts_store, &contacts);
+    let overlay_after =
+        datalib_curated_overlay::overlay(&bin_dir().join("datalib-applet"), &data_root);
+    assert!(
+        overlay_after == overlay_before,
+        "the curated stores lie over the re-downloaded data otherwise than over \
+         run 1's.\nrun 1: {overlay_before:#}\nrun 3: {overlay_after:#}"
+    );
 
     let drifts: Vec<String> = stores_before
         .iter()
@@ -854,6 +869,18 @@ fn manual_e2e_live_sync_golden() {
          §\"Volatile-field split\").\n\n{}",
         drifts.join("\n")
     );
+
+    // Each store this build carried forward is what the next bake starts
+    // from, as the config's upgrade is written back over `dag.toml`.
+    for (ours, checked_in) in
+        datalib_curated_overlay::changed_by_this_build(&data_root, &curated_src)
+    {
+        std::fs::copy(&ours, &checked_in).expect("write a curated store back");
+        eprintln!(
+            "[test] this build changed {}; wrote it back",
+            checked_in.display()
+        );
+    }
 }
 
 /// One raw store and the commit it was at before a run; what the store's
@@ -881,7 +908,8 @@ impl StoreAtCommit {
             use sqlx::Row;
 
             let pool = open_readonly(path).await;
-            let commit: String = sqlx::query("SELECT commit_hash FROM dolt_log() LIMIT 1")
+            let commit: String = test_sql!("SELECT commit_hash FROM dolt_log() LIMIT 1")
+                .query()
                 .fetch_one(&pool)
                 .await
                 .unwrap_or_else(|e| panic!("{name}: dolt_log: {e}"))
@@ -909,21 +937,22 @@ impl StoreAtCommit {
             use sqlx::Row;
 
             let pool = open_readonly(&self.path).await;
-            let has_problems: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='problems'",
-            )
-            .fetch_optional(&pool)
-            .await
-            .expect("read sqlite_master");
+            let has_problems: Option<i64> =
+                test_sql!("SELECT 1 FROM sqlite_master WHERE type='table' AND name='problems'")
+                    .query_scalar()
+                    .fetch_optional(&pool)
+                    .await
+                    .expect("read sqlite_master");
             if has_problems.is_none() {
                 pool.close().await;
                 return None;
             }
-            let rows = sqlx::query(
+            let rows = test_sql!(
                 "SELECT diff_type, COALESCE(to_scope_key, from_scope_key) AS scope_key \
                    FROM dolt_diff_problems WHERE from_ref = ? AND to_ref = 'HEAD' \
-                  ORDER BY scope_key",
+                  ORDER BY scope_key"
             )
+            .query()
             .bind(&self.commit)
             .fetch_all(&pool)
             .await
@@ -965,9 +994,10 @@ impl StoreAtCommit {
                 findings.push(format!("{}#{t}: new after the re-download", self.name));
                 continue;
             }
-            let stat = sqlx::query(
-                "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?, 'HEAD', ?)",
+            let stat = test_sql!(
+                "SELECT rows_added, rows_deleted, rows_modified FROM dolt_diff_stat(?, 'HEAD', ?)"
             )
+            .query()
             .bind(&self.commit)
             .bind(t)
             .fetch_optional(&pool)
@@ -988,7 +1018,8 @@ impl StoreAtCommit {
             // table name was read out of this store's own `sqlite_master`,
             // and the refs are bound.
             // `payload` is JSONB, so it is read back through `json()`.
-            let info = sqlx::query(sqlx::AssertSqlSafe(format!("PRAGMA table_info(\"{t}\")")))
+            let info = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_info(\"{t}\")"))
+                .query()
                 .fetch_all(&pool)
                 .await
                 .expect("table_info");
@@ -1007,9 +1038,13 @@ impl StoreAtCommit {
                 .chain(["diff_type".to_string()])
                 .collect::<Vec<_>>()
                 .join(", ");
-            let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
+            let rows = Sql::dynamic(
+                test_sql_id!(),
+                format!(
                 "SELECT {select_list} FROM \"dolt_diff_{t}\" WHERE from_ref = ? AND to_ref = 'HEAD'"
-            )))
+            ),
+            )
+            .query()
             .bind(&self.commit)
             .fetch_all(&pool)
             .await
@@ -1146,11 +1181,12 @@ fn short_cell(v: &Value) -> String {
 async fn content_table_names(pool: &sqlx::SqlitePool) -> Vec<String> {
     use sqlx::Row;
 
-    sqlx::query(
+    test_sql!(
         "SELECT name FROM sqlite_master \
          WHERE type='table' AND name NOT LIKE 'sqlite_%' \
-         ORDER BY name",
+         ORDER BY name"
     )
+    .query()
     .fetch_all(pool)
     .await
     .expect("list tables")
@@ -1425,7 +1461,8 @@ async fn latest_sync_run(path: &Path) -> Value {
         .await
         .unwrap_or_else(|e| panic!("open {} for sync_runs: {e}", path.display()));
 
-    let row = sqlx::query("SELECT status, summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+    let row = test_sql!("SELECT status, summary FROM sync_runs ORDER BY run_id DESC LIMIT 1")
+        .query()
         .fetch_optional(&pool)
         .await
         .unwrap_or_else(|e| panic!("select sync_runs from {}: {e}", path.display()));
@@ -1456,10 +1493,11 @@ fn search_terms(data_root: &Path) -> String {
         .expect("build tokio runtime for the terms read");
     let coded: Vec<(i64, String, String)> = rt.block_on(async {
         let pool = open_readonly(&path).await;
-        let rows = sqlx::query_as(
+        let rows = test_sql!(
             "SELECT t.kind, v.value, r.uuid FROM terms t \
-             JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id",
+             JOIN vals v ON v.val_id = t.val_id JOIN rows r ON r.row_id = t.row_id"
         )
+        .query_as()
         .fetch_all(&pool)
         .await
         .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
@@ -1476,198 +1514,6 @@ fn search_terms(data_root: &Path) -> String {
         .collect();
     lines.sort();
     lines.join("\n")
-}
-
-/// One contact the bake makes, as `contacts.toml` beside the config
-/// writes it. The handles are real, which is why they live in the
-/// private data repo and not here.
-struct ContactSpec {
-    name: String,
-    handles: Vec<Handle>,
-    stopped_working: Vec<(Handle, String)>,
-}
-
-/// A contact the bake made, under the id the store gave it.
-struct MadeContact {
-    name: String,
-    contact_id: String,
-    handles: Vec<Handle>,
-}
-
-fn read_contact_specs(path: &Path) -> Vec<ContactSpec> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
-        panic!(
-            "read {}: {e}. The bake links handles in the contacts app from this \
-             file; add it beside the config.",
-            path.display()
-        )
-    });
-    let doc: toml::Table = toml::from_str(&text).expect("contacts.toml parses");
-    let handle = |v: &toml::Value| {
-        let s = v.as_str().expect("a handle is a string");
-        Handle::parse(s).unwrap_or_else(|| panic!("{s:?} is not a handle as datalib spells one"))
-    };
-    let specs: Vec<ContactSpec> = doc
-        .get("contacts")
-        .and_then(toml::Value::as_array)
-        .expect("contacts.toml has [[contacts]]")
-        .iter()
-        .map(|c| ContactSpec {
-            name: c["name"].as_str().expect("a contact's name").to_string(),
-            handles: c["handles"]
-                .as_array()
-                .expect("a contact's handles")
-                .iter()
-                .map(handle)
-                .collect(),
-            stopped_working: c
-                .get("stopped_working")
-                .and_then(toml::Value::as_table)
-                .into_iter()
-                .flatten()
-                .map(|(h, by)| {
-                    let by = by.as_str().expect("stopped_working is a date");
-                    (handle(&toml::Value::String(h.clone())), by.to_string())
-                })
-                .collect(),
-        })
-        .collect();
-    assert!(!specs.is_empty(), "{}: no contacts", path.display());
-    specs
-}
-
-/// Every handle the specs link is an author in the index, so each link
-/// lands on documents rather than on nothing.
-fn assert_handles_indexed(data_root: &Path, specs: &[ContactSpec], after: &str) {
-    let db =
-        data_root.join("unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite");
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime for the index read");
-    let indexed: std::collections::BTreeSet<String> = rt.block_on(async {
-        let pool = open_readonly(&db).await;
-        let handles = sqlx::query_scalar(
-            "SELECT DISTINCT author_handle FROM grid_rows WHERE author_handle IS NOT NULL",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("read the index's author handles");
-        pool.close().await;
-        handles.into_iter().collect()
-    });
-    let missing: Vec<&str> = specs
-        .iter()
-        .flat_map(|s| &s.handles)
-        .map(Handle::as_str)
-        .filter(|h| !indexed.contains(*h))
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "after {after}, contacts.toml links handles no document is written by: {missing:?}. \
-         If upstream moved, pick handles that are in the data."
-    );
-}
-
-fn make_contacts(data_root: &Path, specs: &[ContactSpec]) -> Vec<MadeContact> {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime for the contacts store");
-    rt.block_on(async {
-        let store = Store::open(&datalib_contacts::store_path(data_root))
-            .await
-            .expect("open the contacts store");
-        let mut made = Vec::new();
-        for spec in specs {
-            let contact_id = store
-                .create(&spec.name, ContactKind::Person, &spec.handles)
-                .await
-                .unwrap_or_else(|e| panic!("make contact {:?}: {e:#}", spec.name));
-            for (handle, by) in &spec.stopped_working {
-                let marked = store
-                    .set_stopped_working(handle, Some(by))
-                    .await
-                    .unwrap_or_else(|e| panic!("mark {handle} stopped working: {e:#}"));
-                assert!(marked, "{handle} is not one of {:?}'s handles", spec.name);
-            }
-            made.push(MadeContact {
-                name: spec.name.clone(),
-                contact_id,
-                handles: spec.handles.clone(),
-            });
-        }
-        store.close().await;
-        made
-    })
-}
-
-/// The store still answers each handle with the contact it was linked to.
-fn assert_contacts_resolve(store_path: &Path, contacts: &[MadeContact]) {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime for the contacts store");
-    rt.block_on(async {
-        let store = Store::open(store_path)
-            .await
-            .expect("open the contacts store");
-        for c in contacts {
-            let resolved = store.resolve(&c.handles).await.expect("resolve handles");
-            for h in &c.handles {
-                assert_eq!(
-                    resolved.get(h.as_str()).map(|n| n.key.as_str()),
-                    Some(c.contact_id.as_str()),
-                    "{h} no longer resolves to {:?}",
-                    c.name
-                );
-            }
-        }
-        store.close().await;
-    });
-}
-
-/// The contacts store's dump with each contact's random id replaced by
-/// its name and the stamps the wall clock wrote redacted, so a bake diffs
-/// only when what the store holds does.
-fn contacts_for_snapshot(mut dump: Value, contacts: &[MadeContact]) -> Value {
-    const STAMPS: &[&str] = &[
-        "created_at_utc",
-        "updated_at_utc",
-        "linked_at_utc",
-        "added_at_utc",
-        "set_at_utc",
-        "tz_offset",
-    ];
-    fn walk(v: &mut Value, contacts: &[MadeContact]) {
-        match v {
-            Value::Object(map) => {
-                for (k, child) in map.iter_mut() {
-                    if STAMPS.contains(&k.as_str()) {
-                        *child = Value::String(REDACTED.into());
-                    } else {
-                        walk(child, contacts);
-                    }
-                }
-            }
-            Value::Array(items) => items.iter_mut().for_each(|i| walk(i, contacts)),
-            Value::String(s) => {
-                for c in contacts {
-                    *s = s.replace(&c.contact_id, &format!("<contact {}>", c.name));
-                }
-            }
-            _ => {}
-        }
-    }
-    walk(&mut dump, contacts);
-    // These tables are keyed by the random id, so the store's order is
-    // random too; re-sort on the names that replaced it.
-    for table in ["contacts", "members", "photos"] {
-        if let Some(Value::Array(rows)) = dump.get_mut(table) {
-            rows.sort_by_cached_key(|r| r.to_string());
-        }
-    }
-    dump
 }
 
 /// Whole-table bookkeeping that legitimately changes across a reset, so it
@@ -1824,12 +1670,11 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         }
         // Doltlite's `-lock` sidecars and our own per-file `.lock`s
         // (etl README § "Connection pools") are ephemeral and
-        // content-free; `CACHEDIR.TAG` is a backup hint asserted
-        // separately. None belongs in a golden.
+        // content-free. None belongs in a golden.
         if entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.ends_with("-lock") || n.ends_with(".lock") || n == "CACHEDIR.TAG")
+            .is_some_and(|n| n.ends_with("-lock") || n.ends_with(".lock"))
         {
             continue;
         }

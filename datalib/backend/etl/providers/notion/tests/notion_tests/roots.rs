@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 const MISSIONS: &str = "1701d000-0000-4000-8000-000000000010";
 const MISSIONS_DS: &str = "1701d000-0000-4000-8000-000000000011";
@@ -285,7 +286,8 @@ async fn a_database_root_clears_the_page_error_an_older_build_left() {
         problems(&store).await
     );
     let db = RawDb::open(&store).await.unwrap();
-    let stub: Option<String> = sqlx::query_scalar("SELECT id FROM pages WHERE id = ?")
+    let stub: Option<String> = test_sql!("SELECT id FROM pages WHERE id = ?")
+        .query_scalar()
         .bind(MISSIONS)
         .fetch_optional(db.pool())
         .await

@@ -7,6 +7,7 @@ use datalib_runs::{
     LogRow, MetricRow, Process, ProcessLogWriter, ProcessRow, Retention, RunKind, RunStart,
     RunWriter, StepRunRow, StorePart,
 };
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const T0: &str = "2026-08-31T10:00:00+01:00";
 
@@ -533,9 +534,11 @@ async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
         .unwrap();
     for table in ["processes", "step_runs", "log", "metrics", "metric_samples"] {
         // Safe: `table` is one of the five literals above.
-        let runs: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-            "SELECT DISTINCT run_id FROM {table} WHERE run_id IS NOT NULL ORDER BY run_id"
-        )))
+        let runs: Vec<String> = Sql::dynamic(
+            test_sql_id!(),
+            format!("SELECT DISTINCT run_id FROM {table} WHERE run_id IS NOT NULL ORDER BY run_id"),
+        )
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -730,7 +733,8 @@ async fn a_store_from_another_schema_version_is_replaced() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    sqlx::query("PRAGMA user_version = 1")
+    test_sql!("PRAGMA user_version = 1")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -766,7 +770,8 @@ async fn a_store_from_another_schema_version_is_replaced() {
     let head = std::fs::read(&kept[0]).unwrap();
     assert!(head.starts_with(b"SQLite format 3\0"), "not plain SQLite");
     let copy = datalib_runs::open_or_create(&kept[0]).await.unwrap();
-    let msgs: Vec<String> = sqlx::query_scalar("SELECT msg FROM log")
+    let msgs: Vec<String> = test_sql!("SELECT msg FROM log")
+        .query_scalar()
         .fetch_all(&copy)
         .await
         .unwrap();
@@ -788,7 +793,7 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
     // Version 10's shape is this one without what 11 through 15 added.
-    sqlx::raw_sql(
+    test_sql!(
         "DROP INDEX metric_samples_by_name; \
          DROP INDEX metrics_by_name; \
          DROP INDEX runs_by_start; \
@@ -797,8 +802,9 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
          ALTER TABLE processes DROP COLUMN applet; \
          ALTER TABLE runs DROP COLUMN kind; \
          ALTER TABLE runs DROP COLUMN reason; \
-         PRAGMA user_version = 10",
+         PRAGMA user_version = 10"
     )
+    .raw()
     .execute(&pool)
     .await
     .unwrap();
@@ -845,10 +851,8 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
         .count();
     assert_eq!(set_aside, 0, "nothing was set aside");
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    let index: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
-         AND name IN ('processes_by_run', 'runs_by_start', 'metrics_by_name', 'metric_samples_by_name')",
-    )
+    let index: i64 = test_sql!("SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+         AND name IN ('processes_by_run', 'runs_by_start', 'metrics_by_name', 'metric_samples_by_name')").query_scalar()
     .fetch_one(&pool)
     .await
     .unwrap();
@@ -870,11 +874,12 @@ async fn a_run_says_why_it_started_and_an_older_one_says_nothing() {
     }
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    sqlx::raw_sql(
+    test_sql!(
         "ALTER TABLE runs DROP COLUMN kind; \
          ALTER TABLE runs DROP COLUMN reason; \
-         PRAGMA user_version = 11",
+         PRAGMA user_version = 11"
     )
+    .raw()
     .execute(&pool)
     .await
     .unwrap();
@@ -1267,10 +1272,11 @@ async fn a_process_is_pruned_only_once_nothing_names_it() {
         .await
         .unwrap();
     // A launch from long ago whose every line has already aged out.
-    sqlx::query(
+    test_sql!(
         "INSERT INTO processes (process_id, process, started_at_utc, tz_offset, git_hash) \
-         VALUES ('old', 'http', '2020-01-01T00:00:00.000000+00:00', '+00:00', NULL)",
+         VALUES ('old', 'http', '2020-01-01T00:00:00.000000+00:00', '+00:00', NULL)"
     )
+    .query()
     .execute(&pool)
     .await
     .unwrap();
@@ -1283,7 +1289,8 @@ async fn a_process_is_pruned_only_once_nothing_names_it() {
         .await
         .unwrap();
     let left: Vec<(String, String)> =
-        sqlx::query_as("SELECT process_id, started_at_utc FROM processes ORDER BY started_at_utc")
+        test_sql!("SELECT process_id, started_at_utc FROM processes ORDER BY started_at_utc")
+            .query_as()
             .fetch_all(&pool)
             .await
             .unwrap();
@@ -1343,7 +1350,12 @@ async fn retention_of_the_lines_outside_a_run_is_marked_as_walking_by_design() {
         .take()
         .into_iter()
         .map(|ran| ran.sql)
-        .filter(|sql| sql.starts_with("DELETE FROM log") && sql.contains("run_id IS NULL"))
+        .filter(|sql| {
+            datalib_sql::tag::after_name(sql)
+                .trim_start()
+                .starts_with("DELETE FROM log")
+                && sql.contains("run_id IS NULL")
+        })
         .collect();
     assert_eq!(prunes.len(), 2, "{prunes:#?}");
     for sql in prunes {

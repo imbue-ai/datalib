@@ -80,6 +80,26 @@ pub const MODAL_SANDBOXES: &str = "modal_sandboxes_total";
 /// The seconds those Sandboxes lived, by `gpu`: a running total.
 pub const MODAL_SANDBOX_SECONDS: &str = "modal_sandbox_seconds_total";
 
+/// How often each SQL statement ran, by the name it carries (`sql`): a
+/// running total. Every step reports its statements' as it ends; the
+/// server serves its own and its applets' as `datalib_sql_*`.
+pub const SQL_RUNS: &str = "sql_runs_total";
+
+/// The rows each statement returned, or for a write the rows it changed.
+pub const SQL_ROWS: &str = "sql_rows_total";
+
+/// The rows each statement's loops visited to find what it answered.
+pub const SQL_ROWS_SCANNED: &str = "sql_rows_scanned_total";
+
+/// The time each statement took, in microseconds: a metric's value is a
+/// whole number, and most statements take less than a millisecond.
+pub const SQL_MICROSECONDS: &str = "sql_microseconds_total";
+
+/// The rows one loop of a statement visited, by the statement (`sql`) and
+/// the loop as SQLite explains it (`loop`: `SEARCH t USING INDEX t_by_x
+/// (x=?)`), which names the index it read.
+pub const SQL_LOOP_ROWS_SCANNED: &str = "sql_loop_rows_scanned_total";
+
 /// Whether a series is a running total — a counter — by the naming rule
 /// above. `GET /metrics` types a series by this, and the runner warns
 /// when one goes down within a step's attempt.

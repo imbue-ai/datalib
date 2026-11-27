@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use datalib_etl::doltlite_raw::SHARED_TABLES;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
+use datalib_sql::{sql, sql_id, Sql};
 use sqlx::SqlitePool;
 
 /// What the machinery under a download keeps, beside [`SHARED_TABLES`], and no
@@ -18,10 +19,12 @@ pub const SCOPE: &str = "unrendered_tables";
 /// Stored tables that hold rows and are not in `read`, with their row counts,
 /// by name. What the store keeps for itself is no part of an export.
 pub async fn tables_not_read(pool: &SqlitePool, read: &[&str]) -> Result<Vec<(String, i64)>> {
-    let names: Vec<String> = sqlx::query_scalar(
+    let names: Vec<String> = sql!(
+        "etl.render.list_raw_tables",
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' \
-         AND name NOT LIKE 'dolt_%' AND name NOT LIKE '%\\_bookkeeping' ESCAPE '\\' ORDER BY name",
+         AND name NOT LIKE 'dolt_%' AND name NOT LIKE '%\\_bookkeeping' ESCAPE '\\' ORDER BY name"
     )
+    .query_scalar()
     .fetch_all(pool)
     .await
     .context("list the store's tables")?;
@@ -34,8 +37,12 @@ pub async fn tables_not_read(pool: &SqlitePool, read: &[&str]) -> Result<Vec<(St
             continue;
         }
         // Audited: the name comes from `sqlite_master` and is quoted.
-        let sql = format!("SELECT COUNT(*) FROM \"{}\"", name.replace('"', "\"\""));
-        let rows: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        let sql = Sql::dynamic(
+            sql_id!("etl.render.count_rows_of_unread_table"),
+            format!("SELECT COUNT(*) FROM \"{}\"", name.replace('"', "\"\"")),
+        );
+        let rows: i64 = sql
+            .query_scalar()
             .fetch_one(pool)
             .await
             .with_context(|| format!("count {name}"))?;
@@ -86,6 +93,7 @@ pub fn tables_not_read_row(
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// A table nothing reads is named with its rows; one a render reads, an
     /// empty one and the store's own are not.
     #[tokio::test]
@@ -95,15 +103,15 @@ mod tests {
             .await
             .unwrap();
         for sql in [
-            "CREATE TABLE shares (id TEXT)",
-            "INSERT INTO shares VALUES ('a')",
-            "CREATE TABLE education (id TEXT)",
-            "INSERT INTO education VALUES ('Starfleet Academy'), ('Tactical')",
-            "CREATE TABLE education_bookkeeping (id TEXT)",
-            "INSERT INTO education_bookkeeping VALUES ('a')",
-            "CREATE TABLE skills (id TEXT)",
+            test_sql!("CREATE TABLE shares (id TEXT)"),
+            test_sql!("INSERT INTO shares VALUES ('a')"),
+            test_sql!("CREATE TABLE education (id TEXT)"),
+            test_sql!("INSERT INTO education VALUES ('Starfleet Academy'), ('Tactical')"),
+            test_sql!("CREATE TABLE education_bookkeeping (id TEXT)"),
+            test_sql!("INSERT INTO education_bookkeeping VALUES ('a')"),
+            test_sql!("CREATE TABLE skills (id TEXT)"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         let found = tables_not_read(&pool, &["shares"]).await.unwrap();
         assert_eq!(found, [("education".to_string(), 2)]);

@@ -53,6 +53,7 @@ rust_library(
         "//datalib/backend/etl/files:datalib_etl_files",
         "//datalib/backend/etl/providers/beeper_config:datalib_etl_beeper_config",
         "//datalib/backend/etl/sqlite_mirror:datalib_etl_sqlite_mirror",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:sqlx",
     ],

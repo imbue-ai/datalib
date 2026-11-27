@@ -9,11 +9,11 @@ import { kindLabel, type ContactEdit, type Field, type FieldKind } from "./conta
 import type { NormalizedContact, Who } from "./contacts";
 
 /** Where a field's handle stands: linked to this contact, to nobody, or
- *  to someone else, who is named. Null for a field that is no handle. */
+ *  to others, who are named. Null for a field that is no handle. */
 export type Standing =
   | { state: "this" }
   | { state: "none"; handle: string }
-  | { state: "other"; handle: string; owner: NormalizedContact };
+  | { state: "other"; handle: string; owners: NormalizedContact[] };
 
 export function standing(
   handle: string | null | undefined,
@@ -21,9 +21,11 @@ export function standing(
   whoOf: (handle: string) => Who | undefined,
 ): Standing | null {
   if (!handle) return null;
-  const owner = whoOf(handle)?.mine;
-  if (!owner) return { state: "none", handle };
-  return owner.key === contactId ? { state: "this" } : { state: "other", handle, owner };
+  const owners = whoOf(handle)?.mine ?? [];
+  if (owners.length === 0) return { state: "none", handle };
+  return owners.some((c) => c.key === contactId)
+    ? { state: "this" }
+    : { state: "other", handle, owners };
 }
 
 /** The contact's linked addresses and numbers that no field holds: each

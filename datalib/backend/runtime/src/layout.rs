@@ -233,29 +233,38 @@ pub fn restrict_data_root(data_root: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Body of the `CACHEDIR.TAG` files we drop into derived directories. The
-/// first line is the spec-mandated magic that `restic`/`borg`/`tar
-/// --exclude-caches` (and others) recognize; see <https://bford.info/cachedir/>.
-/// The rest is a human hint. Only the per-group `ingest/` stores are
-/// precious — everything tagged here is 100% derived and rebuilt from them
-/// by re-running the pipeline (`datalib-pipeline`).
+/// Body of the `CACHEDIR.TAG` file in a cache outside every library (the
+/// bundled runtime's). The first line is the spec's magic, which `restic`,
+/// `borg` and `tar --exclude-caches` recognize; see
+/// <https://bford.info/cachedir/>. Nothing inside a library is tagged: a
+/// library put back without a tree the loop's record says is up to date
+/// stays without it (`docs/user/backing_up.md`).
 pub const CACHEDIR_TAG_BODY: &str = "Signature: 8a477f597d28d172789f06886806bc55\n\
-    # This directory holds derived, rebuildable data (not a backup source).\n\
-    # datalib regenerates it from the sibling/per-group ingest/ stores by\n\
-    # re-running the pipeline (datalib-pipeline). Safe for backups to skip.\n\
+    # This directory is a cache: datalib fetches what it holds again when\n\
+    # it is missing. Safe for backups to skip.\n\
     # See https://bford.info/cachedir/\n";
 
+pub const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
+
 /// Drop a `CACHEDIR.TAG` into `dir` (if `dir` exists and the tag is absent),
-/// marking it and everything below as derived cache so `--exclude-caches`
-/// backups skip it. Best-effort: a write failure is swallowed — the tag is a
-/// backup hint, never load-bearing for the pipeline.
-pub fn mark_derived_cache(dir: &Path) {
+/// so `--exclude-caches` backups skip it. Best-effort: the tag is a backup
+/// hint, never load-bearing.
+pub fn mark_cache(dir: &Path) {
     if !dir.is_dir() {
         return;
     }
-    let tag = dir.join("CACHEDIR.TAG");
+    let tag = dir.join(CACHEDIR_TAG);
     if !tag.exists() {
         let _ = std::fs::write(&tag, CACHEDIR_TAG_BODY);
+    }
+}
+
+/// Remove the `CACHEDIR.TAG` an earlier build put in `dir`, a tree inside
+/// a library.
+pub fn unmark_cache(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(CACHEDIR_TAG)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
     }
 }
 
@@ -312,16 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn mark_derived_cache_writes_tag_once_and_skips_missing() {
+    fn mark_cache_writes_tag_once_and_skips_missing() {
         let td = tempfile::tempdir().unwrap();
         let derived = td.path().join("render_markdown");
 
         // Missing dir: no-op, no panic, nothing created.
-        mark_derived_cache(&derived);
+        mark_cache(&derived);
         assert!(!derived.exists());
 
         std::fs::create_dir_all(&derived).unwrap();
-        mark_derived_cache(&derived);
+        mark_cache(&derived);
         let tag = derived.join("CACHEDIR.TAG");
         assert!(tag.is_file());
         assert!(std::fs::read_to_string(&tag)
@@ -330,7 +339,7 @@ mod tests {
 
         // Idempotent: a second call doesn't clobber a user-edited tag.
         std::fs::write(&tag, "custom").unwrap();
-        mark_derived_cache(&derived);
+        mark_cache(&derived);
         assert_eq!(std::fs::read_to_string(&tag).unwrap(), "custom");
     }
 }

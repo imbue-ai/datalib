@@ -24,6 +24,7 @@ use datalib_etl_web::http::{HttpRequest, HttpResponse, HttpService};
 use datalib_etl_web::interrupt::{dump_tables, every_cut_resumes, How, Rig};
 use datalib_etl_web::playback;
 use datalib_etl_web::synthesize::{json_response, write_fixture, Synthesizer};
+use datalib_sql::{test_sql_id, Sql};
 use serde_json::{json, Value};
 
 const BASE: &str = "https://chatgpt.com";
@@ -41,13 +42,16 @@ async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
     for table in HELD {
         out.push_str(&format!("== {table} held\n"));
         // Audited: `table` is a literal of HELD.
-        let rows: Vec<(String, bool, Option<String>)> =
-            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        let rows: Vec<(String, bool, Option<String>)> = Sql::dynamic(
+            test_sql_id!(),
+            format!(
                 "SELECT id, fetched_at_utc IS NOT NULL, held_version \
                  FROM {table}_bookkeeping ORDER BY id"
-            )))
-            .fetch_all(pool)
-            .await?;
+            ),
+        )
+        .query_as()
+        .fetch_all(pool)
+        .await?;
         for (id, fetched, held) in rows {
             out.push_str(&format!("{id} fetched={fetched} @ {held:?}\n"));
         }

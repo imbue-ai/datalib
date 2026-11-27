@@ -22,6 +22,7 @@ use datalib_etl_web::retry::{self, RetryGuard};
 use serde_json::{json, Value};
 
 use crate::support::*;
+use datalib_sql::test_sql;
 
 /// Every table the download fills. The `_bookkeeping` sidecars and
 /// `problems` are left out: a run that was cut off has more attempts
@@ -36,10 +37,11 @@ const TABLES: &[&str] = &[
 ];
 
 async fn dump_held(pool: &sqlx::SqlitePool) -> Result<String> {
-    let rows: Vec<(String, bool, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(String, bool, Option<String>)> = test_sql!(
         "SELECT id, fetched_at_utc IS NOT NULL, held_version \
-         FROM merge_requests_bookkeeping ORDER BY id",
+         FROM merge_requests_bookkeeping ORDER BY id"
     )
+    .query_as()
     .fetch_all(pool)
     .await?;
     let mut out = String::from("== merge_requests held\n");

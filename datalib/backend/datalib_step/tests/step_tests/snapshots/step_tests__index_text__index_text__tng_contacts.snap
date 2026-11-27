@@ -54,6 +54,21 @@ Phone home: +33-555-LABARRE
 Address work: Ready Room, Deck 1, Saucer Section
 Note: Make it so.
 
+=== tng_contacts 00000000-0000-81ee-8094-7b4bb677da36 Marie Picard
+--- chunk 0
+title: Marie Picard | text: Source: Contacts
+Group: Engineering
+
+# Marie Picard <vineyard@labarre.earth>
+
+Email home:
+
+vineyard@labarre.earth
+
+Email home:
+
+marie@labarre.earth
+
 === tng_contacts 00000000-0000-829a-bb9d-4c1b203d3251 Senior Staff
 --- chunk 0
 title: Senior Staff | text: Source: Contacts
@@ -104,7 +119,7 @@ Measured Tue Apr 15th, 2369 at 00:00.
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#addressbooks` |  | 3 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contact_categories` |  | 4 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contact_group_members` |  | 2 rows | `00000000` |
-| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 10 rows | `00000000` |
+| Table | ingest | `tng_contacts/ingest/entities.doltlite_db#contacts` |  | 12 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_resources` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#dav_unconfirmed` |  | 0 rows | `00000000` |
 | Table | ingest | `tng_contacts/ingest/entities.doltlite_db#google_contact_groups` |  | 0 rows | `00000000` |
@@ -156,6 +171,23 @@ riker@enterprise.starfleet
 
 Phone cell: +1-555-NUMBER-1
 Note: Plays the trombone. Owns a beard.
+
+=== tng_contacts 00000000-0000-8c26-8d0c-160812e0272d Robert Picard
+--- chunk 0
+title: Robert Picard | text: Source: Contacts
+Group: Engineering
+
+# Robert Picard <vineyard@labarre.earth>
+
+Email home:
+
+vineyard@labarre.earth
+
+Phone home:
+
++33 3 80 55 01 01 <+33380550101>
+
+Note: Keeps the family vineyard at La Barre.
 
 === tng_contacts 00000000-0000-8c51-a4b4-dde335468f6c Hugh
 --- chunk 0

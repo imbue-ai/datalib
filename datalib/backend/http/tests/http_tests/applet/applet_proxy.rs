@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use datalib_http::applets::AppletRegistry;
 use datalib_http::frontend::frontend_dir;
-use datalib_http::request_log::AppletRowsRead;
+use datalib_http::request_log::AppletWork;
 use datalib_http::{router, AppState};
 use std::path::Path;
 use tower::ServiceExt;
@@ -52,10 +52,11 @@ async fn rows_read(app: &axum::Router, uri: &str) -> (Option<u64>, axum::http::H
         )
         .await
         .unwrap();
-    let AppletRowsRead(read) = *resp
+    let read = resp
         .extensions()
-        .get::<AppletRowsRead>()
-        .expect("a proxied answer says what its applet said");
+        .get::<AppletWork>()
+        .expect("a proxied answer says what its applet said")
+        .rows_read;
     (read, resp.headers().clone())
 }
 

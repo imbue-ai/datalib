@@ -19,6 +19,7 @@ use strum::{EnumString, IntoStaticStr, VariantArray};
 
 use super::pass::{PassRow, PassState};
 use crate::step::StoreBytes;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// How a store's tables reach this build's shape, after what
 /// `CREATE TABLE IF NOT EXISTS` makes on its own. Every store from before
@@ -30,13 +31,21 @@ const LADDER: &[datalib_store_meta::Migration] = &[
         name: "steps in one shape; launch_passes goes",
         apply: |conn| {
             Box::pin(async move {
-                sqlx::query("ALTER TABLE steps RENAME TO steps_v5")
-                    .execute(&mut *conn)
-                    .await?;
-                sqlx::query(super::record::STEPS)
-                    .execute(&mut *conn)
-                    .await?;
-                sqlx::raw_sql(STEPS_FROM_V5).execute(&mut *conn).await?;
+                sql!(
+                    "dag.supervisor.migrate_v6_rename_old_steps",
+                    "ALTER TABLE steps RENAME TO steps_v5"
+                )
+                .query()
+                .execute(&mut *conn)
+                .await?;
+                Sql::ddl(
+                    sql_id!("dag.supervisor.migrate_v6_create_steps"),
+                    super::record::STEPS,
+                )
+                .query()
+                .execute(&mut *conn)
+                .await?;
+                STEPS_FROM_V5.raw().execute(&mut *conn).await?;
                 Ok(())
             })
         },
@@ -47,23 +56,29 @@ const LADDER: &[datalib_store_meta::Migration] = &[
         apply: |conn| {
             Box::pin(async move {
                 let has = |table: &'static str| {
-                    sqlx::query_scalar::<_, i64>(
-                        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?",
+                    sql!(
+                        "dag.supervisor.migrate_v7_has_table",
+                        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?"
                     )
+                    .query_scalar::<i64>()
                     .bind(table)
                 };
                 if has("wipes").fetch_one(&mut *conn).await? > 0 {
-                    sqlx::raw_sql(
-                        "DROP INDEX IF EXISTS wipes_open; ALTER TABLE wipes RENAME TO jobs",
+                    sql!(
+                        "dag.supervisor.migrate_v7_rename_wipes",
+                        "DROP INDEX IF EXISTS wipes_open; ALTER TABLE wipes RENAME TO jobs"
                     )
+                    .raw()
                     .execute(&mut *conn)
                     .await?;
                 }
                 if has("wipe_steps").fetch_one(&mut *conn).await? > 0 {
-                    sqlx::raw_sql(
+                    sql!(
+                        "dag.supervisor.migrate_v7_rename_wipe_steps",
                         "ALTER TABLE wipe_steps RENAME TO job_steps; \
-                         ALTER TABLE job_steps RENAME COLUMN wipe_id TO job_id",
+                         ALTER TABLE job_steps RENAME COLUMN wipe_id TO job_id"
                     )
+                    .raw()
                     .execute(&mut *conn)
                     .await?;
                 }
@@ -82,14 +97,17 @@ const SCHEMA_VERSION: u32 = LADDER[LADDER.len() - 1].version;
 /// writes again: `needs_rerun` at the launch's prepare pass,
 /// `waiting_for` on its next tick, `last_failure_kind` at the step's next
 /// run. `launch_passes` goes with it: nothing reads it.
-const STEPS_FROM_V5: &str = "INSERT INTO steps (step, succeeded, fingerprint, reads, \
+const STEPS_FROM_V5: Sql = sql!(
+    "dag.supervisor.migrate_v6_copy_steps_drop_old",
+    "INSERT INTO steps (step, succeeded, fingerprint, reads, \
      last_run_id, last_started_at_utc, last_finished_at_utc, last_status, last_attempts, \
      last_error, last_success_at_utc, tz_offset, state, state_detail, turned_off_by, requests) \
      SELECT step, succeeded, fingerprint, reads, last_run_id, last_started_at_utc, \
      last_finished_at_utc, last_status, last_attempts, last_error, last_success_at_utc, \
      tz_offset, state, state_detail, turned_off_by, requests FROM steps_v5; \
      DROP TABLE steps_v5; \
-     DROP TABLE IF EXISTS launch_passes";
+     DROP TABLE IF EXISTS launch_passes"
+);
 
 const DDL: [&str; 4] = [
     "CREATE TABLE IF NOT EXISTS requests (
@@ -146,14 +164,19 @@ const INDEXES: [&str; 2] = [
     "CREATE INDEX IF NOT EXISTS jobs_open ON jobs (closed_at_utc, opened_at_utc, id)",
 ];
 
-const OPEN_REQUESTS: &str =
+const OPEN_REQUESTS: Sql = sql!(
+    "dag.supervisor.find_open_requests",
     "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
      FROM requests INDEXED BY requests_open \
-     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id";
+     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
+);
 
-const OPEN_JOBS: &str = "SELECT id, kind, targets, opened_by, closed_at_utc, error \
+const OPEN_JOBS: Sql = sql!(
+    "dag.supervisor.find_open_jobs",
+    "SELECT id, kind, targets, opened_by, closed_at_utc, error \
      FROM jobs INDEXED BY jobs_open \
-     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id";
+     WHERE closed_at_utc IS NULL ORDER BY opened_at_utc, id"
+);
 
 /// Long enough to outlast another process's write transaction, which is
 /// a single row here.
@@ -311,7 +334,10 @@ impl Store {
                 .chain(super::record::INDEXES)
         };
         for stmt in ddl() {
-            sqlx::query(stmt).execute(&store.pool).await?;
+            Sql::dynamic(sql_id!("dag.supervisor.create_schema"), stmt)
+                .query()
+                .execute(&store.pool)
+                .await?;
         }
         datalib_store_meta::write(
             &store.pool,
@@ -359,10 +385,14 @@ impl Store {
                 .await
                 .with_context(|| format!("migrate {} to v{}", path.display(), rung.version))?;
         }
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'schema_version'")
-            .bind(SCHEMA_VERSION.to_string())
-            .execute(&mut *tx)
-            .await?;
+        sql!(
+            "dag.supervisor.update_schema_version",
+            "UPDATE _datalib_meta SET value = ? WHERE key = 'schema_version'"
+        )
+        .query()
+        .bind(SCHEMA_VERSION.to_string())
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -395,18 +425,23 @@ impl Store {
     /// Moves whenever another connection commits a change; the loop's cue
     /// to read the intent again.
     pub async fn data_version(&self) -> Result<i64> {
-        Ok(sqlx::query_scalar("PRAGMA data_version")
-            .fetch_one(&self.pool)
-            .await?)
+        Ok(
+            sql!("dag.supervisor.read_data_version", "PRAGMA data_version")
+                .query_scalar()
+                .fetch_one(&self.pool)
+                .await?,
+        )
     }
 
     pub async fn open_request(&self, roots: &[String], by: &str) -> Result<String> {
         let id = uuid::Uuid::now_v7().to_string();
         let (now, tz_offset) = now_split();
-        sqlx::query(
+        sql!(
+            "dag.supervisor.insert_request",
             "INSERT INTO requests (id, roots, opened_by, opened_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?)"
         )
+        .query()
         .bind(&id)
         .bind(serde_json::to_string(roots)?)
         .bind(by)
@@ -422,10 +457,12 @@ impl Store {
     /// Asking twice, or about a closed request, changes nothing.
     pub async fn request_stop(&self, id: &str, by: &str) -> Result<()> {
         let (now, _) = now_split();
-        sqlx::query(
+        sql!(
+            "dag.supervisor.mark_request_stop",
             "UPDATE requests SET stop_requested_by = ?, stop_requested_at_utc = ? \
-             WHERE id = ? AND closed_at_utc IS NULL AND stop_requested_by IS NULL",
+             WHERE id = ? AND closed_at_utc IS NULL AND stop_requested_by IS NULL"
         )
+        .query()
         .bind(by)
         .bind(now)
         .bind(id)
@@ -443,10 +480,12 @@ impl Store {
         failed_step: Option<&str>,
     ) -> Result<()> {
         let (now, _) = now_split();
-        sqlx::query(
+        sql!(
+            "dag.supervisor.close_request",
             "UPDATE requests SET closed_at_utc = ?, outcome = ?, failed_step = ? \
-             WHERE id = ? AND closed_at_utc IS NULL",
+             WHERE id = ? AND closed_at_utc IS NULL"
         )
+        .query()
         .bind(now)
         .bind(outcome.as_str())
         .bind(failed_step)
@@ -458,7 +497,7 @@ impl Store {
     }
 
     pub async fn open_requests(&self) -> Result<Vec<RequestRow>> {
-        let rows = sqlx::query(OPEN_REQUESTS).fetch_all(&self.pool).await?;
+        let rows = OPEN_REQUESTS.query().fetch_all(&self.pool).await?;
         rows.iter().map(request_of).collect()
     }
 
@@ -468,10 +507,14 @@ impl Store {
     /// a step turned back on, and the loop ran a stopped sync's step again.
     pub async fn mailbox(&self) -> Result<(Vec<RequestRow>, BTreeMap<String, String>)> {
         let mut tx = self.pool.begin().await?;
-        let rows = sqlx::query(OPEN_REQUESTS).fetch_all(&mut *tx).await?;
-        let turned_off = sqlx::query("SELECT step, turned_off_by FROM turned_off")
-            .fetch_all(&mut *tx)
-            .await?;
+        let rows = OPEN_REQUESTS.query().fetch_all(&mut *tx).await?;
+        let turned_off = sql!(
+            "dag.supervisor.mailbox_list_turned_off",
+            "SELECT step, turned_off_by FROM turned_off"
+        )
+        .query()
+        .fetch_all(&mut *tx)
+        .await?;
         tx.commit().await?;
         let requests = rows.iter().map(request_of).collect::<Result<_>>()?;
         let turned_off = turned_off
@@ -484,11 +527,13 @@ impl Store {
     /// The open requests and then the newest closed ones, up to `limit`
     /// in all.
     pub async fn recent_requests(&self, limit: u32) -> Result<Vec<RequestRow>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "dag.supervisor.list_recent_requests",
             "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
              FROM requests ORDER BY closed_at_utc IS NOT NULL, opened_at_utc DESC, id DESC \
-             LIMIT ?",
+             LIMIT ?"
         )
+        .query()
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -496,10 +541,12 @@ impl Store {
     }
 
     pub async fn request(&self, id: &str) -> Result<Option<RequestRow>> {
-        let row = sqlx::query(
+        let row = sql!(
+            "dag.supervisor.read_request",
             "SELECT id, roots, opened_by, stop_requested_by, closed_at_utc, outcome, failed_step \
-             FROM requests WHERE id = ?",
+             FROM requests WHERE id = ?"
         )
+        .query()
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
@@ -508,10 +555,8 @@ impl Store {
 
     pub async fn turn_off(&self, step: &str, by: &str) -> Result<()> {
         let (now, tz_offset) = now_split();
-        sqlx::query(
-            "INSERT INTO turned_off (step, turned_off_by, turned_off_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
-             ON CONFLICT(step) DO NOTHING",
-        )
+        sql!("dag.supervisor.insert_turned_off", "INSERT INTO turned_off (step, turned_off_by, turned_off_at_utc, tz_offset) VALUES (?, ?, ?, ?) \
+             ON CONFLICT(step) DO NOTHING").query()
         .bind(step)
         .bind(by)
         .bind(now)
@@ -523,10 +568,14 @@ impl Store {
     }
 
     pub async fn turn_on(&self, step: &str) -> Result<()> {
-        sqlx::query("DELETE FROM turned_off WHERE step = ?")
-            .bind(step)
-            .execute(&self.pool)
-            .await?;
+        sql!(
+            "dag.supervisor.delete_turned_off",
+            "DELETE FROM turned_off WHERE step = ?"
+        )
+        .query()
+        .bind(step)
+        .execute(&self.pool)
+        .await?;
         self.announce(&format!("turned on {step}"));
         Ok(())
     }
@@ -537,10 +586,12 @@ impl Store {
     /// again under the new id. A row the new id already has is left as
     /// it is. Returns how many rows moved.
     pub async fn rename_switches(&self, old: &str, new: &str) -> Result<u64> {
-        let moved = sqlx::query(
+        let moved = sql!(
+            "dag.supervisor.rename_turned_off_under",
             "UPDATE OR IGNORE turned_off SET step = ? || substr(step, ?) \
-             WHERE step = ? OR substr(step, 1, ?) = ?",
+             WHERE step = ? OR substr(step, 1, ?) = ?"
         )
+        .query()
         .bind(new)
         .bind(old.len() as i64 + 1)
         .bind(old)
@@ -565,22 +616,28 @@ impl Store {
         let mut moved = 0;
         for (table, column) in [("turned_off", "step"), ("steps", "step"), ("sinks", "path")] {
             // Safe: `table` and `column` are literals from the list above.
-            let rename = sqlx::AssertSqlSafe(format!(
-                "UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?"
-            ));
-            moved += sqlx::query(rename)
+            let rename = Sql::dynamic(
+                sql_id!("dag.supervisor.rename_step_rows"),
+                format!("UPDATE OR IGNORE {table} SET {column} = ? WHERE {column} = ?"),
+            );
+            moved += rename
+                .query()
                 .bind(new)
                 .bind(old)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
         }
-        sqlx::query("UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0")
-            .bind(&old_key)
-            .bind(&new_key)
-            .bind(&old_key)
-            .execute(&mut *tx)
-            .await?;
+        sql!(
+            "dag.supervisor.rename_step_in_reads",
+            "UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0"
+        )
+        .query()
+        .bind(&old_key)
+        .bind(&new_key)
+        .bind(&old_key)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         if moved > 0 {
             self.announce(&format!("renamed {old} to {new}"));
@@ -602,11 +659,15 @@ impl Store {
         let mut moved = 0;
         for (table, column) in [("turned_off", "step"), ("steps", "step"), ("sinks", "path")] {
             // Safe: `table` and `column` are literals from the list above.
-            let rename = sqlx::AssertSqlSafe(format!(
-                "UPDATE OR IGNORE {table} SET {column} = ? || substr({column}, ?) \
+            let rename = Sql::dynamic(
+                sql_id!("dag.supervisor.rename_group_step_rows"),
+                format!(
+                    "UPDATE OR IGNORE {table} SET {column} = ? || substr({column}, ?) \
                  WHERE substr({column}, 1, ?) = ?"
-            ));
-            moved += sqlx::query(rename)
+                ),
+            );
+            moved += rename
+                .query()
                 .bind(&new_prefix)
                 .bind(old_prefix.len() as i64 + 1)
                 .bind(old_prefix.len() as i64)
@@ -615,12 +676,16 @@ impl Store {
                 .await?
                 .rows_affected();
         }
-        sqlx::query("UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0")
-            .bind(&old_key)
-            .bind(&new_key)
-            .bind(&old_key)
-            .execute(&mut *tx)
-            .await?;
+        sql!(
+            "dag.supervisor.rename_group_in_reads",
+            "UPDATE steps SET reads = replace(reads, ?, ?) WHERE instr(reads, ?) > 0"
+        )
+        .query()
+        .bind(&old_key)
+        .bind(&new_key)
+        .bind(&old_key)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         if moved > 0 {
             self.announce(&format!("renamed {old}/ to {new}/"));
@@ -630,9 +695,13 @@ impl Store {
 
     /// Step id → who turned it off.
     pub async fn turned_off(&self) -> Result<BTreeMap<String, String>> {
-        let rows = sqlx::query("SELECT step, turned_off_by FROM turned_off")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sql!(
+            "dag.supervisor.list_turned_off",
+            "SELECT step, turned_off_by FROM turned_off"
+        )
+        .query()
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
             .map(|r| Ok((r.try_get("step")?, r.try_get("turned_off_by")?)))
             .collect()
@@ -641,10 +710,12 @@ impl Store {
     pub async fn open_job(&self, kind: JobKind, targets: &[String], by: &str) -> Result<String> {
         let id = uuid::Uuid::now_v7().to_string();
         let (now, tz_offset) = now_split();
-        sqlx::query(
+        sql!(
+            "dag.supervisor.insert_job",
             "INSERT INTO jobs (id, kind, targets, opened_by, opened_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?)"
         )
+        .query()
         .bind(&id)
         .bind(kind.as_str())
         .bind(serde_json::to_string(targets)?)
@@ -661,9 +732,11 @@ impl Store {
     /// done; `None` when it was.
     pub async fn close_job(&self, id: &str, error: Option<&str>) -> Result<()> {
         let (now, _) = now_split();
-        sqlx::query(
-            "UPDATE jobs SET closed_at_utc = ?, error = ? WHERE id = ? AND closed_at_utc IS NULL",
+        sql!(
+            "dag.supervisor.close_job",
+            "UPDATE jobs SET closed_at_utc = ?, error = ? WHERE id = ? AND closed_at_utc IS NULL"
         )
+        .query()
         .bind(now)
         .bind(error)
         .bind(id)
@@ -674,25 +747,29 @@ impl Store {
     }
 
     pub async fn open_jobs(&self) -> Result<Vec<JobRow>> {
-        let rows = sqlx::query(OPEN_JOBS).fetch_all(&self.pool).await?;
+        let rows = OPEN_JOBS.query().fetch_all(&self.pool).await?;
         rows.iter().map(wipe_of).collect()
     }
 
     /// Open and closed, oldest first.
     pub async fn wipes(&self) -> Result<Vec<JobRow>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "dag.supervisor.list_jobs",
             "SELECT id, kind, targets, opened_by, closed_at_utc, error \
-             FROM jobs ORDER BY opened_at_utc, id",
+             FROM jobs ORDER BY opened_at_utc, id"
         )
+        .query()
         .fetch_all(&self.pool)
         .await?;
         rows.iter().map(wipe_of).collect()
     }
 
     pub async fn wipe(&self, id: &str) -> Result<Option<JobRow>> {
-        let row = sqlx::query(
-            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs WHERE id = ?",
+        let row = sql!(
+            "dag.supervisor.read_job",
+            "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs WHERE id = ?"
         )
+        .query()
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
@@ -705,18 +782,26 @@ impl Store {
     /// wipe asks, waiting.
     pub async fn begin_job_steps(&self, wipe: &str, steps: &[&str]) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("DELETE FROM job_steps WHERE job_id = ?")
+        sql!(
+            "dag.supervisor.delete_job_steps",
+            "DELETE FROM job_steps WHERE job_id = ?"
+        )
+        .query()
+        .bind(wipe)
+        .execute(&mut *tx)
+        .await?;
+        for (ord, step) in steps.iter().enumerate() {
+            sql!(
+                "dag.supervisor.insert_job_step",
+                "INSERT INTO job_steps (job_id, ord, step, state) VALUES (?, ?, ?, ?)"
+            )
+            .query()
             .bind(wipe)
+            .bind(ord as i64)
+            .bind(step)
+            .bind(PassState::Waiting.as_str())
             .execute(&mut *tx)
             .await?;
-        for (ord, step) in steps.iter().enumerate() {
-            sqlx::query("INSERT INTO job_steps (job_id, ord, step, state) VALUES (?, ?, ?, ?)")
-                .bind(wipe)
-                .bind(ord as i64)
-                .bind(step)
-                .bind(PassState::Waiting.as_str())
-                .execute(&mut *tx)
-                .await?;
         }
         tx.commit().await?;
         self.announce(&format!("{JOB_MOVED} {wipe}"));
@@ -732,10 +817,12 @@ impl Store {
         error: Option<&str>,
         bytes: Option<StoreBytes>,
     ) -> Result<()> {
-        sqlx::query(
+        sql!(
+            "dag.supervisor.update_job_step",
             "UPDATE job_steps SET state = ?, error = ?, before_bytes = ?, after_bytes = ? \
-             WHERE job_id = ? AND ord = ?",
+             WHERE job_id = ? AND ord = ?"
         )
+        .query()
         .bind(state.as_str())
         .bind(error)
         .bind(bytes.map(|b| b.before as i64))
@@ -751,10 +838,12 @@ impl Store {
     /// In the order the wipe asks them. A state this build does not know
     /// reads as waiting.
     pub async fn job_steps(&self, wipe: &str) -> Result<Vec<PassRow>> {
-        let rows = sqlx::query(
+        let rows = sql!(
+            "dag.supervisor.list_job_steps",
             "SELECT step, state, error, before_bytes, after_bytes FROM job_steps \
-             WHERE job_id = ? ORDER BY ord",
+             WHERE job_id = ? ORDER BY ord"
         )
+        .query()
         .bind(wipe)
         .fetch_all(&self.pool)
         .await?;
@@ -791,11 +880,13 @@ impl Store {
 
     async fn latest_since(&self, kinds: &[JobKind], since_utc: &str) -> Result<Option<JobRow>> {
         let kinds: Vec<&str> = kinds.iter().map(|k| k.as_str()).collect();
-        let row = sqlx::query(
+        let row = sql!(
+            "dag.supervisor.find_latest_job_since",
             "SELECT id, kind, targets, opened_by, closed_at_utc, error FROM jobs \
              WHERE kind IN (SELECT value FROM json_each(?)) AND opened_at_utc >= ? \
-             ORDER BY opened_at_utc DESC, id DESC LIMIT 1",
+             ORDER BY opened_at_utc DESC, id DESC LIMIT 1"
         )
+        .query()
         .bind(serde_json::to_string(&kinds)?)
         .bind(since_utc)
         .fetch_optional(&self.pool)
@@ -860,10 +951,12 @@ fn options(path: &Path) -> SqliteConnectOptions {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     async fn columns(store: &Store, table: &str) -> Vec<String> {
         // Safe: `table` is a literal in a test.
-        let pragma = sqlx::AssertSqlSafe(format!("PRAGMA table_info({table})"));
-        sqlx::query(pragma)
+        let pragma = Sql::dynamic(test_sql_id!(), format!("PRAGMA table_info({table})"));
+        pragma
+            .query()
             .fetch_all(store.pool())
             .await
             .unwrap()
@@ -913,19 +1006,22 @@ mod tests {
                 .unwrap();
             for stmt in old.iter().chain(DDL.iter()) {
                 // Safe: every statement is a constant of this file.
-                sqlx::query(sqlx::AssertSqlSafe(*stmt))
+                Sql::dynamic(test_sql_id!(), *stmt)
+                    .query()
                     .execute(&pool)
                     .await
                     .unwrap();
             }
-            sqlx::query(
+            test_sql!(
                 "INSERT INTO steps (step, succeeded, fingerprint, reads, last_status) \
-                 VALUES ('a/ingest', 1, 'f', '{}', 'succeeded')",
+                 VALUES ('a/ingest', 1, 'f', '{}', 'succeeded')"
             )
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-            sqlx::query("INSERT INTO turned_off VALUES ('a/render_markdown', 'thad', 't', 'z')")
+            test_sql!("INSERT INTO turned_off VALUES ('a/render_markdown', 'thad', 't', 'z')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -959,9 +1055,10 @@ mod tests {
                         .collect::<Vec<_>>(),
                     ["a/render_markdown"]
                 );
-                let tables: Vec<String> = sqlx::query_scalar(
-                    "SELECT name FROM sqlite_master WHERE name IN ('launch_passes', 'steps_v5')",
+                let tables: Vec<String> = test_sql!(
+                    "SELECT name FROM sqlite_master WHERE name IN ('launch_passes', 'steps_v5')"
                 )
+                .query_scalar()
                 .fetch_all(store.pool())
                 .await
                 .unwrap();
@@ -993,7 +1090,7 @@ mod tests {
             .connect_with(options(&path))
             .await
             .unwrap();
-        sqlx::raw_sql(
+        test_sql!(
             "CREATE TABLE wipes (id TEXT PRIMARY KEY, kind TEXT NOT NULL, \
              targets TEXT NOT NULL, opened_by TEXT NOT NULL, opened_at_utc TEXT NOT NULL, \
              tz_offset TEXT NOT NULL, closed_at_utc TEXT, error TEXT); \
@@ -1004,8 +1101,9 @@ mod tests {
              INSERT INTO wipes VALUES ('w1', 'reset', '[\"a/ingest\"]', 'ui', 't', 'z', \
              NULL, NULL); \
              INSERT INTO wipes VALUES ('w2', 'collect', '[]', 'ui', 't', 'z', 't', NULL); \
-             INSERT INTO wipe_steps VALUES ('w2', 0, 'a/ingest', 'done', NULL, 10, 4);",
+             INSERT INTO wipe_steps VALUES ('w2', 0, 'a/ingest', 'done', NULL, 10, 4);"
         )
+        .raw()
         .execute(&pool)
         .await
         .unwrap();
@@ -1036,9 +1134,10 @@ mod tests {
         let steps = store.job_steps("w2").await.unwrap();
         assert_eq!(steps.len(), 1, "{steps:?}");
         assert_eq!(steps[0].state, PassState::Done);
-        let left: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE name IN ('wipes', 'wipe_steps', 'wipes_open')",
+        let left: Vec<String> = test_sql!(
+            "SELECT name FROM sqlite_master WHERE name IN ('wipes', 'wipe_steps', 'wipes_open')"
         )
+        .query_scalar()
         .fetch_all(store.pool())
         .await
         .unwrap();
@@ -1058,8 +1157,8 @@ mod tests {
         let store = Store::open(root.path()).await.unwrap();
         for name in NAMES {
             // Safe: `name` is one of the three literals above.
-            let drop = sqlx::AssertSqlSafe(format!("DROP INDEX {name}"));
-            sqlx::query(drop).execute(store.pool()).await.unwrap();
+            let drop = Sql::dynamic(test_sql_id!(), format!("DROP INDEX {name}"));
+            drop.query().execute(store.pool()).await.unwrap();
         }
         store.close().await;
 
@@ -1077,8 +1176,9 @@ mod tests {
             ),
         ] {
             // Safe: each `sql` is one of this module's constants.
-            let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {sql}"));
-            let plan: Vec<String> = sqlx::query(explain)
+            let explain = Sql::dynamic(test_sql_id!(), format!("EXPLAIN QUERY PLAN {sql}"));
+            let plan: Vec<String> = explain
+                .query()
                 .fetch_all(store.pool())
                 .await
                 .unwrap()
@@ -1112,15 +1212,17 @@ mod tests {
             .turn_off("unified_index_extra/x", "test")
             .await
             .unwrap();
-        sqlx::query(
+        test_sql!(
             "INSERT INTO steps (step, succeeded, fingerprint, reads) \
-             VALUES ('unified_index/embedding_map', 1, 'f', ?)",
+             VALUES ('unified_index/embedding_map', 1, 'f', ?)"
         )
+        .query()
         .bind(r#"{"unified_index/qmd_aggregator":"v1"}"#)
         .execute(store.pool())
         .await
         .unwrap();
-        sqlx::query("INSERT INTO sinks (path, version) VALUES ('unified_index/grid_index', 'v2')")
+        test_sql!("INSERT INTO sinks (path, version) VALUES ('unified_index/grid_index', 'v2')")
+            .query()
             .execute(store.pool())
             .await
             .unwrap();
@@ -1138,7 +1240,8 @@ mod tests {
                 "unified_index_extra/x"
             ]
         );
-        let (step, reads): (String, String) = sqlx::query_as("SELECT step, reads FROM steps")
+        let (step, reads): (String, String) = test_sql!("SELECT step, reads FROM steps")
+            .query_as()
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -1147,7 +1250,8 @@ mod tests {
             reads,
             r#"{"unified_grid_and_search_index/qmd_aggregator":"v1"}"#
         );
-        let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
+        let sink: String = test_sql!("SELECT path FROM sinks")
+            .query_scalar()
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -1176,16 +1280,18 @@ mod tests {
             (old, r#"{"a/render_markdown":"v1"}"#),
             ("a/embed", r#"{"u/grid_index":"v2"}"#),
         ] {
-            sqlx::query(
-                "INSERT INTO steps (step, succeeded, fingerprint, reads) VALUES (?, 1, 'f', ?)",
+            test_sql!(
+                "INSERT INTO steps (step, succeeded, fingerprint, reads) VALUES (?, 1, 'f', ?)"
             )
+            .query()
             .bind(step)
             .bind(reads)
             .execute(store.pool())
             .await
             .unwrap();
         }
-        sqlx::query("INSERT INTO sinks (path, version) VALUES (?, 'v2')")
+        test_sql!("INSERT INTO sinks (path, version) VALUES (?, 'v2')")
+            .query()
             .bind(old)
             .execute(store.pool())
             .await
@@ -1194,11 +1300,11 @@ mod tests {
         assert_eq!(store.rename_step(old, new).await.unwrap(), 3);
         let off: Vec<String> = store.turned_off().await.unwrap().into_keys().collect();
         assert_eq!(off, ["u/grid_index_extra", new]);
-        let steps: Vec<(String, String)> =
-            sqlx::query_as("SELECT step, reads FROM steps ORDER BY step")
-                .fetch_all(store.pool())
-                .await
-                .unwrap();
+        let steps: Vec<(String, String)> = test_sql!("SELECT step, reads FROM steps ORDER BY step")
+            .query_as()
+            .fetch_all(store.pool())
+            .await
+            .unwrap();
         assert_eq!(
             steps,
             [
@@ -1206,7 +1312,8 @@ mod tests {
                 (new.to_string(), r#"{"a/render_markdown":"v1"}"#.to_string()),
             ]
         );
-        let sink: String = sqlx::query_scalar("SELECT path FROM sinks")
+        let sink: String = test_sql!("SELECT path FROM sinks")
+            .query_scalar()
             .fetch_one(store.pool())
             .await
             .unwrap();
@@ -1311,7 +1418,8 @@ mod tests {
     async fn a_store_a_newer_build_wrote_is_refused() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = '99' WHERE key = 'schema_version'")
+        test_sql!("UPDATE _datalib_meta SET value = '99' WHERE key = 'schema_version'")
+            .query()
             .execute(&store.pool)
             .await
             .unwrap();

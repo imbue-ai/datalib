@@ -34,6 +34,7 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
 
 use crate::typedstream::attributed_body_text;
+use datalib_sql::{sql, sql_id, Sql};
 
 /// v2: every id carries its row's `created_at` in its leading bits
 ///     (`datalib_id`'s v8 layout).
@@ -224,21 +225,28 @@ async fn load(
     range: RawRange<'_>,
     pin: &datalib_etl::pin::Pin,
 ) -> Result<Loaded> {
-    let handles: HashMap<i64, String> = sqlx::query("SELECT ROWID, id FROM handle")
-        .fetch_all(pool)
-        .await
-        .context("select handle")?
-        .iter()
-        .map(|r| (r.get("ROWID"), r.get("id")))
-        .collect();
+    let handles: HashMap<i64, String> = sql!(
+        "apple_messages_render.list_handles",
+        "SELECT ROWID, id FROM handle"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("select handle")?
+    .iter()
+    .map(|r| (r.get("ROWID"), r.get("id")))
+    .collect();
 
     let mut chats: Vec<ChatBuild> = Vec::new();
     let mut chat_idx: HashMap<i64, usize> = HashMap::new();
-    let chat_rows =
-        sqlx::query("SELECT ROWID, guid, chat_identifier, display_name FROM chat ORDER BY ROWID")
-            .fetch_all(pool)
-            .await
-            .context("select chat")?;
+    let chat_rows = sql!(
+        "apple_messages_render.list_chats",
+        "SELECT ROWID, guid, chat_identifier, display_name FROM chat ORDER BY ROWID"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("select chat")?;
     for r in &chat_rows {
         let rowid: i64 = r.get("ROWID");
         let inputs = Inputs::default();
@@ -256,10 +264,14 @@ async fn load(
         });
     }
 
-    let members = sqlx::query("SELECT chat_id, handle_id FROM chat_handle_join")
-        .fetch_all(pool)
-        .await
-        .context("select chat_handle_join")?;
+    let members = sql!(
+        "apple_messages_render.list_chat_members",
+        "SELECT chat_id, handle_id FROM chat_handle_join"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("select chat_handle_join")?;
     for r in &members {
         let (chat_id, handle_id): (i64, i64) = (r.get("chat_id"), r.get("handle_id"));
         if let Some(&idx) = chat_idx.get(&chat_id) {
@@ -275,10 +287,14 @@ async fn load(
 
     let mut chat_of_message: HashMap<i64, usize> = HashMap::new();
     let mut missing_chat_of_message: HashMap<i64, i64> = HashMap::new();
-    let joins = sqlx::query("SELECT chat_id, message_id FROM chat_message_join")
-        .fetch_all(pool)
-        .await
-        .context("select chat_message_join")?;
+    let joins = sql!(
+        "apple_messages_render.list_chat_messages",
+        "SELECT chat_id, message_id FROM chat_message_join"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("select chat_message_join")?;
     for r in &joins {
         let (chat_id, message_id): (i64, i64) = (r.get("chat_id"), r.get("message_id"));
         match chat_idx.get(&chat_id) {
@@ -295,12 +311,14 @@ async fn load(
     }
 
     let mut attachments: HashMap<i64, Vec<NormalizedAttachment>> = HashMap::new();
-    let files = sqlx::query(
+    let files = sql!(
+        "apple_messages_render.list_message_attachments",
         "SELECT j.message_id, a.ROWID AS attachment_id, a.filename, a.mime_type, \
                 a.transfer_name, a.total_bytes \
            FROM message_attachment_join j \
-           JOIN attachment a ON a.ROWID = j.attachment_id",
+           JOIN attachment a ON a.ROWID = j.attachment_id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("select attachment")?;
@@ -341,13 +359,13 @@ async fn load(
         } else {
             "NULL AS thread_originator_guid"
         };
-    let messages = sqlx::query(sqlx::AssertSqlSafe(format!(
+    let messages = Sql::dynamic(sql_id!("apple_messages_render.list_messages"), format!(
         // Safe: the one interpolation is one of two literals above.
         "SELECT ROWID, guid, text, attributedBody, date, is_from_me, is_read, handle_id, item_type, \
                 group_action_type, group_title, associated_message_guid, \
                 associated_message_type, associated_message_emoji, {thread_originator} \
            FROM message ORDER BY date, ROWID"
-    )))
+    )).query()
     .fetch_all(pool)
     .await
     .context("select message")?;

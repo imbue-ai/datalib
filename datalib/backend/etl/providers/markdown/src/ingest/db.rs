@@ -13,6 +13,7 @@ use datalib_problems::{Outcome, Problem};
 use datalib_time::IsoOffsetTimestamp;
 
 use super::schema_raw::{full_ddl, MarkdownFileRow, MarkdownScanMetaRow, MARKDOWN_FILES};
+use datalib_sql::sql;
 
 pub fn db_path_for(raw_dir: &Path) -> PathBuf {
     datalib_etl::raw_layout::entities_db(raw_dir)
@@ -63,10 +64,16 @@ impl RawDb {
     pub async fn delete_file(&self, scope: &str, rel: &str) -> Result<()> {
         let mut tx = self.pool().begin().await.context("begin delete tx")?;
         for sql in [
-            "DELETE FROM markdown_files WHERE id = ?",
-            "DELETE FROM markdown_files_bookkeeping WHERE id = ?",
+            sql!(
+                "markdown.delete_file.delete_markdown_files",
+                "DELETE FROM markdown_files WHERE id = ?"
+            ),
+            sql!(
+                "markdown.delete_file.delete_markdown_files_bookkeeping",
+                "DELETE FROM markdown_files_bookkeeping WHERE id = ?"
+            ),
         ] {
-            sqlx::query(sql)
+            sql.query()
                 .bind(rel)
                 .execute(&mut *tx)
                 .await
@@ -82,10 +89,14 @@ impl RawDb {
     /// row every rendered note reads, since its link is an absolute path
     /// under that root.
     pub async fn scan_root(&self) -> Result<Option<(String, PathBuf)>> {
-        let row = sqlx::query("SELECT id, abs_root FROM markdown_scan_meta ORDER BY id LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("read markdown_scan_meta")?;
+        let row = sql!(
+            "markdown.read_scan_root",
+            "SELECT id, abs_root FROM markdown_scan_meta ORDER BY id LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("read markdown_scan_meta")?;
         Ok(row.map(|r| {
             (
                 r.get::<String, _>("id"),
@@ -96,9 +107,11 @@ impl RawDb {
 
     /// Every stored note, or the ones `only` names, in path order.
     pub async fn notes(&self, only: Option<&HashSet<String>>) -> Result<Vec<MarkdownFileRow>> {
-        let rows = sqlx::query(
-            "SELECT id, blake3, size, modified_at, text FROM markdown_files ORDER BY id",
+        let rows = sql!(
+            "markdown.list_notes",
+            "SELECT id, blake3, size, modified_at, text FROM markdown_files ORDER BY id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("read markdown_files")?;

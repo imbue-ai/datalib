@@ -1,6 +1,7 @@
 //! A calendar series split with "this and following events", against
 //! the real binary: the ingest and render steps over an `.ics` folder,
 //! before and after the edit.
+use datalib_sql::test_sql;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -60,15 +61,16 @@ async fn rendered(root: &Path) -> (Vec<String>, i64) {
         .unwrap()
         .expect("a render store with a main");
     let titles: Vec<String> =
-        sqlx::query_scalar("SELECT title FROM markdowns WHERE kind <> 'storage' ORDER BY title")
+        test_sql!("SELECT title FROM markdowns WHERE kind <> 'storage' ORDER BY title")
+            .query_scalar()
             .fetch_all(reader.pool())
             .await
             .unwrap();
-    let kept: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM problems WHERE reason = 'no_document'")
-            .fetch_one(reader.pool())
-            .await
-            .unwrap();
+    let kept: i64 = test_sql!("SELECT COUNT(*) FROM problems WHERE reason = 'no_document'")
+        .query_scalar()
+        .fetch_one(reader.pool())
+        .await
+        .unwrap();
     reader.close().await;
     (titles, kept)
 }
@@ -148,15 +150,16 @@ async fn a_split_series_lists_each_occurrence_once() {
         .unwrap()
         .expect("an occurrences store with a main");
     let rows: Vec<(String, String)> =
-        sqlx::query_as("SELECT start_time, title FROM occurrences ORDER BY start_utc")
+        test_sql!("SELECT start_time, title FROM occurrences ORDER BY start_utc")
+            .query_as()
             .fetch_all(reader.pool())
             .await
             .unwrap();
-    let window: (String, String) =
-        sqlx::query_as("SELECT from_utc, until_utc FROM occurrences_window")
-            .fetch_one(reader.pool())
-            .await
-            .unwrap();
+    let window: (String, String) = test_sql!("SELECT from_utc, until_utc FROM occurrences_window")
+        .query_as()
+        .fetch_one(reader.pool())
+        .await
+        .unwrap();
     reader.close().await;
     assert_eq!(
         window,

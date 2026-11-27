@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use sqlx::Row as _;
 
 use super::plan::{IndexRows, MailboxRow, MessageRow};
+use datalib_sql::sql;
 
 pub async fn read(index: &Path) -> Result<IndexRows> {
     let snapshot = datalib_etl_sqlite_mirror::snapshot(index)
@@ -19,22 +20,28 @@ pub async fn read(index: &Path) -> Result<IndexRows> {
 }
 
 async fn read_rows(pool: &sqlx::SqlitePool) -> Result<IndexRows> {
-    let mailboxes = sqlx::query("SELECT ROWID AS rowid, url FROM mailboxes")
-        .fetch_all(pool)
-        .await
-        .context("read Mail's mailboxes")?
-        .into_iter()
-        .map(|r| MailboxRow {
-            rowid: r.get("rowid"),
-            url: r.get("url"),
-        })
-        .collect();
-    let messages = sqlx::query(
+    let mailboxes = sql!(
+        "email.apple_mail.read_mailboxes",
+        "SELECT ROWID AS rowid, url FROM mailboxes"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("read Mail's mailboxes")?
+    .into_iter()
+    .map(|r| MailboxRow {
+        rowid: r.get("rowid"),
+        url: r.get("url"),
+    })
+    .collect();
+    let messages = sql!(
+        "email.apple_mail.read_messages_with_headers",
         "SELECT m.ROWID AS rowid, m.mailbox, m.conversation_id, m.read, m.flagged, m.deleted,
                 m.flags, m.date_received, g.message_id_header
          FROM messages m
-         LEFT JOIN message_global_data g ON g.ROWID = m.global_message_id",
+         LEFT JOIN message_global_data g ON g.ROWID = m.global_message_id"
     )
+    .query()
     .fetch_all(pool)
     .await
     .context("read Mail's messages")?
@@ -51,13 +58,17 @@ async fn read_rows(pool: &sqlx::SqlitePool) -> Result<IndexRows> {
         date_received: r.get("date_received"),
     })
     .collect();
-    let labels = sqlx::query("SELECT message_id, mailbox_id FROM labels")
-        .fetch_all(pool)
-        .await
-        .context("read Mail's labels")?
-        .into_iter()
-        .map(|r| (r.get("message_id"), r.get("mailbox_id")))
-        .collect();
+    let labels = sql!(
+        "email.apple_mail.read_labels",
+        "SELECT message_id, mailbox_id FROM labels"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("read Mail's labels")?
+    .into_iter()
+    .map(|r| (r.get("message_id"), r.get("mailbox_id")))
+    .collect();
     Ok(IndexRows {
         mailboxes,
         messages,

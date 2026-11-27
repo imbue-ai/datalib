@@ -16,10 +16,12 @@ use sqlx::sqlite::SqlitePool;
 use sqlx::SqliteConnection;
 
 use crate::IndexDoc;
+use datalib_sql::{sql, sql_id};
+use sqlx::Row;
 
-/// The keyword index's tables. They are part of the grid index's shape
-/// (`grid_index::shape`), whose writer makes them and empties them with
-/// its own; [`Index::open`] makes any that are missing.
+/// The keyword index's tables: a part of the grid index's file
+/// (`grid_index::Part::Keywords`), whose writer makes them, and empties
+/// them alone when they move; [`Index::open`] makes any that are missing.
 pub const DDL: [&str; 6] = [
     // `conversation`: its pieces are messages, each its own utterance, so a
     // word search needs one to hold every word; otherwise it is a page,
@@ -89,9 +91,11 @@ impl Index {
         let pool = crate::file::open(path, &DDL, WAIT_FOR_THE_GRID)
             .await
             .with_context(|| format!("open the search index in {}", path.display()))?;
-        let started = sqlx::query(
-            "INSERT INTO search_state (id, generation) VALUES (1, 0) ON CONFLICT (id) DO NOTHING",
+        let started = sql!(
+            "search_index.store.insert_initial_generation",
+            "INSERT INTO search_state (id, generation) VALUES (1, 0) ON CONFLICT (id) DO NOTHING"
         )
+        .query()
         .execute(&pool)
         .await;
         if let Err(e) = started {
@@ -107,9 +111,11 @@ impl Index {
 
     /// `markdown_uuid → content_hash` for every document of `source_id`.
     pub async fn indexed(&self, source_id: &str) -> Result<BTreeMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?",
+        let rows: Vec<(String, String)> = sql!(
+            "search_index.store.list_documents_of_source",
+            "SELECT markdown_uuid, content_hash FROM search_documents WHERE source_id = ?"
         )
+        .query_as()
         .bind(source_id)
         .fetch_all(&self.pool)
         .await
@@ -135,13 +141,10 @@ impl Index {
                 .count();
             let (now, later) = rest.split_at(take);
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-            let mut changed = false;
-            for doc in now {
-                changed |= put_one(&mut tx, doc)
-                    .await
-                    .with_context(|| format!("index document {}", doc.markdown_uuid))?;
-            }
-            if changed {
+            if put_batch(&mut tx, now)
+                .await
+                .context("index a batch of documents")?
+            {
                 moved(&mut tx).await?;
             }
             tx.commit().await.context("commit the indexed documents")?;
@@ -153,17 +156,21 @@ impl Index {
     pub async fn remove(&self, markdown_uuids: &[String]) -> Result<()> {
         for batch in markdown_uuids.chunks(REMOVE_BATCH) {
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-            let ids: Vec<i64> = sqlx::query_scalar(
+            let ids: Vec<i64> = sql!(
+                "search_index.store.find_doc_ids_to_remove",
                 "SELECT doc_id FROM search_documents \
-                  WHERE markdown_uuid IN (SELECT value FROM json_each(?))",
+                  WHERE markdown_uuid IN (SELECT value FROM json_each(?))"
             )
+            .query_scalar()
             .bind(serde_json::to_string(batch)?)
             .fetch_all(&mut *tx)
             .await?;
             clear(&mut tx, &ids).await?;
-            sqlx::query(
-                "DELETE FROM search_documents WHERE doc_id IN (SELECT value FROM json_each(?))",
+            sql!(
+                "search_index.store.delete_documents_by_id",
+                "DELETE FROM search_documents WHERE doc_id IN (SELECT value FROM json_each(?))"
             )
+            .query()
             .bind(serde_json::to_string(&ids)?)
             .execute(&mut *tx)
             .await?;
@@ -177,19 +184,23 @@ impl Index {
     /// what its keyword pass last read: a source taken out of the config or
     /// out of search. Returns how many documents went.
     pub async fn keep_sources(&self, sources: &[String]) -> Result<usize> {
-        let gone: Vec<String> = sqlx::query_scalar(
+        let gone: Vec<String> = sql!(
+            "search_index.store.list_documents_of_dropped_sources",
             "SELECT markdown_uuid FROM search_documents \
-              WHERE source_id NOT IN (SELECT value FROM json_each(?))",
+              WHERE source_id NOT IN (SELECT value FROM json_each(?))"
         )
+        .query_scalar()
         .bind(serde_json::to_string(sources)?)
         .fetch_all(&self.pool)
         .await?;
         if !gone.is_empty() {
             self.remove(&gone).await?;
         }
-        sqlx::query(
-            "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))",
+        sql!(
+            "search_index.store.delete_passes_of_dropped_sources",
+            "DELETE FROM search_sources WHERE source_id NOT IN (SELECT value FROM json_each(?))"
         )
+        .query()
         .bind(serde_json::to_string(sources)?)
         .execute(&self.pool)
         .await
@@ -200,11 +211,15 @@ impl Index {
     /// What `source_id`'s last finished keyword pass read, as
     /// [`Index::set_read_at`] wrote it; `None` before its first.
     pub async fn read_at(&self, source_id: &str) -> Result<Option<String>> {
-        sqlx::query_scalar("SELECT read_at FROM search_sources WHERE source_id = ?")
-            .bind(source_id)
-            .fetch_optional(&self.pool)
-            .await
-            .context("read where the source's keyword pass last read")
+        sql!(
+            "search_index.store.read_pass_position",
+            "SELECT read_at FROM search_sources WHERE source_id = ?"
+        )
+        .query_scalar()
+        .bind(source_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("read where the source's keyword pass last read")
     }
 
     /// Records that `source_id`'s documents are in line with what it read
@@ -212,20 +227,26 @@ impl Index {
     pub async fn set_read_at(&self, source_id: &str, read_at: Option<&str>) -> Result<()> {
         let done = match read_at {
             Some(at) => {
-                sqlx::query(
+                sql!(
+                    "search_index.store.upsert_pass_position",
                     "INSERT INTO search_sources (source_id, read_at) VALUES (?1, ?2) \
-                 ON CONFLICT (source_id) DO UPDATE SET read_at = excluded.read_at",
+                 ON CONFLICT (source_id) DO UPDATE SET read_at = excluded.read_at"
                 )
+                .query()
                 .bind(source_id)
                 .bind(at)
                 .execute(&self.pool)
                 .await
             }
             None => {
-                sqlx::query("DELETE FROM search_sources WHERE source_id = ?")
-                    .bind(source_id)
-                    .execute(&self.pool)
-                    .await
+                sql!(
+                    "search_index.store.delete_pass_position",
+                    "DELETE FROM search_sources WHERE source_id = ?"
+                )
+                .query()
+                .bind(source_id)
+                .execute(&self.pool)
+                .await
             }
         };
         done.context("record where the source's keyword pass read")?;
@@ -238,76 +259,154 @@ impl Index {
     }
 }
 
-/// `false` when the document was already held as it is.
-async fn put_one(conn: &mut SqliteConnection, doc: &IndexDoc) -> Result<bool> {
-    let held: Option<(i64, String, String)> = sqlx::query_as(
-        "SELECT doc_id, source_id, content_hash FROM search_documents WHERE markdown_uuid = ?",
+/// Indexes `docs` in a few statements: those already held with the same
+/// source and hash are left alone, a changed one has its sections
+/// replaced under the id it had, a new one gets one. `false` when every
+/// one was already held as it is.
+async fn put_batch(conn: &mut SqliteConnection, docs: &[IndexDoc]) -> Result<bool> {
+    let held: BTreeMap<String, (i64, String, String)> = sql!(
+        "search_index.store.find_documents_of_batch",
+        "SELECT markdown_uuid, doc_id, source_id, content_hash FROM search_documents \
+          WHERE markdown_uuid IN (SELECT value FROM json_each(?))"
     )
-    .bind(&doc.markdown_uuid)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let doc_id = match held {
-        Some((_, source, hash)) if source == doc.source_id && hash == doc.content_hash => {
-            return Ok(false);
-        }
-        Some((doc_id, _, _)) => {
-            clear(conn, &[doc_id]).await?;
-            sqlx::query(
-                "UPDATE search_documents SET source_id = ?, content_hash = ?, conversation = ? \
-                 WHERE doc_id = ?",
-            )
-            .bind(&doc.source_id)
-            .bind(&doc.content_hash)
-            .bind(doc.is_conversation())
-            .bind(doc_id)
-            .execute(&mut *conn)
-            .await?;
-            doc_id
-        }
-        None => sqlx::query_scalar(
-            "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, conversation) \
-                 VALUES (?, ?, ?, ?) RETURNING doc_id",
-        )
-        .bind(&doc.source_id)
-        .bind(&doc.markdown_uuid)
-        .bind(&doc.content_hash)
-        .bind(doc.is_conversation())
-        .fetch_one(&mut *conn)
-        .await?,
-    };
-
-    let sections = doc.sections_or_one();
-    let mut at = 0i64;
-    for (seq, section) in sections.iter().enumerate() {
-        let end = at + section.text.len() as i64;
-        let section_id: i64 = sqlx::query_scalar(
-            "INSERT INTO search_sections (doc_id, seq, uuid, start_byte, end_byte) \
-             VALUES (?, ?, ?, ?, ?) RETURNING section_id",
-        )
-        .bind(doc_id)
-        .bind(seq as i64)
-        .bind(&section.uuid)
-        .bind(at)
-        .bind(end)
-        .fetch_one(&mut *conn)
-        .await?;
-        let title = if seq == 0 { doc.title.as_str() } else { "" };
-        sqlx::query("INSERT INTO search_fts (rowid, title, body) VALUES (?, ?, ?)")
-            .bind(section_id)
-            .bind(title)
-            .bind(&section.text)
-            .execute(&mut *conn)
-            .await?;
-        at = end;
+    .query_as::<(String, i64, String, String)>()
+    .bind(serde_json::to_string(
+        &docs
+            .iter()
+            .map(|d| d.markdown_uuid.as_str())
+            .collect::<Vec<_>>(),
+    )?)
+    .fetch_all(&mut *conn)
+    .await?
+    .into_iter()
+    .map(|(uuid, id, source, hash)| (uuid, (id, source, hash)))
+    .collect();
+    // The last of a document named twice is the one indexed.
+    let mut last: BTreeMap<&str, &IndexDoc> = BTreeMap::new();
+    for doc in docs {
+        last.insert(&doc.markdown_uuid, doc);
     }
+    let owed: Vec<&IndexDoc> = last
+        .into_values()
+        .filter(|d| {
+            held.get(&d.markdown_uuid)
+                .is_none_or(|(_, source, hash)| *source != d.source_id || *hash != d.content_hash)
+        })
+        .collect();
+    if owed.is_empty() {
+        return Ok(false);
+    }
+    let replaced: Vec<i64> = owed
+        .iter()
+        .filter_map(|d| held.get(&d.markdown_uuid).map(|(id, _, _)| *id))
+        .collect();
+    clear(conn, &replaced).await?;
+    let ids: BTreeMap<String, i64> = datalib_sql::values::fetch(
+        conn,
+        sql_id!("search_index.store.upsert_documents"),
+        "INSERT INTO search_documents (source_id, markdown_uuid, content_hash, conversation)",
+        4,
+        "ON CONFLICT (markdown_uuid) DO UPDATE SET source_id = excluded.source_id, \
+         content_hash = excluded.content_hash, conversation = excluded.conversation \
+         RETURNING markdown_uuid, doc_id",
+        &owed,
+        |q, d| {
+            q.bind(&d.source_id)
+                .bind(&d.markdown_uuid)
+                .bind(&d.content_hash)
+                .bind(d.is_conversation())
+        },
+    )
+    .await?
+    .iter()
+    .map(|r| Ok((r.try_get(0)?, r.try_get(1)?)))
+    .collect::<Result<_, sqlx::Error>>()?;
+    let mut sections: Vec<Placed> = Vec::new();
+    for doc in &owed {
+        let doc_id = *ids
+            .get(&doc.markdown_uuid)
+            .with_context(|| format!("no id for document {}", doc.markdown_uuid))?;
+        let mut at = 0i64;
+        for (seq, section) in doc.sections_or_one().iter().enumerate() {
+            let end = at + section.text.len() as i64;
+            sections.push(Placed {
+                doc_id,
+                seq: seq as i64,
+                uuid: section.uuid.clone(),
+                start: at,
+                end,
+                title: if seq == 0 {
+                    doc.title.clone()
+                } else {
+                    String::new()
+                },
+                text: section.text.clone(),
+            });
+            at = end;
+        }
+    }
+    let section_ids: BTreeMap<(i64, i64), i64> = datalib_sql::values::fetch(
+        conn,
+        sql_id!("search_index.store.insert_sections"),
+        "INSERT INTO search_sections (doc_id, seq, uuid, start_byte, end_byte)",
+        5,
+        "RETURNING doc_id, seq, section_id",
+        &sections,
+        |q, s| {
+            q.bind(s.doc_id)
+                .bind(s.seq)
+                .bind(&s.uuid)
+                .bind(s.start)
+                .bind(s.end)
+        },
+    )
+    .await?
+    .iter()
+    .map(|r| Ok(((r.try_get(0)?, r.try_get(1)?), r.try_get(2)?)))
+    .collect::<Result<_, sqlx::Error>>()?;
+    let texts = sections
+        .iter()
+        .map(|s| {
+            let id = *section_ids
+                .get(&(s.doc_id, s.seq))
+                .with_context(|| format!("no id for section {} of document {}", s.seq, s.doc_id))?;
+            Ok((id, s))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    datalib_sql::values::fetch(
+        conn,
+        sql_id!("search_index.store.insert_fts_texts"),
+        "INSERT INTO search_fts (rowid, title, body)",
+        3,
+        "",
+        &texts,
+        |q, (id, s)| q.bind(*id).bind(&s.title).bind(&s.text),
+    )
+    .await?;
     Ok(true)
 }
 
+/// One section of a document as the index places it: where it falls in
+/// the document, and the words it indexes.
+struct Placed {
+    doc_id: i64,
+    seq: i64,
+    uuid: Option<String>,
+    start: i64,
+    end: i64,
+    title: String,
+    text: String,
+}
+
 async fn moved(conn: &mut SqliteConnection) -> Result<()> {
-    sqlx::query("UPDATE search_state SET generation = generation + 1 WHERE id = 1")
-        .execute(conn)
-        .await
-        .context("raise the search index's generation")?;
+    sql!(
+        "search_index.store.bump_generation",
+        "UPDATE search_state SET generation = generation + 1 WHERE id = 1"
+    )
+    .query()
+    .execute(conn)
+    .await
+    .context("raise the search index's generation")?;
     Ok(())
 }
 
@@ -315,11 +414,17 @@ async fn moved(conn: &mut SqliteConnection) -> Result<()> {
 async fn clear(conn: &mut SqliteConnection, doc_ids: &[i64]) -> Result<()> {
     let ids = serde_json::to_string(doc_ids)?;
     for sql in [
-        "DELETE FROM search_fts WHERE rowid IN \
-         (SELECT section_id FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?)))",
-        "DELETE FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?))",
+        sql!(
+            "search_index.clear.delete_search_fts",
+            "DELETE FROM search_fts WHERE rowid IN \
+         (SELECT section_id FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?)))"
+        ),
+        sql!(
+            "search_index.clear.delete_search_sections",
+            "DELETE FROM search_sections WHERE doc_id IN (SELECT value FROM json_each(?))"
+        ),
     ] {
-        sqlx::query(sql).bind(&ids).execute(&mut *conn).await?;
+        sql.query().bind(&ids).execute(&mut *conn).await?;
     }
     Ok(())
 }

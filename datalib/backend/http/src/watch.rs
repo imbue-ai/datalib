@@ -1028,6 +1028,7 @@ fn is_wipe_line(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     #[test]
     fn a_wipes_announcements_are_told_from_the_rest() {
         assert!(is_wipe_line("job opened 01a1"));
@@ -1563,17 +1564,20 @@ mod tests {
     /// one: its own process, opening and closing the store around it.
     async fn write_index(db: &Path, id: i64, commit: bool) {
         let writer = datalib_core::store::open_pool(db).await.unwrap();
-        sqlx::query("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&writer)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO t VALUES (?)")
+        test_sql!("INSERT INTO t VALUES (?)")
+            .query()
             .bind(id)
             .execute(&writer)
             .await
             .unwrap();
         if commit {
-            let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', 'rows')")
+            let hash: Option<String> = test_sql!("SELECT dolt_commit('-Am', 'rows')")
+                .query_scalar()
                 .fetch_one(&writer)
                 .await
                 .unwrap();
@@ -1591,15 +1595,21 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)",
             "INSERT INTO store_generation VALUES (1, 'f', 0) ON CONFLICT (id) DO NOTHING",
         ] {
-            sqlx::query(sql).execute(&writer).await.unwrap();
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
+                .execute(&writer)
+                .await
+                .unwrap();
         }
-        sqlx::query("INSERT INTO t VALUES (?)")
+        test_sql!("INSERT INTO t VALUES (?)")
+            .query()
             .bind(id)
             .execute(&writer)
             .await
             .unwrap();
         if seal {
-            sqlx::query("UPDATE store_generation SET generation = generation + 1")
+            test_sql!("UPDATE store_generation SET generation = generation + 1")
+                .query()
                 .execute(&writer)
                 .await
                 .unwrap();

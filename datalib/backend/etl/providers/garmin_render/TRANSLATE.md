@@ -46,8 +46,10 @@ The `render_time_series` step writes the same data as time series into
   named by its key. Values keep Garmin's unit, written in UCUM by
   `unit_of`: sleep in `s`, HRV in `ms`, intensity minutes in `min`,
   distance in `m`, heart rate as `{beats}/min`, respiration as
-  `{breaths}/min`, steps as `{steps}`, floors as `{floors}`, and the
-  scores (sleep, stress, Body Battery, readiness) as `{score}`. A number
+  `{breaths}/min`, steps as `{steps}`, floors as `{floors}`, calories
+  in `kcal`, SpO₂ in `%`, VO₂ max in `mL/kg/min`, fitness age in `a`
+  (years), the scores (sleep, stress, Body Battery, readiness) as
+  `{score}`, and a text field as `1`. A number
   field is a `float` time series. A text field (HRV status, readiness
   level) is a `text` time series; a value of the other kind than its
   field's is left out.

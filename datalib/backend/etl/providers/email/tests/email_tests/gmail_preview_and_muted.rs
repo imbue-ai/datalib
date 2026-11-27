@@ -15,6 +15,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, gmail_muted_url, inbox_label,
     put_gmail, put_gmail_account, put_gmail_muted, put_gmail_response, Mirror, GMAIL,
 };
+use datalib_sql::test_sql;
 
 const PICARD: &str = "18c9f2a1b2c3d801";
 const RIKER: &str = "18c9f2a1b2c3d802";
@@ -51,7 +52,8 @@ async fn run(m: &Mirror) -> FetchSummary {
 async fn previews(m: &Mirror) -> BTreeMap<String, Option<String>> {
     m.read(|db: RawDb| async move {
         let rows: Vec<(String, Option<String>)> =
-            sqlx::query_as("SELECT id, preview FROM emails ORDER BY id")
+            test_sql!("SELECT id, preview FROM emails ORDER BY id")
+                .query_as()
                 .fetch_all(db.pool())
                 .await
                 .unwrap();
@@ -63,7 +65,8 @@ async fn previews(m: &Mirror) -> BTreeMap<String, Option<String>> {
 async fn mutes(m: &Mirror) -> BTreeMap<String, Option<i64>> {
     m.read(|db: RawDb| async move {
         let rows: Vec<(String, Option<i64>)> =
-            sqlx::query_as("SELECT id, muted FROM read_marks ORDER BY id")
+            test_sql!("SELECT id, muted FROM read_marks ORDER BY id")
+                .query_as()
                 .fetch_all(db.pool())
                 .await
                 .unwrap();
@@ -92,7 +95,8 @@ async fn gmails_snippet_is_the_preview_as_plain_text() {
     );
     let in_payload: i64 = m
         .read(|db: RawDb| async move {
-            sqlx::query_scalar("SELECT count(*) FROM emails WHERE payload -> '$.preview' NOT NULL")
+            test_sql!("SELECT count(*) FROM emails WHERE payload -> '$.preview' NOT NULL")
+                .query_scalar()
                 .fetch_one(db.pool())
                 .await
                 .unwrap()
@@ -157,7 +161,8 @@ async fn a_relabel_from_the_walks_keeps_the_preview() {
     );
     let labelled: Vec<String> = m
         .read(|db: RawDb| async move {
-            sqlx::query_scalar("SELECT mailbox_id FROM email_mailboxes ORDER BY mailbox_id")
+            test_sql!("SELECT mailbox_id FROM email_mailboxes ORDER BY mailbox_id")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .unwrap()
@@ -180,7 +185,8 @@ async fn a_held_message_with_no_preview_gets_one_from_its_bytes() {
     let m = mirror();
     run(&m).await;
     m.read(|db: RawDb| async move {
-        sqlx::query("UPDATE emails SET preview = NULL WHERE id = ?")
+        test_sql!("UPDATE emails SET preview = NULL WHERE id = ?")
+            .query()
             .bind(PICARD)
             .execute(db.pool())
             .await
@@ -263,7 +269,8 @@ async fn a_failed_search_moves_no_mark() {
 
 async fn problem_rows(m: &Mirror) -> Vec<String> {
     m.read(|db: RawDb| async move {
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap()

@@ -7,6 +7,7 @@ use datalib_etl::store_handle::RawStoreHandle;
 use datalib_etl_email::ingest::gmail_api::{self, FetchOptions, FetchSummary, Section};
 use datalib_etl_email::ingest::{db_path_for, RawDb};
 use datalib_fake_services::{with_real_rate_limits, Fakes, Launch, GOOGLE};
+use datalib_sql::{test_sql, Sql};
 use datalib_time::IsoOffsetTimestamp;
 use serde_json::{json, Value};
 
@@ -48,26 +49,28 @@ async fn fetch_into(
     summary
 }
 
-async fn rows(root: &Path, sql: &'static str) -> Vec<(String, Option<String>)> {
+async fn rows(root: &Path, sql: Sql) -> Vec<(String, Option<String>)> {
     let db = RawDb::open(&db_path_for(root)).await.unwrap();
-    let rows: Vec<(String, Option<String>)> =
-        sqlx::query_as(sql).fetch_all(db.pool()).await.unwrap();
+    let rows: Vec<(String, Option<String>)> = sql.query_as().fetch_all(db.pool()).await.unwrap();
     db.close().await;
     rows
 }
 
 async fn subjects(root: &Path) -> BTreeMap<String, Option<String>> {
-    rows(root, "SELECT id, subject FROM emails ORDER BY id")
-        .await
-        .into_iter()
-        .collect()
+    rows(
+        root,
+        test_sql!("SELECT id, subject FROM emails ORDER BY id"),
+    )
+    .await
+    .into_iter()
+    .collect()
 }
 
 /// The ids of the emails not yet read.
 async fn unread(root: &Path) -> BTreeSet<String> {
     rows(
         root,
-        "SELECT id, CAST(read AS TEXT) FROM read_marks ORDER BY id",
+        test_sql!("SELECT id, CAST(read AS TEXT) FROM read_marks ORDER BY id"),
     )
     .await
     .into_iter()
@@ -100,12 +103,20 @@ async fn a_first_sync_mirrors_the_mailbox_with_its_labels_threads_and_read_marks
         .into()
     );
     // The two replies share the first message's thread.
-    let threads = rows(root.path(), "SELECT id, thread_id FROM emails ORDER BY id").await;
+    let threads = rows(
+        root.path(),
+        test_sql!("SELECT id, thread_id FROM emails ORDER BY id"),
+    )
+    .await;
     let thread_ids: BTreeSet<Option<String>> = threads.into_iter().map(|(_, t)| t).collect();
     assert_eq!(thread_ids.len(), 2, "{thread_ids:?}");
     assert_eq!(unread(root.path()).await.len(), 1);
     // Picard's own label reaches the mirror as a mailbox.
-    let mailboxes = rows(root.path(), "SELECT id, name FROM mailboxes ORDER BY id").await;
+    let mailboxes = rows(
+        root.path(),
+        test_sql!("SELECT id, name FROM mailboxes ORDER BY id"),
+    )
+    .await;
     assert!(
         mailboxes
             .iter()

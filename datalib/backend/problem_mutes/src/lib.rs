@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl_macros::PortableTable;
 use datalib_problems::{CountedBy, ProblemRow, Severity};
+use datalib_sql::sql;
 use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -88,9 +89,11 @@ pub const DDL: &[&str] = &[schema::DDL[0].1];
 /// Every mute, by problem id. A store whose table is not there yet holds
 /// none.
 pub async fn read_all(pool: &SqlitePool) -> Result<HashMap<String, MuteRow>> {
-    let rows = match sqlx::query(
-        "SELECT problem_uuid, muted_how, agent, muted_at_utc, tz_offset FROM mutes",
+    let rows = match sql!(
+        "problem_mutes.list_mutes",
+        "SELECT problem_uuid, muted_how, agent, muted_at_utc, tz_offset FROM mutes"
     )
+    .query()
     .fetch_all(pool)
     .await
     {
@@ -123,11 +126,13 @@ pub async fn mute(
     agent: Option<&str>,
     now: &datalib_time::StoredStamp,
 ) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "problem_mutes.insert_mutes",
         "INSERT INTO mutes (problem_uuid, muted_how, agent, muted_at_utc, tz_offset) \
          SELECT value, ?, ?, ?, ? FROM json_each(?) WHERE true \
-         ON CONFLICT (problem_uuid) DO NOTHING",
+         ON CONFLICT (problem_uuid) DO NOTHING"
     )
+    .query()
     .bind(how.as_str())
     .bind(agent)
     .bind(&now.utc)
@@ -141,11 +146,15 @@ pub async fn mute(
 
 /// Unmutes `ids`; one not muted is left alone. The caller commits.
 pub async fn unmute(pool: &SqlitePool, ids: &[String]) -> Result<()> {
-    sqlx::query("DELETE FROM mutes WHERE problem_uuid IN (SELECT value FROM json_each(?))")
-        .bind(serde_json::to_string(ids)?)
-        .execute(pool)
-        .await
-        .context("unmute")?;
+    sql!(
+        "problem_mutes.delete_mutes",
+        "DELETE FROM mutes WHERE problem_uuid IN (SELECT value FROM json_each(?))"
+    )
+    .query()
+    .bind(serde_json::to_string(ids)?)
+    .execute(pool)
+    .await
+    .context("unmute")?;
     Ok(())
 }
 
@@ -333,6 +342,7 @@ mod tests {
     use super::*;
     use datalib_problems::{Outcome, Problem, Reason, Scope, Stage, INDEX_OWN_SCOPE_KEY};
 
+    use datalib_sql::{test_sql_id, Sql};
     /// strum writes the store, serde the wire: two spellings of one value
     /// would read a stored mute back as unknown.
     #[test]
@@ -409,7 +419,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let pool = plain(&dir.path().join("m.sqlite")).await;
         assert!(read_all(&pool).await.unwrap().is_empty());
-        sqlx::query(DDL[0]).execute(&pool).await.unwrap();
+        Sql::dynamic(test_sql_id!(), DDL[0])
+            .query()
+            .execute(&pool)
+            .await
+            .unwrap();
         let first = datalib_time::split_stamp("2370-01-01T00:00:00+02:00");
         let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
         mute(&pool, &ids(&["a", "b"]), MutedHow::Manual, None, &first)

@@ -332,7 +332,10 @@ A step that fails to answer costs that step only, and the rest are
 asked. For `datalib-step`'s own steps, a store is read only in this
 build's shape (`datalib/backend/store_meta/README.md`). A store whose
 indexes alone moved is brought up to date in place: prepare opens it as
-its owner, which makes them. So is an inference cache in smaller pages
+its owner, which makes them. So is a grid index some of whose parts
+moved (`grid_index::Part`): prepare empties those parts' tables and asks
+for the rerun that fills them, and the parts that did not move stay
+readable meanwhile. So is an inference cache in smaller pages
 than this build's, which `unified_grid_and_search_index`'s prepare
 rewrites, keeping every vector: minutes on a large library, once. Until
 a store in another shape is rebuilt, nothing reads it, and the refusal

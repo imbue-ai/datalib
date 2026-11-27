@@ -167,9 +167,12 @@ without `Media/` leaves them as they were.
 ## What render does with it
 
 `whatsapp_render/src/render/parse.rs` loads `jid`, `chat`, `message`,
-`message_media` ⋈ `wa_media_files`, and `message_add_on` ⋈
-`message_add_on_reaction` off the pinned commit and resolves the rowid
-graph in memory. The incremental scan (`render.rs`) asks
+`message_media` ⋈ `wa_media_files`, `message_add_on` ⋈
+`message_add_on_reaction`, and for names `lid_display_name`, `jid_map`
+and `wa_db_contacts`, off the pinned commit and resolves the rowid
+graph in memory. A message's body is `message.text_data` alone:
+`message_text` and `message_media.media_caption` are not rendered.
+The incremental scan (`render.rs`) asks
 `dolt_diff_<table>` for each table's changed rows, walks them up to a
 `chat._id` — at HEAD for a row that still exists, at the previous
 commit for one that was removed, since a rowid is the same row at

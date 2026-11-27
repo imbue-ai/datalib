@@ -1,7 +1,7 @@
-//! Program-A `DataProcessor`s for the `github` source. github
-//! contributes a render processor (always) and a download processor when
-//! `api` is present. The source owns its raw store (open/commit/
-//! checkpoint); the orchestrator only drives `run`.
+//! The download `DataProcessor` for the `github` source, planned when
+//! `api` is present; the render one is in `github_render`. The source
+//! owns its raw store (open/commit/checkpoint); the orchestrator only
+//! drives `run`.
 
 use std::path::PathBuf;
 use std::time::Duration;

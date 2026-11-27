@@ -23,6 +23,7 @@ use super::mdl_html;
 use super::schema_raw::{ns_id, GeminiActivityRow, GeminiAttachmentRow};
 use super::time as time_parser;
 use datalib_etl::doltlite_raw::WirePayload;
+use datalib_sql::sql;
 
 pub(crate) const FILE_REL: &str = "My Activity/Gemini Apps/MyActivity.html";
 const SCOPE: &str = "google_takeout/gemini_apps";
@@ -343,11 +344,14 @@ async fn flush(db: &RawDb, acc: &mut CasEdgeAccumulator) -> Result<usize> {
 /// An unchanged activity file is not read again, so this is the only
 /// retry an attachment that did not read gets.
 async fn retry_unfetched_attachments(db: &RawDb, cell_dir: &Path) -> Result<usize> {
-    let unfetched: Vec<(String, String)> =
-        sqlx::query_as("SELECT activity_id, filename FROM gemini_attachments WHERE blake3 IS NULL")
-            .fetch_all(db.pool())
-            .await
-            .context("list gemini attachments with no bytes")?;
+    let unfetched: Vec<(String, String)> = sql!(
+        "google_takeout.list_gemini_attachments_unfetched",
+        "SELECT activity_id, filename FROM gemini_attachments WHERE blake3 IS NULL"
+    )
+    .query_as()
+    .fetch_all(db.pool())
+    .await
+    .context("list gemini attachments with no bytes")?;
     if unfetched.is_empty() {
         return Ok(0);
     }

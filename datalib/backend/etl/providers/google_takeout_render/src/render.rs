@@ -1,6 +1,7 @@
 //! Render the Takeout feeds into markdown via the shared chat renderer:
 //! a document per Google Chat space, Google Voice conversation and
-//! activity feed (Gemini, YouTube, Google Maps — see [`crate::feeds`]).
+//! activity feed (Gemini, YouTube, Google Maps — see [`crate::feeds`]),
+//! and per Saved list, My Maps map and Play Books book ([`crate::pages`]).
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -29,6 +30,7 @@ use crate::{chat, gemini, ids, maps, pages, youtube};
 use datalib_etl_google_takeout::ingest::google_voice::schema_raw::VoiceAttachmentRow;
 use datalib_etl_google_takeout::ingest::{db_path_for, RawDb};
 use datalib_schema::providers::Provider;
+use datalib_sql::{sql_id, Sql};
 
 /// v2: a `created_date` / `when` we cannot parse gets a null `created_at`
 ///     instead of a real-looking `1970-01-01T00:00:00`. See
@@ -272,12 +274,15 @@ async fn load_rows(db: &RawDb, table: &'static str, dated: Dated) -> Result<Vec<
         Dated::No => "NULL",
     };
     // Audited: `table` is a literal at every call, `when` one of two.
-    let sql = format!("SELECT id, json(payload), {when} FROM {table} ORDER BY id");
-    let rows: Vec<(String, Option<String>, Option<String>)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(sql))
-            .fetch_all(db.pool())
-            .await
-            .with_context(|| format!("select {table}"))?;
+    let sql = Sql::dynamic(
+        sql_id!("google_takeout_render.list_rows"),
+        format!("SELECT id, json(payload), {when} FROM {table} ORDER BY id"),
+    );
+    let rows: Vec<(String, Option<String>, Option<String>)> = sql
+        .query_as()
+        .fetch_all(db.pool())
+        .await
+        .with_context(|| format!("select {table}"))?;
     rows.into_iter()
         .map(|(id, payload, when)| {
             let payload = match payload {
@@ -300,12 +305,15 @@ async fn load_file_rows(
         Dated::No => "NULL",
     };
     // Audited: `table` is a literal at every call, `when` one of two.
-    let sql = format!("SELECT id, json(payload), {when}, file FROM {table} ORDER BY id");
-    let rows: Vec<(String, Option<String>, Option<String>, String)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(sql))
-            .fetch_all(db.pool())
-            .await
-            .with_context(|| format!("select {table}"))?;
+    let sql = Sql::dynamic(
+        sql_id!("google_takeout_render.list_file_rows"),
+        format!("SELECT id, json(payload), {when}, file FROM {table} ORDER BY id"),
+    );
+    let rows: Vec<(String, Option<String>, Option<String>, String)> = sql
+        .query_as()
+        .fetch_all(db.pool())
+        .await
+        .with_context(|| format!("select {table}"))?;
     rows.into_iter()
         .map(|(id, payload, when, file)| {
             let payload = match payload {

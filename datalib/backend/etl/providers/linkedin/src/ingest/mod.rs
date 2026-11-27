@@ -1,5 +1,5 @@
-//! LinkedIn data-export ("takeout") ingester — dead simple, one table
-//! per file.
+//! LinkedIn data-export ("takeout") ingester: one table per CSV, named
+//! for its path, and one `articles` table for every article's HTML.
 
 pub mod schema_raw;
 
@@ -20,6 +20,7 @@ use std::collections::HashSet;
 use tracing::warn;
 use uuid::Uuid;
 
+use datalib_sql::{sql_id, Sql};
 use schema_raw::{canonical_table, known_file, linkedin_ns, ARTICLES_TABLE};
 
 pub use datalib_etl::doltlite_raw::db_path_for;
@@ -36,9 +37,6 @@ pub struct RawDb {
 }
 
 impl RawDb {
-    /// Open the raw store. CSV tables are created lazily during
-    /// [`fetch`] (their names aren't known until we walk the export), so
-    /// we open with just the shared bookkeeping DDL.
     /// Open this store to *read* it, for the render pass.
     ///
     /// The download step owns this store; render only reads it. An ordinary
@@ -58,6 +56,9 @@ impl RawDb {
         }))
     }
 
+    /// Open the raw store. CSV tables are created lazily during
+    /// [`fetch`] (their names aren't known until we walk the export), so
+    /// we open with just the shared bookkeeping DDL.
     pub async fn open(db_path: &Path) -> Result<Self> {
         let pool = dr::open(db_path, &[]).await?;
         Ok(Self { pool, pin: None })
@@ -266,26 +267,34 @@ async fn write_table(
     rows: &[(String, String)],
     keep: Option<&HashSet<String>>,
 ) -> Result<()> {
-    let ddl = dr::wire_payload_table_ddl(table, &[]);
+    let ddl = Sql::dynamic(
+        sql_id!("linkedin.create_table"),
+        dr::wire_payload_table_ddl(table, &[]),
+    );
     // Audited: `table` is `canonical_table`'s output — ASCII alphanumerics
     // and `_` only — so it is safe as an identifier; rows are bound below.
-    sqlx::query(sqlx::AssertSqlSafe(ddl))
+    ddl.query()
         .execute(&mut **tx)
         .await
         .with_context(|| format!("create table {table}"))?;
 
     if let Some(keep) = keep {
-        let existing: Vec<String> =
-            sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
-                .fetch_all(&mut **tx)
-                .await
-                .with_context(|| format!("list ids in {table}"))?;
+        let existing: Vec<String> = Sql::dynamic(
+            sql_id!("linkedin.list_ids"),
+            format!("SELECT id FROM {table}"),
+        )
+        .query_scalar()
+        .fetch_all(&mut **tx)
+        .await
+        .with_context(|| format!("list ids in {table}"))?;
         let gone: Vec<&String> = existing.iter().filter(|id| !keep.contains(*id)).collect();
         for chunk in gone.chunks(INSERT_CHUNK) {
             let placeholders = vec!["?"; chunk.len()].join(",");
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
-                "DELETE FROM {table} WHERE id IN ({placeholders})"
-            )));
+            let mut q = Sql::dynamic(
+                sql_id!("linkedin.delete_ids_not_kept"),
+                format!("DELETE FROM {table} WHERE id IN ({placeholders})"),
+            )
+            .query();
             for id in chunk {
                 q = q.bind((*id).clone());
             }
@@ -303,7 +312,7 @@ async fn write_table(
             }
             sql.push_str("(?, jsonb(?))");
         }
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("linkedin.upsert_rows"), sql).query();
         for (id, payload) in chunk {
             q = q.bind(id.clone()).bind(payload.clone());
         }

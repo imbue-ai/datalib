@@ -5,8 +5,10 @@ An eval set names target rows and, for each, queries a person might type to
 find it. `run` asks every query of the search applet once per setting (`on`,
 the search as it opens; `off`, with `semantic:off`; or a cutoff such as `0.3`,
 to weigh one against another), records where the target ranked and how long
-each answer took, and the applet's lines about heavy or slow statements
-under the query that ran them, and prints the scores; `compare` says which queries moved
+each answer took, what every SQL statement the applet ran for it did (by the
+name it carries: how often it ran, the rows it answered and walked, the index
+each of its loops read, its time), and the applet's lines about heavy or slow
+statements, each under the query that ran them, and prints the scores; `compare` says which queries moved
 between two runs; `show` prints what a query found, for judging the rest of
 the list by eye. `--modes app` instead sends each query the way the app does,
 every request at once, and times what a person waits for: run it on its own,
@@ -87,6 +89,7 @@ class Applet:
         )
         assert self.proc.stdout is not None and self.proc.stderr is not None
         self.logged: list[dict[str, Any]] = []
+        self.worked: list[dict[str, Any]] = []
         self.reader = threading.Thread(
             target=read_log, args=(self.proc.stderr, self.logged), daemon=True
         )
@@ -104,10 +107,16 @@ class Applet:
             headers={"x-datalib-applet-secret": self.secret},
         )
         with urllib.request.urlopen(req, timeout=300) as r:
+            worked = sql_work_of(r.headers.get(SQL_WORK_HEADER))
+            if worked:
+                self.worked.append({"at": time.time(), "statements": worked})
             return json.load(r)
 
     def statements(self, start: float, end: float) -> list[dict[str, Any]]:
         return [s for s in self.logged if start <= s["at"] <= end]
+
+    def sql_work(self, start: float, end: float) -> list[dict[str, Any]]:
+        return [w for w in self.worked if start <= w["at"] <= end]
 
     def close(self) -> None:
         self.proc.terminate()
@@ -150,6 +159,30 @@ class Gateway:
         found = (statement_from_run_store(ts, fields) for ts, fields in rows)
         return [s for s in found if s]
 
+    def sql_work(self, start: float, end: float) -> list[dict[str, Any]]:
+        """What the server wrote on its request lines of the applet's
+        answers: the statements each ran, from the applet's header."""
+        runs = self.root / "system/runs/runs.sqlite"
+        if not runs.exists():
+            return []
+        db = sqlite3.connect(f"file:{runs}?mode=ro", uri=True)
+        try:
+            rows = db.execute(
+                "SELECT ts_utc, json_extract(fields, '$.sql') FROM log "
+                "WHERE target = 'http.request' AND ts_utc >= ? AND ts_utc <= ? "
+                "AND json_extract(fields, '$.path') LIKE '/applet/unified_grid_and_search_index%' "
+                "AND json_extract(fields, '$.sql') IS NOT NULL",
+                (utc_text(start), utc_text(end)),
+            ).fetchall()
+        finally:
+            db.close()
+        out = []
+        for ts, text in rows:
+            worked = sql_work_of(text)
+            if worked:
+                out.append({"at": stamp_seconds(ts), "statements": worked})
+        return out
+
     def close(self) -> None:
         pass
 
@@ -167,6 +200,38 @@ STATEMENT_FIELDS = (
     "rows_returned",
     "elapsed_secs",
 )
+
+
+# The response header in which the applet says what its statements did to
+# answer, by name (`datalib_sql_work::SQL_WORK_HEADER`).
+SQL_WORK_HEADER = "x-datalib-sql-work"
+WORK_SUMS = ("runs", "rows", "rows_scanned", "vm_steps", "micros")
+
+
+def sql_work_of(text: str | None) -> dict[str, dict[str, Any]]:
+    """One answer's statements by name, from the header's JSON."""
+    if not text:
+        return {}
+    try:
+        worked = json.loads(text)
+    except json.JSONDecodeError:
+        return {}
+    return worked if isinstance(worked, dict) else {}
+
+
+def add_work(
+    into: dict[str, dict[str, Any]], worked: dict[str, dict[str, Any]]
+) -> None:
+    """`worked` added to `into`, name by name and loop by loop."""
+    for name, w in worked.items():
+        t = into.setdefault(
+            name, {k: 0 for k in WORK_SUMS} | {"max_micros": 0, "loops": {}}
+        )
+        for k in WORK_SUMS:
+            t[k] += int(w.get(k, 0))
+        t["max_micros"] = max(t["max_micros"], int(w.get("max_micros", 0)))
+        for loop, n in (w.get("loops") or {}).items():
+            t["loops"][loop] = t["loops"].get(loop, 0) + int(n)
 
 
 def statement_of(
@@ -556,6 +621,11 @@ def run(args: argparse.Namespace) -> None:
     by_query, outside = attribute(logged, windows)
     for r, found in zip(results, by_query, strict=True):
         r["statements"] = found
+    worked, _ = attribute(server.sql_work(started, time.time()), windows)
+    for r, answers in zip(results, worked, strict=True):
+        r["sql_work"] = {}
+        for a in answers:
+            add_work(r["sql_work"], a["statements"])
     record = {
         "root": str(root),
         "evals": str(args.evals),
@@ -847,6 +917,43 @@ def statements_table(results: list[dict[str, Any]], top: int = 20) -> list[str]:
     return lines
 
 
+def busiest_loop(w: dict[str, Any]) -> str:
+    loops = w.get("loops") or {}
+    if not loops:
+        return ""
+    loop, n = max(loops.items(), key=lambda kv: kv[1])
+    return f"{loop} ({n})"
+
+
+def sql_work_table(results: list[dict[str, Any]], top: int = 25) -> list[str]:
+    """Every statement the queries ran, by name, the ones that took the most
+    time first: how often, the rows they walked for the rows they answered,
+    and the loop that walked the most, which names the index it read."""
+    total: dict[str, dict[str, Any]] = {}
+    for r in results:
+        add_work(total, r.get("sql_work") or {})
+    if not total:
+        return []
+    cell = lambda s: str(s).replace("|", "\\|")
+    lines = [
+        "",
+        (
+            f"statements the queries ran ({len(total)} names; the {min(top, len(total))} "
+            "that took the most time):"
+        ),
+        "",
+        "| statement | runs | rows scanned | rows | ms | slowest ms | the loop that walked most |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for name, w in sorted(total.items(), key=lambda kv: -kv[1]["micros"])[:top]:
+        lines.append(
+            f"| {cell(name)} | {w['runs']} | {w['rows_scanned']} | {w['rows']} | "
+            f"{w['micros'] / 1000:.1f} | {w['max_micros'] / 1000:.1f} | "
+            f"{cell(busiest_loop(w))} |"
+        )
+    return lines
+
+
 def report(record: dict[str, Any]) -> str:
     results = record["results"]
     cutoffs = sorted({m for r in results for m in r["modes"]} - {*MODES, APP, "ui"})
@@ -880,6 +987,7 @@ def report(record: dict[str, Any]) -> str:
             )
     lines += requests_table(results)
     lines += statements_table(results)
+    lines += sql_work_table(results)
     if record.get("first_ms"):
         lines += ["", f"the first answer, cold, in ms: {record['first_ms']}"]
     lines += [

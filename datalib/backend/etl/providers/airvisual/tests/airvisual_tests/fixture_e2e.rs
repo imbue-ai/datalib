@@ -14,6 +14,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_render::grid_index::RenderedMarkdown;
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
+use datalib_sql::{test_sql, Sql};
 
 const STANZA: &str = "ship-air";
 
@@ -24,8 +25,8 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/airvisual_tng")
 }
 
-async fn count(pool: &sqlx::SqlitePool, sql: &'static str) -> i64 {
-    sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+async fn count(pool: &sqlx::SqlitePool, sql: Sql) -> i64 {
+    sql.query_scalar().fetch_one(pool).await.unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -71,7 +72,7 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'TENFWD10X'"
+            test_sql!("SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'TENFWD10X'")
         )
         .await,
         38
@@ -79,19 +80,24 @@ async fn the_tng_fixture_ingests_and_renders() {
     assert_eq!(
         count(
             pool,
-            "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'SICKBAY01'"
+            test_sql!("SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'SICKBAY01'")
         )
         .await,
         43,
         "44 lines, one timestamp shared by the corrupt and restored files"
     );
     assert_eq!(
-        count(pool, "SELECT COUNT(*) FROM airvisual_unplaced_samples").await,
+        count(
+            pool,
+            test_sql!("SELECT COUNT(*) FROM airvisual_unplaced_samples")
+        )
+        .await,
         2
     );
     // Identity and name came from each folder's JSON.
     let devs: Vec<(String, String)> =
-        sqlx::query_as("SELECT id, name FROM airvisual_devices ORDER BY id")
+        test_sql!("SELECT id, name FROM airvisual_devices ORDER BY id")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap();
@@ -104,28 +110,31 @@ async fn the_tng_fixture_ingests_and_renders() {
     );
     // The restored file's values won the shared timestamp (path order),
     // and its short header left humidity NULL.
-    let (pm, rh, src): (Option<f64>, Option<f64>, String) = sqlx::query_as(
+    let (pm, rh, src): (Option<f64>, Option<f64>, String) = test_sql!(
         "SELECT pm25_ugm3, humidity_pct, source_file FROM airvisual_samples \
-           WHERE device_id = 'SICKBAY01' AND ts_ms = 1725148800000",
+           WHERE device_id = 'SICKBAY01' AND ts_ms = 1725148800000"
     )
+    .query_as()
     .fetch_one(pool)
     .await
     .unwrap();
     assert_eq!((pm, rh), (Some(1.5), None));
     assert!(src.contains("restored_"), "{src}");
     // A sensor-off line kept only the outdoor index; the -1 line kept its CO2.
-    let (pm, out): (Option<f64>, Option<f64>) = sqlx::query_as(
+    let (pm, out): (Option<f64>, Option<f64>) = test_sql!(
         "SELECT pm25_ugm3, outdoor_aqi_us FROM airvisual_samples \
-           WHERE device_id = 'SICKBAY01' AND ts_ms = 1725148810000",
+           WHERE device_id = 'SICKBAY01' AND ts_ms = 1725148810000"
     )
+    .query_as()
     .fetch_one(pool)
     .await
     .unwrap();
     assert_eq!((pm, out), (None, Some(16.0)));
-    let (pm, co2): (Option<f64>, Option<f64>) = sqlx::query_as(
+    let (pm, co2): (Option<f64>, Option<f64>) = test_sql!(
         "SELECT pm25_ugm3, co2_ppm FROM airvisual_samples \
-           WHERE device_id = 'SICKBAY01' AND ts_ms = 1725148845000",
+           WHERE device_id = 'SICKBAY01' AND ts_ms = 1725148845000"
     )
+    .query_as()
     .fetch_one(pool)
     .await
     .unwrap();
