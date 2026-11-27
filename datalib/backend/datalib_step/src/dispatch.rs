@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use datalib_etl::processor::{DataProcessor, PlanContext};
 use datalib_etl_render::processor::RenderProcessor;
-use datalib_source_common::{Defaults, DownloadParams, Reach};
+use datalib_source_common::{DownloadParams, Reach};
 
 use crate::source_type::SourceType;
 
@@ -128,9 +128,6 @@ pub fn plan(
                     let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
                         format!("parse the params as a {source_type} download config")
                     })?;
-                    // No global `defaults:` stanza in DAG mode (each step
-                    // is self-contained): fold the built-in defaults only.
-                    cfg.common.fold_defaults(&Defaults::default());
                     cfg.common.resolve_paths(raw_dir.clone());
                     cfg.validate()
                         .with_context(|| format!("source {name:?} (type={source_type})"))?;
@@ -187,7 +184,6 @@ pub fn plan(
                     let mut cfg: $cfgty = serde_json::from_value(source).with_context(|| {
                         format!("parse the params as a {source_type} download config")
                     })?;
-                    cfg.common.fold_defaults(&Defaults::default());
                     cfg.common.resolve_paths(raw_dir.clone());
                     cfg.validate()
                         .with_context(|| format!("source {name:?} (type={source_type})"))?;
