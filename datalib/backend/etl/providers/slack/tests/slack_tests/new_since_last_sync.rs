@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 use crate::support::{channels_with_messages, fetch_into, msg, record_general, serve};
+use datalib_sql::test_sql;
 
 const A: &str = "1735689600.000100";
 const B: &str = "1735689600.000200";
@@ -52,9 +53,10 @@ async fn second_sync(root: &Path, out: &Path, record: impl FnOnce(&Path)) {
 
 async fn user_problems(out: &Path) -> Vec<String> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let keys = sqlx::query_scalar(
-        "SELECT scope_key FROM problems WHERE scope_key LIKE 'users%' ORDER BY scope_key",
+    let keys = test_sql!(
+        "SELECT scope_key FROM problems WHERE scope_key LIKE 'users%' ORDER BY scope_key"
     )
+    .query_scalar()
     .fetch_all(db.pool())
     .await
     .unwrap();

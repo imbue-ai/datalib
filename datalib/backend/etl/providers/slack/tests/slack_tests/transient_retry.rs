@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use tempfile::tempdir;
 
 use crate::support::{serve, stored_ts};
+use datalib_sql::test_sql;
 
 const A: &str = "1735689600.000100";
 const REPLY: &str = "1735689600.000150";
@@ -70,7 +71,8 @@ fn record_world(api: &Path, replies: Value) {
 
 async fn problems(out: &Path) -> Vec<(String, String)> {
     let db = RawDb::open(&db_path_for(out)).await.unwrap();
-    let rows = sqlx::query_as("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+    let rows = test_sql!("SELECT scope_key, severity FROM problems ORDER BY scope_key")
+        .query_as()
         .fetch_all(db.pool())
         .await
         .unwrap();

@@ -447,7 +447,8 @@ its item stays. The rows stay in earlier commits. Pinned by
 
 ## Known gaps
 
-- **No render side**, so nothing appears in the grid. See above.
+- **No render side**, so no file appears in the grid; the source's only
+  grid rows are the storage report every source gets. See above.
 - **No Matroska, Ogg, GIF or WebP payload recipe.** Recognized and
   recorded; `payload_blake3` is NULL.
 - **No video frame-accurate duration for AVI** beyond

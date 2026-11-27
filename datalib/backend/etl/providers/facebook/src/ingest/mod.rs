@@ -32,6 +32,7 @@ use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use uuid::Uuid;
 
+use datalib_sql::{sql, sql_id, Sql};
 use messenger::ThreadFile;
 use schema_raw::{
     canonical_table, facebook_ns, store_ddl, MediaBlobRow, MESSENGER_MESSAGES_TABLE,
@@ -286,10 +287,14 @@ async fn prune_media_edges(
             named.extend(uris.iter().map(|uri| MediaBlobRow::pk_recipe(id, uri)));
         }
     }
-    let stored: Vec<(String, String)> = sqlx::query_as("SELECT id, owner_id FROM media_blobs")
-        .fetch_all(&mut **tx)
-        .await
-        .context("list media_blobs")?;
+    let stored: Vec<(String, String)> = sql!(
+        "facebook.list_media_edges",
+        "SELECT id, owner_id FROM media_blobs"
+    )
+    .query_as()
+    .fetch_all(&mut **tx)
+    .await
+    .context("list media_blobs")?;
     let held = stored.len();
     let keep: HashSet<String> = stored
         .into_iter()
@@ -321,10 +326,14 @@ async fn upsert_and_prune(
     // constant — ASCII alphanumerics and `_` only — so it is safe as an
     // identifier; ids are bound.
     let existing: Vec<String> = if prune {
-        sqlx::query_scalar(sqlx::AssertSqlSafe(format!("SELECT id FROM {table}")))
-            .fetch_all(&mut **tx)
-            .await
-            .with_context(|| format!("list ids in {table}"))?
+        Sql::dynamic(
+            sql_id!("facebook.list_table_ids"),
+            format!("SELECT id FROM {table}"),
+        )
+        .query_scalar()
+        .fetch_all(&mut **tx)
+        .await
+        .with_context(|| format!("list ids in {table}"))?
     } else {
         Vec::new()
     };
@@ -334,9 +343,11 @@ async fn upsert_and_prune(
         .collect();
     for chunk in gone.chunks(DELETE_CHUNK) {
         let placeholders = vec!["?"; chunk.len()].join(",");
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(format!(
-            "DELETE FROM {table} WHERE id IN ({placeholders})"
-        )));
+        let mut q = Sql::dynamic(
+            sql_id!("facebook.delete_unlisted_rows"),
+            format!("DELETE FROM {table} WHERE id IN ({placeholders})"),
+        )
+        .query();
         for id in chunk {
             q = q.bind((*id).clone());
         }
@@ -354,10 +365,14 @@ async fn upsert_rows(
     table: &str,
     rows: &BTreeMap<String, Value>,
 ) -> Result<()> {
-    sqlx::query(sqlx::AssertSqlSafe(dr::wire_payload_table_ddl(table, &[])))
-        .execute(&mut *conn)
-        .await
-        .with_context(|| format!("create table {table}"))?;
+    Sql::dynamic(
+        sql_id!("facebook.create_payload_table"),
+        dr::wire_payload_table_ddl(table, &[]),
+    )
+    .query()
+    .execute(&mut *conn)
+    .await
+    .with_context(|| format!("create table {table}"))?;
     let rows: Vec<(&String, String)> = rows.iter().map(|(id, v)| (id, v.to_string())).collect();
     for chunk in rows.chunks(INSERT_CHUNK) {
         let mut sql = format!("INSERT INTO {table} (id, payload) VALUES ");
@@ -368,7 +383,7 @@ async fn upsert_rows(
             sql.push_str("(?, jsonb(?))");
         }
         sql.push_str(" ON CONFLICT(id) DO UPDATE SET payload = excluded.payload");
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = Sql::dynamic(sql_id!("facebook.upsert_payload_rows"), sql).query();
         for (id, payload) in chunk {
             q = q.bind((*id).clone()).bind(payload.clone());
         }

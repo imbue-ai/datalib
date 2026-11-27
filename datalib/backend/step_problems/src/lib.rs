@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage};
+use datalib_sql::{sql, sql_id, Sql};
 use datalib_table::BulkUpsertable as _;
 use datalib_time::StoredStamp;
 use serde::{Deserialize, Serialize};
@@ -172,26 +173,37 @@ pub async fn record(
     if rows.is_empty() {
         return Ok(());
     }
-    let insert = datalib_table::insert_sql::<ProblemRow>();
+    let insert = Sql::dynamic(
+        sql_id!("step_problems.insert_problem"),
+        datalib_table::insert_sql::<ProblemRow>(),
+    );
     let mut tx = pool.begin().await.context("begin the problems write")?;
     let mut news = Vec::new();
     for row in one_per_id(rows) {
-        let held = sqlx::query("SELECT * FROM problems WHERE problem_uuid = ?")
-            .bind(&row.problem_uuid)
-            .fetch_optional(&mut *tx)
-            .await
-            .context("read the problem held")?
-            .map(|r| ProblemRow::from_row(&r))
-            .transpose()?;
+        let held = sql!(
+            "step_problems.read_problem",
+            "SELECT * FROM problems WHERE problem_uuid = ?"
+        )
+        .query()
+        .bind(&row.problem_uuid)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("read the problem held")?
+        .map(|r| ProblemRow::from_row(&r))
+        .transpose()?;
         let row = row.stamped(held.as_ref(), &now.utc, now.tz_offset.as_deref());
-        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
-            .bind(&row.problem_uuid)
-            .execute(&mut *tx)
-            .await
-            .context("replace the problem held")?;
+        sql!(
+            "step_problems.delete_replaced_problem",
+            "DELETE FROM problems WHERE problem_uuid = ?"
+        )
+        .query()
+        .bind(&row.problem_uuid)
+        .execute(&mut *tx)
+        .await
+        .context("replace the problem held")?;
         // Audited: `insert` is built from `ProblemRow`'s associated
         // consts, never from row data; every value is bound.
-        row.bind_into(sqlx::query(sqlx::AssertSqlSafe(insert.clone())))
+        row.bind_into(insert.query())
             .execute(&mut *tx)
             .await
             .with_context(|| format!("record problem {}", row.problem_uuid))?;
@@ -214,23 +226,31 @@ pub async fn clear(
     ended: Ended,
 ) -> Result<usize> {
     let mut tx = pool.begin().await.context("begin the problems clear")?;
-    let held: Vec<ProblemRow> = sqlx::query("SELECT * FROM problems")
-        .fetch_all(&mut *tx)
-        .await
-        .context("read the problems held")?
-        .iter()
-        .map(ProblemRow::from_row)
-        .collect::<Result<_>>()?;
+    let held: Vec<ProblemRow> = sql!(
+        "step_problems.list_problems_to_clear",
+        "SELECT * FROM problems"
+    )
+    .query()
+    .fetch_all(&mut *tx)
+    .await
+    .context("read the problems held")?
+    .iter()
+    .map(ProblemRow::from_row)
+    .collect::<Result<_>>()?;
     let mut gone = 0;
     for row in held
         .iter()
         .filter(|r| !found.contains(&r.problem_uuid) && clears(r, covered, ended))
     {
-        sqlx::query("DELETE FROM problems WHERE problem_uuid = ?")
-            .bind(&row.problem_uuid)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("clear problem {}", row.problem_uuid))?;
+        sql!(
+            "step_problems.delete_cleared_problem",
+            "DELETE FROM problems WHERE problem_uuid = ?"
+        )
+        .query()
+        .bind(&row.problem_uuid)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("clear problem {}", row.problem_uuid))?;
         gone += 1;
     }
     tx.commit().await.context("commit the problems clear")?;
@@ -341,12 +361,19 @@ async fn set_up(pool: &SqlitePool) -> Result<()> {
     let want = StepFile::shape();
     let have = datalib_store_meta::read(pool).await?.map(|m| m.shape());
     if have.as_ref() != Some(&want) {
-        sqlx::query("DROP TABLE IF EXISTS problems")
-            .execute(pool)
-            .await?;
+        sql!(
+            "step_problems.drop_problems_table",
+            "DROP TABLE IF EXISTS problems"
+        )
+        .query()
+        .execute(pool)
+        .await?;
     }
     for (_, ddl) in datalib_problems::DDL {
-        sqlx::query(*ddl).execute(pool).await?;
+        Sql::dynamic(sql_id!("step_problems.create_schema"), *ddl)
+            .query()
+            .execute(pool)
+            .await?;
     }
     datalib_store_meta::write(pool, datalib_store_meta::StoreKind::StepProblems, &want).await?;
     Ok(())
@@ -408,16 +435,22 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
             held.other_shape = true;
             return anyhow::Ok(held);
         }
-        held.rows = sqlx::query("SELECT * FROM problems ORDER BY scope_key, problem_uuid")
-            .fetch_all(&pool)
-            .await?
-            .iter()
-            .map(ProblemRow::from_row)
-            .collect::<Result<_>>()?;
+        held.rows = sql!(
+            "step_problems.list_problems",
+            "SELECT * FROM problems ORDER BY scope_key, problem_uuid"
+        )
+        .query()
+        .fetch_all(&pool)
+        .await?
+        .iter()
+        .map(ProblemRow::from_row)
+        .collect::<Result<_>>()?;
         if kind == datalib_store_meta::StoreKind::Render {
-            held.items = sqlx::query_as(
-                "SELECT entity_key, item_uuid FROM entity_items ORDER BY entity_key",
+            held.items = sql!(
+                "step_problems.list_entity_items",
+                "SELECT entity_key, item_uuid FROM entity_items ORDER BY entity_key"
             )
+            .query_as()
             .fetch_all(&pool)
             .await?;
         }
@@ -430,9 +463,11 @@ async fn read_with(path: &Path, opts: SqliteConnectOptions) -> Result<Held> {
 }
 
 async fn has_entity_items(pool: &SqlitePool) -> Result<bool> {
-    let n: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'entity_items'",
+    let n: i64 = sql!(
+        "step_problems.has_entity_items_table",
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'entity_items'"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await?;
     Ok(n > 0)

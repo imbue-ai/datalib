@@ -73,10 +73,11 @@ export type PassState =
   | "done"
   | "failed";
 
-/** `WipeKind in datalib/backend/dag/src/supervisor/store.rs`. */
-export type WipeKind =
+/** `JobKind in datalib/backend/dag/src/supervisor/store.rs`. */
+export type JobKind =
   | "reset"
   | "purge"
   | "compact"
-  | "collect";
+  | "collect"
+  | "prepare";
 

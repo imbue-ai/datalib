@@ -875,9 +875,11 @@ $dl -readonly "$db/abc123…" "SELECT COUNT(*) FROM Adobe_images;"
 
 ## Scaling caveat
 
-Each table is filled inside its own transaction and the run commits
-once, at the end, so a crash mid-run leaves HEAD untouched and a dirty
-working set that the next open discards
+Each table is filled inside its own transaction and each catalog
+mirrored is one commit, made once its last table is filled (a run that
+replays backups makes one per backup, then one for the newest state), so
+a crash mid-mirror leaves HEAD on the last commit and a dirty working set
+that the next open discards
 ([doltlite.md § A writer's open discards the working set](/docs/dev/doltlite.md#a-writers-open-discards-the-working-set));
 the next run refills from the source as every run does.
 

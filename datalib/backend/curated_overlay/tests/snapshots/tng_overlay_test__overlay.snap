@@ -1,0 +1,381 @@
+---
+source: datalib/backend/curated_overlay/tests/tng.rs
+expression: overlay
+---
+{
+  "contacts": {
+    "Beverly Crusher (person)": {
+      "contact:Beverly Crusher": [
+        "discord",
+        "notion",
+        "signal"
+      ],
+      "discord:170100000000000007": [
+        "discord"
+      ],
+      "email:beverly.crusher@enterprise.starfleet.invalid": [
+        "notion"
+      ],
+      "tel:+17015550106": [
+        "signal"
+      ]
+    },
+    "Data (person)": {
+      "contact:Data": [
+        "beeper",
+        "discord",
+        "github",
+        "google-takeout",
+        "linkedin",
+        "signal",
+        "slack",
+        "slack-diff",
+        "tng_contacts-diff",
+        "whatsapp"
+      ],
+      "discord:170100000000000003": [
+        "discord"
+      ],
+      "email:data@enterprise.starfleet": [
+        "google-takeout",
+        "tng_contacts-diff"
+      ],
+      "github:data-soong": [
+        "github"
+      ],
+      "linkedin:datasoong": [
+        "linkedin"
+      ],
+      "signal_aci:0195683a-d140-87f9-bdf6-234da6d68811": {
+        "only on the records of": [
+          "signal"
+        ]
+      },
+      "slack:T_NCC1701D/U_DATA": [
+        "slack",
+        "slack-diff"
+      ],
+      "tel:+15551234001": [
+        "beeper"
+      ],
+      "tel:+17015550102": [
+        "signal",
+        "whatsapp"
+      ]
+    },
+    "Deanna Troi (person)": {
+      "contact:Deanna Troi": [
+        "discord",
+        "signal",
+        "sms-backup-restore",
+        "tng_email",
+        "whatsapp"
+      ],
+      "discord:170100000000000004": [
+        "discord"
+      ],
+      "email:troi@enterprise.starfleet": [
+        "tng_email"
+      ],
+      "signal_aci:0195683a-d140-87f9-bdf6-234da6d68814": {
+        "only on the records of": [
+          "signal"
+        ]
+      },
+      "tel:+12025550103": [
+        "sms-backup-restore"
+      ],
+      "tel:+17015550105": [
+        "signal",
+        "whatsapp"
+      ]
+    },
+    "Enterprise systems (group)": {
+      "contact:Enterprise systems": [
+        "tng_email"
+      ],
+      "email:lcars@enterprise.starfleet": [
+        "tng_email"
+      ]
+    },
+    "Geordi La Forge (person)": {
+      "contact:Geordi La Forge": [
+        "discord",
+        "google-drive",
+        "notion",
+        "signal",
+        "sms-backup-restore",
+        "tng_contacts",
+        "tng_email",
+        "whatsapp"
+      ],
+      "discord:170100000000000006": [
+        "discord"
+      ],
+      "email:geordi.laforge@enterprise.starfleet.invalid": [
+        "notion"
+      ],
+      "email:glaforge@enterprise.starfleet": [
+        "tng_contacts"
+      ],
+      "email:laforge@enterprise.starfleet": [
+        "google-drive",
+        "tng_contacts",
+        "tng_email"
+      ],
+      "signal_aci:0195683a-d140-87f9-bdf6-234da6d68812": {
+        "only on the records of": [
+          "signal"
+        ]
+      },
+      "tel:+12025550104": [
+        "sms-backup-restore"
+      ],
+      "tel:+17015550103": [
+        "signal",
+        "whatsapp"
+      ]
+    },
+    "Jean-Luc Picard (person)": {
+      "contact:Jean-Luc Picard": [
+        "beeper",
+        "discord",
+        "github",
+        "gitlab",
+        "google-drive",
+        "google-takeout",
+        "linkedin",
+        "notion",
+        "slack",
+        "slack-diff",
+        "sms-backup-restore",
+        "tng_contacts",
+        "tng_contacts-diff",
+        "tng_email"
+      ],
+      "discord:170100000000000001": [
+        "discord"
+      ],
+      "email:jean-luc.picard@enterprise.starfleet.invalid": [
+        "notion"
+      ],
+      "email:jlpicard@enterprise.starfleet": [
+        "tng_contacts",
+        "tng_contacts-diff"
+      ],
+      "email:jlpicard@starfleet.gov": [
+        "linkedin"
+      ],
+      "email:picard@enterprise.starfleet": [
+        "google-drive",
+        "google-takeout",
+        "tng_contacts",
+        "tng_contacts-diff",
+        "tng_email"
+      ],
+      "github:jlpicard": [
+        "github"
+      ],
+      "gitlab:gitlab.com/jlpicard": [
+        "gitlab"
+      ],
+      "linkedin:jlpicard": [
+        "linkedin"
+      ],
+      "slack:T1701D/U0PICARD": [
+        "beeper"
+      ],
+      "slack:T_NCC1701D/U_PICARD": [
+        "slack",
+        "slack-diff"
+      ],
+      "tel:+12025550101": [
+        "google-takeout",
+        "sms-backup-restore",
+        "tng_contacts",
+        "tng_contacts-diff"
+      ]
+    },
+    "Marie Picard (person)": {
+      "contact:Marie Picard": [
+        "tng_contacts"
+      ],
+      "email:marie@labarre.earth": [
+        "tng_contacts"
+      ],
+      "email:vineyard@labarre.earth": [
+        "tng_contacts"
+      ]
+    },
+    "Robert Picard (person)": {
+      "contact:Robert Picard": [
+        "tng_contacts"
+      ],
+      "email:vineyard@labarre.earth": [
+        "tng_contacts"
+      ]
+    },
+    "Will Riker (person)": "merged into William T. Riker",
+    "William T. Riker (person)": {
+      "contact:William T. Riker": [
+        "beeper",
+        "discord",
+        "github",
+        "gitlab",
+        "google-takeout",
+        "linkedin",
+        "signal",
+        "slack",
+        "slack-diff",
+        "tng_contacts",
+        "tng_email",
+        "whatsapp"
+      ],
+      "discord:170100000000000002": [
+        "discord"
+      ],
+      "email:riker@enterprise.org": [
+        "beeper"
+      ],
+      "email:riker@enterprise.starfleet": [
+        "google-takeout",
+        "tng_contacts",
+        "tng_email"
+      ],
+      "email:will.riker@alaska.earth": [
+        "tng_contacts"
+      ],
+      "email:wriker@enterprise.starfleet": [
+        "tng_contacts"
+      ],
+      "github:wtriker": [
+        "github"
+      ],
+      "gitlab:gitlab.com/wtriker": [
+        "gitlab"
+      ],
+      "linkedin:wriker": [
+        "linkedin"
+      ],
+      "signal_aci:0195683a-d140-87f9-bdf6-234da6d6880c": {
+        "only on the records of": [
+          "signal"
+        ]
+      },
+      "slack:T_NCC1701D/U_RIKER": [
+        "slack",
+        "slack-diff"
+      ],
+      "tel:+17015550101": [
+        "signal",
+        "whatsapp"
+      ]
+    },
+    "Worf (person)": {
+      "contact:Worf": [
+        "beeper",
+        "discord",
+        "gitlab",
+        "signal",
+        "slack",
+        "slack-diff",
+        "sms-backup-restore",
+        "tng_contacts",
+        "tng_contacts-diff",
+        "whatsapp"
+      ],
+      "discord:170100000000000005": [
+        "discord"
+      ],
+      "email:worf@enterprise.starfleet": [
+        "tng_contacts",
+        "tng_contacts-diff"
+      ],
+      "gitlab:gitlab.com/worf-rozhenko": [
+        "gitlab"
+      ],
+      "signal_aci:0195683a-d140-87f9-bdf6-234da6d68813": {
+        "only on the records of": [
+          "signal"
+        ]
+      },
+      "slack:T1701D/U0WORF": [
+        "beeper"
+      ],
+      "slack:T_NCC1701D/U_WORF": [
+        "slack",
+        "slack-diff"
+      ],
+      "tel:+12025550102": [
+        "sms-backup-restore",
+        "tng_contacts",
+        "tng_contacts-diff"
+      ],
+      "tel:+17015550104": [
+        "signal",
+        "whatsapp"
+      ]
+    }
+  },
+  "me": {
+    "from:discord:170100000000000001": [
+      "discord"
+    ],
+    "from:email:jean-luc.picard@enterprise.starfleet.invalid": [
+      "notion"
+    ],
+    "from:email:jlpicard@enterprise.starfleet": [],
+    "from:email:jlpicard@starfleet.gov": [],
+    "from:email:picard@enterprise.starfleet": [
+      "google-drive",
+      "google-takeout",
+      "tng_email"
+    ],
+    "from:github:jlpicard": [
+      "github"
+    ],
+    "from:gitlab:gitlab.com/jlpicard": [
+      "gitlab"
+    ],
+    "from:linkedin:jlpicard": [
+      "linkedin"
+    ],
+    "from:me": [
+      "beeper",
+      "chatgpt-api",
+      "claude-api",
+      "claude-code",
+      "codex",
+      "discord",
+      "facebook",
+      "github",
+      "gitlab",
+      "google-drive",
+      "google-takeout",
+      "linkedin",
+      "notion",
+      "signal",
+      "slack",
+      "slack-diff",
+      "sms-backup-restore",
+      "tng_email",
+      "whatsapp"
+    ],
+    "from:slack:T1701D/U0PICARD": [
+      "beeper"
+    ],
+    "from:slack:T_NCC1701D/U_PICARD": [
+      "slack",
+      "slack-diff"
+    ],
+    "from:tel:+12025550101": [
+      "google-takeout",
+      "sms-backup-restore"
+    ]
+  },
+  "mutes": {
+    "1860e56d-3cbf-504d-ab0b-df061b1bfe4a": "slack parse uncovered_type: 00000000-0000-80d6-b5a5-2617d0679dab",
+    "4a7fcf9d-734b-5848-8e07-f0cd6bcd7491": "whatsapp parse fetch_failed: 00000000-0000-8d08-85b0-d2533cc3a460",
+    "6df47df9-b6ad-5372-942e-5db5e4d068bb": "claude-api parse coercion_failed: 00000000-0000-8fda-8a1d-506771450366"
+  }
+}

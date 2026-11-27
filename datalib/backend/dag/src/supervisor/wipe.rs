@@ -1,4 +1,4 @@
-//! What a wipe — a reset, a purge, a compaction or a collection (`store::WipeKind`) — touches, when
+//! What a wipe — a reset, a purge, a compaction or a collection (`store::JobKind`) — touches, when
 //! the loop may carry it out, and what it leaves in the record. Pure; the
 //! loop (`round.rs`) stops the steps, runs the reset and deletes the trees.
 
@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::graph::Graph;
 use crate::supervisor::record::{Record, StepRecord};
-use crate::supervisor::store::WipeKind;
+use crate::supervisor::store::JobKind;
 
 /// The steps of `graph` a wipe holds: none of them may run until it is
 /// done. A reset holds its targets; a purge, every step still writing
@@ -15,9 +15,9 @@ use crate::supervisor::store::WipeKind;
 /// reader on a commit the fold drops would be left reading nothing. A
 /// collection holds the same: it drops no commit, but it rewrites the
 /// file under a reader.
-pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
+pub fn held(graph: &Graph, kind: JobKind, targets: &[String]) -> Vec<usize> {
     match kind {
-        WipeKind::Compact | WipeKind::Collect => {
+        JobKind::Compact | JobKind::Collect => {
             let Some(how) = kind.shrink() else {
                 return Vec::new();
             };
@@ -28,24 +28,27 @@ pub fn held(graph: &Graph, kind: WipeKind, targets: &[String]) -> Vec<usize> {
             let held: BTreeSet<usize> = asked.iter().copied().chain(readers).collect();
             held.into_iter().collect()
         }
-        WipeKind::Reset => targets
+        JobKind::Reset => targets
             .iter()
             .filter_map(|t| graph.by_id.get(t).copied())
             .collect(),
-        WipeKind::Purge => (0..graph.steps.len())
+        JobKind::Purge => (0..graph.steps.len())
             .filter(|&i| targets.iter().any(|g| g == tree_group(&graph.steps[i].id)))
             .collect(),
+        // The loop's own pass holds what it has not reached itself
+        // (`round.rs`'s `PreparePass`).
+        JobKind::Prepare => Vec::new(),
     }
 }
 
 /// Why the wipe cannot be done at all, or `None`. `latest` is the newest
 /// graph the loop has heard of, taken on or not.
-pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<String> {
+pub fn refusal(latest: &Graph, kind: JobKind, targets: &[String]) -> Option<String> {
     if targets.is_empty() && kind.shrink().is_none() {
         return Some("nothing to wipe".into());
     }
     match kind {
-        WipeKind::Compact | WipeKind::Collect => {
+        JobKind::Compact | JobKind::Collect => {
             targets.iter().find_map(|t| match latest.by_id.get(t) {
                 None => Some(format!("the config has no step {t:?}")),
                 Some(&i)
@@ -61,11 +64,11 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
                 Some(_) => None,
             })
         }
-        WipeKind::Reset => targets
+        JobKind::Reset => targets
             .iter()
             .find(|t| !latest.by_id.contains_key(*t))
             .map(|t| format!("the config has no step {t:?}")),
-        WipeKind::Purge => {
+        JobKind::Purge => {
             if let Some(bad) = targets.iter().find(|g| !crate::config::usable_group_id(g)) {
                 return Some(format!("{bad:?} is not a group id"));
             }
@@ -75,6 +78,7 @@ pub fn refusal(latest: &Graph, kind: WipeKind, targets: &[String]) -> Option<Str
                 .find(|g| named.contains(g.as_str()))
                 .map(|g| format!("the config still has {g:?}; remove it from the config first"))
         }
+        JobKind::Prepare => Some("the loop opens its own prepare pass each time it starts".into()),
     }
 }
 
@@ -220,13 +224,13 @@ mod tests {
             ix.into_iter().map(|i| g.steps[i].id.as_str()).collect()
         };
         assert_eq!(
-            names(held(&g, WipeKind::Reset, &strings(&["a/ingest"]))),
+            names(held(&g, JobKind::Reset, &strings(&["a/ingest"]))),
             ["a/ingest"]
         );
-        let mut purged = names(held(&g, WipeKind::Purge, &strings(&["a"])));
+        let mut purged = names(held(&g, JobKind::Purge, &strings(&["a"])));
         purged.sort();
         assert_eq!(purged, ["a/ingest", "a/render"]);
-        assert!(held(&g, WipeKind::Purge, &strings(&["gone"])).is_empty());
+        assert!(held(&g, JobKind::Purge, &strings(&["gone"])).is_empty());
     }
 
     /// A compaction holds the steps it asks and every step reading one; with
@@ -254,7 +258,7 @@ mod tests {
             out
         };
         assert_eq!(
-            names(held(&g, WipeKind::Compact, &strings(&["a/render"]))),
+            names(held(&g, JobKind::Compact, &strings(&["a/render"]))),
             ["a/render", "idx/grid"]
         );
         assert_eq!(
@@ -266,27 +270,27 @@ mod tests {
             ["a/ingest", "a/render", "idx/grid"]
         );
         assert_eq!(
-            names(held(&g, WipeKind::Compact, &[])),
+            names(held(&g, JobKind::Compact, &[])),
             ["a/ingest", "a/render", "b/render", "idx/grid", "idx/qmd"]
         );
-        assert_eq!(refusal(&g, WipeKind::Compact, &[]), None);
-        assert!(refusal(&g, WipeKind::Compact, &strings(&["idx/qmd"]))
+        assert_eq!(refusal(&g, JobKind::Compact, &[]), None);
+        assert!(refusal(&g, JobKind::Compact, &strings(&["idx/qmd"]))
             .unwrap()
             .contains("does not take --compact"));
-        assert!(refusal(&g, WipeKind::Compact, &strings(&["nope/x"]))
+        assert!(refusal(&g, JobKind::Compact, &strings(&["nope/x"]))
             .unwrap()
             .contains("no step"));
 
         // A collection holds what it asks and what reads that.
         assert_eq!(
-            names(held(&g, WipeKind::Collect, &[])),
+            names(held(&g, JobKind::Collect, &[])),
             ["a/ingest", "a/render", "idx/grid", "idx/qmd"]
         );
-        assert!(refusal(&g, WipeKind::Collect, &strings(&["b/render"]))
+        assert!(refusal(&g, JobKind::Collect, &strings(&["b/render"]))
             .unwrap()
             .contains("does not take --collect"));
-        assert_eq!(refusal(&g, WipeKind::Collect, &[]), None);
-        assert!(refusal(&g, WipeKind::Collect, &strings(&["idx/qmd"]))
+        assert_eq!(refusal(&g, JobKind::Collect, &[]), None);
+        assert!(refusal(&g, JobKind::Collect, &strings(&["idx/qmd"]))
             .unwrap()
             .contains("does not take --collect"));
     }
@@ -313,7 +317,7 @@ mod tests {
     #[test]
     fn a_wipe_is_refused_what_it_may_not_touch() {
         let g = graph(&[("keep/raw", &[])]);
-        let purge = |groups: &[&str]| refusal(&g, WipeKind::Purge, &strings(groups));
+        let purge = |groups: &[&str]| refusal(&g, JobKind::Purge, &strings(groups));
         assert_eq!(purge(&["gone"]), None);
         assert!(purge(&[]).is_some());
         assert!(purge(&["gone", "keep"])
@@ -322,8 +326,8 @@ mod tests {
         for bad in ["", "..", "system", "SYSTEM", "Keep", "a/b", "../elsewhere"] {
             assert!(purge(&[bad]).unwrap().contains("not a group id"), "{bad:?}");
         }
-        assert_eq!(refusal(&g, WipeKind::Reset, &strings(&["keep/raw"])), None);
-        assert!(refusal(&g, WipeKind::Reset, &strings(&["nope/raw"]))
+        assert_eq!(refusal(&g, JobKind::Reset, &strings(&["keep/raw"])), None);
+        assert!(refusal(&g, JobKind::Reset, &strings(&["nope/raw"]))
             .unwrap()
             .contains("no step \"nope/raw\""));
     }

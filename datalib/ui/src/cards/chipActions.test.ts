@@ -209,13 +209,13 @@ describe("runChipAction", () => {
       title: null,
       seen: null,
     };
-    const get = vi.spyOn(people, "get").mockReturnValue({ mine, sourceContacts: [] });
+    const get = vi.spyOn(people, "get").mockReturnValue({ mine: [mine], sourceContacts: [] });
     const search = vi.fn();
     await runChipAction("search", RIKER, host({ search }));
     get.mockRestore();
     expect(search.mock.calls).toEqual([["with:contact:c1", "narrow"]]);
-    expect(everythingWith("email:riker@enterprise.org", mine)).toBe("with:contact:c1");
-    expect(everythingWith("email:riker@enterprise.org", null)).toBe(
+    expect(everythingWith("email:riker@enterprise.org", [mine])).toBe("with:contact:c1");
+    expect(everythingWith("email:riker@enterprise.org", [])).toBe(
       "with:email:riker@enterprise.org",
     );
   });

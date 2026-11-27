@@ -29,6 +29,7 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use datalib_etl_airvisual_config::AirvisualDevice;
 use datalib_problems::{Outcome, Problem, Reason};
 
+use datalib_sql::sql;
 use schema_raw::{
     cursor_scope, full_ddl, AirvisualDeviceRow, AirvisualSampleRow, AirvisualUnplacedSampleRow,
 };
@@ -204,19 +205,24 @@ async fn read_clock(
         Err(e) => trouble.push(format!("read {CLOCK_HISTORY}: {e}")),
     }
     let changes = schema_raw::load_clock_changes(&mut **tx, device).await?;
-    let timezone: Option<String> =
-        sqlx::query_scalar("SELECT timezone FROM airvisual_devices WHERE id = ?")
-            .bind(device)
-            .fetch_optional(&mut **tx)
-            .await?
-            .flatten();
+    let timezone: Option<String> = sql!(
+        "airvisual.read_device_timezone",
+        "SELECT timezone FROM airvisual_devices WHERE id = ?"
+    )
+    .query_scalar()
+    .bind(device)
+    .fetch_optional(&mut **tx)
+    .await?
+    .flatten();
     let (model, doubts) = clock::clock_model(&changes, timezone.as_deref());
     trouble.extend(doubts);
     trouble.extend(model.unplaced_archives(scan.files.iter().map(|f| f.rel.as_str())));
-    let newest: Option<(i64, String)> = sqlx::query_as(
+    let newest: Option<(i64, String)> = sql!(
+        "airvisual.find_newest_sample_of_device",
         "SELECT ts_ms, source_file FROM airvisual_samples WHERE device_id = ? \
-         ORDER BY ts_ms DESC LIMIT 1",
+         ORDER BY ts_ms DESC LIMIT 1"
     )
+    .query_as()
     .bind(device)
     .fetch_optional(&mut **tx)
     .await?;
@@ -417,11 +423,13 @@ async fn fetch_device(
             "ingested one measurement file"
         );
     }
-    sqlx::query(
+    sql!(
+        "airvisual.update_device_last_sample_time",
         "UPDATE airvisual_devices SET last_ts_ms =
             (SELECT MAX(ts_ms) FROM airvisual_samples WHERE device_id = ?)
-         WHERE id = ?",
+         WHERE id = ?"
     )
+    .query()
     .bind(&who.id)
     .bind(&who.id)
     .execute(&mut *tx)
@@ -467,10 +475,12 @@ async fn upsert_device(
         Option<String>,
         Option<String>,
     );
-    let stored: Option<Stored> = sqlx::query_as(
+    let stored: Option<Stored> = sql!(
+        "airvisual.read_device_info",
         "SELECT name, model, mac_address, app_version, system_version, timezone \
-           FROM airvisual_devices WHERE id = ?",
+           FROM airvisual_devices WHERE id = ?"
     )
+    .query_as()
     .bind(&row.id)
     .fetch_optional(&mut **tx)
     .await?;
@@ -624,6 +634,7 @@ mod tests {
     use sqlx::sqlite::SqlitePool;
     use std::path::PathBuf;
 
+    use datalib_sql::{test_sql, Sql};
     const HEADER: &str = "Date;Time;Timestamp;PM2_5(ug/m3);AQI(US);AQI(CN);PM10(ug/m3);PM1(ug/m3);Outdoor AQI(US);Outdoor AQI(CN);Temperature(C);Temperature(F);Humidity(%RH);CO2(ppm);\n";
 
     fn line(ts: i64, pm25: &str, co2: &str) -> String {
@@ -698,13 +709,14 @@ mod tests {
         vec![device(&e.root, Some("KITCHEN01"), Some("kitchen"))]
     }
 
-    async fn count(pool: &SqlitePool, sql: &'static str) -> i64 {
-        sqlx::query_scalar(sql).fetch_one(pool).await.unwrap()
+    async fn count(pool: &SqlitePool, sql: Sql) -> i64 {
+        sql.query_scalar().fetch_one(pool).await.unwrap()
     }
 
     /// Every `problems` row, `(scope_key, sample)`.
     async fn problems(pool: &SqlitePool) -> Vec<(String, String)> {
-        sqlx::query_as("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            .query_as()
             .fetch_all(pool)
             .await
             .unwrap()
@@ -741,18 +753,23 @@ mod tests {
         );
         assert_eq!(s.samples, 3);
         assert_eq!(
-            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
+            count(
+                e.db.pool(),
+                test_sql!("SELECT COUNT(*) FROM airvisual_samples")
+            )
+            .await,
             3
         );
         let co2: f64 =
-            sqlx::query_scalar("SELECT co2_ppm FROM airvisual_samples WHERE ts_ms = 1788221736000")
+            test_sql!("SELECT co2_ppm FROM airvisual_samples WHERE ts_ms = 1788221736000")
+                .query_scalar()
                 .fetch_one(e.db.pool())
                 .await
                 .unwrap();
         assert_eq!(co2, 430.0);
         let last: i64 = count(
             e.db.pool(),
-            "SELECT last_ts_ms FROM airvisual_devices WHERE id = 'KITCHEN01'",
+            test_sql!("SELECT last_ts_ms FROM airvisual_devices WHERE id = 'KITCHEN01'"),
         )
         .await;
         assert_eq!(last, 1_788_221_736_000);
@@ -784,7 +801,8 @@ mod tests {
         fetch(opts(&e, vec![device(&e.root, None, None)]))
             .await
             .unwrap();
-        let dirty: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dolt_status")
+        let dirty: i64 = test_sql!("SELECT COUNT(*) FROM dolt_status")
+            .query_scalar()
             .fetch_one(e.db.pool())
             .await
             .unwrap();
@@ -810,7 +828,11 @@ mod tests {
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!(s.files_skipped, 0);
         assert_eq!(
-            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
+            count(
+                e.db.pool(),
+                test_sql!("SELECT COUNT(*) FROM airvisual_samples")
+            )
+            .await,
             2
         );
         e.db.close().await;
@@ -838,7 +860,8 @@ mod tests {
             Option<String>,
             Option<String>,
             Option<String>,
-        ) = sqlx::query_as("SELECT id, name, model, mac_address, timezone FROM airvisual_devices")
+        ) = test_sql!("SELECT id, name, model, mac_address, timezone FROM airvisual_devices")
+            .query_as()
             .fetch_one(e.db.pool())
             .await
             .unwrap();
@@ -855,7 +878,7 @@ mod tests {
         assert_eq!(
             count(
                 e.db.pool(),
-                "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = '4133wv2jb9z'"
+                test_sql!("SELECT COUNT(*) FROM airvisual_samples WHERE device_id = '4133wv2jb9z'")
             )
             .await,
             1
@@ -879,7 +902,8 @@ mod tests {
         fetch(opts(&e, vec![device(&e.root, Some("OVERRIDE"), None)]))
             .await
             .unwrap();
-        let row: (String, String) = sqlx::query_as("SELECT id, name FROM airvisual_devices")
+        let row: (String, String) = test_sql!("SELECT id, name FROM airvisual_devices")
+            .query_as()
             .fetch_one(e.db.pool())
             .await
             .unwrap();
@@ -918,13 +942,17 @@ mod tests {
         assert_eq!(
             count(
                 e.db.pool(),
-                "SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'B'"
+                test_sql!("SELECT COUNT(*) FROM airvisual_samples WHERE device_id = 'B'")
             )
             .await,
             2
         );
         assert_eq!(
-            count(e.db.pool(), "SELECT COUNT(*) FROM ingested_files").await,
+            count(
+                e.db.pool(),
+                test_sql!("SELECT COUNT(*) FROM ingested_files")
+            )
+            .await,
             2,
             "one cursor row per (device, file)"
         );
@@ -950,23 +978,27 @@ mod tests {
             assert_eq!(s.samples, 0, "nothing placeable in time");
         }
         assert_eq!(
-            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_samples").await,
+            count(
+                e.db.pool(),
+                test_sql!("SELECT COUNT(*) FROM airvisual_samples")
+            )
+            .await,
             0
         );
         assert_eq!(
             count(
                 e.db.pool(),
-                "SELECT COUNT(*) FROM airvisual_unplaced_samples"
+                test_sql!("SELECT COUNT(*) FROM airvisual_unplaced_samples")
             )
             .await,
             2
         );
-        let id: String = sqlx::query_scalar(
-            "SELECT id FROM airvisual_unplaced_samples ORDER BY line_no LIMIT 1",
-        )
-        .fetch_one(e.db.pool())
-        .await
-        .unwrap();
+        let id: String =
+            test_sql!("SELECT id FROM airvisual_unplaced_samples ORDER BY line_no LIMIT 1")
+                .query_scalar()
+                .fetch_one(e.db.pool())
+                .await
+                .unwrap();
         assert_eq!(id, "KITCHEN01#archive1/197001_AirVisual_values.txt#2");
         e.db.close().await;
     }
@@ -1051,7 +1083,11 @@ mod tests {
         fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert!(problems(e.db.pool()).await.is_empty());
         assert_eq!(
-            count(e.db.pool(), "SELECT COUNT(*) FROM airvisual_clock_changes").await,
+            count(
+                e.db.pool(),
+                test_sql!("SELECT COUNT(*) FROM airvisual_clock_changes")
+            )
+            .await,
             1
         );
 
@@ -1226,7 +1262,8 @@ mod tests {
         std::fs::write(&json, r#"{"serial_number": "KITCH"#).unwrap();
         let s = fetch(opts(&e, kitchen(&e))).await.unwrap();
         assert_eq!(s.errors, 1);
-        let tz: Option<String> = sqlx::query_scalar("SELECT timezone FROM airvisual_devices")
+        let tz: Option<String> = test_sql!("SELECT timezone FROM airvisual_devices")
+            .query_scalar()
             .fetch_one(e.db.pool())
             .await
             .unwrap();

@@ -20,8 +20,9 @@ pub const DATA_TABLES: &[&str] = &["self_identity", "merge_requests", "discussio
 /// of the clock is not.
 pub const SELF_IDENTITY_VOLATILE_PATHS: &[dr::VolatilePath] = &[&["local_time"]];
 
-/// `self_identity` — exactly one row carrying the authenticated
-/// GitLab user (the result of `GET /user`).
+/// `self_identity` — the authenticated GitLab user (the result of
+/// `GET /user`), one row per account the source has signed in as.
+/// Nothing removes a row.
 #[derive(Debug, Clone, WirePayloadRow)]
 #[wire_payload_row(table = "self_identity")]
 pub struct SelfIdentityRow {

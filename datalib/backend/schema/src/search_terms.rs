@@ -313,8 +313,8 @@ pub fn search_terms_of(row: &SearchTermSource) -> Vec<SearchTerm> {
 }
 
 /// What [`search_terms_of`] derives and how [`TERMS_DDL`] lays it out. It
-/// is part of the grid index's shape, and an index in another shape is
-/// built again, so change it whenever either changes. A kind a render
+/// is part of the shape of the grid's tables in the grid index, which a
+/// build that moves it fills again, so change it whenever either changes. A kind a render
 /// starts to supply needs no change: it arrives as its rows are written.
 pub const TERMS_SHAPE: &str = "11";
 

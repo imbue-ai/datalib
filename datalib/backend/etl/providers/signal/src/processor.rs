@@ -35,8 +35,8 @@ pub fn plan_ingest(ctx: PlanContext, config: SignalConfig) -> Result<Vec<Box<dyn
 }
 
 /// Signal's download processor. Owns its raw doltlite store end to end: opens
-/// it, registers an opaque interrupt-commit hook, reads every snapshot under
-/// `backup.path` the store lacks, one commit each, closes.
+/// it, reads every snapshot under `backup.path` the store lacks, one commit
+/// each, and lets the run's store session seal and close it.
 struct SignalIngest {
     id: String,
     raw_path: PathBuf,

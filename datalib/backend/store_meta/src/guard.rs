@@ -164,6 +164,7 @@ pub async fn inspect_root(root: &Path) -> Vec<NewerBuild> {
 mod tests {
     use super::*;
 
+    use datalib_sql::test_sql;
     /// The comparison is `major.minor` and nothing else, and an
     /// unreadable version never counts as newer.
     #[test]
@@ -258,9 +259,10 @@ mod tests {
                 .unwrap();
             }
             if *p == newer {
-                sqlx::query(
-                    "UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'",
+                test_sql!(
+                    "UPDATE _datalib_meta SET value = '99.0.0' WHERE key = 'datalib_version'"
                 )
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();

@@ -9,6 +9,7 @@ use datalib_etl_calendar_common::occurrences::Window;
 use sqlx::SqlitePool;
 
 use super::{Listed, OccurrenceRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 const DDL: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS occurrences (
@@ -104,29 +105,38 @@ pub async fn replace(pool: &SqlitePool, listed: &Listed, window: &Window) -> Res
     let mut tx = pool.begin().await.context("begin the occurrences write")?;
     for table in ["occurrences", "unlisted", "occurrences_window"] {
         // Safe: the table names are constants.
-        sqlx::query(sqlx::AssertSqlSafe(format!("DELETE FROM {table}")))
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("empty {table}"))?;
+        Sql::dynamic(
+            sql_id!("calendar_render.clear_occurrence_table"),
+            format!("DELETE FROM {table}"),
+        )
+        .query()
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("empty {table}"))?;
     }
     for chunk in listed.rows.chunks(CHUNK) {
-        let sql = format!(
-            "INSERT INTO occurrences ({}) VALUES {}",
-            COLUMNS.join(", "),
-            vec![ONE_ROW; chunk.len()].join(", ")
+        let sql = Sql::dynamic(
+            sql_id!("calendar_render.insert_occurrences"),
+            format!(
+                "INSERT INTO occurrences ({}) VALUES {}",
+                COLUMNS.join(", "),
+                vec![ONE_ROW; chunk.len()].join(", ")
+            ),
         );
         // Safe: the columns are constants, the placeholders are sized
         // from the chunk, and every value is bound.
-        let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+        let mut q = sql.query();
         for r in chunk {
             q = bind_row(q, r);
         }
         q.execute(&mut *tx).await.context("write occurrences")?;
     }
     for u in &listed.unlisted {
-        sqlx::query(
-            "INSERT OR IGNORE INTO unlisted (event_row, calendar_id, reason) VALUES (?, ?, ?)",
+        sql!(
+            "calendar_render.insert_unlisted_event",
+            "INSERT OR IGNORE INTO unlisted (event_row, calendar_id, reason) VALUES (?, ?, ?)"
         )
+        .query()
         .bind(&u.event_row)
         .bind(&u.calendar_id)
         .bind(&u.reason)
@@ -134,12 +144,16 @@ pub async fn replace(pool: &SqlitePool, listed: &Listed, window: &Window) -> Res
         .await
         .context("write unlisted")?;
     }
-    sqlx::query("INSERT INTO occurrences_window (id, from_utc, until_utc) VALUES (1, ?, ?)")
-        .bind(super::utc_text(window.from))
-        .bind(super::utc_text(window.until))
-        .execute(&mut *tx)
-        .await
-        .context("write occurrences_window")?;
+    sql!(
+        "calendar_render.insert_occurrences_window",
+        "INSERT INTO occurrences_window (id, from_utc, until_utc) VALUES (1, ?, ?)"
+    )
+    .query()
+    .bind(super::utc_text(window.from))
+    .bind(super::utc_text(window.until))
+    .execute(&mut *tx)
+    .await
+    .context("write occurrences_window")?;
     tx.commit().await.context("commit the occurrences write")
 }
 

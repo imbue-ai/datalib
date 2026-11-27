@@ -80,9 +80,13 @@ fn worth(method: &Method, path: &str, status: StatusCode, live_refetch: bool) ->
     }
 }
 
-/// On a proxied response: the rows the applet says it read, if it says.
-#[derive(Debug, Clone, Copy)]
-pub struct AppletRowsRead(pub Option<u64>);
+/// On a proxied response: the rows the applet says it read and what its
+/// statements did, if it says.
+#[derive(Debug, Clone)]
+pub struct AppletWork {
+    pub rows_read: Option<u64>,
+    pub sql_work: Option<String>,
+}
 
 pub async fn record(
     State(echoes): State<crate::loop_guard::Echoes>,
@@ -102,7 +106,7 @@ pub async fn record(
     let live_refetch = cause.is_some();
     let chain = crate::loop_guard::request_chain(cause);
     let started = Instant::now();
-    let (resp, own_rows) =
+    let (resp, own) =
         datalib_sql_work::counted(crate::loop_guard::scope(chain, next.run(req))).await;
     let status = resp.status();
     if !is_logged(&path, status) {
@@ -112,10 +116,28 @@ pub async fn record(
     let ms = started.elapsed().as_millis() as u64;
     // Not the `Content-Length` header: axum sets that outside this layer.
     let bytes = resp.body().size_hint().exact();
-    let rows_read = match resp.extensions().get::<AppletRowsRead>() {
-        Some(AppletRowsRead(theirs)) => *theirs,
-        None => own_rows,
+    let (rows_read, sql, sql_ms) = match resp.extensions().get::<AppletWork>() {
+        Some(theirs) => {
+            let statements = theirs
+                .sql_work
+                .as_deref()
+                .and_then(|h| serde_json::from_str(h).ok());
+            (
+                theirs.rows_read,
+                theirs.sql_work.clone(),
+                statements.as_ref().map(statements_ms),
+            )
+        }
+        None => (
+            own.as_ref().map(|c| c.rows),
+            own.as_ref()
+                .filter(|c| !c.statements.is_empty())
+                .map(|c| datalib_sql_work::header_value(&c.statements)),
+            own.as_ref().map(|c| statements_ms(&c.statements)),
+        ),
     };
+    let worth = worth(&method, &path, status, live_refetch);
+    let sql = sql.filter(|_| shows_statements(worth, ms));
     let code = status.as_u16();
     // Zero is every request nothing caused; leaving it off keeps the
     // line as it was for them.
@@ -137,17 +159,34 @@ pub async fn record(
                 method = %method, path = %path, query = query.as_deref(), status = code,
                 ms, rows_read, bytes,
                 page = page.as_deref(), card = card.as_deref(), card_type = card_type.as_deref(),
-                chain,
+                chain, sql_ms, sql = sql.as_deref(),
                 "{method} {path} {code} {cost}"
             )
         };
     }
-    match worth(&method, &path, status, live_refetch) {
+    match worth {
         Worth::Warn => write_line!(warn),
         Worth::Debug => write_line!(debug),
         Worth::Info => write_line!(info),
     }
     resp
+}
+
+/// A request that took this long is worth its statements on its line,
+/// whatever it was.
+const SLOW_REQUEST_MS: u64 = 1_000;
+
+/// Whether a line carries its statements one by one. A page polls the
+/// same few routes about once a second, and their statements, some 3 KB
+/// a line, were most of the log's bytes; every line keeps `sql_ms`, and
+/// `GET /metrics` has each statement's totals.
+fn shows_statements(worth: Worth, ms: u64) -> bool {
+    worth != Worth::Debug || ms >= SLOW_REQUEST_MS
+}
+
+/// The time the request's statements took, in all.
+fn statements_ms(statements: &datalib_sql_work::ByTag) -> u64 {
+    statements.values().map(|w| w.micros).sum::<u64>() / 1_000
 }
 
 /// What a request took and what it answered with, for a person reading
@@ -224,6 +263,16 @@ mod tests {
         assert_eq!(at(Method::GET, "/api/config", refused, true), Worth::Info);
         let broke = StatusCode::INTERNAL_SERVER_ERROR;
         assert_eq!(at(Method::GET, "/api/config", broke, true), Worth::Warn);
+    }
+
+    /// Guards the log's size: the Manage page's two polls, each about once
+    /// a second, carried 3.7 KB of statements a line.
+    #[test]
+    fn only_a_line_worth_reading_or_a_slow_one_names_its_statements() {
+        assert!(!shows_statements(Worth::Debug, 150));
+        assert!(shows_statements(Worth::Debug, SLOW_REQUEST_MS));
+        assert!(shows_statements(Worth::Info, 3));
+        assert!(shows_statements(Worth::Warn, 3));
     }
 
     #[test]

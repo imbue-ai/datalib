@@ -3,6 +3,7 @@
 use datalib_etl::blob_cas::CasEdgeRow as _;
 use datalib_etl::doltlite_raw::{self as dr, Migration, WirePayload, WirePayloadRow};
 use datalib_etl_macros::{CasEdgeRow, WirePayloadRow};
+use datalib_sql::{sql, sql_id, Sql};
 
 /// Names of the entity / bookkeeping tables, in the order they should
 /// be iterated for full-table operations (truncate, full-DDL
@@ -377,9 +378,11 @@ pub const LADDER: &[Migration] = &[
 ];
 
 async fn table_exists(conn: &mut sqlx::SqliteConnection, table: &str) -> sqlx::Result<bool> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)",
+    sql!(
+        "slack.migrate.table_exists",
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?)"
     )
+    .query_scalar()
     .bind(table)
     .fetch_one(conn)
     .await
@@ -393,41 +396,56 @@ async fn table_exists(conn: &mut sqlx::SqliteConnection, table: &str) -> sqlx::R
 async fn replies_pages_into_threads(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for ddl in [THREADS_DDL.to_string(), dr::bookkeeping_ddl_for(THREADS)] {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("slack.migrate_threads.create_thread_tables"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
     if !table_exists(conn, "replies_pages").await? {
         return Ok(());
     }
-    sqlx::query("INSERT OR IGNORE INTO threads (id) SELECT id FROM replies_pages")
-        .execute(&mut *conn)
-        .await?;
-    sqlx::query(
+    sql!(
+        "slack.migrate_threads.insert_threads_from_pages",
+        "INSERT OR IGNORE INTO threads (id) SELECT id FROM replies_pages"
+    )
+    .query()
+    .execute(&mut *conn)
+    .await?;
+    sql!(
+        "slack.migrate_threads.carry_sidecars_over",
         "INSERT OR REPLACE INTO threads_bookkeeping \
             (id, fetched_at_utc, attempt_count, last_attempt_at_utc, last_error, \
              volatile_payload, tz_offset, held_version) \
          SELECT r.id, b.fetched_at_utc, COALESCE(b.attempt_count, 0), b.last_attempt_at_utc, \
                 b.last_error, b.volatile_payload, b.tz_offset, r.latest_reply \
-         FROM replies_pages r LEFT JOIN replies_pages_bookkeeping b ON b.id = r.id",
+         FROM replies_pages r LEFT JOIN replies_pages_bookkeeping b ON b.id = r.id"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
     if table_exists(conn, "problems").await? {
-        sqlx::query(
+        sql!(
+            "slack.migrate_threads.rekey_problems",
             "UPDATE problems \
              SET scope_key = 'threads:' || substr(scope_key, length('replies_pages:') + 1) \
-             WHERE scope_kind = ? AND instr(scope_key, 'replies_pages:') = 1",
+             WHERE scope_kind = ? AND instr(scope_key, 'replies_pages:') = 1"
         )
+        .query()
         .bind(datalib_problems::ScopeKind::Entity.as_str())
         .execute(&mut *conn)
         .await?;
     }
     for sql in [
-        "DROP TABLE replies_pages",
-        "DROP TABLE IF EXISTS replies_pages_bookkeeping",
+        sql!(
+            "slack.replies_pages_into_threads.drop_replies_pages",
+            "DROP TABLE replies_pages"
+        ),
+        sql!(
+            "slack.replies_pages_into_threads.drop_replies_pages_bookkeeping",
+            "DROP TABLE IF EXISTS replies_pages_bookkeeping"
+        ),
     ] {
-        sqlx::query(sql).execute(&mut *conn).await?;
+        sql.query().execute(&mut *conn).await?;
     }
     Ok(())
 }
@@ -441,7 +459,8 @@ async fn replies_pages_into_threads(conn: &mut sqlx::SqliteConnection) -> anyhow
 async fn read_marks_out_of_sidecars(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for ddl in datalib_etl::read_marks::ReadMarkRow::all_ddl() {
         // Audited: the shared module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("slack.migrate_read_marks.create_read_marks"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
@@ -466,19 +485,23 @@ async fn read_marks_out_of_sidecars(conn: &mut sqlx::SqliteConnection) -> anyhow
         ));
     }
     for (fill, sidecar) in moves {
-        sqlx::query(fill).execute(&mut *conn).await?;
+        Sql::dynamic(sql_id!("slack.migrate_read_marks.move_last_read"), fill)
+            .query()
+            .execute(&mut *conn)
+            .await?;
         // A sidecar left with nothing in it is NULL, as a fresh write
         // leaves it.
-        let strip = format!(
-            "UPDATE {sidecar} SET volatile_payload = \
+        let strip = Sql::dynamic(
+            sql_id!("slack.migrate_read_marks.strip_last_read"),
+            format!(
+                "UPDATE {sidecar} SET volatile_payload = \
                CASE WHEN json(json_remove(volatile_payload, '$.last_read')) = '{{}}' THEN NULL \
                     ELSE jsonb_remove(volatile_payload, '$.last_read') END \
              WHERE json_type(volatile_payload, '$.last_read') IS NOT NULL"
+            ),
         );
         // Audited: `sidecar` is one of the two names above.
-        sqlx::query(sqlx::AssertSqlSafe(strip))
-            .execute(&mut *conn)
-            .await?;
+        strip.query().execute(&mut *conn).await?;
     }
     Ok(())
 }
@@ -491,18 +514,21 @@ async fn read_marks_out_of_sidecars(conn: &mut sqlx::SqliteConnection) -> anyhow
 async fn bots_from_messages(conn: &mut sqlx::SqliteConnection) -> anyhow::Result<()> {
     for ddl in [BotRow::ddl(), dr::bookkeeping_ddl_for(BOTS)] {
         // Audited: this module's own DDL.
-        sqlx::query(sqlx::AssertSqlSafe(ddl))
+        Sql::dynamic(sql_id!("slack.migrate_bots.create_bots"), ddl)
+            .query()
             .execute(&mut *conn)
             .await?;
     }
     if !table_exists(conn, "messages").await? {
         return Ok(());
     }
-    sqlx::query(
+    sql!(
+        "slack.migrate_bots.insert_bots_from_messages",
         "INSERT OR IGNORE INTO bots (id) \
          SELECT DISTINCT json_extract(payload, '$.bot_id') FROM messages \
-         WHERE json_type(payload, '$.bot_id') = 'text'",
+         WHERE json_type(payload, '$.bot_id') = 'text'"
     )
+    .query()
     .execute(&mut *conn)
     .await?;
     Ok(())

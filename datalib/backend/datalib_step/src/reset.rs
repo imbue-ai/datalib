@@ -26,6 +26,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     );
     match env.function {
         Function::Ingest => {
+            refuse_if_kept(env, &tree)?;
             reset_store(&entities_db(&tree)).await?;
             report_problems(emitter, &entities_db(&tree)).await?;
         }
@@ -60,5 +61,25 @@ async fn report_problems(emitter: &Emitter, store: &Path) -> Result<()> {
             counts.get(&severity).copied().unwrap_or(0),
         );
     }
+    Ok(())
+}
+
+/// A reset empties a raw store for the next download to fill again. A
+/// source that no longer downloads would stay empty, its rows left only in
+/// the store's history.
+fn refuse_if_kept(env: &StepEnv, tree: &Path) -> Result<()> {
+    let planned = crate::dispatch::plan(
+        env.source_type()?,
+        crate::dispatch::Phase::Ingest,
+        &env.group,
+        tree.to_path_buf(),
+        crate::source::params_from_env()?,
+    )?;
+    anyhow::ensure!(
+        !matches!(planned.processors, crate::dispatch::Wave::Kept),
+        "{} does not download (`common.download = false`), so nothing would fill its raw \
+         store again after a reset; turn the download back on first",
+        env.step
+    );
     Ok(())
 }

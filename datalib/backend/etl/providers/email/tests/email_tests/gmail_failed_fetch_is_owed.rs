@@ -25,6 +25,7 @@ use crate::support::{
     gmail_get_url, gmail_history_url, gmail_list_url, gmail_message, inbox_label, put_gmail,
     put_gmail_account, put_gmail_response, Mirror,
 };
+use datalib_sql::test_sql;
 
 /// Fetched first: the newer id.
 const GOOD: &str = "18c9f2a1b2c3d502";
@@ -87,7 +88,8 @@ async fn a_404_is_a_deletion() {
     assert!(problems(&m).await.is_empty());
     let listed: Vec<String> = m
         .read(|db| async move {
-            sqlx::query_scalar("SELECT id FROM listed_messages")
+            test_sql!("SELECT id FROM listed_messages")
+                .query_scalar()
                 .fetch_all(db.pool())
                 .await
                 .unwrap()
@@ -141,7 +143,8 @@ async fn run(m: &Mirror) -> anyhow::Result<FetchSummary> {
 
 async fn cursor(m: &Mirror) -> Option<String> {
     m.read(|db| async move {
-        sqlx::query_scalar("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
+        test_sql!("SELECT last_seen_at_utc FROM sync_scope_state WHERE scope = ?")
+            .query_scalar()
             .bind("gmail:t@example.test:historyId")
             .fetch_optional(db.pool())
             .await
@@ -152,7 +155,8 @@ async fn cursor(m: &Mirror) -> Option<String> {
 
 async fn problems(m: &Mirror) -> Vec<String> {
     m.read(|db| async move {
-        sqlx::query_scalar("SELECT scope_key FROM problems ORDER BY scope_key")
+        test_sql!("SELECT scope_key FROM problems ORDER BY scope_key")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .expect("read the problems")
@@ -163,9 +167,10 @@ async fn problems(m: &Mirror) -> Vec<String> {
 /// How many times `id` has been asked for.
 async fn attempts(m: &Mirror, id: &'static str) -> i64 {
     m.read(|db| async move {
-        sqlx::query_scalar(
-            "SELECT coalesce(sum(attempt_count), 0) FROM listed_messages_bookkeeping WHERE id = ?",
+        test_sql!(
+            "SELECT coalesce(sum(attempt_count), 0) FROM listed_messages_bookkeeping WHERE id = ?"
         )
+        .query_scalar()
         .bind(id)
         .fetch_one(db.pool())
         .await
@@ -177,7 +182,8 @@ async fn attempts(m: &Mirror, id: &'static str) -> i64 {
 /// What the last attempt on `id` failed with, if it failed.
 async fn last_error(m: &Mirror, id: &'static str) -> Option<String> {
     m.read(|db| async move {
-        sqlx::query_scalar("SELECT last_error FROM listed_messages_bookkeeping WHERE id = ?")
+        test_sql!("SELECT last_error FROM listed_messages_bookkeeping WHERE id = ?")
+            .query_scalar()
             .bind(id)
             .fetch_one(db.pool())
             .await

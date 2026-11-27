@@ -155,6 +155,15 @@ group = "unified_grid_and_search_index"
 id = "unified_grid_and_search_index"
 command = "datalib-applet unified_grid_and_search_index"
 
+# The contacts app, over Picard's curated contacts, which stage_demo.sh
+# lays into `datalib_curated/`. They were made for the whole TNG corpus,
+# so their mutes name problems these seven sources do not have, and
+# Beverly Crusher, whose handles are all in other sources, finds nothing.
+[[applets]]
+group = "unified_grid_and_search_index"
+id = "datalib_contacts"
+command = "datalib-applet datalib_contacts"
+
 # Each source's embeddings, over the keywords baked into the image.
 [[steps]]
 id = "claude-export/embed"

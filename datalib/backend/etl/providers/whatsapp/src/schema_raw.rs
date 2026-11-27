@@ -12,7 +12,10 @@
 //! natural keys its ids are minted from.
 
 /// Catalog of plaintext media files from the source backup. Bytes live in the
-/// sibling CAS, and `blake3` is both this table's key and the CAS key.
+/// sibling CAS, and `blake3` is both this table's key and the CAS key, so
+/// there is one row per distinct content: of two files with the same bytes,
+/// only the first the walk reaches is registered, and a message naming the
+/// other path finds no row.
 ///
 /// `relative_path` is relative to the **backup root**, so it includes the
 /// `Media/` prefix that msgstore puts on `message_media.file_path`. The

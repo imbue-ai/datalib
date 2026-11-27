@@ -4,6 +4,7 @@
 use datalib_etl_notion::ingest::db::{CommentUpsert, PageMarkdownUpsert, PageUpsert, RawDb};
 use datalib_etl_notion_render::render::parse_api_dir;
 use datalib_etl_render::inputs::RawRange;
+use datalib_sql::test_sql;
 use serde_json::json;
 use std::collections::HashSet;
 use tempfile::tempdir;
@@ -213,7 +214,8 @@ async fn a_deleted_page_is_a_render_unit_with_no_rows() {
     let none: HashSet<String> = HashSet::new();
 
     let db = RawDb::open(&f).await.unwrap();
-    sqlx::query("DELETE FROM pages WHERE id = ?")
+    test_sql!("DELETE FROM pages WHERE id = ?")
+        .query()
         .bind(A)
         .execute(db.pool())
         .await
@@ -257,7 +259,8 @@ async fn a_thread_whose_last_comment_went_is_the_drivers_to_name() {
     db.close().await;
 
     let db = RawDb::open(&f).await.unwrap();
-    sqlx::query("DELETE FROM comments WHERE id = 'c1'")
+    test_sql!("DELETE FROM comments WHERE id = 'c1'")
+        .query()
         .execute(db.pool())
         .await
         .unwrap();

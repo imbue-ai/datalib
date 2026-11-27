@@ -24,6 +24,7 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     if env.function == Function::Ingest {
         return prepare_raw_store(env, &tree, emitter).await;
     }
+    remove_cache_tags(env, data_root, &tree)?;
     if env.function == Function::EmbeddingMap {
         return prepare_embedding_map(env, data_root, emitter);
     }
@@ -41,6 +42,16 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
     if standing == Standing::IndexesOnly {
         reopen(env.function, &tree, &store).await?;
     }
+    // Only some of the grid index's parts moved: they are emptied now, so
+    // the parts that did not stay readable while the rerun fills them.
+    if env.function == Function::UnifiedGridAndSearchIndex && standing == Standing::Other {
+        emitter
+            .progress()
+            .set_message("emptying the parts of the search index this build changed");
+        if datalib_etl_render::grid_index::empty_moved_parts(&store).await? {
+            tracing::info!(step = %env.step, "prepare: emptied the index's moved parts; the rest stays readable");
+        }
+    }
     let readable = matches!(standing, Standing::Current | Standing::IndexesOnly);
     if env.function == Function::UnifiedGridAndSearchIndex
         && readable
@@ -53,6 +64,23 @@ pub async fn run(env: &StepEnv, data_root: &Path, emitter: &Emitter) -> Result<V
         emitter.needs_rerun();
     }
     Ok(Vec::new())
+}
+
+/// Earlier builds marked each render tree and the index tree with a
+/// `CACHEDIR.TAG`, which backup tools skip. A library put back without
+/// them stays without them: the loop's record, in `system/`, says their
+/// steps are up to date (`docs/user/backing_up.md`).
+fn remove_cache_tags(env: &StepEnv, data_root: &Path, tree: &Path) -> Result<()> {
+    let index = datalib_core::layout::unified_grid_and_search_index_dir(data_root);
+    let trees: &[&Path] = match env.function {
+        Function::UnifiedGridAndSearchIndex | Function::EmbeddingMap => &[tree, &index],
+        _ => &[tree],
+    };
+    for dir in trees {
+        datalib_core::layout::unmark_cache(dir)
+            .with_context(|| format!("remove the cache tag in {}", dir.display()))?;
+    }
+    Ok(())
 }
 
 /// The one thing of the inference cache's shape prepare moves itself: its
@@ -398,6 +426,7 @@ mod tests {
     use super::*;
     use crate::source_type::SourceType;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     const SHAPES_DIR: &str = "datalib/backend/datalib_step/raw_shapes";
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,10 +460,11 @@ mod tests {
             .await
             .unwrap()
             .expect("a migrated store has a commit");
-        let sql: Vec<String> = sqlx::query_scalar(
+        let sql: Vec<String> = test_sql!(
             "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL \
-             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name",
+             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name"
         )
+        .query_scalar()
         .fetch_all(reader.pool())
         .await
         .unwrap();
@@ -478,20 +508,19 @@ mod tests {
             .await
             .unwrap()
             .expect("a migrated store has a commit");
-        let objects: Vec<(String, String)> = sqlx::query_as(
+        let objects: Vec<(String, String)> = test_sql!(
             "SELECT type, name FROM sqlite_master WHERE type IN ('table', 'index') \
-             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name",
+             AND name NOT LIKE 'sqlite_%' AND name != '_datalib_meta' ORDER BY name"
         )
+        .query_as()
         .fetch_all(reader.pool())
         .await
         .unwrap();
         let mut out = BTreeMap::new();
         for (kind, name) in objects {
             let columns: Vec<String> = if kind == "table" {
-                sqlx::query_scalar(
-                    "SELECT name || ' ' || type || ' notnull=' || \"notnull\" || ' default=' || \
-                     ifnull(dflt_value, '-') || ' pk=' || pk FROM pragma_table_info(?) ORDER BY cid",
-                )
+                test_sql!("SELECT name || ' ' || type || ' notnull=' || \"notnull\" || ' default=' || \
+                     ifnull(dflt_value, '-') || ' pk=' || pk FROM pragma_table_info(?) ORDER BY cid").query_scalar()
                 .bind(&name)
                 .fetch_all(reader.pool())
                 .await
@@ -521,14 +550,16 @@ mod tests {
         for stmt in tables.into_iter().chain(rest) {
             // Audited: the SQL is checked in under raw_shapes/, written by
             // this test from a store this repo's own code created.
-            sqlx::query(sqlx::AssertSqlSafe(stmt.clone()))
+            Sql::dynamic(test_sql_id!(), stmt)
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap_or_else(|e| panic!("{stmt}: {e}"));
         }
-        let names: Vec<String> = sqlx::query_scalar(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+        let names: Vec<String> = test_sql!(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
         )
+        .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
@@ -547,12 +578,14 @@ mod tests {
         datalib_store_meta::write(&pool, StoreKind::Raw, &recorded)
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+        test_sql!("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+            .query()
             .bind(release)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', ?)")
+        test_sql!("SELECT dolt_commit('-Am', ?)")
+            .query()
             .bind(format!("a store as {release} left it"))
             .execute(&pool)
             .await
@@ -567,7 +600,8 @@ mod tests {
     /// a hash-length check.
     async fn one_row(pool: &sqlx::SqlitePool, table: &str) {
         let columns: Vec<(String, String)> =
-            sqlx::query_as("SELECT name, upper(type) FROM pragma_table_info(?) ORDER BY cid")
+            test_sql!("SELECT name, upper(type) FROM pragma_table_info(?) ORDER BY cid")
+                .query_as()
                 .bind(table)
                 .fetch_all(pool)
                 .await
@@ -589,14 +623,17 @@ mod tests {
                 })
                 .collect();
             let names: Vec<String> = columns.iter().map(|(n, _)| format!("\"{n}\"")).collect();
-            let sql = format!(
-                "INSERT INTO \"{table}\" ({}) VALUES ({})",
-                names.join(", "),
-                values.join(", ")
+            let sql = Sql::dynamic(
+                test_sql_id!(),
+                format!(
+                    "INSERT INTO \"{table}\" ({}) VALUES ({})",
+                    names.join(", "),
+                    values.join(", ")
+                ),
             );
             // Audited: table and column names come from sqlite_master and
             // pragma_table_info of a store this test just built, quoted.
-            match sqlx::query(sqlx::AssertSqlSafe(sql)).execute(pool).await {
+            match sql.query().execute(pool).await {
                 Ok(_) => return,
                 Err(e) => last_error = Some(e),
             }
@@ -736,12 +773,14 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let raw = store_at(dir.path(), &shape, &release).await;
             let pool = plain_pool(&entities_db(&raw)).await;
-            sqlx::query("UPDATE contacts SET payload = json_object('vcard', ?)")
+            test_sql!("UPDATE contacts SET payload = json_object('vcard', ?)")
+                .query()
                 .bind(&card)
                 .execute(&pool)
                 .await
                 .unwrap();
-            sqlx::query("SELECT dolt_commit('-Am', 'a card with a photo')")
+            test_sql!("SELECT dolt_commit('-Am', 'a card with a photo')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -782,6 +821,7 @@ mod tests {
             shared_schema_version: 0,
             store_kind: None,
             written_at_utc: "2369-04-15T00:00:00Z".into(),
+            parts: Default::default(),
         };
         assert_eq!(
             opened_by_this_build(&mine),
@@ -827,13 +867,15 @@ mod tests {
     /// Set one `_datalib_meta` row of a store and commit it.
     async fn set_meta(db: &Path, key: &str, value: &str) {
         let pool = plain_pool(db).await;
-        sqlx::query("UPDATE _datalib_meta SET value = ? WHERE key = ?")
+        test_sql!("UPDATE _datalib_meta SET value = ? WHERE key = ?")
+            .query()
             .bind(value)
             .bind(key)
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', 'set a meta row')")
+        test_sql!("SELECT dolt_commit('-Am', 'set a meta row')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -923,7 +965,8 @@ mod tests {
             .await
             .unwrap();
         let hash = "a".repeat(64);
-        sqlx::query("INSERT INTO cas_objects VALUES (?, 5, 'text/plain', x'68656c6c6f')")
+        test_sql!("INSERT INTO cas_objects VALUES (?, 5, 'text/plain', x'68656c6c6f')")
+            .query()
             .bind(&hash)
             .execute(&pool)
             .await
@@ -1002,13 +1045,15 @@ mod tests {
     /// would have left it.
     async fn written_by_an_older_build(db: &Path) {
         let pool = plain_pool(db).await;
-        sqlx::query("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'an older shape' WHERE key = 'schema_hash'")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
         // The grid index is plain SQLite, and has no commit to make.
         if db.extension().is_some_and(|e| e == "doltlite_db") {
-            sqlx::query("SELECT dolt_commit('-Am', 'an older build')")
+            test_sql!("SELECT dolt_commit('-Am', 'an older build')")
+                .query()
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -1069,15 +1114,18 @@ mod tests {
         .unwrap();
         let db = datalib_etl_render::indexed_markdown::path_for(&tree);
         let pool = plain_pool(&db).await;
-        sqlx::query("DROP INDEX markdowns_by_render_unit")
+        test_sql!("DROP INDEX markdowns_by_render_unit")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
+        test_sql!("UPDATE _datalib_meta SET value = 'fewer' WHERE key = 'index_hash'")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
-        sqlx::query("SELECT dolt_commit('-Am', 'an older build, one index short')")
+        test_sql!("SELECT dolt_commit('-Am', 'an older build, one index short')")
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -1092,10 +1140,11 @@ mod tests {
             Some(datalib_etl_render::indexed_markdown::shape())
         );
         let pool = plain_pool(&db).await;
-        let made: i64 = sqlx::query_scalar(
+        let made: i64 = test_sql!(
             "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
-             AND name = 'markdowns_by_render_unit'",
+             AND name = 'markdowns_by_render_unit'"
         )
+        .query_scalar()
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -1156,7 +1205,11 @@ mod tests {
             let db = db.clone();
             async move {
                 let pool = plain_pool(&db).await;
-                sqlx::query(sql).execute(&pool).await.unwrap();
+                Sql::dynamic(test_sql_id!(), sql)
+                    .query()
+                    .execute(&pool)
+                    .await
+                    .unwrap();
                 pool.close().await;
             }
         };
@@ -1177,6 +1230,25 @@ mod tests {
             meta.map(|m| m.shape()),
             Some(datalib_etl_render::grid_index::shape())
         );
+
+        // Only the keyword tables moved: prepare empties them, and the grid
+        // reads again at once while the rerun fills them.
+        edit(
+            "UPDATE _datalib_meta SET value = 'older' \
+             WHERE key IN ('schema_hash', 'schema_hash.keywords')",
+        )
+        .await;
+        assert!(ask().await, "the step fills the keyword tables again");
+        let meta = datalib_store_meta::guard::read_at(&db).await.unwrap();
+        assert_eq!(
+            meta.map(|m| m.shape()),
+            Some(datalib_etl_render::grid_index::shape())
+        );
+        let grid = datalib_etl_render::grid_index::open_for_reading(&db)
+            .await
+            .unwrap()
+            .expect("the grid reads while its keyword tables are filled again");
+        grid.close().await;
 
         written_by_an_older_build(&db).await;
         assert!(ask().await, "an older build's shape");
@@ -1252,12 +1324,12 @@ mod tests {
         made.close().await;
         let pool = plain_pool(&path).await;
         for sql in [
-            "PRAGMA journal_mode = DELETE",
-            "PRAGMA page_size = 4096",
-            "VACUUM",
-            "PRAGMA journal_mode = WAL",
+            test_sql!("PRAGMA journal_mode = DELETE"),
+            test_sql!("PRAGMA page_size = 4096"),
+            test_sql!("VACUUM"),
+            test_sql!("PRAGMA journal_mode = WAL"),
         ] {
-            sqlx::query(sql).execute(&pool).await.unwrap();
+            sql.query().execute(&pool).await.unwrap();
         }
         pool.close().await;
         assert!(cache::in_other_pages(&path).await.unwrap(), "set up");
@@ -1322,6 +1394,41 @@ mod tests {
         assert!(ask().await, "drawn by an older version");
         put(format!("h{}", datalib_search_index::text::key_suffix())).await;
         assert!(!ask().await, "this build's version");
+    }
+
+    /// A tag an earlier build left on a render tree or the index tree is
+    /// gone after the prepare at the next start, so a backup tool that
+    /// skips caches copies the whole library.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_cache_tags_an_earlier_build_left_are_removed() {
+        let root = tempfile::tempdir().unwrap();
+        let tagged = [
+            "mail/render_markdown",
+            "unified_grid_and_search_index",
+            "unified_grid_and_search_index/unified_grid_and_search_index",
+        ];
+        for dir in tagged {
+            std::fs::create_dir_all(root.path().join(dir)).unwrap();
+            datalib_core::layout::mark_cache(&root.path().join(dir));
+        }
+        for (step, function) in [
+            ("mail/render_markdown", Function::RenderMarkdown),
+            (
+                "unified_grid_and_search_index/unified_grid_and_search_index",
+                Function::UnifiedGridAndSearchIndex,
+            ),
+        ] {
+            let env = env_of(step, function);
+            run(&env, root.path(), &Emitter::new(env.step.clone()))
+                .await
+                .unwrap();
+        }
+        for dir in tagged {
+            assert!(
+                !root.path().join(dir).join("CACHEDIR.TAG").exists(),
+                "{dir} is still tagged"
+            );
+        }
     }
 
     /// A source that has never downloaded gets no store from a prepare:

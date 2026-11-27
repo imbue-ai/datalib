@@ -319,6 +319,44 @@ The window is a key of each method rather than one range under
 `[steps.params.common]`, so what a source cannot honor is a missing
 key, which the schema and the field reference already say.
 
+## A source that no longer downloads
+
+When upstream is gone for good (an export you no longer have, an
+account that was closed, a library copied from a machine that could
+reach a service this one cannot), keep the source and turn its download
+off in the download step's params:
+
+```toml
+[[steps]]
+id = "linkedin/ingest"
+command = "datalib-step run ingest linkedin"
+[steps.params.export]
+path = "/opt/datalib/demo-sources/linkedin"
+[steps.params.common]
+download = false
+```
+
+The step still runs on every sync. It fetches nothing, reads none of
+its inputs and signs in nowhere, and it publishes the raw store it has,
+so every step reading it is up to date. (The first sync after the edit
+runs them once, as any edited step's readers run, and they find
+nothing new.) Its Manage row says "Not downloading". Leave the method table as it was: it is still how the
+data came in, and the Source column says so. Each build's prepare pass
+still brings the raw store to its shape, which it would not do with the
+download step deleted. Turning the step off instead stops everything
+that reads it.
+
+Three things are refused:
+
+- **A source with no raw store to keep.** The step fails, naming the
+  store it looked for.
+- **A reset** (`datalib-pipeline reset`) of such a download. A reset
+  empties a raw store for the next download to fill again, and nothing
+  would. Turn the download back on first.
+- **A PDF source.** Its raw store holds where each file is, not its
+  bytes, and its render reads the files themselves, so it cannot keep
+  its documents without its folder. `datalib-pipeline check` says so.
+
 ## Examples and the field reference
 
 Each source type carries its own example stanzas: a minimal and a
@@ -354,7 +392,9 @@ params it would write reach an origin.
 
 `datalib-pipeline reset` is *not* gated on it: it empties the step's store
 whatever the method, and the next sync reads its files or its origin in
-full — the only "from scratch" button a user has. `datalib-step`'s
+full — the only "from scratch" button a user has. The one download it
+refuses is one that no longer downloads (§"A source that no longer
+downloads"). `datalib-step`'s
 ingest driver only logs the reach.
 
 ## What the loader checks

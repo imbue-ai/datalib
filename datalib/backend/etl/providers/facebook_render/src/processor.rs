@@ -447,6 +447,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use datalib_sql::{test_sql_id, Sql};
     fn render(raw: &Path) -> Result<Outcome> {
         let source = Source {
             raw_dir: raw,
@@ -480,15 +481,19 @@ mod tests {
         );
 
         let db = RawDb::open(&db_path_for(raw)).await.unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "CREATE TABLE {POSTS_TABLE} (id TEXT PRIMARY KEY)"
-        )))
+        Sql::dynamic(
+            test_sql_id!(),
+            format!("CREATE TABLE {POSTS_TABLE} (id TEXT PRIMARY KEY)"),
+        )
+        .query()
         .execute(db.pool())
         .await
         .unwrap();
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "INSERT INTO {POSTS_TABLE} (id) VALUES ('p1')"
-        )))
+        Sql::dynamic(
+            test_sql_id!(),
+            format!("INSERT INTO {POSTS_TABLE} (id) VALUES ('p1')"),
+        )
+        .query()
         .execute(db.pool())
         .await
         .unwrap();

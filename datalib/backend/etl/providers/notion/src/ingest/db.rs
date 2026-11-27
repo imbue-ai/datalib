@@ -20,6 +20,7 @@ use super::schema_raw::{
     full_ddl, tree_rows_of_pages_sql, NotionAttachmentRow, TreeKind, ATTACHMENTS, COMMENTS, LADDER,
     PAGES, TREE, TREE_ROW_OF_LISTED_PAGE_SQL, TREE_ROW_OF_PLACED_PAGE_SQL, TREE_UPDATE,
 };
+use datalib_sql::{sql, sql_id, Sql};
 
 datalib_etl::raw_db!(pub RawDb: CasEntityStore, full_ddl(), LADDER);
 
@@ -337,11 +338,13 @@ impl RawDb {
     /// many times over, and a run reaching them first left the pages
     /// people write for days.
     pub async fn pages_listed(&self) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "notion.list_held_pages_by_edit_time",
             "SELECT id, last_edited_time FROM pages WHERE payload IS NOT NULL \
              ORDER BY coalesce(parent_type IN ('data_source_id', 'database_id'), 0), \
-                      last_edited_time DESC, id",
+                      last_edited_time DESC, id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("list the pages")?;
@@ -354,10 +357,12 @@ impl RawDb {
     /// Every page the store has in Notion's trash, at its
     /// `last_edited_time`: what the trash listing is expected to name.
     pub async fn pages_in_trash(&self) -> Result<Vec<Listed>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "notion.list_pages_in_trash",
             "SELECT id, last_edited_time FROM pages \
-             WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id",
+             WHERE in_trash = 1 AND payload IS NOT NULL ORDER BY id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("list the pages in the trash")?;
@@ -370,10 +375,14 @@ impl RawDb {
     /// Every attachment a stored body names, at no version: its bytes
     /// only have to have landed once.
     pub async fn attachments_listed(&self) -> Result<Vec<Listed>> {
-        let ids: Vec<String> = sqlx::query_scalar("SELECT id FROM notion_attachments ORDER BY id")
-            .fetch_all(self.pool())
-            .await
-            .context("list the attachments")?;
+        let ids: Vec<String> = sql!(
+            "notion.list_attachments",
+            "SELECT id FROM notion_attachments ORDER BY id"
+        )
+        .query_scalar()
+        .fetch_all(self.pool())
+        .await
+        .context("list the attachments")?;
         Ok(ids
             .into_iter()
             .map(|id| Listed::new(id, None::<String>))
@@ -382,11 +391,13 @@ impl RawDb {
 
     /// Every block a stored comment hangs off, at no version.
     pub async fn anchors_listed(&self) -> Result<Vec<AnchorListed>> {
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "notion.list_commented_blocks",
             "SELECT parent_id, MIN(page_id) FROM comments \
              WHERE parent_type = 'block_id' AND parent_id IS NOT NULL \
-             GROUP BY parent_id ORDER BY parent_id",
+             GROUP BY parent_id ORDER BY parent_id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("list the commented blocks")?;
@@ -401,7 +412,8 @@ impl RawDb {
     /// and a comment's author. `json_tree` spells a key with an
     /// underscore quoted, so both spellings are asked for.
     pub async fn users_listed(&self) -> Result<Vec<Listed>> {
-        let ids: Vec<String> = sqlx::query_scalar(
+        let ids: Vec<String> = sql!(
+            "notion.list_users_named_by_pages",
             "SELECT DISTINCT id FROM (\
                 SELECT j.value AS id FROM pages p, json_tree(p.payload) j \
                 WHERE p.payload IS NOT NULL AND j.key = 'id' AND j.type = 'text' \
@@ -411,8 +423,9 @@ impl RawDb {
                 UNION ALL \
                 SELECT json_extract(c.payload, '$.created_by.id') AS id FROM comments c \
                 WHERE c.payload IS NOT NULL) \
-             WHERE id IS NOT NULL AND id <> '' ORDER BY id",
+             WHERE id IS NOT NULL AND id <> '' ORDER BY id"
         )
+        .query_scalar()
         .fetch_all(self.pool())
         .await
         .context("list the users the store names")?;
@@ -425,12 +438,14 @@ impl RawDb {
     /// Every parent a `tree` row names, at no version: what the
     /// ancestry loop owes until each has a row of its own.
     pub async fn ancestors_listed(&self) -> Result<Vec<AncestorListed>> {
-        let rows: Vec<(String, bool)> = sqlx::query_as(
+        let rows: Vec<(String, bool)> = sql!(
+            "notion.list_ancestors_of_tree",
             "SELECT parent_id, MAX(parent_type IN ('data_source_id', 'database_id')) FROM tree \
              WHERE parent_type IN ('page_id', 'block_id', 'data_source_id', 'database_id') \
                AND parent_id IS NOT NULL \
-             GROUP BY parent_id ORDER BY parent_id",
+             GROUP BY parent_id ORDER BY parent_id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("list the parents the tree names")?;
@@ -442,12 +457,15 @@ impl RawDb {
 
     /// Every database the tree places, with its title if it has one.
     pub async fn database_titles(&self) -> Result<HashMap<String, Option<String>>> {
-        let rows: Vec<(String, Option<String>)> =
-            sqlx::query_as("SELECT id, title FROM tree WHERE kind = ?")
-                .bind(TreeKind::Database.as_str())
-                .fetch_all(self.pool())
-                .await
-                .context("list the databases the tree places")?;
+        let rows: Vec<(String, Option<String>)> = sql!(
+            "notion.list_database_titles",
+            "SELECT id, title FROM tree WHERE kind = ?"
+        )
+        .query_as()
+        .bind(TreeKind::Database.as_str())
+        .fetch_all(self.pool())
+        .await
+        .context("list the databases the tree places")?;
         Ok(rows.into_iter().collect())
     }
 
@@ -457,11 +475,15 @@ impl RawDb {
     pub async fn forget_failed_pages(&self, ids: &[&str]) -> Result<()> {
         let mut tx = self.pool().begin().await?;
         for id in ids {
-            sqlx::query("DELETE FROM pages WHERE id = ? AND payload IS NULL")
-                .bind(id)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("forget the page stub {id}"))?;
+            sql!(
+                "notion.delete_page_stub",
+                "DELETE FROM pages WHERE id = ? AND payload IS NULL"
+            )
+            .query()
+            .bind(id)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("forget the page stub {id}"))?;
             owed::forget(&mut tx, PAGES, id).await?;
         }
         tx.commit().await?;
@@ -473,26 +495,30 @@ impl RawDb {
     /// else this is all there is to know. A people property's object,
     /// which carries an address too, is preferred to a comment's name.
     pub async fn users_named_in_store(&self) -> Result<HashMap<String, KnownUser>> {
-        let objects: Vec<(String, String, String)> = sqlx::query_as(
+        let objects: Vec<(String, String, String)> = sql!(
+            "notion.list_users_in_page_properties",
             "SELECT json_extract(j.value, '$.id'), json_extract(j.value, '$.name'), json(j.value) \
              FROM pages p, json_tree(p.payload, '$.properties') j \
              WHERE p.payload IS NOT NULL AND j.type = 'object' \
                AND json_extract(j.value, '$.object') = 'user' \
                AND json_extract(j.value, '$.id') IS NOT NULL \
                AND json_extract(j.value, '$.name') IS NOT NULL \
-             ORDER BY 1, 3",
+             ORDER BY 1, 3"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("read the users people properties carry")?;
-        let commenters: Vec<(String, String)> = sqlx::query_as(
+        let commenters: Vec<(String, String)> = sql!(
+            "notion.list_users_in_comments",
             "SELECT json_extract(payload, '$.created_by.id'), \
                     json_extract(payload, '$.display_name.resolved_name') \
              FROM comments WHERE payload IS NOT NULL \
                AND json_extract(payload, '$.created_by.id') IS NOT NULL \
                AND json_extract(payload, '$.display_name.resolved_name') <> '' \
-             ORDER BY 1, 2",
+             ORDER BY 1, 2"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("read the names comments give their authors")?;
@@ -521,11 +547,14 @@ impl RawDb {
             datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
             // Audited: the IN-list is a `?,?,?` run sized from the chunk and
             // every id is bound.
-            let sql = format!(
-                "SELECT id, markdown FROM page_markdown \
+            let sql = Sql::dynamic(
+                sql_id!("notion.read_markdown_of_pages"),
+                format!(
+                    "SELECT id, markdown FROM page_markdown \
                  WHERE markdown IS NOT NULL AND id IN ({placeholders})"
+                ),
             );
-            let mut q = sqlx::query_as::<_, (String, String)>(sqlx::AssertSqlSafe(sql));
+            let mut q = sql.query_as::<(String, String)>();
             for id in chunk {
                 q = q.bind(id);
             }
@@ -559,10 +588,13 @@ impl RawDb {
             datalib_etl::bulk::push_placeholder_list(&mut placeholders, chunk.len());
             // Audited: the IN-list is a `?,?,?` run sized from the chunk and
             // every id is bound.
-            let sql = format!(
-                "SELECT id, last_edited_time FROM listed_pages WHERE id IN ({placeholders})"
+            let sql = Sql::dynamic(
+                sql_id!("notion.read_listed_page_stamps"),
+                format!(
+                    "SELECT id, last_edited_time FROM listed_pages WHERE id IN ({placeholders})"
+                ),
             );
-            let mut q = sqlx::query_as::<_, (String, Option<String>)>(sqlx::AssertSqlSafe(sql));
+            let mut q = sql.query_as::<(String, Option<String>)>();
             for id in chunk {
                 q = q.bind(id);
             }
@@ -582,10 +614,12 @@ impl RawDb {
     /// hash: a file's bytes never change, so one landed under one page
     /// is not fetched for another.
     pub async fn blake3_of_slot(&self, slot: &str) -> Result<Option<String>> {
-        sqlx::query_scalar(
+        sql!(
+            "notion.find_blake3_of_slot",
             "SELECT blake3 FROM notion_attachments \
-             WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1",
+             WHERE ref_id = ? AND blake3 IS NOT NULL LIMIT 1"
         )
+        .query_scalar()
         .bind(slot)
         .fetch_optional(self.pool())
         .await
@@ -607,8 +641,7 @@ impl RawDb {
         rows: &[PageUpsert],
     ) -> Result<()> {
         for r in rows {
-            sqlx::query(
-                "INSERT INTO pages (id, parent_type, parent_id, in_trash, created_time, last_edited_time, url, payload)
+            sql!("notion.upsert_page", "INSERT INTO pages (id, parent_type, parent_id, in_trash, created_time, last_edited_time, url, payload)
                  VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?))
                  ON CONFLICT(id) DO UPDATE SET
                     parent_type = excluded.parent_type,
@@ -617,8 +650,7 @@ impl RawDb {
                     created_time = excluded.created_time,
                     last_edited_time = excluded.last_edited_time,
                     url = excluded.url,
-                    payload = excluded.payload",
-            )
+                    payload = excluded.payload").query()
             .bind(&r.id)
             .bind(&r.parent_type)
             .bind(&r.parent_id)
@@ -632,11 +664,15 @@ impl RawDb {
             .with_context(|| format!("upsert page {}", r.id))?;
             owed::hold(tx, PAGES, &r.id, r.last_edited_time.as_deref()).await?;
             // Audited: a constant filter, the id bound.
-            sqlx::query(sqlx::AssertSqlSafe(tree_rows_of_pages_sql("p.id = ?")))
-                .bind(&r.id)
-                .execute(&mut **tx)
-                .await
-                .with_context(|| format!("place page {} in the tree", r.id))?;
+            Sql::dynamic(
+                sql_id!("notion.place_page_in_tree"),
+                tree_rows_of_pages_sql("p.id = ?"),
+            )
+            .query()
+            .bind(&r.id)
+            .execute(&mut **tx)
+            .await
+            .with_context(|| format!("place page {} in the tree", r.id))?;
             owed::hold(tx, TREE, &r.id, None).await?;
         }
         Ok(())
@@ -650,11 +686,15 @@ impl RawDb {
         tx: &mut Transaction<'_, Sqlite>,
         id: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE pages SET in_trash = 0 WHERE id = ?")
-            .bind(id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("take page {id} out of the trash"))?;
+        sql!(
+            "notion.mark_page_out_of_trash",
+            "UPDATE pages SET in_trash = 0 WHERE id = ?"
+        )
+        .query()
+        .bind(id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("take page {id} out of the trash"))?;
         Ok(())
     }
 
@@ -667,7 +707,8 @@ impl RawDb {
         rows: &[PageUpsert],
     ) -> Result<()> {
         for r in rows {
-            sqlx::query(TREE_ROW_OF_LISTED_PAGE_SQL)
+            TREE_ROW_OF_LISTED_PAGE_SQL
+                .query()
                 .bind(&r.id)
                 .bind(&r.payload)
                 .bind(&r.parent_type)
@@ -690,10 +731,14 @@ impl RawDb {
     ) -> Result<()> {
         for r in rows {
             // Audited: `TREE_UPDATE` is a constant; every value is bound.
-            sqlx::query(sqlx::AssertSqlSafe(format!(
+            Sql::dynamic(
+                sql_id!("notion.upsert_tree_row"),
+                format!(
                 "INSERT INTO tree (id, kind, title, parent_type, parent_id) VALUES (?, ?, ?, ?, ?) \
                  ON CONFLICT(id) DO UPDATE SET {TREE_UPDATE}"
-            )))
+            ),
+            )
+            .query()
             .bind(&r.id)
             .bind(r.kind.as_str())
             .bind(&r.title)
@@ -724,7 +769,8 @@ impl RawDb {
                     continue;
                 }
             };
-            sqlx::query(TREE_ROW_OF_PLACED_PAGE_SQL)
+            TREE_ROW_OF_PLACED_PAGE_SQL
+                .query()
                 .bind(&p.id)
                 .bind(&p.title)
                 .bind(&p.parent_type)
@@ -751,14 +797,16 @@ impl RawDb {
         slots: &[String],
         complete: bool,
     ) -> Result<()> {
-        sqlx::query(
+        sql!(
+            "notion.upsert_page_markdown",
             "INSERT INTO page_markdown (id, markdown, truncated, unresolved_block_ids)
              VALUES (?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 markdown = excluded.markdown,
                 truncated = excluded.truncated,
-                unresolved_block_ids = excluded.unresolved_block_ids",
+                unresolved_block_ids = excluded.unresolved_block_ids"
         )
+        .query()
         .bind(&body.id)
         .bind(&body.markdown)
         .bind(body.truncated as i64)
@@ -769,20 +817,20 @@ impl RawDb {
         let mut keep: HashSet<String> = HashSet::new();
         for slot in slots {
             let id = NotionAttachmentRow::pk_recipe(&body.id, slot);
-            sqlx::query(
-                "INSERT INTO notion_attachments (id, page_id, ref_id, blake3) VALUES (?, ?, ?, NULL)
-                 ON CONFLICT(id) DO NOTHING",
-            )
+            sql!("notion.insert_attachment_edge", "INSERT INTO notion_attachments (id, page_id, ref_id, blake3) VALUES (?, ?, ?, NULL)
+                 ON CONFLICT(id) DO NOTHING").query()
             .bind(&id)
             .bind(&body.id)
             .bind(slot)
             .execute(&mut **tx)
             .await
             .with_context(|| format!("list attachment {id}"))?;
-            sqlx::query(
+            sql!(
+                "notion.insert_attachment_sidecar",
                 "INSERT INTO notion_attachments_bookkeeping (id, attempt_count) VALUES (?, 0)
-                 ON CONFLICT(id) DO NOTHING",
+                 ON CONFLICT(id) DO NOTHING"
             )
+            .query()
             .bind(&id)
             .execute(&mut **tx)
             .await
@@ -803,12 +851,16 @@ impl RawDb {
         edge_id: &str,
         blake3: &str,
     ) -> Result<()> {
-        sqlx::query("UPDATE notion_attachments SET blake3 = ? WHERE id = ?")
-            .bind(blake3)
-            .bind(edge_id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("record the bytes of {edge_id}"))?;
+        sql!(
+            "notion.set_attachment_blake3",
+            "UPDATE notion_attachments SET blake3 = ? WHERE id = ?"
+        )
+        .query()
+        .bind(blake3)
+        .bind(edge_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("record the bytes of {edge_id}"))?;
         Ok(())
     }
 
@@ -818,11 +870,15 @@ impl RawDb {
         tx: &mut Transaction<'_, Sqlite>,
         edge_id: &str,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM notion_attachments WHERE id = ?")
-            .bind(edge_id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("forget attachment {edge_id}"))?;
+        sql!(
+            "notion.delete_attachment_edge",
+            "DELETE FROM notion_attachments WHERE id = ?"
+        )
+        .query()
+        .bind(edge_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("forget attachment {edge_id}"))?;
         Ok(())
     }
 
@@ -835,11 +891,15 @@ impl RawDb {
         page_id: &str,
         rows: &[CommentUpsert],
     ) -> Result<()> {
-        sqlx::query("INSERT OR IGNORE INTO page_comments (id) VALUES (?)")
-            .bind(page_id)
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("list the comments of {page_id}"))?;
+        sql!(
+            "notion.insert_page_comments_row",
+            "INSERT OR IGNORE INTO page_comments (id) VALUES (?)"
+        )
+        .query()
+        .bind(page_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("list the comments of {page_id}"))?;
         upsert_comments_in_tx(tx, rows).await?;
         let keep: HashSet<String> = rows.iter().map(|r| r.id.clone()).collect();
         let gone =
@@ -861,14 +921,16 @@ impl RawDb {
         tx: &mut Transaction<'_, Sqlite>,
         row: &CommentAnchorUpsert,
     ) -> Result<()> {
-        sqlx::query(
+        sql!(
+            "notion.upsert_comment_anchor",
             "INSERT INTO comment_anchors (id, page_id, block_type, plain_text)
              VALUES (?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET
                 page_id = excluded.page_id,
                 block_type = excluded.block_type,
-                plain_text = excluded.plain_text",
+                plain_text = excluded.plain_text"
         )
+        .query()
         .bind(&row.id)
         .bind(&row.page_id)
         .bind(&row.block_type)
@@ -888,12 +950,14 @@ impl RawDb {
         name: Option<&str>,
         payload: Option<&str>,
     ) -> Result<()> {
-        sqlx::query(
+        sql!(
+            "notion.upsert_user",
             "INSERT INTO users (id, name, payload) VALUES (?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
-                payload = excluded.payload",
+                payload = excluded.payload"
         )
+        .query()
         .bind(id)
         .bind(name)
         .bind(payload)
@@ -911,16 +975,18 @@ impl RawDb {
 
     /// Every stored page body, as `(page_id, markdown)`.
     pub async fn load_page_markdown(&self) -> Result<Vec<(String, String)>> {
-        sqlx::query_as(
-            "SELECT id, markdown FROM page_markdown WHERE markdown IS NOT NULL ORDER BY id",
+        sql!(
+            "notion.load_page_markdown",
+            "SELECT id, markdown FROM page_markdown WHERE markdown IS NOT NULL ORDER BY id"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("select page_markdown")
     }
 
     pub async fn load_comments(&self) -> Result<Vec<(Value, Option<String>)>> {
-        let rows = sqlx::query("SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id")
+        let rows = sql!("notion.load_comments", "SELECT json(payload) AS payload, page_id FROM comments WHERE payload IS NOT NULL ORDER BY id").query()
         .fetch_all(self.pool())
         .await
         .context("select comments")?;
@@ -940,11 +1006,14 @@ impl RawDb {
 
     /// `(user_id, display name)` for every user we resolved.
     pub async fn load_user_names(&self) -> Result<HashMap<String, String>> {
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT id, name FROM users WHERE name IS NOT NULL")
-                .fetch_all(self.pool())
-                .await
-                .context("select user names")?;
+        let rows: Vec<(String, String)> = sql!(
+            "notion.load_user_names",
+            "SELECT id, name FROM users WHERE name IS NOT NULL"
+        )
+        .query_as()
+        .fetch_all(self.pool())
+        .await
+        .context("select user names")?;
         Ok(rows.into_iter().collect())
     }
 
@@ -952,11 +1021,14 @@ impl RawDb {
     /// person, whose `person.email` the users endpoint returns when the
     /// integration may read it.
     pub async fn load_user_emails(&self) -> Result<HashMap<String, String>> {
-        let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT id, json(payload) FROM users WHERE payload IS NOT NULL")
-                .fetch_all(self.pool())
-                .await
-                .context("select user payloads")?;
+        let rows: Vec<(String, String)> = sql!(
+            "notion.load_user_payloads",
+            "SELECT id, json(payload) FROM users WHERE payload IS NOT NULL"
+        )
+        .query_as()
+        .fetch_all(self.pool())
+        .await
+        .context("select user payloads")?;
         Ok(rows
             .into_iter()
             .filter_map(|(id, payload)| {
@@ -977,9 +1049,11 @@ impl RawDb {
             Option<String>,
             Option<String>,
         );
-        let rows: Vec<Raw> = sqlx::query_as(
-            "SELECT id, kind, title, parent_type, parent_id, created_time FROM tree",
+        let rows: Vec<Raw> = sql!(
+            "notion.load_tree",
+            "SELECT id, kind, title, parent_type, parent_id, created_time FROM tree"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("select tree")?;
@@ -1000,10 +1074,12 @@ impl RawDb {
 
     /// `(block_id, anchor text)` for every block a comment hangs off.
     pub async fn load_comment_anchors(&self) -> Result<HashMap<String, String>> {
-        let rows: Vec<(String, String)> = sqlx::query_as(
+        let rows: Vec<(String, String)> = sql!(
+            "notion.load_comment_anchors",
             "SELECT id, plain_text FROM comment_anchors \
-             WHERE plain_text IS NOT NULL AND plain_text <> ''",
+             WHERE plain_text IS NOT NULL AND plain_text <> ''"
         )
+        .query_as()
         .fetch_all(self.pool())
         .await
         .context("select comment anchors")?;
@@ -1013,9 +1089,11 @@ impl RawDb {
     /// Every `notion_attachments` row, bytes fetched or not: a page
     /// declares them all, so the fetch landing re-renders it.
     pub async fn load_attachments(&self) -> Result<Vec<AttachmentRow>> {
-        let rows = sqlx::query(
-            "SELECT id, page_id, ref_id, blake3 FROM notion_attachments ORDER BY page_id, ref_id",
+        let rows = sql!(
+            "notion.load_attachments",
+            "SELECT id, page_id, ref_id, blake3 FROM notion_attachments ORDER BY page_id, ref_id"
         )
+        .query()
         .fetch_all(self.pool())
         .await
         .context("select notion_attachments for render")?;
@@ -1037,10 +1115,12 @@ async fn list_stamp(
     id: &str,
     last_edited_time: Option<&str>,
 ) -> Result<()> {
-    sqlx::query(
+    sql!(
+        "notion.upsert_listed_page_stamp",
         "INSERT INTO listed_pages (id, last_edited_time) VALUES (?, ?) \
-         ON CONFLICT(id) DO UPDATE SET last_edited_time = excluded.last_edited_time",
+         ON CONFLICT(id) DO UPDATE SET last_edited_time = excluded.last_edited_time"
     )
+    .query()
     .bind(id)
     .bind(last_edited_time)
     .execute(&mut **tx)
@@ -1054,8 +1134,7 @@ async fn upsert_comments_in_tx(
     rows: &[CommentUpsert],
 ) -> Result<()> {
     for r in rows {
-        sqlx::query(
-            "INSERT INTO comments (id, discussion_id, parent_type, parent_id, page_id, created_time, last_edited_time, payload)
+        sql!("notion.upsert_comment", "INSERT INTO comments (id, discussion_id, parent_type, parent_id, page_id, created_time, last_edited_time, payload)
              VALUES (?, ?, ?, ?, ?, ?, ?, jsonb(?))
              ON CONFLICT(id) DO UPDATE SET
                 discussion_id = excluded.discussion_id,
@@ -1064,8 +1143,7 @@ async fn upsert_comments_in_tx(
                 page_id = excluded.page_id,
                 created_time = excluded.created_time,
                 last_edited_time = excluded.last_edited_time,
-                payload = excluded.payload",
-        )
+                payload = excluded.payload").query()
         .bind(&r.id)
         .bind(&r.discussion_id)
         .bind(&r.parent_type)
@@ -1088,6 +1166,7 @@ mod tests {
     use crate::ingest::schema_raw::{PAGE_COMMENTS, PAGE_MARKDOWN};
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     fn page(id: &str, edited: &str, payload: Value) -> PageUpsert {
         PageUpsert {
             id: id.into(),
@@ -1245,12 +1324,11 @@ mod tests {
         let edges = |db: &RawDb| {
             let pool = db.pool().clone();
             async move {
-                sqlx::query_scalar::<_, String>(
-                    "SELECT ref_id FROM notion_attachments ORDER BY ref_id",
-                )
-                .fetch_all(&pool)
-                .await
-                .unwrap()
+                test_sql!("SELECT ref_id FROM notion_attachments ORDER BY ref_id")
+                    .query_scalar::<String>()
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap()
             }
         };
         let mut tx = db.pool().begin().await.unwrap();
@@ -1315,7 +1393,8 @@ mod tests {
         let left = db.load_comments().await.unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].0["id"], "c2");
-        let listed: Vec<String> = sqlx::query_scalar("SELECT id FROM page_comments")
+        let listed: Vec<String> = test_sql!("SELECT id FROM page_comments")
+            .query_scalar()
             .fetch_all(db.pool())
             .await
             .unwrap();
@@ -1342,7 +1421,8 @@ mod tests {
         .await
         .unwrap();
         tx.commit().await.unwrap();
-        let t: String = sqlx::query_scalar("SELECT typeof(payload) FROM pages WHERE id='p1'")
+        let t: String = test_sql!("SELECT typeof(payload) FROM pages WHERE id='p1'")
+            .query_scalar()
             .fetch_one(db.pool())
             .await
             .unwrap();

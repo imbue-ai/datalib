@@ -17,6 +17,7 @@ use super::schema_raw::{
     full_ddl, IssueCommentRow, PrReviewCommentRow, PrReviewRow, PullRequestRow, SelfIdentityRow,
     LADDER,
 };
+use datalib_sql::{sql, sql_id, Sql};
 
 datalib_etl::raw_db!(pub RawDb: EntityStore, full_ddl(), LADDER);
 
@@ -112,12 +113,16 @@ impl RawDb {
     pub async fn load_children(&self, table: &str) -> Result<Vec<LoadedChild>> {
         // Audited: `table` is a static identifier supplied by us, not user
         // input; `payload` is read, nothing is interpolated from it.
-        let sql = format!(
-            "SELECT id, repo_full_name, pr_number, json(payload) AS payload
+        let sql = Sql::dynamic(
+            sql_id!("github.load_pull_request_children"),
+            format!(
+                "SELECT id, repo_full_name, pr_number, json(payload) AS payload
              FROM {} WHERE payload IS NOT NULL ORDER BY id",
-            table
+                table
+            ),
         );
-        let rows = sqlx::query(sqlx::AssertSqlSafe(sql))
+        let rows = sql
+            .query()
             .fetch_all(self.pool())
             .await
             .with_context(|| format!("select {table}"))?;
@@ -137,10 +142,14 @@ impl RawDb {
     }
 
     pub async fn any_pull_requests(&self) -> Result<bool> {
-        let row = sqlx::query("SELECT 1 FROM pull_requests WHERE payload IS NOT NULL LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("any_pull_requests")?;
+        let row = sql!(
+            "github.has_any_pull_request",
+            "SELECT 1 FROM pull_requests WHERE payload IS NOT NULL LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("any_pull_requests")?;
         Ok(row.is_some())
     }
 }
@@ -201,6 +210,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    use datalib_sql::test_sql;
     #[tokio::test]
     async fn self_identity_round_trips() {
         let d = tempfile::tempdir().unwrap();
@@ -265,12 +275,12 @@ mod tests {
         .await
         .unwrap();
         tx.commit().await.unwrap();
-        let row = sqlx::query(
-            "SELECT typeof(payload) AS t FROM pull_requests WHERE id='octocat/hello#7'",
-        )
-        .fetch_one(db.pool())
-        .await
-        .unwrap();
+        let row =
+            test_sql!("SELECT typeof(payload) AS t FROM pull_requests WHERE id='octocat/hello#7'")
+                .query()
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
         let t: String = row.try_get("t").unwrap();
         assert_eq!(t, "blob", "payload should be JSONB-encoded BLOB");
     }

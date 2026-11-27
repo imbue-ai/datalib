@@ -71,6 +71,7 @@ mod tests {
     use crate::fingerprint_cache::FingerprintCache;
     use std::path::Path;
 
+    use datalib_sql::{test_sql_id, Sql};
     const SCOPE: &str = "test/read";
 
     async fn pool(dir: &Path) -> SqlitePool {
@@ -94,7 +95,11 @@ mod tests {
                 .iter()
                 .copied(),
         ) {
-            sqlx::query(ddl).execute(&pool).await.unwrap();
+            Sql::dynamic(test_sql_id!(), ddl)
+                .query()
+                .execute(&pool)
+                .await
+                .unwrap();
         }
         pool
     }

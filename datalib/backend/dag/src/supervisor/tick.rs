@@ -93,6 +93,10 @@ pub struct StepFacts {
     /// It answered a launch's `--migrate` with `needs_rerun`, and has not
     /// succeeded since: due whatever it read.
     pub needs_rerun: bool,
+    /// The launch's prepare pass has not yet asked it, or a step it reads,
+    /// to make what it stored usable: wanted, it waits rather than read or
+    /// write a store in an older shape.
+    pub preparing: bool,
 }
 
 /// What an invocation was started against.
@@ -185,6 +189,8 @@ pub enum Wait {
     Lock(LockIx),
     /// The data root's disk is under the config's free-space floor.
     DiskSpace,
+    /// The prepare pass has not yet reached it, or a step it reads.
+    Prepare,
 }
 
 /// What a `waiting` step waits for, as the record stores it
@@ -202,6 +208,9 @@ pub enum WaitKind {
     /// A request names it, and the config the loop runs does not have it
     /// yet: the sync in progress takes the new one on when it ends.
     Config,
+    /// The prepare pass at the loop's start has not yet reached it, or a
+    /// step it reads.
+    Prepare,
 }
 
 impl WaitKind {
@@ -222,6 +231,7 @@ impl From<Wait> for WaitKind {
             Wait::Reader(_) => WaitKind::Reader,
             Wait::Lock(_) => WaitKind::Lock,
             Wait::DiskSpace => WaitKind::DiskSpace,
+            Wait::Prepare => WaitKind::Prepare,
         }
     }
 }
@@ -327,6 +337,11 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
                 .any(|&r| step.source && !started_since(f, intent.requests[r].opened));
         if !due {
             states[i] = StepState::Fresh;
+            continue;
+        }
+        if f.preparing {
+            pending[i] = true;
+            states[i] = StepState::Waiting(Wait::Prepare);
             continue;
         }
         if facts.low_disk {
@@ -585,6 +600,7 @@ mod tests {
                     running: None,
                     streams_output: false,
                     needs_rerun: false,
+                    preparing: false,
                 }
             })
             .collect();
@@ -1252,6 +1268,25 @@ mod tests {
             vec![0],
             "space is back: the download runs again"
         );
+    }
+
+    /// A step the prepare pass has not reached waits, and its request
+    /// stays open; a step it does not hold runs beside it. Before, the
+    /// pass ran to the end before the loop took any request at all.
+    #[test]
+    fn a_step_being_prepared_waits_and_holds_its_request_open() {
+        let s = shape(&[&[], &[]]);
+        let mut facts = all_fresh(&s, 1);
+        facts.steps[0].preparing = true;
+        let intent = request(&[0, 1], 5);
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(t.states[0], StepState::Waiting(Wait::Prepare));
+        assert_eq!(started(&t), vec![1], "the step it does not hold runs");
+        assert!(t.closed.is_empty(), "the request waits for the pass");
+
+        facts.steps[0].preparing = false;
+        let t = tick(&s, &intent, &facts);
+        assert!(started(&t).contains(&0), "{t:?}");
     }
 
     /// A step with nothing to do is not waiting on the disk: a request

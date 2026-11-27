@@ -216,7 +216,7 @@ async fn at_is_read_off_its_indexes() {
             "a place's rows come newest first off its index: {plan:?}"
         );
     }
-    let facts = plan(&w, FACTS_SQL, 1).await;
+    let facts = plan(&w, FACTS_SQL.as_str(), 1).await;
     assert_eq!(
         facts.iter().filter(|d| d.starts_with("SEARCH ")).count(),
         3,

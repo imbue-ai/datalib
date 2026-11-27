@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use super::tests::{groups, index_over, search, search_part, search_within, uuids, Part};
 use super::warm::Warming;
 use super::*;
+use datalib_sql::test_sql;
 use sqlx::{ConnectOptions, Connection};
 
 /// A word the fixture's corpus uses across several sources.
@@ -127,7 +128,8 @@ async fn warming_waits_for_an_index_in_another_shape() {
         .connect()
         .await
         .unwrap();
-    sqlx::query("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+    test_sql!("UPDATE _datalib_meta SET value = 'older' WHERE key = 'schema_hash'")
+        .query()
         .execute(&mut conn)
         .await
         .unwrap();
@@ -160,12 +162,14 @@ async fn a_search_reads_only_the_sources_the_grid_holds() {
     let pool = datalib_etl_render::grid_index::open_index(&db)
         .await
         .unwrap();
-    sqlx::query("DELETE FROM grid_rows WHERE source_id = ?")
+    test_sql!("DELETE FROM grid_rows WHERE source_id = ?")
+        .query()
         .bind(&gone)
         .execute(&pool)
         .await
         .unwrap();
-    sqlx::query("UPDATE store_generation SET generation = generation + 1")
+    test_sql!("UPDATE store_generation SET generation = generation + 1")
+        .query()
         .execute(&pool)
         .await
         .unwrap();
@@ -625,15 +629,16 @@ async fn documents_holding(
         .connect()
         .await
         .unwrap();
-    let held: Vec<String> = sqlx::query_scalar(
+    let held: Vec<String> = test_sql!(
         "WITH hold AS (SELECT s.doc_id, count(*) AS n FROM search_fts f \
                          JOIN search_sections s ON s.section_id = f.rowid \
                         WHERE search_fts MATCH ?1 GROUP BY s.doc_id), \
               pieces AS (SELECT doc_id, count(*) AS n FROM search_sections GROUP BY doc_id) \
          SELECT d.markdown_uuid FROM hold JOIN pieces USING (doc_id) \
            JOIN search_documents d USING (doc_id) \
-          WHERE NOT ?2 OR hold.n = pieces.n",
+          WHERE NOT ?2 OR hold.n = pieces.n"
     )
+    .query_scalar()
     .bind(fts)
     .bind(every_piece)
     .fetch_all(&mut grid)

@@ -1,6 +1,6 @@
-//! The loop, run in-process by the one idle host (`supervisor::host::
-//! run_idle`), over a real `config.toml` of puppet steps; and a person at
-//! its controls, through the store. Everything the harness waits on is
+//! The loop, run in-process as a host runs it (`Runner::run_forever`),
+//! over a real `config.toml` of puppet steps; and a person at its
+//! controls, through the store. Everything the harness waits on is
 //! observable — a puppet's ack, a loop event, an announcement — and every
 //! wait has a deadline that names what never came.
 
@@ -19,9 +19,10 @@ use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
 use datalib_dag::supervisor::host;
+use datalib_dag::supervisor::loop_host::{LoopHost, PeriodSink};
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
-use datalib_dag::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
+use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
 use datalib_dag::{Event, EventSink, Runner};
 use tokio::sync::{mpsc, watch};
 
@@ -111,7 +112,7 @@ pub enum Seen {
     Event(Event),
     /// Something announced to the store's listeners.
     Heard(String),
-    /// What the host did: a busy period, a settle.
+    /// What the host did: a busy period opened or closed.
     Host(String),
     /// The loop returned an error.
     Broke(String),
@@ -122,7 +123,7 @@ pub struct State {
     pub record: Record,
     pub invocations: Vec<(InvocationRow, Option<InvocationEnd>)>,
     pub requests: Vec<RequestRow>,
-    pub wipes: Vec<WipeRow>,
+    pub wipes: Vec<JobRow>,
 }
 
 impl State {
@@ -303,19 +304,34 @@ impl Harness {
 
     async fn start_host(&mut self, tx: mpsc::UnboundedSender<Seen>, clocks: Clocks, record: bool) {
         let root = self.root.path().to_path_buf();
-        let mut stop = self.stop.subscribe();
+        let stop = self.stop.subscribe();
         let store = Store::open(&root).await.unwrap();
-        let mut listener = Listener::new(&store, "the loop's host").backstop(clocks.backstop);
-        let mut periods = Periods {
+        let periods = Periods {
             root,
             report: tx.clone(),
-            sink: Arc::new(ChannelSink(tx)),
-            clocks,
-            stop: stop.clone(),
-            record,
+            record: Arc::new(PeriodSink::default()),
+            write_run_store: record,
         };
+        let sink: Arc<dyn EventSink> = Arc::new(FanOutSink(vec![
+            Arc::new(ChannelSink(tx)),
+            periods.record.clone(),
+        ]));
         self.host = Some(tokio::spawn(async move {
-            host::run_idle(&store, &mut listener, &mut periods, &mut stop).await;
+            if let Some((checked, path)) = periods.graph() {
+                let mut runner = Runner::new(&periods.root)
+                    .sink(sink)
+                    .stop_on(stop.clone())
+                    .retry(RetryPolicy {
+                        backoff: clocks.backoff,
+                        ..RetryPolicy::default()
+                    })
+                    .reload_from(Arc::new(ConfigFile::new(path)));
+                runner.stop_grace = clocks.stop_grace;
+                runner.backstop = clocks.backstop;
+                if let Err(e) = runner.run_forever(&checked.graph, &store, &periods).await {
+                    let _ = periods.report.send(Seen::Broke(format!("{e:#}")));
+                }
+            }
             store.close().await;
         }));
     }
@@ -612,7 +628,7 @@ impl Harness {
             record: self.person.load_record().await.unwrap(),
             invocations: self.person.invocations().await.unwrap(),
             requests: self.person.recent_requests(1000).await.unwrap(),
-            wipes: self.person.wipes().await.unwrap(),
+            wipes: self.person.jobs().await.unwrap(),
         }
     }
 
@@ -694,18 +710,18 @@ impl Harness {
     }
 
     pub async fn reset(&mut self, steps: &[&str]) -> String {
-        self.wipe(WipeKind::Reset, steps).await
+        self.wipe(JobKind::Reset, steps).await
     }
 
     pub async fn purge(&mut self, groups: &[&str]) -> String {
-        self.wipe(WipeKind::Purge, groups).await
+        self.wipe(JobKind::Purge, groups).await
     }
 
-    async fn wipe(&mut self, kind: WipeKind, targets: &[&str]) -> String {
+    async fn wipe(&mut self, kind: JobKind, targets: &[&str]) -> String {
         let targets: Vec<String> = targets.iter().map(|t| t.to_string()).collect();
         let id = self
             .person
-            .open_wipe(kind, &targets, "person")
+            .open_job(kind, &targets, "person")
             .await
             .unwrap();
         self.note(format!("person: {} {targets:?} = {id}", kind.as_str()));
@@ -758,12 +774,11 @@ impl Harness {
 
 struct Periods {
     root: PathBuf,
-    sink: Arc<dyn EventSink>,
-    clocks: Clocks,
-    stop: watch::Receiver<bool>,
     report: mpsc::UnboundedSender<Seen>,
+    /// The open period's run store record, when it writes one.
+    record: Arc<PeriodSink>,
     /// Whether a busy period writes the run store too.
-    record: bool,
+    write_run_store: bool,
 }
 
 impl Periods {
@@ -783,57 +798,26 @@ impl Periods {
     }
 }
 
-impl host::Periods for Periods {
-    async fn busy_period(&mut self, store: &Store) {
+impl LoopHost for Periods {
+    fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let _ = self.report.send(Seen::Host("busy period".into()));
-        let Some((checked, path)) = self.graph() else {
-            return;
-        };
+        let (checked, _) = self.graph().ok_or("the config does not load")?;
         let run_id = datalib_dag::scheduler::new_run_id();
         let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs();
         let env = host::step_env(&checked.cfg, None, &[], &now, &run_id).unwrap();
-        let sink: Arc<dyn EventSink> = match self.record {
-            true => {
-                let started = host::period_start(&[], &[]);
-                let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, started)
-                    .expect("open the run store");
-                Arc::new(FanOutSink(vec![self.sink.clone(), Arc::new(store)]))
-            }
-            false => self.sink.clone(),
-        };
-        let mut runner = Runner::new(&self.root)
-            .sink(sink)
-            .child_env(env.vars)
-            .stop_on(self.stop.clone())
-            .retry(RetryPolicy {
-                backoff: self.clocks.backoff,
-                ..RetryPolicy::default()
-            })
-            .reload_from(Arc::new(ConfigFile::new(path)));
-        runner.stop_grace = self.clocks.stop_grace;
-        runner.backstop = self.clocks.backstop;
-        if let Err(e) = runner.serve(&checked.graph, store).await {
-            let _ = self.report.send(Seen::Broke(format!("{e:#}")));
+        if self.write_run_store {
+            let store = host::start_record(&self.root, &checked.cfg, &run_id, &now, start)
+                .expect("open the run store");
+            self.record.point_at(Some(Arc::new(store)));
         }
-        // Dropping the runner drops the run store's writer, which flushes
-        // and joins: the period is over once what it wrote can be read.
-        drop(runner);
-        let _ = self.report.send(Seen::Host("busy period over".into()));
+        Ok(env.vars)
     }
 
-    async fn settle(&mut self, store: &Store) -> Option<BTreeMap<String, String>> {
-        let (checked, _) = self.graph()?;
-        match Runner::new(&self.root).settle(&checked.graph, store).await {
-            Ok(turned_off) => {
-                let steps: Vec<&String> = turned_off.keys().collect();
-                let _ = self.report.send(Seen::Host(format!("settled {steps:?}")));
-                Some(turned_off)
-            }
-            Err(e) => {
-                let _ = self.report.send(Seen::Broke(format!("{e:#}")));
-                None
-            }
-        }
+    /// Dropping the run store's writer flushes and joins: the period is
+    /// over once what it wrote can be read.
+    fn close(&self, _run_id: &str) {
+        drop(self.record.point_at(None));
+        let _ = self.report.send(Seen::Host("busy period over".into()));
     }
 }
 

@@ -56,7 +56,9 @@ import {
   hasContactsApp,
   copyText as copyHandleText,
   nameOf,
+  onlyMine,
   people,
+  sharedName,
 } from "./contacts";
 import { CONTACT } from "@/search/queryText";
 import { dateWallText, datesInText, parseStamp } from "./dates";
@@ -283,7 +285,8 @@ function shownValue(value: string): string | null {
   }
   if (!handleKind(value)) return null;
   const who = people.lookup(value);
-  const record = who?.mine ?? who?.sourceContacts[0];
+  if (who && who.mine.length > 1) return sharedName(who.mine);
+  const record = onlyMine(who) ?? who?.sourceContacts[0];
   return record ? nameOf(record) : null;
 }
 const namesAnswered = ref(0);

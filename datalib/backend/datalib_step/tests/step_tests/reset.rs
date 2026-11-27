@@ -30,6 +30,7 @@ async fn a_reset_download_reports_the_emptied_stores_problems() {
 
     let out = Command::new(std::env::var_os("DATALIB_STEP_BIN").expect("DATALIB_STEP_BIN"))
         .env("DATALIB_DAG_STEP", "tng/ingest")
+        .env("DATALIB_DAG_PARAMS", r#"{"api": {}}"#)
         .args(["run", "ingest", "slack"])
         .env("DATALIB_DAG_DATA_ROOT", root)
         .arg("--reset")

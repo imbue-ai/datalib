@@ -17,6 +17,7 @@ use datalib_etl::doltlite_raw;
 use datalib_etl_render::inputs::{changed_rows, Inputs, RawRange};
 use datalib_handle::Handle;
 use datalib_schema::problems::{Outcome, Problem, ProblemRow, Reason, Scope, Severity, Stage};
+use datalib_sql::sql;
 use serde_json::Value;
 use sqlx::sqlite::SqlitePool;
 use sqlx::Row;
@@ -207,10 +208,12 @@ async fn load(
     pin: &datalib_etl::pin::Pin,
 ) -> Result<ParsedBeeper> {
     let mut unlisted_chats: BTreeMap<String, usize> = BTreeMap::new();
-    for account in sqlx::query_scalar::<_, Option<String>>(
+    for account in sql!(
+        "beeper_render.list_accounts_with_messages",
         "SELECT accountID FROM threads t \
-         WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)",
+         WHERE EXISTS (SELECT 1 FROM mx_room_messages m WHERE m.roomID = t.threadID)"
     )
+    .query_scalar::<Option<String>>()
     .fetch_all(pool)
     .await
     .context("read which accounts hold messages")?
@@ -223,10 +226,14 @@ async fn load(
         }
     }
     let mut rooms: HashMap<String, Room> = HashMap::new();
-    for r in sqlx::query("SELECT threadID, accountID, thread FROM threads")
-        .fetch_all(pool)
-        .await
-        .context("read threads")?
+    for r in sql!(
+        "beeper_render.list_threads",
+        "SELECT threadID, accountID, thread FROM threads"
+    )
+    .query()
+    .fetch_all(pool)
+    .await
+    .context("read threads")?
     {
         let account: Option<String> = r.try_get("accountID")?;
         let Some(network) = account.as_deref().and_then(network_for_account) else {
@@ -247,16 +254,19 @@ async fn load(
     // Every forward table's key holds its room id, the one part a Matrix
     // room id can be: it starts with `!`. An identifier's key is
     // `account|person|identifier`, and reaches every room its person is in.
-    let rooms_of: HashMap<String, Vec<String>> =
-        sqlx::query_as::<_, (String, String)>("SELECT id, room_id FROM participants")
-            .fetch_all(pool)
-            .await
-            .context("read participants' rooms")?
-            .into_iter()
-            .fold(HashMap::new(), |mut acc, (person, room)| {
-                acc.entry(person).or_default().push(room);
-                acc
-            });
+    let rooms_of: HashMap<String, Vec<String>> = sql!(
+        "beeper_render.list_participant_rooms",
+        "SELECT id, room_id FROM participants"
+    )
+    .query_as::<(String, String)>()
+    .fetch_all(pool)
+    .await
+    .context("read participants' rooms")?
+    .into_iter()
+    .fold(HashMap::new(), |mut acc, (person, room)| {
+        acc.entry(person).or_default().push(room);
+        acc
+    });
     let mut forward_tables = FORWARD_TABLES.to_vec();
     forward_tables.push(IDENTIFIERS);
     let forward = changed_rows(pool, range, pin, &forward_tables)
@@ -327,11 +337,13 @@ async fn load(
 
     // ── messages, and the reactions kept as messages ───────────────
     let mut events: Vec<(String, i64, Event)> = Vec::new();
-    for r in sqlx::query(
+    for r in sql!(
+        "beeper_render.list_messages_of_rooms",
         "SELECT roomID, eventID, senderContactID, timestamp, type, hsOrder, \
                 inReplyToID, text_content, message \
-         FROM mx_room_messages WHERE roomID IN (SELECT value FROM json_each(?))",
+         FROM mx_room_messages WHERE roomID IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(&loading_json)
     .fetch_all(pool)
     .await
@@ -382,10 +394,12 @@ async fn load(
     }
 
     // ── reactions kept in their own table ──────────────────────────
-    for r in sqlx::query(
+    for r in sql!(
+        "beeper_render.list_reactions_of_rooms",
         "SELECT roomID, reactionID, eventID, senderID, description, timestamp \
-         FROM mx_reactions WHERE roomID IN (SELECT value FROM json_each(?))",
+         FROM mx_reactions WHERE roomID IN (SELECT value FROM json_each(?))"
     )
+    .query()
     .bind(&loading_json)
     .fetch_all(pool)
     .await
@@ -450,11 +464,13 @@ async fn people(
 ) -> Result<HashMap<String, Vec<Person>>> {
     let mut reach: HashMap<String, Vec<ContactHandle>> = HashMap::new();
     if doltlite_raw::table_exists(pool, IDENTIFIERS).await? {
-        for (person, identifier, kind) in sqlx::query_as::<_, (String, String, String)>(
+        for (person, identifier, kind) in sql!(
+            "beeper_render.list_participant_identifiers",
             "SELECT participant_id, identifier, identifier_type FROM participant_identifiers \
              WHERE participant_id IN (SELECT id FROM participants \
-                                      WHERE room_id IN (SELECT value FROM json_each(?)))",
+                                      WHERE room_id IN (SELECT value FROM json_each(?)))"
         )
+        .query_as::<(String, String, String)>()
         .bind(loading_json)
         .fetch_all(pool)
         .await
@@ -470,10 +486,12 @@ async fn people(
     }
 
     let mut out: HashMap<String, Vec<Person>> = HashMap::new();
-    for r in sqlx::query(
+    for r in sql!(
+        "beeper_render.list_participants_of_rooms",
         "SELECT room_id, id, full_name, nickname, img_url, is_self FROM participants \
-         WHERE room_id IN (SELECT value FROM json_each(?)) ORDER BY room_id, id",
+         WHERE room_id IN (SELECT value FROM json_each(?)) ORDER BY room_id, id"
     )
+    .query()
     .bind(loading_json)
     .fetch_all(pool)
     .await
@@ -562,9 +580,11 @@ struct MediaIndex {
 
 impl MediaIndex {
     async fn read(pool: &SqlitePool, db_path: &Path) -> Result<Self> {
-        let blake3_by_path = sqlx::query_as::<_, (String, String)>(
-            "SELECT rel_path, blake3 FROM beeper_media_files",
+        let blake3_by_path = sql!(
+            "beeper_render.list_media_files",
+            "SELECT rel_path, blake3 FROM beeper_media_files"
         )
+        .query_as::<(String, String)>()
         .fetch_all(pool)
         .await
         .context("read beeper_media_files")?
@@ -575,9 +595,11 @@ impl MediaIndex {
             .await
             .with_context(|| format!("open the blob store beside {}", db_path.display()))?
         {
-            let rows = sqlx::query_as::<_, (String, Option<String>, Option<i64>)>(
-                "SELECT blake3, content_type, byte_len FROM cas_objects",
+            let rows = sql!(
+                "beeper_render.list_cas_objects",
+                "SELECT blake3, content_type, byte_len FROM cas_objects"
             )
+            .query_as::<(String, Option<String>, Option<i64>)>()
             .fetch_all(cas.pool())
             .await
             .context("read cas_objects");

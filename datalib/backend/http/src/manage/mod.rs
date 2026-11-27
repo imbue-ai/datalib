@@ -396,12 +396,7 @@ async fn manage_rows(s: &AppState) -> Result<(ManageResponse, Took), crate::Refu
 
     let raw_stores = raw_stores(&storage.outputs);
     let trouble = s.sync.trouble();
-    let sync_paused = s
-        .sync
-        .upgrade()
-        .migrating
-        .then_some(buttons::SYNC_PAUSED_FOR_UPGRADE)
-        .or(trouble.as_deref());
+    let sync_paused = trouble.as_deref();
     let rows = Snapshot {
         written: &written,
         diagnostics: &diagnostics,

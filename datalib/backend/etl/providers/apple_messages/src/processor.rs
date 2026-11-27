@@ -49,8 +49,8 @@ pub fn plan_ingest(
     })])
 }
 
-/// Owns its doltlite store end to end: open, register the interrupt
-/// hook, mirror, commit + close via `run_store`.
+/// Owns its doltlite store end to end: open, mirror, commit + close via
+/// `run_store`.
 struct AppleMessagesIngest {
     id: String,
     raw_path: PathBuf,

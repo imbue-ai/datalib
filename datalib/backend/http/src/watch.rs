@@ -203,7 +203,7 @@ enum Moved {
     Supervisor,
     /// A wipe opened, closed, or moved on to its next step: heard by
     /// [`watch_record`] in the announcement's words.
-    Wipe,
+    Job,
     RunStore,
     Frontend,
     GridIndex,
@@ -537,7 +537,7 @@ async fn expand(
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
             }
-            Moved::Wipe => {
+            Moved::Job => {
                 out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
@@ -1007,7 +1007,7 @@ async fn watch_record(
         if record && moved.send(Moved::Supervisor).is_err() {
             return;
         }
-        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Wipe).is_err() {
+        if heard.iter().any(|line| is_wipe_line(line)) && moved.send(Moved::Job).is_err() {
             return;
         }
     }
@@ -1017,9 +1017,9 @@ async fn watch_record(
 /// A change the backstop found unannounced may be one too.
 fn is_wipe_line(line: &str) -> bool {
     use datalib_dag::supervisor::announce::UNANNOUNCED;
-    use datalib_dag::supervisor::store::WIPE_MOVED;
+    use datalib_dag::supervisor::store::JOB_MOVED;
     line == UNANNOUNCED
-        || ["wipe opened ", "wipe closed ", WIPE_MOVED]
+        || ["job opened ", "job closed ", JOB_MOVED]
             .iter()
             .any(|p| line.starts_with(p))
 }
@@ -1028,13 +1028,14 @@ fn is_wipe_line(line: &str) -> bool {
 mod tests {
     use super::*;
 
+    use datalib_sql::{test_sql, test_sql_id, Sql};
     #[test]
     fn a_wipes_announcements_are_told_from_the_rest() {
-        assert!(is_wipe_line("wipe opened 01a1"));
-        assert!(is_wipe_line("wipe closed 01a1"));
+        assert!(is_wipe_line("job opened 01a1"));
+        assert!(is_wipe_line("job closed 01a1"));
         assert!(is_wipe_line(&format!(
             "{} 01a1",
-            datalib_dag::supervisor::store::WIPE_MOVED
+            datalib_dag::supervisor::store::JOB_MOVED
         )));
         assert!(is_wipe_line(datalib_dag::supervisor::announce::UNANNOUNCED));
         assert!(!is_wipe_line("request opened 01a1"));
@@ -1563,17 +1564,20 @@ mod tests {
     /// one: its own process, opening and closing the store around it.
     async fn write_index(db: &Path, id: i64, commit: bool) {
         let writer = datalib_core::store::open_pool(db).await.unwrap();
-        sqlx::query("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)")
+        test_sql!("CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)")
+            .query()
             .execute(&writer)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO t VALUES (?)")
+        test_sql!("INSERT INTO t VALUES (?)")
+            .query()
             .bind(id)
             .execute(&writer)
             .await
             .unwrap();
         if commit {
-            let hash: Option<String> = sqlx::query_scalar("SELECT dolt_commit('-Am', 'rows')")
+            let hash: Option<String> = test_sql!("SELECT dolt_commit('-Am', 'rows')")
+                .query_scalar()
                 .fetch_one(&writer)
                 .await
                 .unwrap();
@@ -1591,15 +1595,21 @@ mod tests {
             "CREATE TABLE IF NOT EXISTS t (id INTEGER PRIMARY KEY)",
             "INSERT INTO store_generation VALUES (1, 'f', 0) ON CONFLICT (id) DO NOTHING",
         ] {
-            sqlx::query(sql).execute(&writer).await.unwrap();
+            Sql::dynamic(test_sql_id!(), sql)
+                .query()
+                .execute(&writer)
+                .await
+                .unwrap();
         }
-        sqlx::query("INSERT INTO t VALUES (?)")
+        test_sql!("INSERT INTO t VALUES (?)")
+            .query()
             .bind(id)
             .execute(&writer)
             .await
             .unwrap();
         if seal {
-            sqlx::query("UPDATE store_generation SET generation = generation + 1")
+            test_sql!("UPDATE store_generation SET generation = generation + 1")
+                .query()
                 .execute(&writer)
                 .await
                 .unwrap();

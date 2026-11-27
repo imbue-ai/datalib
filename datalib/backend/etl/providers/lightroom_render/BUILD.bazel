@@ -21,6 +21,7 @@ rust_library(
         "//datalib/backend/id:datalib_id",
         "//datalib/backend/photo_schema:datalib_photo_schema",
         "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/uri:datalib_uri",
         "@datalib_crates//:anyhow",

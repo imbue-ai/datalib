@@ -10,6 +10,7 @@ use datalib_etl::doltlite_raw::WirePayloadRow;
 use datalib_etl_web::coverage::{self, Span};
 use datalib_etl_yolink::ingest::schema_raw::{device_scope, span_end, YolinkReadingRow};
 use datalib_etl_yolink::ingest::{db_path_for, RawDb};
+use datalib_sql::{test_sql, test_sql_id, Sql};
 
 const DAY: i64 = 86_400_000;
 const FIVE_MIN: i64 = 300_000;
@@ -47,7 +48,8 @@ async fn earlier_store(dir: &tempfile::TempDir, rows: &[String]) -> std::path::P
     let pool = dr::open(&path, &shape).await.unwrap();
     for sql in rows {
         // Audited: the test's own literals.
-        sqlx::query(sqlx::AssertSqlSafe(sql.clone()))
+        Sql::dynamic(test_sql_id!(), sql)
+            .query()
             .execute(&pool)
             .await
             .unwrap();
@@ -68,7 +70,8 @@ async fn earlier_store(dir: &tempfile::TempDir, rows: &[String]) -> std::path::P
 }
 
 async fn has_column(pool: &sqlx::SqlitePool, table: &str, column: &str) -> bool {
-    let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+    let n: i64 = test_sql!("SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?")
+        .query_scalar()
         .bind(table)
         .bind(column)
         .fetch_one(pool)
@@ -160,7 +163,8 @@ async fn a_store_with_the_cursor_opens_with_what_it_walked_as_coverage() {
         "the next run owes the failed window and the time since the cursor"
     );
 
-    let readings: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM yolink_readings")
+    let readings: i64 = test_sql!("SELECT COUNT(*) FROM yolink_readings")
+        .query_scalar()
         .fetch_one(pool)
         .await
         .unwrap();
@@ -169,7 +173,8 @@ async fn a_store_with_the_cursor_opens_with_what_it_walked_as_coverage() {
     assert!(!has_column(pool, "yolink_windows", "id").await);
     assert!(!has_column(pool, "yolink_windows_bookkeeping", "id").await);
     let windows_problems: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'yolink_windows:%'")
+        test_sql!("SELECT COUNT(*) FROM problems WHERE scope_key LIKE 'yolink_windows:%'")
+            .query_scalar()
             .fetch_one(pool)
             .await
             .unwrap();
@@ -177,9 +182,10 @@ async fn a_store_with_the_cursor_opens_with_what_it_walked_as_coverage() {
         windows_problems, 0,
         "a failed window's row went with its table"
     );
-    let retired: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'",
+    let retired: i64 = test_sql!(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'sync_scope_config'"
     )
+    .query_scalar()
     .fetch_one(pool)
     .await
     .unwrap();

@@ -13,6 +13,7 @@ use super::schema_raw::{
     full_ddl, MediaAudioRow, MediaFileRow, MediaItemRow, MediaPlaylistEntryRow, MediaPlaylistRow,
     MediaScanMetaRow, MediaVisualRow,
 };
+use datalib_sql::{sql, sql_id, Sql};
 
 pub fn db_path_for(raw_dir: &Path) -> PathBuf {
     datalib_etl::raw_layout::entities_db(raw_dir)
@@ -78,17 +79,22 @@ impl RawDb {
     pub async fn load_prev(&self) -> Result<PrevCache> {
         let mut cache = PrevCache::default();
 
-        let rows = sqlx::query("SELECT id, blake3 FROM media_files")
-            .fetch_all(self.pool())
-            .await
-            .context("load media_files")?;
+        let rows = sql!(
+            "media.list_file_hashes",
+            "SELECT id, blake3 FROM media_files"
+        )
+        .query()
+        .fetch_all(self.pool())
+        .await
+        .context("load media_files")?;
         for r in rows {
             cache
                 .paths
                 .insert(r.get("id"), r.get::<String, _>("blake3"));
         }
 
-        let items = sqlx::query("SELECT blake3 FROM media_items")
+        let items = sql!("media.list_item_hashes", "SELECT blake3 FROM media_items")
+            .query()
             .fetch_all(self.pool())
             .await
             .context("load media_items ids")?;
@@ -96,7 +102,8 @@ impl RawDb {
             cache.known_items.insert(r.get::<String, _>("blake3"));
         }
 
-        let playlists = sqlx::query("SELECT id FROM media_playlists")
+        let playlists = sql!("media.list_playlist_ids", "SELECT id FROM media_playlists")
+            .query()
             .fetch_all(self.pool())
             .await
             .context("load media_playlists ids")?;
@@ -127,12 +134,13 @@ impl RawDb {
         let mut tx = self.pool().begin().await.context("begin item prune tx")?;
         let mut removed = 0;
         for sql in [
-            "DELETE FROM media_audio WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
-            "DELETE FROM media_visual WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
-            "DELETE FROM media_items_bookkeeping WHERE id NOT IN (SELECT blake3 FROM media_files)",
-            "DELETE FROM media_items WHERE blake3 NOT IN (SELECT blake3 FROM media_files)",
+            sql!("media.delete_unnamed_items.delete_media_audio", "DELETE FROM media_audio WHERE blake3 NOT IN (SELECT blake3 FROM media_files)"),
+            sql!("media.delete_unnamed_items.delete_media_visual", "DELETE FROM media_visual WHERE blake3 NOT IN (SELECT blake3 FROM media_files)"),
+            sql!("media.delete_unnamed_items.delete_media_items_bookkeeping", "DELETE FROM media_items_bookkeeping WHERE id NOT IN (SELECT blake3 FROM media_files)"),
+            sql!("media.delete_unnamed_items.delete_media_items", "DELETE FROM media_items WHERE blake3 NOT IN (SELECT blake3 FROM media_files)"),
         ] {
-            removed = sqlx::query(sql)
+            removed = sql
+                .query()
                 .execute(&mut *tx)
                 .await
                 .context("prune unnamed items")?
@@ -143,11 +151,15 @@ impl RawDb {
     }
 
     pub async fn clear_playlist_entries(&self, playlist_id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM media_playlist_entries WHERE playlist_id = ?")
-            .bind(playlist_id)
-            .execute(self.pool())
-            .await
-            .context("clear playlist entries")?;
+        sql!(
+            "media.delete_playlist_entries",
+            "DELETE FROM media_playlist_entries WHERE playlist_id = ?"
+        )
+        .query()
+        .bind(playlist_id)
+        .execute(self.pool())
+        .await
+        .context("clear playlist entries")?;
         Ok(())
     }
 
@@ -169,7 +181,7 @@ impl RawDb {
             sql.push(')');
             // Audited: `table` and `column` are literals at every callsite; the IN-list
             // is a placeholder run and every id is bound.
-            let mut q = sqlx::query(sqlx::AssertSqlSafe(sql));
+            let mut q = Sql::dynamic(sql_id!("media.delete_rows_by_column"), sql).query();
             for id in chunk {
                 q = q.bind(id);
             }
@@ -197,10 +209,14 @@ impl RawDb {
     }
 
     pub async fn scan_root(&self) -> Result<Option<PathBuf>> {
-        let row = sqlx::query("SELECT abs_root FROM media_scan_meta ORDER BY id LIMIT 1")
-            .fetch_optional(self.pool())
-            .await
-            .context("read media_scan_meta")?;
+        let row = sql!(
+            "media.read_scan_root",
+            "SELECT abs_root FROM media_scan_meta ORDER BY id LIMIT 1"
+        )
+        .query()
+        .fetch_optional(self.pool())
+        .await
+        .context("read media_scan_meta")?;
         Ok(row.map(|r| PathBuf::from(r.get::<String, _>("abs_root"))))
     }
 
