@@ -126,9 +126,8 @@ impl Walk {
                 log.push(format!("sync {roots:?}"));
             }
         }
-        // Nothing shows the loop has started serving a request while an
-        // older one for the same steps is open: a step's row names the
-        // oldest.
+        // The walk goes on at once, without waiting for the loop to start
+        // serving the request (`Store::taken_on`).
         let id = self.h.sync(roots).await;
         self.open.push(id.clone());
         self.requests.push(id);
