@@ -240,7 +240,8 @@ pub fn sections(t: &Thread) -> Vec<Section> {
 
 /// Each comment author with a handle, as this file's comments describe
 /// them: the names they showed, how many messages they wrote and when
-/// the newest was — what chat-common's baseline says of a chat's authors.
+/// the newest was — what chat-common's `baseline_contacts` says of a
+/// chat's authors.
 pub fn authors(source_id: &str, threads: &[Thread], me: Option<&Handle>) -> Vec<NormalizedContact> {
     let mut by_handle: BTreeMap<&str, (NormalizedContact, Option<i64>)> = BTreeMap::new();
     for m in threads.iter().flat_map(|t| &t.messages) {

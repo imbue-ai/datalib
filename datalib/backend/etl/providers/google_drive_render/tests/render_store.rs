@@ -159,7 +159,7 @@ async fn a_doc_in_the_store_renders_with_its_image_and_its_thread() {
         .unwrap()
         .expect("committed");
     let listing = store::load(&db, RawRange::cold()).await.unwrap();
-    // The Sheet renders nothing, and that is on record, as one row.
+    // The Sheet renders nothing, and one problem row says so.
     let row = listing.not_docs_row("drive", 1).unwrap();
     assert_eq!(row.scope_key, "unrendered_files:all");
     assert_eq!(

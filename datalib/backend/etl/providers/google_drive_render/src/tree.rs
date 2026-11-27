@@ -4,8 +4,8 @@
 //! and is filed under the others.
 //!
 //! A folder is carried by every Doc in or under it, and the grid index
-//! takes one carrier's word for its name and kind, so nothing a place
-//! row says may come from the Doc that carries it.
+//! takes its name and kind from one of those Docs, so nothing a place row
+//! says may come from the Doc that carries it.
 
 use std::collections::{HashMap, HashSet};
 
@@ -111,8 +111,9 @@ impl Places {
             .unwrap_or_else(|| captured.to_vec())
     }
 
-    /// The containers from the top down to folder `id`, each read
-    /// declared, a miss too: a folder that arrives later moves the Doc.
+    /// The containers from the top down to folder `id`, each lookup
+    /// declared as a read, one that found nothing too, so a folder that
+    /// arrives later renders the Doc again.
     /// An id the store holds neither as a folder nor as a drive is a
     /// folder with no name, at the top.
     fn chain<'a>(&'a self, id: &'a str, inputs: &Inputs) -> Vec<Place<'a>> {
