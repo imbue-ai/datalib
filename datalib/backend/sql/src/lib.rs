@@ -20,6 +20,7 @@
 //! `datalib_sql_work` reads it to file the statement's work under it.
 
 pub mod tag;
+pub mod values;
 
 use std::fmt;
 use std::sync::Arc;

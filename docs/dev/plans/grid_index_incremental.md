@@ -1,7 +1,10 @@
 # The grid index pays only for what changed
 
 *Proposal (2026-11-26). Order step 1, the keywords as their own part,
-is built (`grid_index::Part`); steps 2 and 3 are not. Every number comes from
+is built (`grid_index::Part`). Step 2 is built for the grid pass and the
+keyword index (`grid_index::apply_page`, `LOAD_PAGE`); the render store
+still writes a document at a time through it, and no real library has
+been measured. Step 3 is not built. Every number comes from
 one real library's rebuild that day: 21 sources, 257k documents, 1.23M
 grid rows. The step's own statement counts (`sql_*_total` in
 `runs.sqlite`, `docs/dev/logging.md`) and its "sealed the index" lines

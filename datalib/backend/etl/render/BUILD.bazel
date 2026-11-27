@@ -51,6 +51,7 @@ rust_test(
     edition = "2021",
     deps = [
         "//datalib/backend/sql_work:datalib_sql_work",
+        "//datalib/backend/store_dump:datalib_store_dump",
         "@datalib_crates//:tempfile",
     ],
 )
