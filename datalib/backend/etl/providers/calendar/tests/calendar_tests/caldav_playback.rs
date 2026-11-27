@@ -1,5 +1,5 @@
-//! A CalDAV account shaped like Fastmail's, measured live on
-//! 2026-09-24: the bare host answers 404, `/.well-known/caldav` redirects
+//! A CalDAV account shaped like Fastmail's, as measured live: the bare
+//! host answers 404, `/.well-known/caldav` redirects
 //! to the DAV root, every value is CDATA, and the home lists scheduling
 //! boxes beside the calendars.
 
@@ -751,9 +751,10 @@ async fn a_calendar_the_server_no_longer_lists_goes_with_its_events() {
 }
 
 /// A home listing that names nothing is not an empty home: a `Depth: 1`
-/// PROPFIND always answers for the home itself. A 200 with an empty body
-/// parsed to no calendars, and every stored calendar and its events was
-/// deleted (#991). Now the run fails and deletes nothing.
+/// PROPFIND always answers for the home itself. Guards against #991, where
+/// a 200 with an empty body parsed to no calendars and every stored
+/// calendar and its events was deleted. The run fails and deletes
+/// nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_home_listing_that_names_nothing_deletes_no_calendar() {
     let d = tempfile::tempdir().expect("tempdir");

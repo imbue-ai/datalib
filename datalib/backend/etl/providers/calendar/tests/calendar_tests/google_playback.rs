@@ -487,13 +487,13 @@ async fn an_event_with_no_id_is_asked_for_again() {
 }
 
 /// A whole listing may delete what it does not name only if it named
-/// everything it listed. An event it could not identify (no `id`) used to
-/// be skipped and the stored copy deleted, and a reply with no `items`
-/// read as an empty calendar. Google sends `items`
+/// everything it listed. Guards against skipping an event it could not
+/// identify (no `id`) and deleting the stored copy, and against reading
+/// a reply with no `items` as an empty calendar. Google sends `items`
 /// on every reply, `[]` when empty — measured live across 7 calendars,
 /// incremental replies included — so its absence is not a listing.
-/// Either now deletes nothing and says why on the calendar's row; the
-/// next listing that names everything deletes as before.
+/// Either deletes nothing and says why on the calendar's row; the next
+/// listing that names everything deletes as usual.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_whole_listing_it_cannot_fully_read_deletes_nothing() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -615,11 +615,11 @@ async fn calendar_count(store: &Path) -> i64 {
 }
 
 /// The account's list may delete a calendar it does not name only if it
-/// could read every entry. A reply with no `items` read as an account
-/// with no calendars, and an entry with no `id` was skipped; either way
-/// every calendar it did not name went with its events (#991). Now the
-/// first fails the run and the second keeps every calendar, each
-/// deleting nothing.
+/// could read every entry. Guards against #991, where a reply with no
+/// `items` read as an account with no calendars, and an entry with no
+/// `id` was skipped; either way every calendar it did not name went with
+/// its events. A reply with no `items` fails the run, and an entry with
+/// no `id` keeps every calendar; neither deletes anything.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_calendar_list_it_cannot_fully_read_deletes_no_calendar() {
     let d = tempfile::tempdir().expect("tempdir");

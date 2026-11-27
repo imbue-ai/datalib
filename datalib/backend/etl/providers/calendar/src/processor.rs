@@ -1,5 +1,6 @@
-//! The ingest wave for the `calendar` source: which method the config
-//! holds decides the downloader, and the processor owns the store.
+//! The `calendar` source's ingest-step processor: which method the
+//! config holds decides the downloader, and the processor owns the
+//! store.
 
 use std::path::PathBuf;
 
