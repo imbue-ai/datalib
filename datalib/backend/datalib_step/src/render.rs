@@ -1,5 +1,6 @@
-//! The render step driver: one source's render wave, written to the tree
-//! the step id names and read from the raw store its input names.
+//! The render step driver: one source's render processors, written to
+//! the tree the step id names and read from the raw store its input
+//! names.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};

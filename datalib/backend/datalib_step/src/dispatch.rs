@@ -18,7 +18,7 @@ pub enum Phase {
     Render,
 }
 
-/// A normalized, planned source: the per-wave processors plus the
+/// A normalized, planned source: the step's processors plus the
 /// resolved envelope facts the step driver needs.
 pub struct PlannedSource {
     pub name: String,
@@ -29,7 +29,7 @@ pub struct PlannedSource {
     /// Whether the method the ingest step's params hold reaches a live
     /// origin or reads files on disk. `None` for a render.
     pub reach: Option<Reach>,
-    /// Resolved rate-limit give-up bounds for the ingest wave.
+    /// Resolved rate-limit give-up bounds for the ingest step.
     pub download_params: DownloadParams,
     pub processors: Wave,
 }
@@ -55,8 +55,8 @@ impl Wave {
     }
 }
 
-/// The wave of a download that no longer runs, or why `source_type`
-/// cannot keep what it has without its inputs.
+/// What a download that no longer runs plans (`Wave::Kept`), or why
+/// `source_type` cannot keep what it has without its inputs.
 fn kept(source_type: SourceType) -> Result<Wave> {
     anyhow::ensure!(
         !source_type.renders_files_where_they_lie(),
@@ -115,9 +115,9 @@ pub fn plan(
 
     // Each arm names two crates, because a provider is two crates: the
     // download half and the `_render` half that links `datalib_schema`.
-    // A provider's two waves are its `plan_ingest` / `plan_render`
-    // pair; which *method* runs is the provider's own reading of its
-    // params.
+    // A provider's two steps' processors come from its `plan_ingest` /
+    // `plan_render` pair; which *method* runs is the provider's own
+    // reading of its params.
     macro_rules! arm {
         ($cfgty:ty, $rcfgty:ty, $dlp:ident, $rnp:ident) => {{
             let ctx = PlanContext {
@@ -174,8 +174,8 @@ pub fn plan(
         }};
     }
 
-    // A source that renders nothing: it plans an ingest wave and an
-    // empty render one. The render config is still parsed, so a typo in
+    // A source that renders nothing: it plans ingest processors and no
+    // render processors. The render config is still parsed, so a typo in
     // a render step's params is still rejected rather than ignored.
     macro_rules! ingest_only {
         ($cfgty:ty, $rcfgty:ty, $dlp:ident) => {{
@@ -757,7 +757,7 @@ mod tests {
 
     /// An `ingest` step whose params hold none of its provider's methods
     /// is refused at plan time, where `datalib-pipeline check` sees it. A
-    /// step with no method used to plan an empty ingest wave and
+    /// step with no method used to plan no ingest processors and
     /// succeed, which read exactly like a working sync that found nothing.
     #[test]
     fn an_ingest_step_with_no_method_is_refused() {
@@ -915,7 +915,7 @@ mod tests {
 
     /// One `claude` type, two methods: `export` is file-backed, not
     /// render-only. It ingests the export at its `path` into the same
-    /// raw store `api` writes, so it plans a ingest wave like every
+    /// raw store `api` writes, so it plans ingest processors like every
     /// other file-backed source (issue #207).
     #[test]
     fn claude_export_plans_an_ingest_from_its_path() {
@@ -934,7 +934,7 @@ mod tests {
         assert_eq!(dl.reach, Some(Reach::Local));
         assert_eq!(dl.raw_path, td.path().join("claude-export/ingest"));
 
-        // …and its render wave reads that store, same as the API's.
+        // …and its render step reads that store, same as the API's.
         let rn = plan(
             "claude",
             Phase::Render,
