@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use datalib_dag::config::DagConfig;
+use datalib_config::DagConfig;
 
 use crate::dispatch::{self, Phase};
 use crate::function::Function;
@@ -35,7 +35,7 @@ pub fn problems(cfg: &DagConfig, data_root: &Path) -> Vec<Problem> {
 }
 
 fn plan_step(
-    step: &datalib_dag::config::StepEntry,
+    step: &datalib_config::StepEntry,
     args: Result<crate::source::RunArgs, String>,
     data_root: &Path,
 ) -> Result<(), String> {
@@ -111,7 +111,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         std::fs::write(&path, text).unwrap();
-        let (checked, root) = datalib_dag::config::load_graded(&path).unwrap();
+        let (checked, root) = datalib_dag::config_check::load_graded(&path).unwrap();
         problems(&checked.cfg, &root)
     }
 

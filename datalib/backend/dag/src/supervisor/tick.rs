@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
-use super::locks::Hold;
+use datalib_config::locks::Hold;
 
 pub type StepIx = usize;
 pub type SinkIx = usize;

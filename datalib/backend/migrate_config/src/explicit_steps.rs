@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 
 use anyhow::{bail, Context as _, Result};
-use datalib_dag::config_order::entry_ranges;
+use datalib_config::order::entry_ranges;
 use serde::Deserialize;
 use toml::Spanned;
 
@@ -820,7 +820,7 @@ at_most_every_secs = 2.5
 
     /// Each step's table in `text`, by id, as the loader reads it.
     fn step(text: &str, id: &str) -> toml::Table {
-        let check = datalib_dag::config::check_text(text);
+        let check = datalib_dag::config_check::check_text(text);
         assert!(
             check.nothing_dropped(),
             "{}\n{text}",
@@ -909,7 +909,7 @@ at_most_every_secs = 2.5
             Some("datalib-step run render_markdown diff --source-type slack")
         );
         assert!(!out.contains("source = "), "{out}");
-        let check = datalib_dag::config::check_text(&out);
+        let check = datalib_dag::config_check::check_text(&out);
         assert!(check.cfg.groups.iter().any(|g| g.id == "picard-diff"));
     }
 
@@ -970,7 +970,7 @@ at_most_every_secs = 2.5
     #[test]
     fn the_file_gets_its_programs_locks_and_env() {
         let out = after();
-        let check = datalib_dag::config::check_text(&out);
+        let check = datalib_dag::config_check::check_text(&out);
         let programs: Vec<(&str, Vec<&str>)> = check
             .cfg
             .programs
@@ -1029,7 +1029,7 @@ at_most_every_secs = 2.5
             "[[groups]]\nid = \"u\"\n\n[[steps]]\ngroup = \"u\"\nfunction = \"grid_index\"\n\
                     inputs = []\n\n[[locks]]\nname = \"index\"\nslots = 3\n";
         let out = rewrite(text).unwrap();
-        let check = datalib_dag::config::check_text(&out);
+        let check = datalib_dag::config_check::check_text(&out);
         let declared: Vec<(&str, usize)> = check
             .cfg
             .locks
@@ -1329,7 +1329,7 @@ inputs = ["*/render_markdown"]
                 .unwrap_or_else(|e| panic!("{name}: {e:#}"))
                 .unwrap_or_else(|| panic!("{name}: nothing to do"));
             assert!(!is_retired(&out).unwrap(), "{name}");
-            let check = datalib_dag::config::check_text(&out);
+            let check = datalib_dag::config_check::check_text(&out);
             assert!(
                 check.nothing_dropped(),
                 "{name}:\n{}\n{out}",

@@ -10,61 +10,12 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use datalib_config::Verb;
+
 use crate::artifact::ArtifactPath;
 use crate::events::StepProgress;
 
 pub type StepId = String;
-
-/// A verb the runner may append to a step's argv, as `--<verb>`, when the
-/// step's program declares it (`docs/dev/step_protocol.md` § Verbs).
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Deserialize,
-    Serialize,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum Verb {
-    /// Empty what the step wrote. A program that does not take it has its
-    /// step's directory deleted by the runner instead.
-    Reset,
-    /// Each time the runner starts: bring what the step wrote to this
-    /// program's shape, or say it cannot.
-    Prepare,
-    /// Give back disk, dropping history nothing reads.
-    Compact,
-    /// Give back disk, keeping every version.
-    Collect,
-    /// Before anything runs: say whether the step would run its params as
-    /// written, and write nothing.
-    Check,
-}
-
-impl Verb {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    /// `None` for a spelling this build does not know.
-    pub fn parse(s: &str) -> Option<Self> {
-        s.parse().ok()
-    }
-
-    /// The argv word the step is sent.
-    pub fn flag(self) -> String {
-        format!("--{}", self.as_str())
-    }
-}
 
 /// A step declaration.
 #[derive(Debug, Clone)]
@@ -120,7 +71,7 @@ pub struct StepSpec {
     /// The named locks it holds while it runs (`supervisor::locks`);
     /// `None` for the default one its shape gives it. Not in the
     /// fingerprint: it changes when the step may run, not what it makes.
-    pub locks: Option<Vec<(String, crate::supervisor::locks::Hold)>>,
+    pub locks: Option<Vec<(String, datalib_config::locks::Hold)>>,
     /// The `[[groups]]` entry its id's first part names, when one does.
     /// Labels what the step reports; the runner does nothing else with it.
     pub group: Option<String>,

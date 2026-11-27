@@ -16,7 +16,7 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 use toml::Spanned;
 
-use datalib_dag::config_array::edit_string_array;
+use datalib_config::array::edit_string_array;
 
 /// The group's earlier ids, newest first.
 pub const OLD: [&str; 2] = ["unified_document_index", "unified_index"];

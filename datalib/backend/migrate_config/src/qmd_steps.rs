@@ -14,7 +14,7 @@
 //! values are replaced where they stand, down to how an `inputs` array was
 //! laid out, and every comment, lock and key the file holds survives. The
 //! missing steps are added and the file put back in the order data flows
-//! (`datalib_dag::config_order`), so each lands below the render it reads
+//! (`datalib_config::order`), so each lands below the render it reads
 //! and the aggregator below them all.
 
 use std::collections::BTreeSet;
@@ -24,8 +24,8 @@ use anyhow::{Context as _, Result};
 use serde::Deserialize;
 
 use crate::retired::names_datalib_step;
-use datalib_dag::config_array::edit_string_array;
-use datalib_dag::config_order::sort_config;
+use datalib_config::array::edit_string_array;
+use datalib_config::order::sort_config;
 
 #[derive(Deserialize)]
 struct View {

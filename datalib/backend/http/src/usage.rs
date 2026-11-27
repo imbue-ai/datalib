@@ -422,7 +422,7 @@ pub fn measured_trees(config_path: &Path) -> Vec<String> {
 }
 
 pub fn declared_trees(config_path: &Path) -> Vec<String> {
-    match datalib_dag::config::load(config_path) {
+    match datalib_config::load(config_path) {
         Ok((cfg, _root)) => {
             let mut seen = BTreeSet::new();
             cfg.groups
@@ -463,7 +463,7 @@ pub async fn sample_once(
         }
     }
     let walk_started = Instant::now();
-    let config_path = datalib_dag::config::root_config_path(&root);
+    let config_path = datalib_config::root_config_path(&root);
     // A recursive read_dir of a large root is not something to do on
     // the async executor.
     let measured = tokio::task::spawn_blocking(move || {
@@ -531,13 +531,13 @@ fn retention_cutoff(now: &datalib_time::IsoOffsetTimestamp, days: u32) -> String
 fn disk_usage_days_of(config_path: &Path) -> u32 {
     std::fs::read_to_string(config_path)
         .ok()
-        .and_then(|text| datalib_dag::config::parse_graded(&text).0.run_history)
+        .and_then(|text| datalib_config::parse_graded(&text).0.run_history)
         .unwrap_or_default()
         .disk_usage_days
 }
 
 async fn forget_old_samples(repo: &DynAppRepo, root: &Path) {
-    let days = disk_usage_days_of(&datalib_dag::config::root_config_path(root));
+    let days = disk_usage_days_of(&datalib_config::root_config_path(root));
     let cutoff = retention_cutoff(&datalib_time::IsoOffsetTimestamp::now_local(), days);
     match repo.forget_disk_stats_before(&cutoff).await {
         Ok(0) => {}
@@ -815,7 +815,7 @@ command = "my-step"
     fn disk_usage_days_comes_from_run_history() {
         let td = tempfile::tempdir().unwrap();
         let config = td.path().join("config.toml");
-        let default = datalib_dag::config::RunHistory::default().disk_usage_days;
+        let default = datalib_config::RunHistory::default().disk_usage_days;
         assert_eq!(default, 30);
         assert_eq!(disk_usage_days_of(&config), default);
         std::fs::write(&config, "[run_history]\nmax_runs = 5\n").unwrap();

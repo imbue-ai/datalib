@@ -77,7 +77,7 @@ or digit-leading id would fail to parse at render time rather than at
 config load.
 
 The config loader checks this, id uniqueness and the reserved `user`
-id (`accept_applets` in `datalib/backend/dag/src/config.rs`). A bad
+id (`accept_applets` in `datalib/backend/config/src/lib.rs`). A bad
 entry is dropped and costs only its own applet: the gateway starts the
 rest, logs the diagnostic, and a request for the dropped one answers
 with it. Search is itself an applet, so one bad entry must not cost the
@@ -251,7 +251,7 @@ window where the gallery could scan a namespace that is missing.
 
 `user` is never touched, because nothing regenerates it — which is
 exactly why an applet may not take that id. The config loader rejects
-it (`datalib_dag::config::RESERVED_APPLET_ID`); an applet allowed to
+it (`datalib_config::RESERVED_APPLET_ID`); an applet allowed to
 claim `user` would have the user's own work deleted on the next
 reload.
 

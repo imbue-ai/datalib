@@ -11,7 +11,8 @@
 use std::path::Path;
 
 use anyhow::Result;
-use datalib_dag::disk_space::{human_bytes, space};
+use datalib_dag::disk_space::space;
+use datalib_source_common::byte_size::human_bytes;
 
 use crate::events::{Emitter, OutputClaim};
 use crate::function::Function;

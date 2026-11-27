@@ -11,8 +11,8 @@ use std::ops::Range;
 
 use crate::retired::{names_datalib_step, TIME_SERIES_SOURCE_TYPES};
 use anyhow::{Context as _, Result};
-use datalib_dag::config_array::edit_string_array;
-use datalib_dag::config_order::entry_ranges;
+use datalib_config::array::edit_string_array;
+use datalib_config::order::entry_ranges;
 use serde::Deserialize;
 
 const EMBED: &str = "embed";

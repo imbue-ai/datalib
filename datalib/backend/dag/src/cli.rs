@@ -257,7 +257,7 @@ pub fn config_path(root: &Path) -> PathBuf {
     if names_a_file {
         root.to_path_buf()
     } else {
-        crate::config::root_config_path(root)
+        datalib_config::root_config_path(root)
     }
 }
 

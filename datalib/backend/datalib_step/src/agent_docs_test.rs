@@ -38,7 +38,7 @@ fn config_for(name: &str, block: &str) -> String {
         .filter_map(|s| s.get("inputs")?.as_array().cloned())
         .flatten()
         .filter_map(|i| i.as_str().map(str::to_string))
-        .filter(|i| datalib_dag::input_pattern::pattern_function(i).is_none())
+        .filter(|i| datalib_config::input_pattern::pattern_function(i).is_none())
         .collect();
     let locked: BTreeSet<String> = table
         .get("locks")
@@ -80,7 +80,7 @@ fn every_toml_block_in_the_docs_loads_and_plans_unless_it_is_a_fragment() {
                     std::fs::write(&path, &config).expect("write the block");
                     crate::config_examples_test::validate_config(&name, &path);
                     crate::config_examples_test::assert_current_shape(&name, &path);
-                    let check = datalib_dag::config::check_text(&config);
+                    let check = datalib_dag::config_check::check_text(&config);
                     let dropped: Vec<_> = check
                         .diagnostics
                         .iter()

@@ -7,7 +7,7 @@
 //! `grid_rows`.
 //!
 //! `config.toml` is the only config this side reads, in the shape the
-//! loader in `datalib_dag::config` accepts today; a root written in an
+//! loader in `datalib_config` accepts today; a root written in an
 //! earlier shape is rewritten out of band by `datalib-migrate-config`.
 
 use crate::starter::STARTER_CONFIG;
@@ -144,7 +144,7 @@ impl AppState {
     /// the app bootstrap from an empty directory with no external
     /// `~/.config` file.
     pub fn config_path(&self) -> PathBuf {
-        datalib_dag::config::root_config_path(&self.root)
+        datalib_config::root_config_path(&self.root)
     }
 }
 
@@ -593,7 +593,7 @@ async fn get_lib(
     let store = frontend::FrontendStore::scan(&s.root);
     let ns = store
         .view()
-        .get(frontend::USER_NAMESPACE)
+        .get(datalib_config::RESERVED_APPLET_ID)
         .ok_or(StatusCode::NOT_FOUND)?;
     let hash = match ns.entries.get(&name) {
         Some(frontend::Meta::Component { component_hash, .. }) => component_hash.clone(),
@@ -620,7 +620,7 @@ async fn put_lib(
     if !frontend::valid_name(&name) {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let dir = frontend::frontend_dir(&s.root).join(frontend::USER_NAMESPACE);
+    let dir = frontend::frontend_dir(&s.root).join(datalib_config::RESERVED_APPLET_ID);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         tracing::error!("put_lib: mkdir {}: {e}", dir.display());
         return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -715,7 +715,7 @@ async fn rename_lib(
     if name == new_name {
         return Err(StatusCode::BAD_REQUEST);
     }
-    let dir = frontend::frontend_dir(&s.root).join(frontend::USER_NAMESPACE);
+    let dir = frontend::frontend_dir(&s.root).join(datalib_config::RESERVED_APPLET_ID);
     let meta = match read_user_meta(&dir, &name) {
         Some(m @ frontend::Meta::Component { .. }) => m,
         _ => return Err(StatusCode::NOT_FOUND),
@@ -807,15 +807,17 @@ pub struct SourceInfo {
 
 // --- Config / setup --------------------------------------------------------
 
-fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config::ConfigCheck> {
-    let (checked, _root) = datalib_dag::config::load_graded(path)?;
+fn load_dag_config(
+    path: &std::path::Path,
+) -> anyhow::Result<datalib_dag::config_check::ConfigCheck> {
+    let (checked, _root) = datalib_dag::config_check::load_graded(path)?;
     Ok(checked)
 }
 
 /// The source step ids of a checked config: the steps with no declared
 /// `inputs`, which is exactly what a sync can name. Their real input is
 /// outside the DAG — a remote service, a user-staged tree.
-fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
+fn source_ids(checked: &datalib_dag::config_check::ConfigCheck) -> Vec<String> {
     checked
         .graph
         .fringe_ids()
@@ -859,7 +861,7 @@ pub struct ConfigResponse {
     /// why, and where. Empty for a clean config. This is what the UI
     /// renders — inline in the editor by `span`, and per-row in the
     /// pipeline table by the entry's `id`.
-    pub diagnostics: Vec<datalib_dag::Diagnostic>,
+    pub diagnostics: Vec<datalib_config::Diagnostic>,
     /// Whether the app can serve its own views at all. False in three
     /// cases: the file is not a config, or it declares no usable
     /// `unified_grid_and_search_index` applet — one screen for both, because they have
@@ -955,7 +957,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
             !c.is_fatal(),
             c.diagnostics
                 .iter()
-                .find(|d| d.severity == datalib_dag::Severity::Fatal)
+                .find(|d| d.severity == datalib_config::Severity::Fatal)
                 .map(|d| d.describe()),
             configured_source_count(&source_ids(c)),
             c.diagnostics.clone(),
@@ -1033,7 +1035,7 @@ pub struct ConfigCheckResponse {
     pub error: Option<String>,
     /// Every problem, so an editor can show them all at once instead of
     /// one save per typo.
-    pub diagnostics: Vec<datalib_dag::Diagnostic>,
+    pub diagnostics: Vec<datalib_config::Diagnostic>,
     pub source_count: usize,
 }
 
@@ -1050,7 +1052,7 @@ async fn check_config(
 /// not written; a warning it answers with is reported and writes.
 async fn full_verdict(root: &std::path::Path, text: &str) -> ConfigCheckResponse {
     let mut verdict = config_verdict(text);
-    let checked = datalib_dag::config::check_text(text);
+    let checked = datalib_dag::config_check::check_text(text);
     let binary_dir = crate::binaries::resolve_binary_dir();
     let asked = datalib_dag::check::check_params(&checked, root, binary_dir.as_deref()).await;
     if let Some(refusal) = asked.iter().find(|d| d.severity.drops_the_entry()) {
@@ -1064,7 +1066,7 @@ async fn full_verdict(root: &std::path::Path, text: &str) -> ConfigCheckResponse
 }
 
 fn config_verdict(text: &str) -> ConfigCheckResponse {
-    let checked = datalib_dag::config::check_text(text);
+    let checked = datalib_dag::config_check::check_text(text);
     ConfigCheckResponse {
         ok: checked.nothing_dropped(),
         error: checked.diagnostics.first().map(|d| d.describe()),
@@ -1505,8 +1507,6 @@ async fn live_progress(
 /// Graph::build chain), so the visualization can never drift from
 /// execution. Steps come back in topological order.
 async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal> {
-    use datalib_dag::config;
-
     let DagRecord {
         run,
         states,
@@ -1521,13 +1521,13 @@ async fn get_dag(State(s): State<AppState>) -> Result<Json<DagResponse>, Refusal
     } = dag_record(&s.root, &s.sync).await.map_err(unread)?;
 
     let build = || -> anyhow::Result<Vec<DagStepInfo>> {
-        let (cfg, _root) = config::load(&s.config_path())?;
+        let (cfg, _root) = datalib_config::load(&s.config_path())?;
         let commands: std::collections::HashMap<String, String> = cfg
             .steps
             .iter()
             .map(|e| (e.id.clone(), e.command.clone()))
             .collect();
-        let specs = config::to_specs(&cfg)?;
+        let specs = datalib_dag::config_check::to_specs(&cfg)?;
         let graph = datalib_dag::Graph::build(specs)?;
         Ok(graph
             .topo
@@ -2470,7 +2470,7 @@ mod tests {
     }
 
     fn fringe_of(text: &str) -> Vec<String> {
-        let checked = datalib_dag::config::check_text(text);
+        let checked = datalib_dag::config_check::check_text(text);
         assert!(
             checked.is_clean(),
             "expected a clean config, got {:?}",
@@ -2485,7 +2485,7 @@ mod tests {
     #[test]
     fn scaffold_is_valid_toml() {
         let text = STARTER_CONFIG;
-        let checked = datalib_dag::config::check_text(text);
+        let checked = datalib_dag::config_check::check_text(text);
         assert!(
             checked.is_clean(),
             "scaffold rejected: {}\n---\n{text}",
@@ -2550,7 +2550,7 @@ mod tests {
             assert!(!v.ok, "{legacy:?} should be rejected");
             assert_eq!(
                 v.diagnostics[0].severity,
-                datalib_dag::Severity::Fatal,
+                datalib_config::Severity::Fatal,
                 "YAML is not a config at all, not a config with a bad entry"
             );
         }
@@ -2568,7 +2568,7 @@ mod tests {
             STARTER_CONFIG
         );
         // The loader keeps everything but the bad step…
-        let checked = datalib_dag::config::check_text(&text);
+        let checked = datalib_dag::config_check::check_text(&text);
         assert!(!checked.is_fatal());
         assert_eq!(checked.dropped(), 1);
         assert!(checked

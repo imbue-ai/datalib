@@ -5,7 +5,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use crate::config::{owner_only_options, root_config_path};
+use datalib_config::{owner_only_options, root_config_path};
 
 /// `data_root` is left out: it defaults to the file's own directory,
 /// keeping the root self-contained.

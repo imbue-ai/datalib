@@ -1,7 +1,7 @@
 //! Just enough of TOML's lexing to edit a config as text: where each
 //! string, comment and bracket is, so a `[`, `#` or `,` inside a string is
-//! never taken for one outside it. `config_order` cuts the file into
-//! entries with it, and `config_array` edits an array where it stands.
+//! never taken for one outside it. `order` cuts the file into
+//! entries with it, and `array` edits an array where it stands.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {

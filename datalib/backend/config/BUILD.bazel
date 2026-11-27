@@ -1,0 +1,32 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
+# The config file, `config.toml`: its entries, reading and checking its
+# text, the diagnostics, and editing it as text. Every program that reads
+# or writes a config links it; the runner (//datalib/backend/dag) turns
+# its steps into the graph it runs. Nothing here links the runner.
+rust_library(
+    name = "datalib_config",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "datalib_config",
+    edition = "2021",
+    visibility = ["//datalib:__subpackages__"],
+    deps = [
+        "//datalib/backend/runs:datalib_runs",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/source_common:datalib_source_common",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:shlex",
+        "@datalib_crates//:strum",
+        "@datalib_crates//:toml",
+    ],
+)
+
+rust_test(
+    name = "config_unittests",
+    size = "small",
+    crate = ":datalib_config",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)

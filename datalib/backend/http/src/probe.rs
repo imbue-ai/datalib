@@ -127,10 +127,9 @@ fn probe_command(
     root: &std::path::Path,
     source_type: &str,
 ) -> Result<Command, (StatusCode, Json<Value>)> {
-    let text =
-        std::fs::read_to_string(datalib_dag::config::root_config_path(root)).unwrap_or_default();
+    let text = std::fs::read_to_string(datalib_config::root_config_path(root)).unwrap_or_default();
     let installed: Vec<(String, datalib_packages::Manifest)> =
-        datalib_dag::config::check_text(&text)
+        datalib_dag::config_check::check_text(&text)
             .cfg
             .packages
             .iter()

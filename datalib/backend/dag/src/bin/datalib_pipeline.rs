@@ -1,5 +1,5 @@
-//! `datalib-pipeline` — run a DAG config file (see `datalib_dag::config`
-//! for the schema).
+//! `datalib-pipeline` — run a DAG config file (see `datalib_config` for
+//! the schema).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -24,10 +24,10 @@ const VERSION_RESOLVED: &str = {
     }
 };
 use datalib_dag::cli::{Cli, Verb};
-use datalib_dag::disk_space::human_bytes;
 use datalib_dag::subprocess::Shrink;
 use datalib_dag::supervisor::store::{JobKind, RequestOutcome, Store};
-use datalib_dag::{config, subprocess, NdjsonSink};
+use datalib_dag::{config_check, subprocess, NdjsonSink};
+use datalib_source_common::byte_size::human_bytes;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -181,7 +181,7 @@ async fn main() -> Result<()> {
                     n => format!(", {n} entr{} dropped", if n == 1 { "y" } else { "ies" }),
                 },
             );
-            for line in config::expansion_lines(&checked.expansions) {
+            for line in config_check::expansion_lines(&checked.expansions) {
                 println!("{line}");
             }
         }
@@ -543,7 +543,7 @@ async fn say_what_was_given_back(
 /// returns flushes as it is dropped.
 fn log_to_the_run_store(
     data_root: &Path,
-    cfg: Option<&config::DagConfig>,
+    cfg: Option<&datalib_config::DagConfig>,
 ) -> Option<Arc<datalib_runs::ProcessLogWriter>> {
     let commit = datalib_runs::git_hash_and_origin();
     let retention = cfg
@@ -765,10 +765,10 @@ async fn run_verb(verb: Verb) -> Result<()> {
 
 /// A config that is not there is most often a root not set up yet, so
 /// the error names the command that sets one up.
-fn load_config(path: &Path) -> Result<(config::ConfigCheck, std::path::PathBuf)> {
+fn load_config(path: &Path) -> Result<(config_check::ConfigCheck, std::path::PathBuf)> {
     if !path.exists() {
         let root = match (path.file_name(), path.parent()) {
-            (Some(name), Some(dir)) if name == config::CONFIG_FILE_NAME => {
+            (Some(name), Some(dir)) if name == datalib_config::CONFIG_FILE_NAME => {
                 dir.display().to_string()
             }
             _ => "<data_root>".to_string(),
@@ -778,12 +778,12 @@ fn load_config(path: &Path) -> Result<(config::ConfigCheck, std::path::PathBuf)>
             path.display()
         );
     }
-    config::load_graded(path)
+    config_check::load_graded(path)
 }
 
 #[allow(clippy::disallowed_macros)]
 fn init(data_root: &Path) -> Result<()> {
-    let path = config::root_config_path(data_root);
+    let path = datalib_config::root_config_path(data_root);
     if datalib_dag::starter::write_starter_config(data_root)
         .with_context(|| format!("write {}", path.display()))?
     {

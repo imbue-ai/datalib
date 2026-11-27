@@ -75,8 +75,8 @@ pub fn init(root: &Path) -> Option<Arc<ProcessLogWriter>> {
 /// for, read once at boot; the defaults when there is no config yet
 /// or it does not say. A change to either takes a restart.
 fn boot_config(root: &Path) -> (Retention, String) {
-    let path = datalib_dag::config::root_config_path(root);
-    match datalib_dag::config::load_graded(&path).ok() {
+    let path = datalib_config::root_config_path(root);
+    match datalib_dag::config_check::load_graded(&path).ok() {
         Some((checked, _)) => (
             checked
                 .cfg

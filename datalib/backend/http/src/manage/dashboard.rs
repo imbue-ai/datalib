@@ -75,7 +75,7 @@ pub async fn get_dashboard(
     Query(p): Query<DashboardParams>,
 ) -> Result<Json<Dashboard>, crate::Refusal> {
     let text = std::fs::read_to_string(s.config_path()).unwrap_or_default();
-    let step_ids: Vec<String> = datalib_dag::written::entries_as_written(&text)
+    let step_ids: Vec<String> = datalib_config::written::entries_as_written(&text)
         .map(|w| {
             w.steps
                 .into_iter()

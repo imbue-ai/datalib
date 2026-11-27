@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use datalib_dag::config::ConfigCheck;
+use datalib_dag::config_check::ConfigCheck;
 use datalib_dag::step::StepRun;
 
 /// The old shared directory, `~/.datalib/bin`.
@@ -61,7 +61,7 @@ pub fn bring_forward(root: &Path, checked: &ConfigCheck, binary_dir: Option<&Pat
 
 fn bring_forward_from(root: &Path, checked: &ConfigCheck, binary_dir: Option<&Path>, old: &Path) {
     let bin = root.join(datalib_runtime::layout::BIN_DIR_REL);
-    let first = datalib_dag::config::resolve_binary_dir(&checked.cfg, binary_dir);
+    let first = datalib_config::resolve_binary_dir(&checked.cfg, binary_dir);
     let programs = bare_programs(checked);
     let bring = to_bring(
         &programs,
@@ -114,7 +114,7 @@ mod tests {
     use super::*;
 
     fn checked(text: &str) -> ConfigCheck {
-        datalib_dag::config::check_text(text)
+        datalib_dag::config_check::check_text(text)
     }
 
     const CONFIG: &str = r#"

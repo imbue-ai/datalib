@@ -8,8 +8,8 @@
 
 use crate::retired::FAN_INS;
 use anyhow::{Context as _, Result};
-use datalib_dag::config_array::edit_string_array;
-use datalib_dag::input_pattern::{names, WILDCARD_GROUP};
+use datalib_config::array::edit_string_array;
+use datalib_config::input_pattern::{names, WILDCARD_GROUP};
 use serde::Deserialize;
 
 #[derive(Deserialize)]

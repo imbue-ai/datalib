@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use datalib_dag::config::{ConfigCheck, DagConfig};
+use datalib_config::DagConfig;
+use datalib_dag::config_check::ConfigCheck;
 use datalib_dag::supervisor::announce::Listener;
 use datalib_dag::supervisor::pass::PassRow;
 use datalib_dag::supervisor::serve::{self, ServeEvent};
@@ -463,10 +464,7 @@ fn purge_refusal(cfg: &DagConfig, groups: &[String]) -> Option<String> {
     if groups.is_empty() {
         return Some("no groups to delete".into());
     }
-    if let Some(bad) = groups
-        .iter()
-        .find(|g| !datalib_dag::config::usable_group_id(g))
-    {
+    if let Some(bad) = groups.iter().find(|g| !datalib_config::usable_group_id(g)) {
         return Some(format!("{bad:?} is not a group id"));
     }
     let named: BTreeSet<&str> = cfg
@@ -599,7 +597,7 @@ mod tests {
     fn root_keeping_one_group() -> tempfile::TempDir {
         let td = tempfile::tempdir().unwrap();
         std::fs::write(
-            datalib_dag::config::root_config_path(td.path()),
+            datalib_config::root_config_path(td.path()),
             "[[groups]]\nid = \"keep\"\n[[steps]]\nid = \"keep/raw\"\ncommand = \"x\"\n",
         )
         .unwrap();

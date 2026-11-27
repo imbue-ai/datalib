@@ -269,7 +269,13 @@ datalib/
                    `//datalib/backend:bin` stages every shipped binary
                    under its public `datalib-*` name in one directory
                    (`:dist`); build that whenever you need to actually
-                   run a pipeline.
+                   run a pipeline. `src/config_check.rs` turns a
+                   config's steps into the graph it runs.
+    config/        `datalib_config`: the config file, `config.toml`. Its
+                   entries, reading and checking its text, the
+                   diagnostics, and editing it as text. The runner, the
+                   server, `datalib-step` and `datalib-migrate-config`
+                   link it; it links none of them.
     datalib_step/  `datalib-step`: the step program Datalib ships. A
                    step runs it with `command = "datalib-step run
                    <function> <type>"`, and it reads its params from

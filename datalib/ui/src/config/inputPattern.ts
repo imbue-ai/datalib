@@ -1,5 +1,5 @@
 // An input that names every step of one function, `*/render_markdown`,
-// as the loader reads it (`datalib/backend/dag/src/input_pattern.rs`,
+// as the loader reads it (`datalib/backend/config/src/input_pattern.rs`,
 // which this mirrors and `inputPattern.test.ts` holds it to).
 
 /// The function a pattern input names, or null for a step id.

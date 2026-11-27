@@ -3,13 +3,11 @@
 **Status: notes, partly built; checked against the tree 2026-11-27.**
 The step protocol redesign (#1894) took `datalib-step` out of the
 runner. This file lists what that redesign left alone on purpose, so it
-is not forgotten. Done: items 1, 5a, 5b and 6, and of item 7 all but
-one constant; item 5 is closed as not a coupling, and item 4 as
-Datalib's own tool. Half done: item 2 (a package's probe runs, every
-other type's is still `datalib-step probe`), item 8 (applets and probes
-get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
-crate of its own is decided, not done) and item 9 (the lint checks are
-in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
+is not forgotten. Done: items 1, 5a, 5b, 6, 7 and 8; item 5 is closed
+as not a coupling, and item 4 as Datalib's own tool. Half done: item 2
+(a package's probe runs, every other type's is still `datalib-step
+probe`) and item 9 (the lint checks are in, the `AGENTS.md` rule is
+not). Untouched: item 3. Of the reconciler
 in section 10, steps 1 to 3 are done (#2033, #2034, #2036, #2038,
 #2040); steps 4 to 6 are not.
 
@@ -153,22 +151,31 @@ request is no longer refused when another process runs the loop. How
 it behaves is in `datalib/backend/dag/README.md` §"Two locks, two
 files".
 
-### 7. Datalib's constants live in the runner's crate (mostly done)
+### 7. Datalib's constants live in the runner's crate (done)
 
 `DIFF_GROUP_TYPE` and `TIME_SERIES_INDEX_GROUP` moved to
 `datalib/backend/http/src/step_program.rs`, and the app's starter config
 to `datalib/backend/http/src/starter.rs`; `datalib_dag::starter` now
-holds only `datalib-pipeline init`'s, which has no steps. Left:
-`RESERVED_APPLET_ID` (`datalib/backend/dag/src/config.rs`), which the
-runner enforces on `[[applets]]` ids and the server mirrors as
-`USER_NAMESPACE` (`datalib/backend/http/src/frontend.rs`). It goes with
-item 8.
+holds only `datalib-pipeline init`'s, which has no steps.
+`RESERVED_APPLET_ID`, which the loader enforces on `[[applets]]` ids,
+moved with item 8 to `datalib_config`, and the server's copy of it,
+`USER_NAMESPACE`, is gone: the server names the same constant.
 
-### 8. `[[applets]]` is in the runner's config but the runner never runs one
+### 8. `[[applets]]` is in the runner's config but the runner never runs one (done)
 
 The gateway in `datalib-http` starts applets
-(`datalib/backend/http/src/applets.rs:91`), using `AppletEntry` from the
-runner's crate (`datalib/backend/dag/src/config.rs:357`).
+(`datalib/backend/http/src/applets.rs`), using `AppletEntry`, which was
+in the runner's crate.
+
+**Done:** the model of the file is `datalib_config`
+(`datalib/backend/config/`). It took `config` (all but the graph),
+`diagnostics`, `written`, `config_order` (now `order`), `config_array`
+(`array`), `config_lex` (`lex`) and `input_pattern`, and with them the
+words a config uses that the runner used to own: `Verb`, a lock's
+`Hold` and the two default locks' names, and `DiskFloor`. The runner
+keeps `config_check`: `check_text`, `ConfigCheck`, `load_graded` and
+`to_specs`, which build the specs and the graph from what the model
+kept. `datalib_config` links nothing of the runner's.
 
 **Decided:** the model of the config file moves out of the runner's
 crate into a crate of its own, which the runner, the server,
@@ -183,8 +190,8 @@ the server parses it, and applets moving to a file of their own.
 An applet and a probe now get their params in `DATALIB_DAG_PARAMS`, as
 a step does, rather than in a file named by `--params-file`, and the
 helper that wrote that file is gone. `applet_type`
-(`datalib/backend/dag/src/written.rs`), which knows that
-`datalib-applet <type>` names an applet's type, moves with the rest of
+(`datalib/backend/config/src/written.rs`), which knows that
+`datalib-applet <type>` names an applet's type, moved with the rest of
 the config file's lenient reading.
 
 ## When the decoupling is done

@@ -409,9 +409,10 @@ ingest driver only logs the reach.
 
 ## What the loader checks
 
-The rules sit in `datalib/backend/dag/src/config.rs` (`accept_groups`,
-`accept_steps`, `accept_programs`, `accept_applets`) and `graph.rs`;
-`diagnostics.rs` explains the severities. A bad entry is dropped and
+The rules sit in `datalib/backend/config/src/lib.rs` (`accept_groups`,
+`accept_steps`, `accept_programs`, `accept_applets`) and the runner's
+`datalib/backend/dag/src/graph.rs`; `datalib/backend/config/src/diagnostics.rs`
+explains the severities. A bad entry is dropped and
 the rest of the file runs.
 
 | the entry | is dropped when |

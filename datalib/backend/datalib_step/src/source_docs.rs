@@ -384,16 +384,16 @@ mod tests {
         )
         .unwrap();
         crate::config_examples_test::validate_config(name, &path);
-        let (cfg, _) = datalib_dag::config::load(&path).unwrap();
+        let (cfg, _) = datalib_config::load(&path).unwrap();
         let sources: Vec<_> = cfg.groups.iter().filter(|g| g.r#type.is_some()).collect();
         assert_eq!(sources.len(), 1, "{name}: one [[groups]] entry per example");
         let group = sources[0];
-        let own: Vec<&datalib_dag::config::StepEntry> = cfg
+        let own: Vec<&datalib_config::StepEntry> = cfg
             .steps
             .iter()
             .filter(|s| s.group() == Some(group.id.as_str()))
             .collect();
-        let function_of = |s: &datalib_dag::config::StepEntry| {
+        let function_of = |s: &datalib_config::StepEntry| {
             crate::step_entry::run_args(&s.command)
                 .unwrap_or_else(|| panic!("{name}: {} does not run datalib-step", s.id))
                 .unwrap_or_else(|e| panic!("{name}: {}: {e}", s.id))

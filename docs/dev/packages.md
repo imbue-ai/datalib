@@ -15,7 +15,7 @@ fetches the build for that machine.
 
 The code: `datalib/backend/packages/` (the manifest, the lookup, the
 fetch), `http/src/packages.rs` (the routes), `[[packages]]` in
-`datalib/backend/dag/src/config.rs`, and in the UI
+`datalib/backend/config/src/lib.rs`, and in the UI
 `config/packages.ts`, `components/PackageReview.vue` and
 `components/PackagesDialog.vue`. The example package is
 `datalib/backend/packages/example/hello/`.
@@ -165,7 +165,7 @@ command = "system/packages/3f9a1c2e3f9a1c2e/bin/fetch-weather"
   (`step_protocol.md` §"The config entry"), so this is not a
   rule of its own. The loader refuses a command whose program is in a
   directory under `system/packages/` that no `[[packages]]` entry pins
-  (`datalib/backend/dag/src/config.rs`, `unlisted_package`).
+  (`datalib/backend/config/src/lib.rs`, `unlisted_package`).
 - The pin is part of the step's argv, so it is part of the step's
   fingerprint: updating a package makes its steps run again on the next
   sync.

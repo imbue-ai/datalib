@@ -2,7 +2,7 @@
 // raises or clears the toast that says syncs are paused. From under the
 // config's `[disk_space]` pause line until the resume line, the loop
 // starts no step and stops the running ones
-// (`datalib/backend/dag/src/disk_space.rs`); this only reports it.
+// (`datalib/backend/config/src/disk_floor.rs`); this only reports it.
 
 import type { DiskFree } from "@/api";
 import { formatBytes } from "./bytes";

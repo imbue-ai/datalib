@@ -42,7 +42,7 @@ struct OldConfig {
     #[serde(default)]
     checkpoint_cadence: Option<crate::retired::CheckpointCadence>,
     #[serde(default)]
-    run_history: Option<datalib_dag::config::RunHistory>,
+    run_history: Option<datalib_config::RunHistory>,
     #[serde(default)]
     groups: Vec<GroupIn>,
     #[serde(default)]
@@ -712,7 +712,7 @@ fn header(cfg: &OldConfig) -> Result<String> {
         #[serde(skip_serializing_if = "Option::is_none")]
         checkpoint_cadence: Option<crate::retired::CheckpointCadence>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        run_history: Option<datalib_dag::config::RunHistory>,
+        run_history: Option<datalib_config::RunHistory>,
     }
     toml::to_string(&Head {
         data_root: cfg.data_root.clone(),

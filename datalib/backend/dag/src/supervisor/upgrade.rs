@@ -14,7 +14,7 @@ pub fn steps_to_ask(graph: &Graph) -> Vec<StepId> {
         .topo
         .iter()
         .map(|&i| &graph.steps[i])
-        .filter(|spec| spec.takes(crate::step::Verb::Prepare))
+        .filter(|spec| spec.takes(datalib_config::Verb::Prepare))
         .map(|spec| spec.id.clone())
         .collect()
 }
@@ -33,7 +33,7 @@ mod tests {
             spec = spec.input(i);
         }
         if migrates {
-            spec.verbs.insert(crate::step::Verb::Prepare);
+            spec.verbs.insert(datalib_config::Verb::Prepare);
         }
         spec
     }

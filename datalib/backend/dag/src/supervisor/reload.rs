@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 
-use crate::config;
+use crate::config_check;
 use crate::graph::Graph;
 
 /// Asked when a busy period starts and whenever the config is announced
@@ -30,7 +30,7 @@ impl GraphSource for ConfigFile {
     fn load(&self) -> Result<Graph> {
         let text = std::fs::read_to_string(&self.path)
             .with_context(|| format!("read {}", self.path.display()))?;
-        let checked = config::check_text(&text);
+        let checked = config_check::check_text(&text);
         anyhow::ensure!(
             !checked.is_fatal(),
             "{} is not a config: nothing in it could be read",

@@ -1683,7 +1683,7 @@ function extendOverComments(text: string, start: number): number {
 /// changes, since it lists groups in the order their `[[groups]]`
 /// entries are written. The moved entries land together, in the order
 /// they were written, each with its banner: the block the server's
-/// sorter (`datalib_dag::config_order`) moves a group as. Nothing else
+/// sorter (`datalib_config::order`) moves a group as. Nothing else
 /// changes — the runner follows `inputs`, not the file — and a result
 /// that would parse to different entries is refused (throws), as the
 /// sorter refuses one.
@@ -1728,7 +1728,7 @@ function declaredEntries(text: string): string {
 
 /// The group a move would put on the wrong side of it, when it would:
 /// above a group whose steps it reads, or below one that reads it. The
-/// file reads in the order data flows (`datalib_dag::config_order`, which
+/// file reads in the order data flows (`datalib_config::order`, which
 /// `datalib-step topo-sort-config` restores), and a drag keeps it so. A
 /// source's `embed` reads the index group that reads the source, so a
 /// source group's reads of an index group are left out, or no source

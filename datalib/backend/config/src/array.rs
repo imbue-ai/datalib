@@ -4,7 +4,7 @@
 //! result is refused unless it reads back as the ids asked for. The UI
 //! edits a fan-in's `inputs` the same way (`datalib/ui/src/config/tomlText.ts`).
 
-use crate::config_lex::{tokens, Kind};
+use crate::lex::{tokens, Kind};
 
 enum Entry {
     Id {

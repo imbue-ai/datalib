@@ -21,7 +21,9 @@ use super::tick::{
 };
 use super::wipe;
 use crate::artifact::ArtifactPath;
-use crate::disk_space::{self, DiskFloor, LowDisk};
+use datalib_config::disk_floor::DiskFloor;
+
+use crate::disk_space::{self, LowDisk};
 use crate::events::{Event, PlannedStep, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
@@ -1071,7 +1073,10 @@ impl Runner {
             store
                 .set_job_step(&pass.job, pass.ord(&step), PassState::Running, None, None)
                 .await?;
-            let task = self.verb_task(&graph.steps[graph.by_id[&step]], crate::step::Verb::Prepare);
+            let task = self.verb_task(
+                &graph.steps[graph.by_id[&step]],
+                datalib_config::Verb::Prepare,
+            );
             pass.running.insert(step.clone());
             tasks.push(async move { Done::Prepared(step, task.await) });
         }
@@ -2289,7 +2294,7 @@ mod tests {
                 spec = spec.input(i);
             }
             if prepares {
-                spec.verbs.insert(crate::step::Verb::Prepare);
+                spec.verbs.insert(datalib_config::Verb::Prepare);
             }
             spec
         };

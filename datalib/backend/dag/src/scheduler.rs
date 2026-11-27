@@ -13,12 +13,14 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 
+use datalib_config::Verb;
+
 use crate::events::{Event, EventSink, NoopSink, StepProgress};
 use crate::graph::Graph;
 use crate::run_state::RunState;
 use crate::step::{
     ArtifactState, FailureKind, StepCtx, StepError, StepId, StepOutcome, StepRun, StepSpec,
-    StopSignal, Verb,
+    StopSignal,
 };
 use crate::subprocess::Shrink;
 use crate::supervisor::record::{LastRun, Record};
@@ -137,10 +139,7 @@ impl Runner {
     /// `--parallelism N`: N downloads and N renders at once, whatever the
     /// config says of `network` and `cpu`.
     pub fn parallelism(mut self, n: usize) -> Self {
-        for lock in [
-            crate::supervisor::locks::NETWORK,
-            crate::supervisor::locks::CPU,
-        ] {
+        for lock in [datalib_config::locks::NETWORK, datalib_config::locks::CPU] {
             self.lock_slots.insert(lock.to_string(), n);
         }
         self
