@@ -267,9 +267,9 @@ const STORE_SUFFIX: &str = ".doltlite_db";
 /// The datasets a part of the run store feeds.
 fn tables_of(part: StorePart) -> &'static [Table] {
     match part {
-        StorePart::Runs | StorePart::StepRuns => &[Table::Runs, Table::ManageRows, Table::Requests],
+        StorePart::Invocations => &[Table::Runs, Table::ManageRows, Table::Requests],
         StorePart::Metrics => &[Table::ManageRows, Table::Requests],
-        StorePart::RunLog => &[Table::Log, Table::ManageRows],
+        StorePart::InvocationLog => &[Table::Log, Table::ManageRows],
         StorePart::ProcessLog => &[Table::Log],
         StorePart::Processes => &[Table::Processes],
     }
@@ -534,10 +534,13 @@ async fn expand(
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
             }
+            // A request opening or closing is a run starting or ending in
+            // the Runs list.
             Moved::Supervisor => {
                 out.insert(table(Table::Dag));
                 out.insert(table(Table::ManageRows));
                 out.insert(table(Table::Requests));
+                out.insert(table(Table::Runs));
                 out.insert(RootEvent::PassChanged);
             }
             Moved::RunStore => {
@@ -1206,7 +1209,7 @@ mod tests {
         assert_eq!(seen, now, "the look is remembered");
 
         // A run's line is both a log line and an input to the rows.
-        let now = BTreeMap::from([(StorePart::ProcessLog, 4), (StorePart::RunLog, 1)]);
+        let now = BTreeMap::from([(StorePart::ProcessLog, 4), (StorePart::InvocationLog, 1)]);
         let tables: HashSet<Table> = moved_parts(&now, &mut seen)
             .into_iter()
             .flat_map(|p| tables_of(p).iter().copied())
@@ -1249,15 +1252,15 @@ mod tests {
     /// process starting or ending must.
     #[test]
     fn a_step_progress_tick_does_not_wake_the_process_list() {
-        let mut seen = BTreeMap::from([(StorePart::StepRuns, 3), (StorePart::Processes, 2)]);
-        let now = BTreeMap::from([(StorePart::StepRuns, 4), (StorePart::Processes, 2)]);
+        let mut seen = BTreeMap::from([(StorePart::Invocations, 3), (StorePart::Processes, 2)]);
+        let now = BTreeMap::from([(StorePart::Invocations, 4), (StorePart::Processes, 2)]);
         let tables: HashSet<Table> = moved_parts(&now, &mut seen)
             .into_iter()
             .flat_map(|p| tables_of(p).iter().copied())
             .collect();
         assert!(!tables.contains(&Table::Processes), "{tables:?}");
 
-        let now = BTreeMap::from([(StorePart::StepRuns, 4), (StorePart::Processes, 3)]);
+        let now = BTreeMap::from([(StorePart::Invocations, 4), (StorePart::Processes, 3)]);
         let tables: HashSet<Table> = moved_parts(&now, &mut seen)
             .into_iter()
             .flat_map(|p| tables_of(p).iter().copied())

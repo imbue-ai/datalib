@@ -350,11 +350,15 @@ right-click on the data root's size) asks the same, and a pill in the
 toolbar shows that progress.
 
 **Logs.** The run store is where to read what happened.
-`GET /api/runs` lists runs: a run is one stretch of the loop being busy,
-and every request served in that stretch is in it.
-`/api/runs/{run}/steps` gives every step's state and metrics, and
-`/api/runs/{run}/log?step=&after_seq=` is the log, which you can tail
-by `seq`. `GET /api/log?q=` is the same log across every run, in the
+`GET /api/runs` lists runs: a run is one request (a sync someone asked
+for) or one job (a reset, freeing disk, the prepare pass at a start),
+with the invocations started for it — one invocation is one process of
+one step. `/api/runs/{run}/invocations` lists those,
+`/api/runs/{run}/steps` gives each step's newest invocation in it with
+its metrics, and `/api/runs/{run}/log?step=&after_seq=` is their log,
+which you can tail by `seq`. Runs an older Datalib recorded, one per
+stretch of the loop being busy, are listed too, with `"old": true`.
+`GET /api/log?q=` is the same log across every run, in the
 search bar's grammar (`level:warn -target:sqlx "history"`), and
 `process:http` narrows it to what the server itself said (its sync
 loop, the applets, requests that failed). `GET /api/sync/stream` is a
@@ -365,9 +369,9 @@ All of it is one file, `<data_root>/system/runs/runs.sqlite`: every
 line any Datalib process wrote — the runner, each step, the server,
 the applets. It is plain SQLite, so stock `sqlite3` reads it with no
 server up. `log` holds one row per line, `processes` says who wrote
-each (join on `process_id`), `runs` and `step_runs` hold each run and
-each step's state, attempt and error, and `metrics` holds a step's
-numbers:
+each (join on `process_id`), `invocations` holds each invocation's
+step, state, attempt and error, `invocation_requests` which requests
+each served, and `invocation_metrics` an invocation's numbers:
 
 ```sh
 sqlite3 <data_root>/system/runs/runs.sqlite \
@@ -377,8 +381,8 @@ sqlite3 <data_root>/system/runs/runs.sqlite \
     ORDER BY l.seq DESC LIMIT 50"
 ```
 
-`select run_id, step, state, attempt, error from step_runs where error
-is not null` lists the steps that failed. Every table and column is in
+`select invocation_id, step, state, attempt, error from invocations
+where error is not null` lists the invocations that failed. Every table and column is in
 [`docs/dev/logging.md`](dev/logging.md).
 
 ## Before you answer from the copy

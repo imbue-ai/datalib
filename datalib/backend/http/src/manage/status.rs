@@ -4,7 +4,7 @@
 //! here works out what the loop is doing; the loop writes it
 //! (`datalib_dag::supervisor::record`).
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::tick::StateKind;
@@ -116,10 +116,10 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
 /// What a step is doing now, or did last, and when it last succeeded.
 /// A step the loader dropped says so and nothing else: a row still
 /// reading "Up to date" from last week, for an entry no longer in the
-/// graph, is what #209 was about. `run` is the id of the run in flight.
+/// graph, is what #209 was about. `open` are the requests open now.
 pub fn step_status(
     step: Option<&StepRow>,
-    run: Option<&str>,
+    open: &BTreeSet<String>,
     dropped: Option<&Diagnostic>,
 ) -> StatusView {
     if let Some(d) = dropped {
@@ -130,17 +130,20 @@ pub fn step_status(
         };
         return view(key, None, Some(dropped_detail(d)));
     }
-    let last = step.and_then(|s| s.last_run.as_ref());
+    let last = step.and_then(|s| s.last_invocation.as_ref());
     let detail = step.and_then(|s| s.state_detail.clone());
     let ended = last.map(|l| {
         l.finished_at
             .clone()
             .unwrap_or_else(|| l.started_at.clone())
     });
-    // Fresh is wanted and up to date: done for this sync if it has run in
-    // it, and otherwise waiting, since what it reads may still move.
-    let ran_this_run =
-        last.is_some_and(|l| l.finished_at.is_some() && Some(l.run_id.as_str()) == run);
+    // Fresh is wanted and up to date: done for this sync if a request
+    // still open reached it, and otherwise waiting, since what it reads
+    // may still move. With none open, the request that wanted it has just
+    // closed and the loop's next tick has not yet said Idle: it is done.
+    let ran_this_run = last.is_some_and(|l| {
+        l.finished_at.is_some() && (open.is_empty() || l.requests.iter().any(|r| open.contains(r)))
+    });
     // Waiting with an invocation open is a streaming consumer between two
     // of its processes: it has done the work it had and waits for what it
     // reads to move again.
@@ -195,7 +198,15 @@ fn finish_detail(status: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use datalib_dag::supervisor::record::LastRun;
+    use datalib_dag::supervisor::record::LastInvocation;
+
+    fn none() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
+    fn open(r: &str) -> BTreeSet<String> {
+        BTreeSet::from([r.to_string()])
+    }
 
     const STARTED: &str = "2026-09-01T10:00:01+02:00";
     const ENDED: &str = "2026-09-01T10:00:09+02:00";
@@ -203,8 +214,9 @@ mod tests {
 
     fn succeeded_yesterday() -> StepRow {
         StepRow {
-            last_run: Some(LastRun {
-                run_id: "r0".into(),
+            last_invocation: Some(LastInvocation {
+                invocation_id: "i0".into(),
+                requests: vec!["r0".into()],
                 started_at: YESTERDAY.into(),
                 finished_at: Some(YESTERDAY.into()),
                 status: "succeeded".into(),
@@ -231,7 +243,7 @@ mod tests {
     fn a_step_in_hand_reads_as_the_loop_says() {
         let waiting = step_status(
             Some(&at(StateKind::Waiting, Some("waiting for a/ingest"))),
-            None,
+            &none(),
             None,
         );
         assert_eq!(waiting.key, "queued");
@@ -239,8 +251,8 @@ mod tests {
         assert_eq!(waiting.last_success_at.as_deref(), Some(YESTERDAY));
 
         let mut running = at(StateKind::Running, None);
-        running.last_run.as_mut().unwrap().started_at = STARTED.into();
-        let running = step_status(Some(&running), None, None);
+        running.last_invocation.as_mut().unwrap().started_at = STARTED.into();
+        let running = step_status(Some(&running), &none(), None);
         assert_eq!(
             (running.key.as_str(), running.at.as_deref()),
             ("running", Some(STARTED))
@@ -249,17 +261,23 @@ mod tests {
         // Up to date so far is not done: what it reads may still move.
         // Having run in this sync, it is.
         assert_eq!(
-            step_status(Some(&at(StateKind::Fresh, None)), Some("r0"), None).key,
+            step_status(Some(&at(StateKind::Fresh, None)), &open("r0"), None).key,
             "succeeded"
         );
         assert_eq!(
-            step_status(Some(&at(StateKind::Fresh, None)), None, None).key,
+            step_status(Some(&at(StateKind::Fresh, None)), &open("r9"), None).key,
             "queued"
+        );
+        // The row read Queued between its request closing and the loop's
+        // next tick, and the sync seemed to go backwards.
+        assert_eq!(
+            step_status(Some(&at(StateKind::Fresh, None)), &none(), None).key,
+            "succeeded"
         );
 
         let turned_off = step_status(
             Some(&at(StateKind::Off, Some("turned off by claude"))),
-            None,
+            &none(),
             None,
         );
         assert_eq!(turned_off.label, "Off");
@@ -272,11 +290,11 @@ mod tests {
     #[test]
     fn a_caught_up_consumer_with_its_invocation_open_reads_waiting() {
         let mut rec = at(StateKind::Waiting, Some("waiting for a/ingest"));
-        let last = rec.last_run.as_mut().unwrap();
+        let last = rec.last_invocation.as_mut().unwrap();
         last.started_at = STARTED.into();
         last.finished_at = None;
         last.status = String::new();
-        let v = step_status(Some(&rec), Some("r0"), None);
+        let v = step_status(Some(&rec), &open("r0"), None);
         assert_eq!(
             (v.key.as_str(), v.label.as_str(), v.at.as_deref()),
             ("waiting", "Waiting", Some(STARTED))
@@ -289,21 +307,21 @@ mod tests {
     #[test]
     fn a_step_at_rest_reads_as_its_last_outcome() {
         for state in [StateKind::Idle, StateKind::Stale] {
-            let v = step_status(Some(&at(state, None)), None, None);
+            let v = step_status(Some(&at(state, None)), &none(), None);
             assert_eq!(
                 (v.key.as_str(), v.at.as_deref()),
                 ("succeeded", Some(YESTERDAY))
             );
         }
         let mut failed = at(StateKind::Failed, None);
-        let last = failed.last_run.as_mut().unwrap();
+        let last = failed.last_invocation.as_mut().unwrap();
         last.status = "failed".into();
         last.finished_at = Some(ENDED.into());
-        let v = step_status(Some(&failed), None, None);
+        let v = step_status(Some(&failed), &none(), None);
         assert_eq!((v.key.as_str(), v.at.as_deref()), ("failed", Some(ENDED)));
         assert_eq!(v.last_success_at.as_deref(), Some(YESTERDAY));
 
-        assert_eq!(step_status(None, None, None).key, "never_run");
+        assert_eq!(step_status(None, &none(), None).key, "never_run");
     }
 
     /// A step started by a loop that then died has an outcome nobody
@@ -312,10 +330,10 @@ mod tests {
     #[test]
     fn a_step_a_dead_loop_left_reads_interrupted() {
         let mut rec = at(StateKind::Stale, None);
-        let last = rec.last_run.as_mut().unwrap();
+        let last = rec.last_invocation.as_mut().unwrap();
         last.status = String::new();
         last.finished_at = None;
-        assert_eq!(step_status(Some(&rec), None, None).key, "interrupted");
+        assert_eq!(step_status(Some(&rec), &none(), None).key, "interrupted");
     }
 
     fn diag(severity: Severity) -> Diagnostic {
@@ -333,7 +351,7 @@ mod tests {
     #[test]
     fn a_dropped_entry_outranks_whatever_its_steps_row_says() {
         let rec = at(StateKind::Running, None);
-        let v = step_status(Some(&rec), None, Some(&diag(Severity::Rejected)));
+        let v = step_status(Some(&rec), &none(), Some(&diag(Severity::Rejected)));
         assert_eq!(v.key, "config_rejected");
         assert_eq!(v.at, None);
         assert_eq!(v.last_success_at, None);
@@ -341,7 +359,7 @@ mod tests {
             v.detail.as_deref(),
             Some("unknown type \u{2014} fix the type")
         );
-        let blocked = step_status(Some(&rec), None, Some(&diag(Severity::Blocked)));
+        let blocked = step_status(Some(&rec), &none(), Some(&diag(Severity::Blocked)));
         assert_eq!(blocked.key, "config_blocked");
     }
 

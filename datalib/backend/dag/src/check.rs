@@ -54,9 +54,7 @@ pub async fn check_params(
     if checked_steps.is_empty() {
         return Vec::new();
     }
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_string();
-    let env = match crate::supervisor::host::step_env(&checked.cfg, binary_dir, &[], &now, "check")
-    {
+    let env = match crate::supervisor::host::step_env(&checked.cfg, binary_dir, &[]) {
         Ok(env) => env,
         Err(e) => {
             return vec![Diagnostic::new(

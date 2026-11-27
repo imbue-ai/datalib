@@ -16,7 +16,7 @@ use axum::http::header;
 use axum::response::IntoResponse;
 use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::tick::StateKind;
-use datalib_runs::MetricRow;
+use datalib_runs::MetricValue;
 use strum::VariantArray;
 
 use crate::usage::OutputStorage;
@@ -70,7 +70,7 @@ pub struct StepEntry {
 pub struct Inputs<'a> {
     pub steps: &'a [StepEntry],
     /// The newest value of every series, across runs.
-    pub metrics: &'a [MetricRow],
+    pub metrics: &'a [MetricValue],
     pub records: &'a BTreeMap<String, StepRow>,
     pub trees: &'a [OutputStorage],
     pub root_bytes: u64,
@@ -414,8 +414,8 @@ pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse,
 mod tests {
     use super::*;
 
-    fn metric(step: &str, name: &str, labels: &str, value: i64) -> MetricRow {
-        MetricRow {
+    fn metric(step: &str, name: &str, labels: &str, value: i64) -> MetricValue {
+        MetricValue {
             step: step.into(),
             name: name.into(),
             labels: labels.into(),
@@ -424,7 +424,7 @@ mod tests {
         }
     }
 
-    fn scrape(metrics: &[MetricRow]) -> String {
+    fn scrape(metrics: &[MetricValue]) -> String {
         let steps = [
             StepEntry {
                 id: "slack/ingest".into(),

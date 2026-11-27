@@ -69,9 +69,11 @@ async fn a_root_that_never_ran_reports_no_history() {
     }
 }
 
-/// A finished run: each step carries its own timings and outcome, so
-/// "last synced" is per step rather than a whole run's timestamp
-/// smeared across everything it named.
+/// A finished sync: each step carries its own timings and outcome, so
+/// "last synced" is per step rather than a whole sync's timestamp
+/// smeared across everything it named. The newest closed request is the
+/// run `/api/dag` names, and a step's state in it is its last outcome
+/// for that request.
 #[tokio::test]
 async fn a_finished_run_surfaces_per_step_outcomes() {
     let tmp = tempfile::tempdir().unwrap();
@@ -83,6 +85,8 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
                 "slack/ingest": {
                   "succeeded": true,
                   "last_run": {
+                    "invocation_id": "i-1",
+                    "requests": ["r-1"],
                     "started_at": "2026-08-31T10:00:00+01:00",
                     "finished_at": "2026-08-31T10:00:09+01:00",
                     "status": "succeeded",
@@ -92,6 +96,8 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
                 "slack/render_markdown": {
                   "succeeded": false,
                   "last_run": {
+                    "invocation_id": "i-2",
+                    "requests": ["r-1"],
                     "started_at": "2026-08-31T10:00:09+01:00",
                     "finished_at": "2026-08-31T10:00:11+01:00",
                     "status": "failed",
@@ -100,24 +106,16 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
                   }
                 }
               },
-              "current_run": {
-                "run_id": "2026-08-31T10:00:00+01:00",
-                "started_at": "2026-08-31T10:00:00+01:00",
-                "finished_at": "2026-08-31T10:00:12+01:00",
-                "states": {"slack/ingest": "succeeded", "slack/render_markdown": "failed"}
-              }
+              "requests": [{"id": "r-1", "roots": ["slack/ingest"], "closed": true}]
             }"#,
         ),
     )
     .await;
 
     let dag = get_dag(tmp.path()).await;
-    assert_eq!(dag["run"]["run_id"], "2026-08-31T10:00:00+01:00");
-    assert_eq!(dag["run"]["finished_at"], "2026-08-31T10:00:12+01:00");
-    assert_eq!(
-        dag["run"]["live"], false,
-        "a run with a finished_at is not live"
-    );
+    assert_eq!(dag["run"]["run_id"], "r-1");
+    assert!(dag["run"]["finished_at"].is_string(), "{dag}");
+    assert_eq!(dag["run"]["live"], false, "a closed request is not live");
 
     let by: std::collections::HashMap<&str, &serde_json::Value> = dag["steps"]
         .as_array()
@@ -133,18 +131,21 @@ async fn a_finished_run_surfaces_per_step_outcomes() {
         "2026-08-31T10:00:09+01:00"
     );
     assert_eq!(fetch["current_state"], "succeeded");
+    assert_eq!(fetch["last_run"]["run_id"], "r-1");
+    assert_eq!(fetch["last_run"]["invocation_id"], "i-1");
 
     // The failure is legible without opening a log.
     let render = by["slack/render_markdown"];
     assert_eq!(render["last_run"]["status"], "failed");
     assert_eq!(render["last_run"]["attempts"], 2);
     assert_eq!(render["last_run"]["error"], "bad json at line 3");
+    assert_eq!(render["current_state"], "failed");
 }
 
-/// A run row with no `finished_at` and nobody holding the runner
-/// lock is a run that *died*. Reporting it as live would spin the UI
-/// forever; the lock is what makes the difference knowable, since the
-/// kernel drops it when the holder exits however it exits.
+/// An open request with nobody holding the runner lock is one no loop
+/// is serving. Reporting it as live would spin the UI forever; the lock
+/// is what makes the difference knowable, since the kernel drops it when
+/// the holder exits however it exits.
 #[tokio::test]
 async fn an_open_run_row_with_no_lock_holder_is_not_live() {
     let tmp = tempfile::tempdir().unwrap();
@@ -152,12 +153,8 @@ async fn an_open_run_row_with_no_lock_holder_is_not_live() {
         tmp.path(),
         Some(
             r#"{
-              "steps": {},
-              "current_run": {
-                "run_id": "2026-08-31T10:00:00+01:00",
-                "started_at": "2026-08-31T10:00:00+01:00",
-                "states": {"slack/ingest": "running"}
-              }
+              "steps": {"slack/ingest": {"state": "running", "requests": ["r-1"]}},
+              "requests": [{"id": "r-1", "roots": ["slack/ingest"]}]
             }"#,
         ),
     )
@@ -167,15 +164,15 @@ async fn an_open_run_row_with_no_lock_holder_is_not_live() {
     assert_eq!(dag["run"]["finished_at"], serde_json::Value::Null);
     assert_eq!(
         dag["run"]["live"], false,
-        "no runner holds this root, so the open record is a crashed run"
+        "no runner holds this root, so the open request is not being served"
     );
     // The step's own state is still reported — the UI decides what to
-    // call it, and needs to know it was mid-flight when the run died.
+    // call it, and needs to know it was mid-flight when the loop died.
     let step = &dag["steps"].as_array().unwrap()[0];
     assert_eq!(step["current_state"], "running");
 }
 
-/// ...and with a runner actually holding the root, the same run is
+/// ...and with a runner actually holding the root, the same request is
 /// live. This is the pair that makes the previous test mean something.
 #[tokio::test]
 #[cfg(unix)]
@@ -186,9 +183,7 @@ async fn an_open_run_row_is_live_while_a_runner_holds_the_root() {
         Some(
             r#"{
               "steps": {},
-              "current_run": {
-                "run_id": "r", "started_at": "2026-08-31T10:00:00+01:00", "states": {"slack/ingest": "running"}
-              }
+              "requests": [{"id": "r", "roots": ["slack/ingest"]}]
             }"#,
         ),
     )
@@ -197,4 +192,34 @@ async fn an_open_run_row_is_live_while_a_runner_holds_the_root() {
     let _held = datalib_dag::lock::acquire_runner(tmp.path()).expect("take the lock");
     let dag = get_dag(tmp.path()).await;
     assert_eq!(dag["run"]["live"], true);
+}
+
+/// Two syncs open at once: a step working for the second reads as
+/// running too, not only one working for the oldest. Guards the
+/// `current_state` that named the oldest open request alone, which left
+/// a source started during another's sync reading as not reached.
+#[tokio::test]
+async fn a_step_working_for_any_open_sync_has_its_state() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(
+        tmp.path(),
+        Some(
+            r#"{
+              "steps": {
+                "slack/ingest": {"state": "running", "requests": ["r-1"]},
+                "slack/render_markdown": {"state": "running", "requests": ["r-2"]}
+              },
+              "requests": [
+                {"id": "r-1", "roots": ["slack/ingest"]},
+                {"id": "r-2", "roots": ["slack/render_markdown"]}
+              ]
+            }"#,
+        ),
+    )
+    .await;
+
+    let dag = get_dag(tmp.path()).await;
+    for step in dag["steps"].as_array().unwrap() {
+        assert_eq!(step["current_state"], "running", "{step}");
+    }
 }

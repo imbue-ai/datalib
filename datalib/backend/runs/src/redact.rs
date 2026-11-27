@@ -4,7 +4,7 @@
 //! carry"). Both writers take every row through here, so this is the
 //! one place it happens.
 
-use app_schema::runs::{LogRow, StepRunRow};
+use app_schema::runs::{InvocationRow, LogRow};
 
 /// The home directory to hide, read once when a writer starts.
 #[derive(Debug, Clone, Default)]
@@ -35,7 +35,7 @@ impl Redactor {
         row
     }
 
-    pub(crate) fn step(&self, mut row: StepRunRow) -> StepRunRow {
+    pub(crate) fn invocation(&self, mut row: InvocationRow) -> InvocationRow {
         for text in [row.error.as_mut(), row.msg.as_mut()].into_iter().flatten() {
             self.in_place(text);
         }
@@ -119,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rows_message_fields_and_step_error_are_all_covered() {
+    fn a_rows_message_fields_and_an_invocations_error_are_all_covered() {
         let r = Redactor::for_home(Some("/Users/al/"));
         let line = r.log(LogRow {
             msg: "read /Users/al/x".into(),
@@ -128,7 +128,7 @@ mod tests {
         });
         assert_eq!(line.msg, "read ~/x");
         assert_eq!(line.fields.as_deref(), Some(r#"{"path":"~/x"}"#));
-        let step = r.step(StepRunRow {
+        let step = r.invocation(InvocationRow {
             error: Some("no such file /Users/al/x".into()),
             msg: Some("at /Users/al".into()),
             ..Default::default()

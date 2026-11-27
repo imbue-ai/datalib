@@ -1,4 +1,4 @@
-//! The loop that runs for the whole life of the process that runs it,
+//! The loop held for the whole life of the process that runs it,
 //! `datalib-pipeline serve`, which the app's server starts as a child. It
 //! takes `runner-lock` (waiting while another process holds
 //! it), closes what a dead loop left, then runs the loop, whose prepare
@@ -17,7 +17,7 @@ use crate::lock::RunnerLock;
 use crate::scheduler::Runner;
 use crate::supervisor::announce::Listener;
 use crate::supervisor::host;
-use crate::supervisor::loop_host::{LoopHost, OpenRunSink};
+use crate::supervisor::loop_host::LoopHost;
 use crate::supervisor::reload::ConfigFile;
 use crate::supervisor::store::{RequestOutcome, Store};
 
@@ -27,17 +27,15 @@ pub struct ServeOptions {
     pub root: PathBuf,
     /// The step binaries' directory, ahead of the config's `binary_dir`.
     pub binary_dir: Option<PathBuf>,
-    /// Every run's "now", in place of the clock. For fixtures, whose
-    /// output must not depend on the day they were built.
+    /// Every invocation's "now", in place of the time its request was
+    /// opened. For fixtures, whose output must not depend on the day they
+    /// were built.
     pub now: Option<String>,
     /// At most this many steps at once; the runner's default when `None`.
     pub parallelism: Option<usize>,
-    /// Where every event also goes, beside the open run's sink in the run
-    /// store: a `datalib-pipeline` verb's stderr.
+    /// Where every event also goes, beside the run store: a
+    /// `datalib-pipeline` verb's stderr.
     pub events: Option<Arc<dyn crate::events::EventSink>>,
-    /// The first run's id, in place of a fresh one. For a
-    /// fixture that finds its run by id.
-    pub run_id: Option<String>,
     /// The config file, when it is not the root's own `config.toml`: a
     /// `datalib-pipeline` verb may be given one that names its root.
     pub config: Option<PathBuf>,
@@ -59,13 +57,10 @@ impl ServeOptions {
 pub enum ServeEvent {
     /// This process holds `runner-lock`: the loop is its from here on.
     Holding,
-    /// A run began: the loop is busy until [`ServeEvent::SyncOver`].
-    SyncStarted {
-        run_id: String,
-    },
-    SyncOver {
-        run_id: String,
-    },
+    /// The loop has taken on work: it is busy until [`ServeEvent::Idle`].
+    Busy,
+    /// Nothing is open and nothing runs.
+    Idle,
     /// This process wrote to the run store, so a reader showing it should
     /// read it again. A filesystem watch would say so too, but late.
     RunStoreWritten,
@@ -100,8 +95,8 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
 
 /// The loop for as long as anything is open, for a `datalib-pipeline`
 /// verb that wrote its request or job and found no other process running
-/// the loop. The caller holds `runner-lock`. The last run's report, or
-/// why the loop could not go on.
+/// the loop. The caller holds `runner-lock`. The last busy period's
+/// report, or why the loop could not go on.
 pub async fn run_until_idle(
     opts: &ServeOptions,
     store: &Store,
@@ -119,9 +114,9 @@ enum Until {
 }
 
 /// What a process holding the lock does: close what a dead loop left,
-/// then run the loop. Run until `stop`, a loop that fails starts again at
-/// the next change to the store or the config; run until idle, it says
-/// why and returns.
+/// then run the loop. One held until `stop` starts again at the next
+/// change to the store or the config when it fails; one held until idle
+/// says why and returns.
 async fn hold(
     opts: &ServeOptions,
     emit: Emit,
@@ -132,31 +127,32 @@ async fn hold(
 ) -> Result<Option<crate::scheduler::RunReport>, String> {
     let root = opts.root.as_path();
     match host::take_over(store, root).await {
-        Ok(taken) => {
-            if let Some(run) = &taken.closed_run {
-                tracing::warn!(
-                    run,
-                    invocations = taken.closed_invocations,
-                    "supervisor: closed a run a dead loop left open"
-                );
-            }
-        }
+        Ok(taken) if taken != host::TakenOver::default() => tracing::warn!(
+            invocations = taken.closed_invocations,
+            in_history = taken.closed_in_history,
+            "supervisor: closed the invocations a dead loop left open"
+        ),
+        Ok(_) => {}
         Err(e) => tracing::error!("supervisor: could not take over from the last loop: {e:#}"),
     }
     tracing::info!("supervisor: running the loop on {}", root.display());
-    let run_host = RunHost {
+    // One record for as long as this process holds the loop; it closes
+    // when it is dropped, at the end of this function.
+    let record = record_of(opts);
+    let host = Host {
         opts,
         emit,
-        run_sink: Arc::new(OpenRunSink::default()),
-        open: Mutex::new(None),
-        first_run_id: Mutex::new(opts.run_id.clone()),
+        last_env: Mutex::new(None),
+        record: record.clone(),
     };
     let mut said_no_pass = false;
     loop {
         let ran = match load_config_at(&opts.root, &opts.config_path()) {
-            Ok(checked) => run_the_loop(opts, &checked, store, &run_host, stop, until).await,
+            Ok(checked) => {
+                run_the_loop(opts, &checked, store, &host, record.clone(), stop, until).await
+            }
             Err(why) => {
-                // With no config there is no step to run `--prepare` for: the pass is over,
+                // With no config there is no step to ask: the pass is over,
                 // and a root waiting for its first config is not waiting
                 // on it. A closed job with no steps says so.
                 if !std::mem::replace(&mut said_no_pass, true) {
@@ -171,10 +167,10 @@ async fn hold(
             Ok(report) => return Ok(report),
             Err(why) => why,
         };
-        // Its requests would otherwise be served again at once, and fail the
+        // Its requests would otherwise be taken on at once, and fail the
         // same way; the next change to the store or the config is the
         // next try.
-        run_host.close_any();
+        host.busy(false);
         fail_open_requests(store, &why).await;
         if let Err(e) = host::take_over(store, root).await {
             tracing::error!("supervisor: could not close the failed run: {e:#}");
@@ -192,8 +188,7 @@ async fn hold(
     }
 }
 
-/// A prepare pass with no step to run `--prepare` for, open and closed at
-/// once.
+/// A prepare pass with nothing to ask, open and closed at once.
 async fn no_pass(store: &Store) -> anyhow::Result<()> {
     let job = store
         .open_job(
@@ -205,35 +200,56 @@ async fn no_pass(store: &Store) -> anyhow::Result<()> {
     store.close_job(&job, None).await
 }
 
+/// The run store's record of what the loop's invocations do, for as long
+/// as this process runs the loop. `None` when the store could not be
+/// opened: a sync without a record beats one that refuses to start over
+/// an unwritable status file.
+fn record_of(opts: &ServeOptions) -> Option<Arc<crate::runs_sink::RunStoreSink>> {
+    let retention = load_config_at(&opts.root, &opts.config_path())
+        .ok()
+        .and_then(|c| c.cfg.run_history)
+        .map(|h| h.retention())
+        .unwrap_or_default();
+    let commit = datalib_runs::git_hash_and_origin().map(|(hash, _)| hash);
+    let record = crate::runs_sink::RunStoreSink::start(&opts.root, commit, retention);
+    if record.is_none() {
+        tracing::warn!("supervisor: run store unavailable; nothing will be recorded");
+    }
+    record.map(Arc::new)
+}
+
 /// The loop on `checked`'s graph, until `stop` or an error it cannot go
 /// on from. It re-reads the config as it goes.
 async fn run_the_loop(
     opts: &ServeOptions,
     checked: &ConfigCheck,
     store: &Store,
-    run_host: &RunHost<'_>,
+    host: &Host<'_>,
+    record: Option<Arc<crate::runs_sink::RunStoreSink>>,
     stop: &watch::Receiver<bool>,
     until: Until,
 ) -> Result<Option<crate::scheduler::RunReport>, String> {
     let root = opts.root.as_path();
-    let record: Arc<dyn crate::events::EventSink> = run_host.run_sink.clone();
-    let sink: Arc<dyn crate::events::EventSink> = match &opts.events {
-        Some(events) => Arc::new(crate::events::FanOutSink(vec![events.clone(), record])),
-        None => record,
-    };
+    let sinks: Vec<Arc<dyn crate::events::EventSink>> = opts
+        .events
+        .iter()
+        .cloned()
+        .chain(record.map(|r| r as Arc<dyn crate::events::EventSink>))
+        .collect();
     let mut runner = Runner::new(root)
-        .sink(sink)
+        .sink(Arc::new(crate::events::FanOutSink(sinks)))
         .stop_on(stop.clone())
+        .pin_now(opts.now.clone())
         .reload_from(Arc::new(ConfigFile::new(opts.config_path())));
     if let Some(n) = opts.parallelism {
         runner = runner.parallelism(n);
     }
     let ran = match until {
         Until::Stopped => runner
-            .run_forever(&checked.graph, store, run_host)
+            .run_forever(&checked.graph, store, host)
             .await
             .map(|()| None),
-        Until::Idle => runner.run_until_idle(&checked.graph, store, run_host).await,
+        Until::Idle => runner.run_until_idle(&checked.graph, store, host).await,
     };
     ran.map_err(|e| {
         tracing::error!("supervisor: the loop failed: {e:#}");
@@ -306,20 +322,9 @@ async fn take_the_lock(
 /// up to date in place.
 pub const UPGRADE_REQUESTER: &str = "upgrade";
 
-/// The environment every step of one run gets.
-fn steps_env(
-    opts: &ServeOptions,
-    cfg: &crate::config::DagConfig,
-    now: &str,
-    run_id: &str,
-) -> anyhow::Result<host::StepEnv> {
-    host::step_env(
-        cfg,
-        opts.binary_dir.as_deref(),
-        &extra_path(&opts.root),
-        now,
-        run_id,
-    )
+/// The environment a step started now gets, from `cfg`.
+fn steps_env(opts: &ServeOptions, cfg: &crate::config::DagConfig) -> anyhow::Result<host::StepEnv> {
+    host::step_env(cfg, opts.binary_dir.as_deref(), &extra_path(&opts.root))
 }
 
 /// Where the loop's steps find the library's own programs, whether or not
@@ -329,81 +334,54 @@ fn extra_path(root: &Path) -> Vec<PathBuf> {
     vec![root.join(datalib_runtime::layout::BIN_DIR_REL)]
 }
 
-fn now(opts: &ServeOptions) -> String {
-    opts.now
-        .clone()
-        .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
-}
-
-/// Each run recorded in the run store, and said to the parent.
-struct RunHost<'a> {
+/// What the loop asks of this process, and what it says to the parent.
+struct Host<'a> {
     opts: &'a ServeOptions,
     emit: Emit,
-    /// The runner's sink: the open run's sink in the run store, or
-    /// nothing.
-    run_sink: Arc<OpenRunSink>,
-    /// The id of the run open now.
-    open: Mutex<Option<String>>,
-    /// [`ServeOptions::run_id`], until the first run takes it.
-    first_run_id: Mutex<Option<String>>,
+    /// The environment built from the last config that loaded, for while
+    /// the config cannot be read.
+    last_env: Mutex<Option<BTreeMap<String, String>>>,
+    record: Option<Arc<crate::runs_sink::RunStoreSink>>,
 }
 
-impl RunHost<'_> {
-    /// A loop that failed may have left its run open.
-    fn close_any(&self) {
-        let open = self.open.lock().expect("the open period's lock").clone();
-        if let Some(run_id) = open {
-            self.close(&run_id);
+impl LoopHost for Host<'_> {
+    fn step_env(&self) -> Result<BTreeMap<String, String>, String> {
+        let built = load_config_at(&self.opts.root, &self.opts.config_path()).and_then(|checked| {
+            steps_env(self.opts, &checked.cfg)
+                .map(|env| env.vars)
+                .map_err(|e| format!("{e:#}"))
+        });
+        let mut last = self.last_env.lock().expect("the last environment's lock");
+        match built {
+            Ok(env) => {
+                *last = Some(env.clone());
+                Ok(env)
+            }
+            Err(why) => last.clone().ok_or(why),
+        }
+    }
+
+    fn busy(&self, busy: bool) {
+        if busy {
+            (self.emit)(ServeEvent::Busy);
+            tracing::info!("supervisor: the loop took on work");
+        } else {
+            // Written before it is said: a reader told the loop is idle
+            // reads how every invocation ended.
+            if let Some(record) = &self.record {
+                record.flush_blocking();
+            }
+            (self.emit)(ServeEvent::Idle);
+            tracing::info!("supervisor: nothing is open and nothing runs");
+            say_runner_statements();
         }
     }
 }
 
-impl LoopHost for RunHost<'_> {
-    fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
-        let root = self.opts.root.as_path();
-        let checked = load_config_at(&self.opts.root, &self.opts.config_path())?;
-        let run_id = self
-            .first_run_id
-            .lock()
-            .expect("the first run id's lock")
-            .take()
-            .unwrap_or_else(crate::scheduler::new_run_id);
-        let now = now(self.opts);
-        let env =
-            steps_env(self.opts, &checked.cfg, &now, &run_id).map_err(|e| format!("{e:#}"))?;
-        match host::start_record(root, &checked.cfg, &run_id, &now, start) {
-            Some(record) => drop(self.run_sink.point_at(Some(Arc::new(record)))),
-            None => tracing::warn!(
-                run = %run_id,
-                "supervisor: run store unavailable; nothing recorded this run"
-            ),
-        }
-        *self.open.lock().expect("the open period's lock") = Some(run_id.clone());
-        (self.emit)(ServeEvent::SyncStarted {
-            run_id: run_id.clone(),
-        });
-        tracing::info!(run = %run_id, "supervisor: a sync started");
-        Ok(env.vars)
-    }
-
-    /// The run store closes the run when its sink is dropped, here:
-    /// before the loop says the sync is over, so no one reads "over"
-    /// before it is.
-    fn close(&self, run_id: &str) {
-        drop(self.run_sink.point_at(None));
-        *self.open.lock().expect("the open period's lock") = None;
-        (self.emit)(ServeEvent::SyncOver {
-            run_id: run_id.to_string(),
-        });
-        tracing::info!(run = %run_id, "supervisor: the sync is over");
-        say_runner_statements(run_id);
-    }
-}
-
-/// What the runner's own statements did during the sync that just ended,
-/// by name, as one line: the runner never ends, so its work is reported
-/// a sync at a time rather than as a step's metrics are.
-fn say_runner_statements(run_id: &str) {
+/// What the runner's own statements did while the loop was busy, by name,
+/// as one line: the runner never ends, so its work is reported a stretch
+/// of work at a time rather than as a step's metrics are.
+fn say_runner_statements() {
     static LAST: std::sync::Mutex<datalib_sql_work::ByTag> =
         std::sync::Mutex::new(std::collections::BTreeMap::new());
     let now = datalib_sql_work::totals();
@@ -416,9 +394,8 @@ fn say_runner_statements(run_id: &str) {
     let statements = datalib_sql_work::header_value(&ran);
     tracing::debug!(
         target: datalib_sql_work::TARGET,
-        run = %run_id,
         statements = %statements,
-        "the runner's statements this sync: {} names",
+        "the runner's statements since the loop was last idle: {} names",
         ran.len()
     );
 }
@@ -445,8 +422,8 @@ mod tests {
     fn a_serve_event_reads_back_as_it_was_written() {
         let events = [
             ServeEvent::Holding,
-            ServeEvent::SyncStarted { run_id: "r".into() },
-            ServeEvent::SyncOver { run_id: "r".into() },
+            ServeEvent::Busy,
+            ServeEvent::Idle,
             ServeEvent::RunStoreWritten,
         ];
         for event in events {

@@ -1,15 +1,16 @@
 //! `GET /api/manage/groups/{id}/dashboard`: one group's sync as time
-//! series, for the dashboard card. For one run — the newest its steps
-//! took part in, or the one asked for — each step's state, every metric
+//! series, for the dashboard card. For one run — a request or a job, the
+//! newest one of its steps' invocations served, or the one asked for, or
+//! a run an older build recorded — each step's state, every metric
 //! series it reported (each already a running total, or the `queued`
 //! gauge), its warning and error lines counted up over the run, and
 //! what its tree weighed; and the group's folder's weight. The rows,
 //! controls and status come from `/api/manage/rows`, as for the table.
 
+use crate::runs_view::RunView;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use datalib_columns::Sample;
-use datalib_runs::RunRow;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
@@ -58,11 +59,11 @@ pub struct StepPanel {
 pub struct Dashboard {
     pub group: String,
     /// The run shown; `None` when the group's steps have never run.
-    pub run: Option<RunRow>,
+    pub run: Option<RunView>,
     /// The shown run is still going.
     pub live: bool,
     /// The group's recent runs, newest first, for the picker.
-    pub runs: Vec<RunRow>,
+    pub runs: Vec<RunView>,
     /// The group's steps in config order.
     pub steps: Vec<StepPanel>,
     /// Bytes under the group's folder over the run.
@@ -84,15 +85,14 @@ pub async fn get_dashboard(
                 .collect()
         })
         .unwrap_or_default();
-    let runs = datalib_runs::runs_of_steps(&s.root, &step_ids, RUNS_OFFERED)
+    let store = crate::supervisor_store(&s).await?;
+    let runs = crate::runs_view::list(&s.root, store, Some(&step_ids), RUNS_OFFERED)
         .await
         .map_err(crate::unread)?;
     let run = match p.run {
-        Some(id) => datalib_runs::runs(&s.root, None, i64::MAX)
+        Some(id) => crate::runs_view::one(&s.root, store, &id)
             .await
-            .map_err(crate::unread)?
-            .into_iter()
-            .find(|r| r.run_id == id),
+            .map_err(crate::unread)?,
         None => runs.first().cloned(),
     };
     let Some(run) = run else {
@@ -183,7 +183,7 @@ fn absent(id: String) -> StepPanel {
 }
 
 /// The samples, ordered by series then time, split into one series each.
-fn series_of(samples: Vec<datalib_runs::MetricSampleRow>) -> Vec<Series> {
+fn series_of(samples: Vec<datalib_runs::MetricSample>) -> Vec<Series> {
     let mut out: Vec<Series> = Vec::new();
     for m in samples {
         let point = Sample {
@@ -278,7 +278,7 @@ mod tests {
 
     #[test]
     fn samples_split_into_one_series_per_name_and_labels() {
-        let m = |name: &str, labels: &str, ts: &str| datalib_runs::MetricSampleRow {
+        let m = |name: &str, labels: &str, ts: &str| datalib_runs::MetricSample {
             name: name.into(),
             labels: labels.into(),
             ts_utc: ts.into(),

@@ -1616,8 +1616,11 @@ export type HistoryCommit = {
   committer: string;
   date: string;
   message: string;
-  /// The run that made the commit, when the message ends in the step's
-  /// ` run=<id>` stamp — the job id, when the app ran it.
+  /// The invocation that made the commit, when the message ends in the
+  /// step's ` invocation=<id>` stamp: what its log is filed under.
+  invocation: string | null;
+  /// The run an older build's step made the commit in, when the message
+  /// ends in the ` run=<id>` stamp those builds wrote instead.
   run: string | null;
   /// Every table, largest first, as of this commit.
   tables: HistoryTable[];

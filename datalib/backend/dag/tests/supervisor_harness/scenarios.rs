@@ -535,11 +535,11 @@ async fn a_consumer_runs_on_each_seal_of_a_streaming_producer() {
     h.finish().await;
 }
 
-/// A consumer whose first process crashed and whose next, on the
-/// producer's next seal, succeeded was recorded as succeeded with no
-/// error: the crash was only its own stderr, at info. The failed process
-/// is an error line in the run store, and a count (`failed_passes`) the
-/// Manage row reads.
+/// A consumer whose first pass crashed and whose next, on the producer's
+/// next seal, succeeded was recorded as succeeded with no error: the crash
+/// was only its own stderr, at info. The failed invocation is an error
+/// line in the run store, filed under the request it served, and a count
+/// of failed passes the Manage row reads.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_failed_invocation_that_runs_again_is_an_error_and_a_count() {
     let mut h = Harness::recording(&chain()).await;
@@ -557,7 +557,7 @@ async fn a_failed_invocation_that_runs_again_is_an_error_and_a_count() {
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
     assert_eq!(
         h.state().await.record.steps["c"]
-            .last_run
+            .last_invocation
             .as_ref()
             .map(|r| r.status.as_str()),
         Some("succeeded"),
@@ -569,12 +569,7 @@ async fn a_failed_invocation_that_runs_again_is_an_error_and_a_count() {
     .await;
 
     let root = h.root.path().to_path_buf();
-    let run = datalib_runs::snapshot(&root)
-        .await
-        .unwrap()
-        .run_id
-        .expect("the run is in the store");
-    let errors: Vec<String> = datalib_runs::log_after(&root, &run, Some("c"), 0, 100)
+    let errors: Vec<String> = datalib_runs::log_after(&root, &sync, Some("c"), 0, 100)
         .await
         .unwrap()
         .into_iter()
@@ -583,7 +578,7 @@ async fn a_failed_invocation_that_runs_again_is_an_error_and_a_count() {
         .collect();
     assert_eq!(errors.len(), 1, "{errors:?}");
     assert!(
-        errors[0].starts_with("pass 1 failed: step c exited with exit status: 1")
+        errors[0].starts_with("step c exited with exit status: 1")
             && errors[0].contains("Traceback: boom"),
         "{errors:?}"
     );

@@ -1,16 +1,37 @@
-// The run store, `system/runs/runs.sqlite`: what every run did — each step's
-// state, its log lines and its metrics — kept across runs, plus the
-// app server's own log between them. One table per file below. Every
-// process that took part is a row in `processes` — the runner, each
+// The run store, `system/runs/runs.sqlite`: what every invocation of a step
+// did — how it went, its log lines and its metrics — and which requests
+// it served, plus the app server's own log. One table per file below.
+// Every process that took part is a row in `processes` — the runner, each
 // attempt of each step, the server — and every log line points at the
-// one that wrote it. The DAG runner writes the run tables; `log` is
-// written by the runner and by `datalib-http`, which also reads all of
+// one that wrote it. The DAG runner writes the invocation tables; `log`
+// is written by the runner and by `datalib-http`, which also reads all of
 // it, as does anyone with `sqlite3`.
+//
+// `runs`, `step_runs`, `metrics` and `metric_samples` hold what builds
+// before invocations recorded, a row per busy period of the loop. This
+// build writes none of them and reads them as they are, until retention
+// ages them out.
 //
 // Every stamp is a `<x>_utc` column — UTC with a `+00:00` suffix — and
 // each table carries a `tz_offset` column holding the offset the stamp
 // was made in (`+02:00`), the pair every store keeps (AGENTS.md,
 // "Timestamp convention").
+
+pub mod invocation_metric_samples {
+    include!("invocation_metric_samples.rs");
+}
+
+pub mod invocation_metrics {
+    include!("invocation_metrics.rs");
+}
+
+pub mod invocation_requests {
+    include!("invocation_requests.rs");
+}
+
+pub mod invocations {
+    include!("invocations.rs");
+}
 
 pub mod log {
     include!("log.rs");
@@ -40,11 +61,15 @@ pub mod store_changes {
     include!("store_changes.rs");
 }
 
+pub use invocation_metric_samples::InvocationMetricSampleRow;
+pub use invocation_metrics::InvocationMetricRow;
+pub use invocation_requests::InvocationRequestRow;
+pub use invocations::InvocationRow;
 pub use log::{LogLevel, LogRow, Process, Stream};
 pub use metric_samples::MetricSampleRow;
 pub use metrics::MetricRow;
 pub use process::ProcessRow;
-pub use run::{RunKind, RunRow, RunStart};
+pub use run::{RunKind, RunRow};
 pub use step_runs::StepRunRow;
 pub use store_changes::{StoreChangeRow, StorePart};
 
@@ -58,6 +83,10 @@ pub fn ddl() -> Vec<&'static str> {
         metrics::DDL,
         metric_samples::DDL,
         store_changes::DDL,
+        invocations::DDL,
+        invocation_requests::DDL,
+        invocation_metrics::DDL,
+        invocation_metric_samples::DDL,
     ]
     .iter()
     .flat_map(|d| d.iter().map(|(_, sql)| *sql))
@@ -82,7 +111,7 @@ mod tests {
 
     #[test]
     fn every_table_has_a_tz_offset_beside_its_stamps() {
-        for sql in ddl() {
+        for sql in ddl().into_iter().filter(|sql| sql.contains("_utc")) {
             assert!(sql.contains("tz_offset"), "{sql}");
         }
     }

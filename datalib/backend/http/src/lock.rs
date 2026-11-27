@@ -74,7 +74,7 @@ impl DataRootLock {
             })
     }
 
-    /// Record where this server can be reached, so a later would-be
+    /// LoopState where this server can be reached, so a later would-be
     /// owner's refusal can point at it. Called once the listener has a
     /// port; failure to write is not worth failing a boot over.
     pub fn write_url(&mut self, base_url: &str) {

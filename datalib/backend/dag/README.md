@@ -102,9 +102,13 @@ downstream of them. Anyone may open one, or ask one to stop, or turn a
 step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it:
 writes a line to every FIFO in `system/supervisor-listeners/` (below,
-"What wakes the loop"). A **run** lasts from when the loop, idle, starts
-serving a request or a job to when it has none left, and every request
-served in it shares that run's id.
+"What wakes the loop"). An **invocation** is one process the loop
+starts for one step (its retries included, until retries move into the
+tick); it is started for every open request whose scope wants the step,
+and the run store files it under each of them. What the app calls a
+**run** is one request (or one job: a reset, a compaction, the prepare
+pass) with the invocations started for it (§"History: invocations and
+requests").
 
 Scope is reachability in the graph, deliberately independent of run-time
 state. That is what makes "sync yolink" mean the same thing every time — the
@@ -113,8 +117,8 @@ DAG. The cost is that pending work elsewhere stays pending until a request
 reaches it, and in exchange a per-source sync never does surprising work on
 someone else's chain. A step in scope that reads one outside it reads that
 step's recorded version. A step no open request wants is never started,
-and a run records nothing for it: its `last_run` stays as it was, so a
-sync of Slack never moves email's "last synced".
+and nothing is recorded for it: its `last_invocation` stays as it was,
+so a sync of Slack never moves email's "last synced".
 
 **Which step does what is one pure function**, `supervisor/tick.rs`: from
 the graph, the open requests, the steps turned off and the facts (each sink's
@@ -183,32 +187,31 @@ held by trainer`, `waiting for disk space: 3.2 GB free on the data
 root's disk; steps pause under 10.0 GB and run again from 15.0 GB`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
-A consumer of a streaming producer can run as several processes in one
-run, each started on the seals published so far. Once one has exited
-having read every seal so far, no process is running, but the step is
-not finished either, because what it reads is still being written. Its
-`steps` row says it is `waiting` on the first producer it reads that is
-still running or waiting, or is itself in this state below one that is
-(`waiting for garmin/ingest`), and the Manage row reads Waiting rather
-than Queued, since it has already started. So the index behind a render
-waits for as long as the download runs. Each such process is closed
-with a `PassEnd` event; the `StepFinish` comes once its producers are
-done.
+A consumer of a streaming producer can run as several invocations in
+one sync, each started on the seals published so far. Once one has
+exited having read every seal so far, no process is running, but the
+step is not finished either, because what it reads is still being
+written. Its `steps` row says it is `waiting` on the first producer it
+reads that is still running or waiting, or is itself in this state below
+one that is (`waiting for garmin/ingest`), and the Manage row reads
+Waiting rather than Queued, since it has already started. So the index
+behind a render waits for as long as the download runs. Each invocation
+ends with an `invocation_end` event as its process exits; the
+`StepFinish` comes once its producers are done.
 
-**A failed process is reported even when the next one succeeds.** A
-consumer process that fails while what it reads is still moving runs
-again once it moves (rule 4), and the run then reports the process that
-ran last: a consumer whose first process crashed and whose second
-worked has succeeded. So the `PassEnd` carries that process's status
-and error, and the run store keeps a failed one as an `error` line of
-the step's log (`pass 1 failed: …`, with the exit status and the end of
-its stderr). The loop counts the processes that failed and were run
-again, and reports the count as the step's `failed_passes` metric when
-the step finishes, zero included, so each run that invokes the step
-replaces the last one's: the Manage row adds it to the step's warnings,
-and `run_summary` and `datalib-pipeline`'s report on stdout say it too.
-A process that fails and is not run again is the step's last, and its
-failure is the step's.
+**A failed invocation is reported even when the next one succeeds.** A
+consumer invocation that fails while what it reads is still moving runs
+again once it moves (rule 4), and the request then reports the
+invocation that ran last: a consumer whose first invocation crashed and
+whose second worked has succeeded. The failed one stays failed in the
+run store, with its error as the last `error` line of its log (the exit
+status and the end of its stderr). The loop counts the invocations that
+failed and were run again, and reports the count as the step's
+`failed_passes` metric when the step finishes, zero included, so each
+sync that invokes the step replaces the last one's: the Manage row adds
+it to the step's warnings, and `run_summary` and `datalib-pipeline`'s
+report on stdout say it too. An invocation that fails and is not run
+again is the step's last, and its failure is the step's.
 
 A failed step does not stop its dependents. Whatever it committed and
 reported is a version like any other, and a dependent reads it; a fan-in
@@ -232,8 +235,9 @@ A run the loop stopped is not a failure (rule 4); one that reported
 open reaches its `steps` row the same way: the loop does not exit when
 the last request closes, and every wake is a tick, with or without a
 request. A request naming a step the loop's config lacks is closed
-`failed` if the loop read it with no run open, or at a run's first tick;
-one that arrives later in a run waits for a config that has the step.
+`failed` if the loop read it with nothing open, or at its first tick
+after taking work on; one that arrives while the loop is busy waits for
+a config that has the step.
 
 **The loop re-reads the config while it runs**, when told it changed
 (below, "What wakes the loop"). A source added mid-sync
@@ -244,7 +248,10 @@ stale and it runs again if a request still wants it. A config that drops
 a step still running, or still named by an open request, is put in use
 once the loop is done with that step: a config saved mid-edit must not
 cost a long download. The step environment (`PATH`, log level, the
-config's `[env]`) stays the one the run started with.
+config's `[env]`) is built again from the config as it is in each tick
+that starts something, so an edit to `log_level` or `[env]` reaches the
+next invocation; while the config cannot be read, the last one built
+stands, as the graph does.
 
 A reset, a purge and freeing disk space are carried out by the loop too
 (§"Resets and purges").
@@ -281,8 +288,8 @@ A resume line under the pause line refuses the config, and
 
 The loop logs the crossing once each way (`WARN` going under the pause
 line, `INFO` reaching the resume line). Which side of the gap a disk is
-on is remembered for one run, so a sync started anew with the
-disk between the lines runs. "Free" is what an unprivileged process may
+on is remembered while the loop has work open, so a sync started anew,
+once the loop has had nothing open, runs with the disk between the lines. "Free" is what an unprivileged process may
 still write (`statvfs`'s `f_bavail`); on APFS that leaves out purgeable
 space, so it can read lower than Finder. A disk that cannot be measured
 pauses nothing, and says so once at ERROR. An edit to the floor
@@ -482,7 +489,7 @@ serve` does, and plays a person through the store. It waits only on what it
 can observe (an ack, a loop event, an announcement), each under a
 deadline, and asserts only what the loop owns: processes started and
 ended, never two of one step at once (checked on every start), each
-request's outcome, each run's recorded status, the versions recorded
+request's outcome, each step's recorded outcome, the versions recorded
 and handed on, the queues. Nothing about what a step wrote. Product
 timers a scenario depends on (stop grace, retry backoff, backstop) are
 parameters it sets; no test sleeps.
@@ -607,8 +614,7 @@ naming no step) looks exactly like one it did.
 ## Two locks, two files
 
 - **One loop per data root** (`system/runner-lock`). The loop is the
-  only writer of the `steps`, `sinks`, `runs`, `run_steps` and
-  `invocations` tables in `system/supervisor.sqlite` (§"The record"),
+  only writer of the `steps`, `sinks` and `invocations` tables in `system/supervisor.sqlite` (§"The record"),
   and the steps it spawns write raw stores
   whose doltlite working set is shared across every connection on the
   branch, in any process ([`doltlite.md`](../../../docs/dev/doltlite.md#branches-head-and-the-working-set)); two loops on one root would interleave both. While `datalib-http` is up it keeps
@@ -651,9 +657,10 @@ closes, however the process died. A step the loop stops gets SIGINT on
 its process group and SIGKILL on it fifteen seconds later if it, or
 anything it left in the group, is still there (`subprocess::stop_ladder`,
 `step::STOP_GRACE`), so one that ignores its SIGINT cannot hold its
-store for good, and a child it left behind cannot hold the run open. A loop that died
-holding the lock leaves its run and its invocations open in
-`system/supervisor.sqlite` and the run store; the next process to take the lock closes them
+store for good, and a child it left behind cannot hold the sync open. A loop that died
+holding the lock leaves its invocations open in
+`system/supervisor.sqlite` and the run store; the next process to take
+the lock closes them as stopped
 (`supervisor::host::take_over`). Its requests are still open rows, and
 the next loop runs them.
 
@@ -699,8 +706,8 @@ consumer's process ends, and `dequeued_total{from=…}`, the rows taken off so f
 grows — the pace a sampled sawtooth can lose the bottoms of. When a
 step ends, however it ended — succeeded, failed, stopped, turned off —
 the sink sets every `queued` series of that step to zero, its own and
-each `queued{from=…}`: a step that is not running has nothing ahead of
-it in this run.
+each `queued{from=…}`: an invocation that has ended has nothing ahead
+of it.
 
 When the step ended short of done (stopped, turned off, failed, or
 `incomplete`), what its own `queued` held at that moment is what it
@@ -708,13 +715,13 @@ still owes: the conversations, threads and files a Slack sync saw
 waiting and did not get to. The sink writes it first as the step's
 `owed` (`datalib_metrics::OWED`), which nothing zeroes. A step that
 succeeded owes nothing, whatever its bar still showed: a render or an
-embed often ends a successful run with work announced that it then had
-no need to do, and a download that cannot finish says so by ending
-`incomplete`. So every step a run invokes gets an `owed` as it ends,
-zero when it succeeded or never counted, and the next run that invokes
-it replaces it (`runs_sink::owed_at_end`). A `queued{from=…}` is not
+embed often ends a successful invocation with work announced that it
+then had no need to do, and a download that cannot finish says so by
+ending `incomplete`. So every invocation gets an `owed` as it ends, zero
+when it succeeded or never counted, and the step's next invocation to
+end replaces it (`runs_sink::owed_at_end`). A `queued{from=…}` is not
 owed: those are the producer's seals the step has not read, which its
-next run reads anyway. The Manage row of a step at rest draws it ("412
+next invocation reads anyway. The Manage row of a step at rest draws it ("412
 owed"), and `datalib-pipeline status` lists it. A record the step reached and
 failed is usually counted done, so the count can fall short of what the
 store owes by the records that failed, which are errors on the row.
@@ -780,35 +787,37 @@ announced for it by the next look, a writer bypassed `Store` (a `sqlite3`
 shell, an older build): that is logged at ERROR and counted
 (`announce::missed_announcements`), and tests assert the count is zero.
 It is the only timer that wakes an idle loop, and it exists to catch
-that bug. The other, while a run is open, is a look at the disk
+that bug. The other, while the loop has work open, is a look at the disk
 every five seconds for the `[disk_space]` floor: nothing announces a disk
 filling or being freed.
 
 A `datalib-pipeline` running the loop with no server up, a sync or a
 `serve`, has nobody watching the config, so it starts using an edit
-at its next run, not mid-sync.
+when it next takes work on with none open, not mid-sync.
 
 A host holding the lock runs one loop until it is told to stop,
 `Runner::run_forever` (`supervisor/round.rs`). Idle is a tick that starts
 nothing: a request asked to stop before the loop started serving it is
 closed as `stopped`, and a switch or a config edit reaches the `steps`
-table. The first request or job the loop starts serving with none open
-begins a run, which the host records through
-`supervisor::loop_host::LoopHost`: the loop calls its `open` for the
-run's step environment when the run opens, and its `close` when it
-closes. `supervisor::serve::run` runs that loop after taking the lock and
-the prepare pass; `datalib-pipeline serve` calls that, and the harness
-runs `run_forever` itself. A `datalib-pipeline` sync has no idle side:
-`Runner::serve` opens one run, serves until nothing is open, then
-exits.
+table. The loop asks its host (`supervisor::loop_host::LoopHost`) for
+the steps' environment, built from the config as it is, before each
+tick that starts something, and tells it when it takes work on with
+none open and when it has none left (`busy`). Nothing records that
+stretch: its end is only when `datalib-pipeline sync` prints its report.
+`supervisor::serve::run` runs that loop after taking the lock and the
+prepare pass; `datalib-pipeline serve` calls that, and the harness runs
+`run_forever` itself. `Runner::serve`, which the tests call, serves until
+nothing is open, then returns.
 
 `datalib-pipeline serve` says on stderr, one NDJSON line each
 (`supervisor::serve::ServeEvent`), what its parent needs and no store
-holds: that it holds the lock (`holding`), the start and end of each run
-(`sync_started`, `sync_over`), and every write it makes to the run
-store (`run_store_written`), which a filesystem watch would report late.
-Its own log lines go to the run store, as a `dag` process outside any
-run, which the log card offers under "The runner". SIGINT or SIGTERM
+holds: that it holds the lock (`holding`), when it takes work on and
+when it has none left (`busy`, `idle`; the run store has every
+invocation's end written before `idle` is said), and every write it
+makes to the run store (`run_store_written`), which a filesystem watch
+would report late. Its own log lines go to the run store, as a `dag`
+process about no invocation, which the log card offers under "The
+runner". SIGINT or SIGTERM
 stops it: its steps are interrupted and their requests stay open. A root
 with no config, or one it cannot read, is served all the same, and
 nothing runs until the file holds a config.
@@ -905,11 +914,9 @@ header says rollback-journal:
 
 | table | one row per | what it holds |
 |---|---|---|
-| `steps` | step | its state now (`state`, `waiting_for`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a run reached it (`last_*`) |
+| `steps` | step | its state now (`state`, `waiting_for`, `state_detail`, `turned_off_by`, and `requests`, the open requests it still has work in: a JSON array, NULL once it has none, which is when its Manage row offers Sync again), what it read at its last success (`reads`), under which definition (`fingerprint`), and what happened the last time a request reached it (`last_*`: its last invocation's id, the requests that invocation served in `last_requests`, how and when it ended) |
 | `sinks` | tree a step writes | the version it last published |
-| `runs` | run of the loop | when it started and finished |
-| `run_steps` | step the newest run has reached | what it is doing in that run |
-| `invocations` | process the loop started | when, in which run, and how it ended (`outcome` is NULL while it runs) |
+| `invocations` | process the loop started | its step, when, and how it ended (`outcome` is NULL while it runs); the run store's `invocations` has the same id and what it did |
 
 The store's shape moves by the rungs of
 `supervisor/store.rs`'s `LADDER`: an open runs the rungs from the
@@ -917,34 +924,53 @@ version the store records to this build's before it runs the DDL, and a
 store a newer build migrated further is refused, so two builds sharing a
 root run the newer one.
 
-A run must record a state for *every* step in scope (including ones that
-were skipped or blocked and never "ran"), a `finished_at_utc` that tells
-a completed run from a crashed one, and per-step timings. The loop keeps
-a copy of the second set of tables in memory (`record::LoopState`) and
-saves only what changed since
+A step a request reached records how that went, including when it was
+skipped or blocked and never "ran" (its last invocation's id stays, so
+its log is still found). The loop keeps a copy of the second set of
+tables in memory (`record::Record`) and saves only what changed since
 its last save (`record::changes`), after every tick and every event, not
 only on terminal states; a Manage row's Status is `steps.state`, read
 straight from it.
 
-The run id is `DATALIB_DAG_RUN_ID`, verbatim — a UUID v7 the host mints
-for one run of the loop (`datalib-pipeline` takes `--run-id` instead
-when given one). `supervisor::host::step_env` puts it in the
-child environment and `start_record` hands the same string to the run
-store (`system/runs/runs.sqlite`) *before* the loop starts, and `Runner`
-reads it back out of that environment, so `system/supervisor.sqlite`,
-the run store and every step name one run. If
-they diverge nothing errors — the store describes a run nobody is
-displaying, `/api/dag` reports no progress on the id mismatch, and the
-UI silently shows none. `started_at` stays the pinned
-`DATALIB_DAG_NOW`, and `finished_at` is read off the same clock
-(`datalib_time::RunClock`: the start moved on by the time since), in
-`system/supervisor.sqlite` and in the run store alike, so a run pinned to 2369 ends in
-2369. The runner's stamps for a step and its log lines stay on the
-wall clock.
+### History: invocations and requests
 
-`system/supervisor.sqlite` is the only way a reader who did not spawn
-the run learns what it did, and the loop saves its state there before it
-closes a request, whether its work is done or it was
+The invocation id is `DATALIB_DAG_INVOCATION_ID`, a UUID v7 the loop
+mints as it starts the step (`scheduler::new_invocation_id`), and the
+same string is the `invocations.id` of `system/supervisor.sqlite`, the
+step's `last_invocation_id`, the `invocation_start` event's
+`invocation`, and the run store's key for the invocation's rows. The
+step is handed it again under its old name, `DATALIB_DAG_RUN_ID`, for a
+program that still reads that. The event names the requests the
+invocation serves (every open request whose scope wants the step) or
+the job that started it, and the run store keeps that as
+`invocation_requests`; so "what this sync ran", "this sync's log" and
+"this step's log" are queries over the run store's `invocations` and
+`invocation_requests` with the request rows of
+`system/supervisor.sqlite` (`datalib_runs::invocations_of`,
+`log_query`'s `run:` and `invocation:`). `datalib-pipeline` takes
+`--request-id` (`--run-id` is the old spelling) to give its request or
+job an id of its own, for a fixture that looks it up.
+
+`DATALIB_DAG_NOW` is the time the oldest open request an invocation
+serves was opened, to the second, or for one a job started (a
+`--prepare`, a reset's `--reset`, a compaction's `--compact`), the time
+the job was opened. So every output a sync stamps agrees on its time,
+and a sync opened while another runs gets its own. `--now` replaces it
+for every invocation. The runner's own stamps for an invocation and its
+log lines stay on the wall clock.
+
+Before invocations the loop recorded a **busy period** — from taking a
+request on while idle to having none left — as a run: a row in the
+run store's `runs`, every step's row in it in `step_runs`, its metrics
+and log lines filed under the run's id, and every step handed that id as
+`DATALIB_DAG_RUN_ID` and the period's start as `DATALIB_DAG_NOW`. The
+run store keeps those rows as they were and reads them beside the
+invocations (`datalib/backend/runs/`), and a step's last outcome from
+then keeps its status and times but names no invocation.
+
+`system/supervisor.sqlite` is the only way a reader who did not start
+the sync learns what it did, and the loop saves its state there before
+it closes a request, whether its work is done or it was
 stopped, so a reader that sees a request closed never finds a step still
 serving it. A step stopped with its request reads Stopping until its
 process has exited. `POST /api/requests`

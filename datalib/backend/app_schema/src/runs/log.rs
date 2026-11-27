@@ -1,5 +1,6 @@
-// One row per log line: every step of every run, what the runner said
-// about a run, and what the app's server said between runs.
+// One row per log line: what every invocation of a step printed, what the
+// runner said about one, and what the runner and the app's server said
+// of themselves.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
@@ -114,7 +115,8 @@ pub struct LogRow {
     /// tail cursor. A writer leaves it 0.
     #[col(sql = "INTEGER")]
     pub seq: i64,
-    /// `None` for a line written outside any run: the server's own.
+    /// The busy period an older build filed the line under; `None` for
+    /// every line this build writes.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: Option<String>,
     /// The process that wrote it (`processes`): a step's for what came
@@ -123,7 +125,7 @@ pub struct LogRow {
     /// writer's own.
     #[col(sql = "VARCHAR(64)")]
     pub process_id: String,
-    /// `None` for a line about the run, or the server, rather than one
+    /// `None` for a line about the runner, or the server, rather than one
     /// step.
     #[col(sql = "VARCHAR(255)")]
     pub step: Option<String>,
@@ -131,7 +133,7 @@ pub struct LogRow {
     /// said; `None` for a line with no step, or a step outside any group.
     #[col(sql = "VARCHAR(255)")]
     pub group_id: Option<String>,
-    /// Which invocation of the step within the run; 0 when unknown.
+    /// Which attempt of the invocation; 0 when unknown.
     #[col(sql = "INT")]
     pub attempt: i64,
     /// UTC. The line's own clock when it carried one, else when the
@@ -161,4 +163,9 @@ pub struct LogRow {
     /// there were any.
     #[col(sql = "TEXT")]
     pub fields: Option<String>,
+    /// The invocation of `step` the line is about; `None` for a line about
+    /// no invocation (the runner's or the server's own) and for one an
+    /// older build wrote.
+    #[col(sql = "VARCHAR(64)")]
+    pub invocation_id: Option<String>,
 }

@@ -208,16 +208,13 @@ async fn a_source_synced_during_anothers_sync_runs_beside_it() {
         action(&rb, "stop")["label"],
         "Stop the sync of b, started by claude"
     );
+    // Each row's live run is its own request, and `/api/dag` names the
+    // older one: a run is a request, however many are open at once.
     let dag = call(&state, "GET", "/api/dag", None).await;
     assert_eq!(dag["run"]["live"], true, "{dag}");
-    assert_eq!(
-        ra["live_run_id"], dag["run"]["run_id"],
-        "one run serves both"
-    );
-    assert_eq!(
-        rb["live_run_id"], dag["run"]["run_id"],
-        "one run serves both"
-    );
+    assert_eq!(ra["live_run_id"], json!(a), "{ra}");
+    assert_eq!(rb["live_run_id"], json!(b), "{rb}");
+    assert_eq!(dag["run"]["run_id"], json!(a), "{dag}");
 
     std::fs::write(root.join("release"), "").unwrap();
     for id in [&a, &b] {

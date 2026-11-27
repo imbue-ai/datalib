@@ -1,6 +1,6 @@
 # Logging — one store, every process, and how to add a line
 
-The run store: where every log line, step state and metric lands, who
+The run store: where every log line, invocation and metric lands, who
 writes it, how to add a line and how to read it. How a step writes
 lines on stderr (pipes, envelopes, flushing, the error tail) is
 [`step_protocol.md`](step_protocol.md#stderr-logging).
@@ -9,17 +9,18 @@ lines on stderr (pipes, envelopes, flushing, the error tail) is
 
 Everything any Datalib process says lands in one file,
 `<data_root>/system/runs/runs.sqlite` — plain SQLite in WAL mode, so
-`sqlite3` opens it. The runner writes it during a run; `datalib-http`
-writes it for the life of the server. The tables:
+`sqlite3` opens it. The runner writes it for as long as it runs the
+loop; `datalib-http` writes it for the life of the server. The tables:
 
 | table | one row per |
 |---|---|
 | `processes` | a process that took part (below) |
-| `runs` | a run of the runner: what it is for (`kind`: a sync, the prepare pass at a start, or giving back disk) and why it started (`reason`, also the run's first line). Empty for a run an older build recorded |
-| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing removed them at its end, so any might have been about to run |
+| `invocations` | an invocation: one process the loop started for one step, its retries included. What it was started with (`fingerprint`, `reads`, `now`, `verb` for one a job started), its state (`running`, then how it ended), attempt, error, message, exit, start and end. One whose loop died is closed as `stopped` by the next loop |
+| `invocation_requests` | an invocation and a request it served: each open request whose scope wanted the step, or the job (a reset, a compaction, the prepare pass) that started it. Request and job rows themselves are in `system/supervisor.sqlite` |
 | `log` | a line |
-| `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse time series |
-| `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, `processes`, a run's lines, the server's lines), with a counter each write bumps |
+| `invocation_metrics`, `invocation_metric_samples` | an invocation's numbers — the newest value of each series, and a sparse time series. A value the runner keeps for a step it is not running (a consumer's `queued{from=…}`) goes under the step's latest invocation, or under an empty id before it has one |
+| `runs`, `step_runs`, `metrics`, `metric_samples` | what builds before invocations recorded, a row per busy period of the loop (a run) and its steps' rows and numbers. Nothing writes them now; readers read them beside the invocations until retention ages them out |
+| `store_changes` | a part of the store a reader can depend on (`invocations`, `metrics`, `processes`, an invocation's lines, the runner's and the server's own lines), with a counter each write bumps |
 
 Every stamp is UTC in a `*_utc` column with the offset the clock was
 in beside it (`tz_offset`); text order is instant order. A line keeps
@@ -55,15 +56,19 @@ filesystem. **A data root belongs on local disk**, not on an NFS or SMB
 mount or inside a Dropbox folder.
 
 Retention is `[run_history]` in `config.toml`
-([`dag_example.toml`](../../configs/dag_example.toml)): `max_runs` /
-`max_age_days` for runs and everything that belongs to one,
-`process_log_days` / `process_log_lines` for the lines outside any run
-— the server's and the pages'. `disk_usage_days` is for the disk
+([`dag_example.toml`](../../configs/dag_example.toml)): `max_age_days`
+for invocations and everything that belongs to one, and `max_runs` for
+how many requests (and jobs) their invocations are kept for: an
+invocation goes once none of the newest `max_runs` requests it served
+is kept. An older build's runs go by the same two. `process_log_days` /
+`process_log_lines` are for the lines about no invocation — the
+runner's own, the server's and the pages'. Every writer prunes as it
+opens the store and every hour after. `disk_usage_days` is for the disk
 samples in `system/disk_stats.sqlite`, not this store.
 
 Nothing the loop decides reads this store: which steps are due and
 what each last succeeded with are in `system/supervisor.sqlite`. So
-losing it loses the logs, metrics and run history the app shows, and
+losing it loses the logs, metrics and history the app shows, and
 nothing else. A store from an older schema version is
 upgraded in place, keeping its rows. One that will not open, or is at a
 version this build has no upgrade from (a newer build's, say), is
@@ -83,8 +88,8 @@ and the commit it was built from — what a line's `filename` and
 
 | `process` | what | who records it | ends when |
 |---|---|---|---|
-| `dag` | a run of the runner; or a `datalib-pipeline serve`, for the lines it writes outside any run | itself | it records nothing; the run row closes, or the serve stops |
-| `step` | one attempt of one step — or one process of a streaming consumer, which is spawned once per producer checkpoint, every one under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
+| `dag` | a process running the loop (`datalib-pipeline serve`, or a `datalib-pipeline` verb), for the lines it writes about itself and the ones it writes about a step at rest | itself | when it stops |
+| `step` | one attempt of one invocation, `invocation_id` naming it — a streaming consumer is invoked once per producer checkpoint, each invocation's first attempt `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
 | `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
 | `applet` | one start of one applet, its config id in `applet`; it writes no lines, which stay the server's | the server, at spawn and when it stops or reaps it | `exit_code` or `signal` |
 | `ui` | one load of the app in one browser tab | the server, on the page's behalf | the page says so on `pagehide` |
@@ -106,11 +111,12 @@ sqlite3 <root>/system/runs/runs.sqlite \
 An applet's row has no lines, so the retention that prunes the server's
 lines prunes it too, `process_log_days` after it started.
 
-A line also keeps its **subject** — `run_id`, `step`, `attempt` — which
-is not the same thing: the runner's line "step X failed" is authored by
-the runner and about step X. A line about a step also carries the
-step's `group_id`, so a source's lines can be read together whatever
-step wrote them.
+A line also keeps its **subject** — `invocation_id`, `step`, `attempt`
+— which is not the same thing: the runner's line "step X failed" is
+authored by the runner and about step X's invocation. A line about a
+step also carries the step's `group_id`, so a source's lines can be
+read together whatever step wrote them. A line an older build wrote
+names its run in `run_id` instead of an invocation.
 
 The commit belongs to the process, not the store, because lines from
 different builds sit in one file. It comes from the
@@ -128,7 +134,7 @@ has none. A page has the server's.
 | you are writing | do this | it becomes |
 |---|---|---|
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added |
-| the runner, about a step — a checkpoint sealed, a consumer's process that failed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
+| the runner, about a step — which requests an invocation was started for, a checkpoint sealed, why an invocation ended badly, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step and, while it runs, its invocation, with the runner as author |
 | Rust in `datalib-step`'s steps | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
@@ -180,8 +186,8 @@ the wait ends when the answer arrives and the line says `hidden`.
 `log_level` at the top of its `config.toml` — `trace` when it does not
 say — and it applies to Datalib's own crates (the server's `http.*`
 targets included) in every process of that root: the server reads it at
-launch (a change takes a restart), the runner per run, and each step
-gets the resulting filter as `RUST_LOG`. Third-party crates follow it
+launch (a change takes a restart), the runner for each tick that starts
+an invocation, and each step gets the resulting filter as `RUST_LOG`. Third-party crates follow it
 down to `info` and no further, and the noisy ones (`sqlx`, `hyper`,
 `html5ever`, …) stay at `warn` or above. A `RUST_LOG` set where a
 process was started wins over all of that.
@@ -329,24 +335,30 @@ log goes into a public issue, the person reads it first.
 
 ## Reading it
 
-**In the app.** The log is a card, `logView({ run, step, launch })`.
+**In the app.** The log is a card, `logView({ run, step, launch })`,
+where a run is a request or a job (or a run an older build recorded).
 **Logs** in the status bar opens it on everything (the picker holds the
-runs, this server's launch and earlier ones, and the pages of the app);
-on the Manage screen, **Show step log** on a step's menu opens its
-newest attempt, as does a double-click on a Failed row. A double-click,
+runs, the runner, this server's launch and earlier ones, and the pages
+of the app); with a run picked, a second picker holds the processes of
+its invocations.
+On the Manage screen, **Show step log** on a step's menu opens its
+newest invocation in the run it served, as does a double-click on a
+Failed row. A double-click,
 Enter or "Open this line" opens `logLineView(seq)` beside the card: the
 whole message, the fields as a tree, the source link at the process's
 commit, both clocks. The grid shows Time, Step, Level, Stream, Source,
 Message and Fields; the grid menu at the top right shows the hidden
-ones (run, process, commit, thread, target, group).
+ones (invocation, run, process, commit, thread, target, group).
 
 The search bar takes the grammar every grid shares
 ([`searching.md`](../user/searching.md)): the keys are the columns —
-`run`, `process`, `step`, `group`, `level`, `stream`, `target`,
-`thread`, `msg` — plus `process_id` and `attempt`, `min_level:warn`
-(this level and above) and `commit:0fc29cb` (prefix). The pickers above
-the grid write `run:`, `process_id:`, `step:` and `attempt:` into the
-query, and clearing it shows the whole store. The card tails while what
+`invocation`, `process`, `step`, `group`, `level`, `stream`, `target`,
+`thread`, `msg` — plus `process_id` and `attempt`, `run:` (the lines of
+a request's or a job's invocations, or of an older build's run, by its
+id), `min_level:warn` (this level and above) and `commit:0fc29cb`
+(prefix). The pickers above the grid write `run:`, `invocation:`,
+`process_id:`, `step:` and `attempt:` into the query, and clearing it
+shows the whole store. The card tails while what
 it shows may still be writing.
 
 **Over the API** (`Authorization: Bearer <token>`, the token being
@@ -354,9 +366,10 @@ it shows may still be writing.
 
 ```
 GET /api/processes?run=&process=&limit=       the authors, newest first
-GET /api/runs                                 recent runs
-GET /api/runs/{run}/steps                     step_runs + current metrics
-GET /api/runs/{run}/log?step=&after_seq=&limit=  one run's lines, oldest first
+GET /api/runs?step=&limit=                    requests, jobs and old runs, newest first
+GET /api/runs/{run}/invocations               a request's or job's invocations
+GET /api/runs/{run}/steps                     each step's newest invocation in it, with its numbers
+GET /api/runs/{run}/log?step=&after_seq=&limit=  its invocations' lines, oldest first
 GET /api/log?q=&limit=&after_seq=|before_seq=  lines, oldest first
 GET /api/log/{seq}                            one line, with its process row
 ```
@@ -397,12 +410,12 @@ form: `datalib`, then what the series is about (`step`, `tree`, `disk`,
 config; it says nothing about which program the step runs.
 
 - **`datalib_step_<name>`**: every series a step the config declares
-  has reported, its newest value from the last run it reported in,
-  labelled `step`, `group` and the series' own labels. One whose name
-  ends in `_total` is a counter, anything else a gauge
+  has reported, its newest value from the last invocation it reported
+  in, labelled `step`, `group` and the series' own labels. One whose
+  name ends in `_total` is a counter, anything else a gauge
   ([`step_protocol.md`](step_protocol.md#stdout-the-event-protocol-optional)
   has the naming rules). A step's counters start again from zero each
-  run, which a scraper reads as a counter reset.
+  invocation, which a scraper reads as a counter reset.
 - **`datalib_step_state{state=…}`**: 1 for the state the sync loop last
   put the step in, 0 for the others — `running`, `failed`, `off`, …
 - **`datalib_step_last_success_timestamp_seconds`**: for an alert on a
@@ -430,7 +443,7 @@ config; it says nothing about which program the step runs.
   `rss_bytes` series.
 
 Its history starts when something begins scraping; the app's own views
-read the run store, which has every run it keeps. Labels are step and
+read the run store, which has every invocation it keeps. Labels are step and
 group ids and what a step labels its series with (a table name, a
 producer, a statement's name and plan), never a record's contents. Log lines do not go out this way.
 

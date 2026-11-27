@@ -2635,16 +2635,18 @@ class IngestedTngPipelineTest(unittest.TestCase):
     # ── the run store ───────────────────────────────────────────────
 
     def _documents_rendered_in_newest_run(self) -> dict[str, int]:
-        """`step → documents (re)rendered` for the newest run, only the
-        steps that rendered any."""
+        """`step → documents (re)rendered` for the newest run of the
+        pipeline, only the steps that rendered any."""
         store = self.workspace / "system" / "runs" / "runs.sqlite"
         con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
         try:
             rows = con.execute(
                 "SELECT step, fields FROM log "
-                # The runs share a pinned `--now` (run 2 is five minutes on),
-                # so insertion order, not the stamp, says which is newest.
-                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid DESC LIMIT 1) "
+                # Each run of the pipeline pins its own `--now` (run 2 is
+                # five minutes on), which every invocation it starts is
+                # handed: the newest invocation's says which run is newest.
+                "WHERE invocation_id IN (SELECT invocation_id FROM invocations WHERE now = "
+                "(SELECT now FROM invocations ORDER BY rowid DESC LIMIT 1)) "
                 "AND msg = 'docs (re)rendered'"
             ).fetchall()
         finally:
@@ -2712,7 +2714,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
         try:
             lines = con.execute(
                 "SELECT group_id, level, fields FROM log "
-                "WHERE run_id = (SELECT run_id FROM runs ORDER BY rowid LIMIT 1) "
+                # Run 1's invocations: those handed the first one's `--now`.
+                "WHERE invocation_id IN (SELECT invocation_id FROM invocations WHERE now = "
+                "(SELECT now FROM invocations ORDER BY rowid LIMIT 1)) "
                 "AND json_extract(fields, '$.event') = 'problems_recorded'"
             ).fetchall()
         finally:
@@ -2830,9 +2834,9 @@ class IngestedTngPipelineTest(unittest.TestCase):
                 seen, 0, "the fixture no longer reads a thread, so this checks nothing"
             )
             spam = con.execute(
-                "SELECT run_id, step, attempt, target, msg, count(*) n FROM log "
+                "SELECT invocation_id, step, attempt, target, msg, count(*) n FROM log "
                 "WHERE level IN ('info', 'warn', 'error') "
-                "GROUP BY run_id, step, attempt, target, msg HAVING n > ? "
+                "GROUP BY invocation_id, step, attempt, target, msg HAVING n > ? "
                 "ORDER BY n DESC",
                 (self._SPAM_CEILING,),
             ).fetchall()

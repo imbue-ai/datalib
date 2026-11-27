@@ -137,9 +137,9 @@ pub enum Verb {
     /// of date. Exits with the request's outcome: 0 done, 2 failed or some
     /// config entry did not load, 130 stopped. Ctrl-C asks this request to
     /// stop; a second Ctrl-C exits at once. stderr is an NDJSON event
-    /// stream (run_plan, then step_start, progress_*, log, hint and
-    /// step_finish per step, then one run_summary); stdout gets one line
-    /// per step at the end.
+    /// stream (run_plan, then invocation_start, step_start, progress_*,
+    /// log, hint, invocation_end and step_finish per step, then one
+    /// run_summary); stdout gets one line per step at the end.
     Sync {
         /// The data root, or its config.toml.
         root: PathBuf,
@@ -152,9 +152,11 @@ pub enum Verb {
         by: String,
         #[command(flatten)]
         run: StepArgs,
-        /// Use this run id rather than minting one.
-        #[arg(long, value_name = "ID")]
-        run_id: Option<String>,
+        /// Give the request (for a reset or a freeing of disk space, the
+        /// job) this id rather than a fresh one; its invocations are listed
+        /// under it. `--run-id` is the old spelling.
+        #[arg(long = "request-id", alias = "run-id", value_name = "ID")]
+        request_id: Option<String>,
     },
     /// Empty what these steps wrote, keeping its doltlite history, so
     /// their next run starts from nothing; an ingest step's attachment
@@ -170,9 +172,11 @@ pub enum Verb {
         steps: Vec<String>,
         #[command(flatten)]
         run: StepArgs,
-        /// Use this run id rather than minting one.
-        #[arg(long, value_name = "ID")]
-        run_id: Option<String>,
+        /// Give the request (for a reset or a freeing of disk space, the
+        /// job) this id rather than a fresh one; its invocations are listed
+        /// under it. `--run-id` is the old spelling.
+        #[arg(long = "request-id", alias = "run-id", value_name = "ID")]
+        request_id: Option<String>,
     },
     /// Give back the disk every store holds that no commit reaches. Every
     /// commit stays readable, so nothing is lost and nothing runs again.
@@ -188,18 +192,21 @@ pub enum Verb {
         drop_old_versions_on_derived_data: bool,
         #[command(flatten)]
         run: StepArgs,
-        /// Use this run id rather than minting one.
-        #[arg(long, value_name = "ID")]
-        run_id: Option<String>,
+        /// Give the request (for a reset or a freeing of disk space, the
+        /// job) this id rather than a fresh one; its invocations are listed
+        /// under it. `--run-id` is the old spelling.
+        #[arg(long = "request-id", alias = "run-id", value_name = "ID")]
+        request_id: Option<String>,
     },
     /// Run the loop on the root until stopped: wait for runner-lock if
     /// another process holds it, run the command of each step whose
     /// program takes --prepare with --prepare appended, then serve every
     /// sync, stop, reset and purge written to the store, idle or not.
     /// SIGINT or SIGTERM stops it: its steps are interrupted and their
-    /// requests stay open for the next loop; a second signal exits at once. stderr is an NDJSON stream of
-    /// what the loop has to say that no store holds (holding, sync_started,
-    /// sync_over, run_store_written); its log lines go to the run store.
+    /// requests stay open for the next loop; a second signal exits at
+    /// once. stderr is an NDJSON stream of what the loop has to say that
+    /// no store holds (holding, busy, idle, run_store_written); its log
+    /// lines go to the run store.
     Serve {
         /// The data root, or its config.toml.
         root: PathBuf,

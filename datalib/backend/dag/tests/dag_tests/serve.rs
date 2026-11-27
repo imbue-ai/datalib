@@ -106,7 +106,7 @@ fn serve_runs_one_sync_after_another_until_sigterm() {
             String::from_utf8_lossy(&out.stderr).contains("following request"),
             "sync {n} was not served by `serve`, which should still hold the loop: {out:?}"
         );
-        events.wait_for("sync_over");
+        events.wait_for("idle");
         assert_eq!(runs(root), n, "the source runs once per sync");
     }
     assert!(

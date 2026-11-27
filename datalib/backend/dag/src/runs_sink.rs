@@ -1,18 +1,18 @@
-//! Publishing the event stream to the run store.
+//! Publishing the event stream to the run store, one invocation at a time.
 //!
-//! Step state is kept here and written whole: the store coalesces to the
-//! newest row per step, so every row it sees has to be complete. The
-//! `progress_length` / `progress_inc` sugar is also resolved here — the
-//! wire carries deltas, the store carries positions, and coalescing
-//! deltas would lose work.
+//! An invocation's row is kept here and written whole: the store
+//! coalesces to the newest row per invocation, so every row it sees has
+//! to be complete. The `progress_length` / `progress_inc` sugar is also
+//! resolved here — the wire carries deltas, the store carries positions,
+//! and coalescing deltas would lose work.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 
 use datalib_runs::store::{now_split, split_stamp};
 use datalib_runs::{
-    canonical_labels, LiveState, LogRow, MetricRow, Process, ProcessRow, Retention, RunStart,
-    RunWriter, StepRunRow,
+    canonical_labels, InvocationMetricRow, InvocationRow, LiveState, LogRow, LoopWriter, Process,
+    ProcessRow, Retention,
 };
 
 use crate::events::{Event, EventSink, LogLevel};
@@ -21,28 +21,27 @@ use crate::run_state::RunState;
 use crate::slow_statements::{is_slow_statement, SlowStatements};
 use crate::step::StepId;
 
-/// What we know about one step right now.
+/// What we know about one step: its latest invocation, and that
+/// invocation's attempt.
 #[derive(Default, Clone)]
 struct Acc {
-    row: StepRunRow,
-    /// From the plan; every line about the step carries it.
-    group: Option<String>,
+    /// The step's latest invocation; `None` before the first this sink
+    /// saw. A value the runner keeps for the step after it ended (a
+    /// consumer's queue) is filed under it.
+    row: Option<InvocationRow>,
     /// The attempt's process: what came out of the step's pipes is its,
     /// and how it ended goes on it.
     process: Option<ProcessRow>,
-    /// The sugar accumulators: increments so far, and the reported total.
+    /// The sugar accumulators: increments so far, and the announced total.
     done: u64,
     total: Option<u64>,
     checkpoints: u64,
     /// The labels of every `queued` series written for the step, so its
-    /// finish can empty them all.
+    /// end can empty them all.
     queued: BTreeSet<String>,
     /// This attempt's last value of its own `queued`, the one without a
     /// `from`: what it still owes if it ends now.
     own_queued: Option<i64>,
-    /// The processes started so far: a streaming consumer is started once
-    /// per seal it reads, each process a first attempt.
-    passes: u32,
     /// This attempt's last value of each running total (`name`, labels),
     /// and whether it has already been caught going down.
     counters: HashMap<(String, String), (i64, bool)>,
@@ -50,6 +49,22 @@ struct Acc {
     slow: SlowStatements,
     /// What `datalib_sql_work` warned of, likewise.
     heavy: HeavyStatements,
+}
+
+impl Acc {
+    /// The invocation still running, for a line about it.
+    fn live(&self) -> Option<&InvocationRow> {
+        self.row
+            .as_ref()
+            .filter(|r| !datalib_runs::is_terminal(&r.state))
+    }
+
+    fn invocation_id(&self) -> String {
+        self.row
+            .as_ref()
+            .map(|r| r.invocation_id.clone())
+            .unwrap_or_default()
+    }
 }
 
 /// The attempt's process row with its peak raised to `bytes`, to write
@@ -64,25 +79,21 @@ fn raise_peak(process: Option<&mut ProcessRow>, bytes: i64) -> Option<ProcessRow
     Some(p.clone())
 }
 
-/// What a step owes as it ends `status`, its own queue last at `queued`;
-/// `None` keeps what its last run said, for a step this run did not
-/// invoke. Only an end short of done owes: a render's or an index's bar
-/// ends a successful run still holding work it reported and then found
-/// it had no need to do, and a download that gives up with work owed
-/// ends `incomplete`, which is a failure.
-fn owed_at_end(status: RunState, ran: bool, queued: Option<i64>) -> Option<i64> {
-    if !ran {
-        return None;
-    }
-    Some(match status {
+/// What an invocation owes as it ends `status`, its own queue last at
+/// `queued`. Only an end short of done owes: a render's or an index's bar
+/// ends a successful invocation still holding work it announced and then
+/// found it had no need to do, and a download that gives up with work
+/// owed ends `incomplete`, which is a failure.
+fn owed_at_end(status: RunState, queued: Option<i64>) -> i64 {
+    match status {
         RunState::Failed | RunState::Stopped => queued.unwrap_or(0).max(0),
         RunState::Succeeded | RunState::SkippedUpToDate | RunState::Blocked | RunState::Running => {
             0
         }
-    })
+    }
 }
 
-/// Record a running total's new value, and say what it was if this is
+/// LoopState a running total's new value, and say what it was if this is
 /// the first time within the attempt it has gone down.
 fn counter_fell(
     counters: &mut HashMap<(String, String), (i64, bool)>,
@@ -100,7 +111,7 @@ fn counter_fell(
 
 /// An [`EventSink`] that keeps the run store current.
 pub struct RunStoreSink {
-    writer: Arc<RunWriter>,
+    writer: Arc<LoopWriter>,
     steps: Mutex<HashMap<StepId, Acc>>,
 }
 
@@ -118,7 +129,8 @@ const RUNNER_TARGET: &str = "datalib_dag::runner";
 /// producer (`queued{from=<producer>}`) that the scheduler keeps.
 const QUEUED: &str = datalib_metrics::QUEUED;
 
-/// What a step's own queue held when it ended; not emptied with it.
+/// What a step's own queue held when its invocation ended; not emptied
+/// with it.
 const OWED: &str = datalib_metrics::OWED;
 
 impl RunStoreSink {
@@ -128,33 +140,10 @@ impl RunStoreSink {
     /// unwritable.
     pub fn start(
         data_root: &std::path::Path,
-        run_id: &str,
-        started_at_utc: &str,
         git_hash: Option<String>,
         retention: Retention,
-        started: Option<RunStart>,
     ) -> Option<Self> {
-        let writer = RunWriter::start_because(
-            data_root,
-            run_id,
-            started_at_utc,
-            git_hash,
-            retention,
-            started.clone(),
-        )?;
-        // The run's first line, so a log read from its top opens on why.
-        if let Some(RunStart { kind, reason }) = started {
-            let (ts_utc, tz_offset) = now();
-            writer.log(LogRow {
-                ts_utc,
-                tz_offset,
-                level: LogLevel::Info.as_str().into(),
-                target: Some(RUNNER_TARGET.into()),
-                msg: format!("why this run started: {reason}"),
-                fields: Some(serde_json::json!({ "run_kind": kind.as_str() }).to_string()),
-                ..Default::default()
-            });
-        }
+        let writer = LoopWriter::start(data_root, git_hash, retention)?;
         Some(Self {
             writer: Arc::new(writer),
             steps: Mutex::new(HashMap::new()),
@@ -162,25 +151,35 @@ impl RunStoreSink {
     }
 
     /// For the runner's own `tracing` lines, through
-    /// [`datalib_runs::StoreLayer`]: they land in the run with no step.
+    /// [`datalib_runs::StoreLayer`]: they land about no invocation.
     /// Weak, so the global subscriber never keeps the writer — and its
     /// final flush — from happening when this sink is dropped.
-    pub fn log_sink(&self) -> Weak<RunWriter> {
+    pub fn log_sink(&self) -> Weak<LoopWriter> {
         Arc::downgrade(&self.writer)
     }
 
+    /// Returns once everything sent before it is written.
+    pub fn flush_blocking(&self) {
+        self.writer.flush_blocking();
+    }
+
+    /// Change the step's latest invocation and write it whole; nothing
+    /// for a step with none.
     fn update(&self, step: &StepId, f: impl FnOnce(&mut Acc)) {
         let row = {
             let mut steps = self.steps.lock().expect("run store sink mutex");
             let acc = steps.entry(step.clone()).or_default();
             f(acc);
-            acc.row.step = step.clone();
-            let (at, offset) = now();
-            acc.row.updated_at_utc = at;
-            acc.row.tz_offset = offset;
-            acc.row.clone()
+            acc.row.as_mut().map(|row| {
+                let (at, offset) = now();
+                row.updated_at_utc = at;
+                row.tz_offset = offset;
+                row.clone()
+            })
         };
-        self.writer.step(row);
+        if let Some(row) = row {
+            self.writer.invocation(row);
+        }
     }
 
     fn metric(&self, step: &StepId, name: &str, labels: &BTreeMap<String, String>, value: i64) {
@@ -219,62 +218,61 @@ impl RunStoreSink {
 
     /// A running total that went down is a step naming a gauge as a
     /// counter: `GET /metrics` would serve it as a counter, and a scraper
-    /// would read each fall as a reset and count the rise back twice.
+    /// would read each fall as a reset and count the climb back twice.
     fn warn_counter_fell(&self, step: &StepId, name: &str, labels: &str, before: i64, now: i64) {
         let series = if labels.is_empty() {
             name.to_string()
         } else {
             format!("{name}{{{labels}}}")
         };
-        let (ts_utc, tz_offset) = now_split();
-        self.writer.log(LogRow {
-            step: Some(step.clone()),
-            group_id: self.group_of(step),
-            attempt: self.attempt_of(step),
-            ts_utc,
-            tz_offset,
-            level: LogLevel::Warn.as_str().into(),
-            target: Some(RUNNER_TARGET.into()),
-            msg: format!(
+        self.say(
+            step,
+            None,
+            LogLevel::Warn,
+            format!(
                 "{series} went down, {before} to {now}, but a name ending in `_total` says it only \
                  grows; name it without the suffix if it can fall (docs/dev/step_protocol.md)"
             ),
-            fields: Some(
-                serde_json::json!({ "counter_fell": series, "from": before, "to": now })
-                    .to_string(),
-            ),
-            ..Default::default()
-        });
+            serde_json::json!({ "counter_fell": series, "from": before, "to": now }),
+        );
     }
 
     fn write_metric(&self, step: &StepId, name: &str, labels: String, value: i64) {
         let (updated_at_utc, tz_offset) = now();
-        self.writer.metric(MetricRow {
+        let invocation_id = self
+            .steps
+            .lock()
+            .expect("run store sink mutex")
+            .get(step)
+            .map(Acc::invocation_id)
+            .unwrap_or_default();
+        self.writer.metric(InvocationMetricRow {
+            invocation_id,
             step: step.clone(),
             name: name.to_string(),
             labels,
             value,
             updated_at_utc,
             tz_offset,
-            ..Default::default()
         });
     }
 
-    fn attempt_of(&self, step: &StepId) -> i64 {
-        self.steps
-            .lock()
-            .expect("run store sink mutex")
-            .get(step)
-            .map(|a| a.row.attempt)
-            .unwrap_or(0)
-    }
-
-    fn group_of(&self, step: &StepId) -> Option<String> {
-        self.steps
-            .lock()
-            .expect("run store sink mutex")
-            .get(step)
-            .and_then(|a| a.group.clone())
+    /// The line's step, its group, and its invocation and attempt while
+    /// that invocation runs: a line the runner writes about a step at rest
+    /// is about no invocation.
+    fn about(&self, step: &StepId) -> LogRow {
+        let steps = self.steps.lock().expect("run store sink mutex");
+        let acc = steps.get(step);
+        let live = acc.and_then(Acc::live);
+        LogRow {
+            step: Some(step.clone()),
+            group_id: acc
+                .and_then(|a| a.row.as_ref())
+                .and_then(|r| r.group_id.clone()),
+            invocation_id: live.map(|r| r.invocation_id.clone()),
+            attempt: live.map_or(0, |r| r.attempt),
+            ..Default::default()
+        }
     }
 
     /// The process of the step's current attempt, for a line that came
@@ -305,11 +303,12 @@ impl RunStoreSink {
             (summaries, process_id)
         };
         for (level, msg, fields) in summaries.into_iter().flatten() {
-            self.say_about_attempt(step, process_id.clone(), level, msg, fields);
+            self.say(step, process_id.clone(), level, msg, fields);
         }
     }
 
-    fn say_about_attempt(
+    /// A line the runner writes about a step.
+    fn say(
         &self,
         step: &StepId,
         process_id: Option<String>,
@@ -319,9 +318,6 @@ impl RunStoreSink {
     ) {
         let (ts_utc, tz_offset) = now();
         self.writer.log(LogRow {
-            step: Some(step.clone()),
-            group_id: self.group_of(step),
-            attempt: self.attempt_of(step),
             process_id: process_id.unwrap_or_default(),
             ts_utc,
             tz_offset,
@@ -329,56 +325,12 @@ impl RunStoreSink {
             target: Some(RUNNER_TARGET.into()),
             msg,
             fields: Some(fields.to_string()),
-            ..Default::default()
-        });
-    }
-
-    /// A process of a streaming consumer that failed, at error level, as
-    /// the runner's line about the step: which process, and why — the
-    /// error carries the exit status and the end of the process's stderr.
-    fn log_failed_process(
-        &self,
-        step: &StepId,
-        error: Option<&str>,
-        exit_code: Option<i32>,
-        signal: Option<i32>,
-    ) {
-        let pass = self
-            .steps
-            .lock()
-            .expect("run store sink mutex")
-            .get(step)
-            .map_or(0, |a| a.passes);
-        let why = match (error, exit_code, signal) {
-            (Some(error), _, _) => error.to_string(),
-            (None, Some(code), _) => format!("exit code {code}"),
-            (None, None, Some(signal)) => format!("signal {signal}"),
-            (None, None, None) => "no reason given".to_string(),
-        };
-        let (ts_utc, tz_offset) = now();
-        self.writer.log(LogRow {
-            step: Some(step.clone()),
-            group_id: self.group_of(step),
-            attempt: self.attempt_of(step),
-            ts_utc,
-            tz_offset,
-            level: LogLevel::Error.as_str().into(),
-            target: Some(RUNNER_TARGET.into()),
-            msg: format!("pass {pass} failed: {why}"),
-            fields: Some(
-                serde_json::json!({
-                    "pass_failed": pass,
-                    "exit_code": exit_code,
-                    "signal": signal,
-                })
-                .to_string(),
-            ),
-            ..Default::default()
+            ..self.about(step)
         });
     }
 
     /// The sugar: `done` is the increments so far, `queued` what the
-    /// reported total leaves. A step that never reported a total gets
+    /// announced total leaves. A step that never announced a total gets
     /// `done` alone, which a bar cannot be drawn from and a count can.
     fn publish_sugar(&self, step: &StepId) {
         let (done, total) = {
@@ -392,20 +344,127 @@ impl RunStoreSink {
             self.metric(step, QUEUED, &none, total.saturating_sub(done) as i64);
         }
     }
+
+    /// The invocation is over: its row and its last attempt's process
+    /// closed, its queue emptied and what it owes kept, and the reason it
+    /// ended badly a log line, so the log panel has a line to jump to —
+    /// the last error-level line of a failed invocation is why it failed,
+    /// the last warn-level one of a stopped invocation is where it
+    /// stopped.
+    #[allow(clippy::too_many_arguments)]
+    fn ended(
+        &self,
+        step: &StepId,
+        invocation: &str,
+        status: RunState,
+        error: &Option<String>,
+        exit_code: Option<i32>,
+        signal: Option<i32>,
+        attempts: u32,
+    ) {
+        self.say_slow_statements(step);
+        if let Some(error) = error {
+            let level = if status == RunState::Stopped {
+                LogLevel::Warn
+            } else {
+                LogLevel::Error
+            };
+            self.say(
+                step,
+                None,
+                level,
+                error.clone(),
+                serde_json::json!({ "finished": status.as_str() }),
+            );
+        }
+        let finished_at_utc = now().0;
+        let mut process = None;
+        let mut queued = BTreeSet::new();
+        let mut owed = None;
+        self.update(step, |a| {
+            let Some(row) = a.row.as_mut().filter(|r| r.invocation_id == invocation) else {
+                return;
+            };
+            row.state = status.as_str().into();
+            row.attempt = i64::from(attempts.max(1));
+            row.finished_at_utc = Some(finished_at_utc.clone());
+            row.error = error.clone();
+            row.exit_code = exit_code.map(i64::from);
+            row.signal = signal.map(i64::from);
+            queued = std::mem::take(&mut a.queued);
+            owed = Some(owed_at_end(status, a.own_queued));
+            if let Some(p) = a.process.as_mut().filter(|p| p.finished_at_utc.is_none()) {
+                p.finished_at_utc = Some(finished_at_utc.clone());
+                p.exit_code = exit_code.map(i64::from);
+                p.signal = signal.map(i64::from);
+                process = Some(p.clone());
+            }
+        });
+        if let Some(p) = process {
+            self.writer.process(p);
+        }
+        // Stays after the queue is emptied, until the next invocation ends.
+        if let Some(owed) = owed {
+            self.write_metric(step, OWED, String::new(), owed);
+        }
+        // Ended is ended, however: nothing is ahead of it now.
+        for labels in queued {
+            self.write_metric(step, QUEUED, labels, 0);
+        }
+    }
 }
 
 impl EventSink for RunStoreSink {
     fn emit(&self, event: &Event) {
         match event {
-            // Publish the whole plan up front so a reader can draw every
-            // row, pending ones included, before anything has started.
-            Event::RunPlan { steps } => {
-                for planned in steps {
-                    self.update(&planned.step, |a| {
-                        a.row.state = LiveState::Pending.as_str().into();
-                        a.group = planned.group.clone();
-                    });
-                }
+            Event::InvocationStart {
+                step,
+                invocation,
+                group,
+                verb,
+                requests,
+                now: step_now,
+                fingerprint,
+                reads,
+            } => {
+                let (started_at_utc, tz_offset) = now();
+                let row = InvocationRow {
+                    invocation_id: invocation.clone(),
+                    step: step.clone(),
+                    group_id: group.clone(),
+                    verb: verb.map(|v| v.as_str().to_string()),
+                    state: LiveState::Running.as_str().into(),
+                    attempt: 0,
+                    started_at_utc: started_at_utc.clone(),
+                    now: Some(step_now.clone()),
+                    fingerprint: Some(fingerprint.clone()),
+                    reads: (!reads.is_empty())
+                        .then(|| serde_json::to_string(reads).expect("a string map is JSON")),
+                    updated_at_utc: started_at_utc,
+                    tz_offset,
+                    ..Default::default()
+                };
+                self.writer.served(invocation, requests);
+                // What was ahead of it stays its to empty; the rest is new.
+                self.update(step, |a| {
+                    *a = Acc {
+                        row: Some(row),
+                        queued: std::mem::take(&mut a.queued),
+                        ..Default::default()
+                    }
+                });
+                self.say(
+                    step,
+                    None,
+                    LogLevel::Info,
+                    match verb {
+                        Some(verb) => {
+                            format!("started with {} for {}", verb.flag(), requests.join(", "))
+                        }
+                        None => format!("started for {}", requests.join(", ")),
+                    },
+                    serde_json::json!({ "requests": requests, "now": step_now }),
+                );
             }
             // A retry re-runs the step from zero, so the counters reset
             // with it — otherwise attempt 2 would appear to start
@@ -414,128 +473,43 @@ impl EventSink for RunStoreSink {
                 // A retry goes straight to its next start.
                 self.say_slow_statements(step);
                 let (started_at_utc, tz_offset) = now();
-                let process = ProcessRow {
-                    process_id: datalib_runs::new_process_id(),
-                    process: Process::Step.as_str().into(),
-                    step: Some(step.clone()),
-                    attempt: Some(*attempt as i64),
-                    started_at_utc: started_at_utc.clone(),
-                    tz_offset,
-                    ..Default::default()
-                };
-                self.writer.process(process.clone());
-                // `counters` goes with the rest: a retry counts from zero.
+                let mut process = None;
                 self.update(step, |a| {
-                    *a = Acc {
-                        queued: std::mem::take(&mut a.queued),
-                        passes: a.passes + u32::from(*attempt == 1),
-                        row: StepRunRow {
-                            state: LiveState::Running.as_str().into(),
-                            attempt: *attempt as i64,
-                            started_at_utc: Some(started_at_utc),
-                            ..Default::default()
-                        },
-                        process: Some(process),
-                        group: a.group.take(),
-                        ..Default::default()
-                    }
-                })
-            }
-            // The reason a step ended badly is a log line too, so the
-            // log panel has a line to jump to: the last error-level line
-            // of a failed step is why it failed, the last warn-level one
-            // of a stopped step is where it stopped.
-            Event::StepFinish {
-                step,
-                status,
-                error,
-                exit_code,
-                signal,
-            } => {
-                self.say_slow_statements(step);
-                let finished_at_utc = now().0;
-                let mut ended = None;
-                let mut queued = BTreeSet::new();
-                let mut owed = None;
-                self.update(step, |a| {
-                    queued = std::mem::take(&mut a.queued);
-                    owed = owed_at_end(*status, a.process.is_some(), a.own_queued);
-                    a.row.state = status.as_str().into();
-                    a.row.finished_at_utc = Some(finished_at_utc.clone());
-                    a.row.error = error.clone();
-                    // A process that ended while its producers ran was
-                    // closed by its `PassEnd`; the finish only fills in the
-                    // step's row.
-                    if let Some(p) = a.process.as_mut().filter(|p| p.finished_at_utc.is_none()) {
-                        p.finished_at_utc = Some(finished_at_utc.clone());
-                        p.exit_code = exit_code.map(i64::from);
-                        p.signal = signal.map(i64::from);
-                        ended = Some(p.clone());
-                    }
-                });
-                if let Some(p) = ended {
-                    self.writer.process(p);
-                }
-                // Stays after the queue is emptied, until its next run ends.
-                if let Some(owed) = owed {
-                    self.write_metric(step, OWED, String::new(), owed);
-                }
-                // Ended is ended, however: nothing is ahead of it now.
-                for labels in queued {
-                    self.write_metric(step, QUEUED, labels, 0);
-                }
-                if let Some(error) = error {
-                    let level = if *status == RunState::Stopped {
-                        LogLevel::Warn
-                    } else {
-                        LogLevel::Error
-                    };
-                    let (ts_utc, tz_offset) = now();
-                    self.writer.log(LogRow {
+                    let Some(row) = a.row.as_mut() else { return };
+                    row.attempt = i64::from(*attempt);
+                    let p = ProcessRow {
+                        process_id: datalib_runs::new_process_id(),
+                        process: Process::Step.as_str().into(),
+                        invocation_id: Some(row.invocation_id.clone()),
                         step: Some(step.clone()),
-                        group_id: self.group_of(step),
-                        attempt: self.attempt_of(step),
-                        ts_utc,
-                        tz_offset,
-                        level: level.as_str().into(),
-                        target: Some(RUNNER_TARGET.into()),
-                        msg: error.clone(),
-                        fields: Some(
-                            serde_json::json!({ "finished": status.as_str() }).to_string(),
-                        ),
+                        attempt: Some(i64::from(*attempt)),
+                        started_at_utc: started_at_utc.clone(),
+                        tz_offset: tz_offset.clone(),
                         ..Default::default()
-                    });
+                    };
+                    process = Some(p.clone());
+                    *a = Acc {
+                        row: a.row.take(),
+                        queued: std::mem::take(&mut a.queued),
+                        process: Some(p),
+                        ..Default::default()
+                    };
+                });
+                if let Some(p) = process {
+                    self.writer.process(p);
                 }
             }
-            // The process is closed the way a finished attempt's is; the
-            // step row is not touched, since the step goes on. A process
-            // that failed is an error line now: the next process may
-            // succeed, and the step's finish then says nothing of it.
-            Event::PassEnd {
+            Event::InvocationEnd {
                 step,
+                invocation,
                 status,
                 error,
                 exit_code,
                 signal,
-            } => {
-                self.say_slow_statements(step);
-                if *status == RunState::Failed {
-                    self.log_failed_process(step, error.as_deref(), *exit_code, *signal);
-                }
-                let finished_at_utc = now().0;
-                let mut ended = None;
-                self.update(step, |a| {
-                    if let Some(p) = a.process.as_mut() {
-                        p.finished_at_utc = Some(finished_at_utc.clone());
-                        p.exit_code = exit_code.map(i64::from);
-                        p.signal = signal.map(i64::from);
-                        ended = Some(p.clone());
-                    }
-                });
-                if let Some(p) = ended {
-                    self.writer.process(p);
-                }
-            }
+                attempts,
+            } => self.ended(
+                step, invocation, *status, error, *exit_code, *signal, *attempts,
+            ),
             Event::Metric {
                 step,
                 name,
@@ -550,9 +524,11 @@ impl EventSink for RunStoreSink {
                 self.update(step, |a| a.done = a.done.saturating_add(*delta));
                 self.publish_sugar(step);
             }
-            Event::ProgressMessage { step, msg } => {
-                self.update(step, |a| a.row.msg = Some(msg.clone()))
-            }
+            Event::ProgressMessage { step, msg } => self.update(step, |a| {
+                if let Some(row) = a.row.as_mut() {
+                    row.msg = Some(msg.clone());
+                }
+            }),
             // A checkpoint is the one thing a watcher can act on before
             // the step ends, so it is a log line as well as a count.
             Event::Checkpoint {
@@ -572,26 +548,17 @@ impl EventSink for RunStoreSink {
                     &BTreeMap::new(),
                     n as i64,
                 );
-                let (ts_utc, tz_offset) = now();
                 let since_last = match rows {
                     Some(rows) => format!("{rows} rows since the last, "),
                     None => String::new(),
                 };
-                self.writer.log(LogRow {
-                    step: Some(step.clone()),
-                    group_id: self.group_of(step),
-                    attempt: self.attempt_of(step),
-                    ts_utc,
-                    tz_offset,
-                    level: LogLevel::Info.as_str().into(),
-                    target: Some(RUNNER_TARGET.into()),
-                    msg: format!("sealed checkpoint #{n}: {since_last}now at {version}"),
-                    fields: Some(
-                        serde_json::json!({ "version": version, "rows": rows, "checkpoint": n })
-                            .to_string(),
-                    ),
-                    ..Default::default()
-                });
+                self.say(
+                    step,
+                    None,
+                    LogLevel::Info,
+                    format!("sealed checkpoint #{n}: {since_last}now at {version}"),
+                    serde_json::json!({ "version": version, "rows": rows, "checkpoint": n }),
+                );
             }
             Event::Log {
                 step,
@@ -637,9 +604,6 @@ impl EventSink for RunStoreSink {
                     *level
                 };
                 self.writer.log(LogRow {
-                    step: Some(step.clone()),
-                    group_id: self.group_of(step),
-                    attempt: self.attempt_of(step),
                     process_id,
                     ts_utc,
                     tz_offset,
@@ -655,24 +619,16 @@ impl EventSink for RunStoreSink {
                     fields: fields
                         .as_ref()
                         .map(|f| serde_json::Value::Object(f.clone()).to_string()),
-                    ..Default::default()
+                    ..self.about(step)
                 })
             }
-            Event::Hint { step, msg } => {
-                let (ts_utc, tz_offset) = now();
-                self.writer.log(LogRow {
-                    step: Some(step.clone()),
-                    group_id: self.group_of(step),
-                    attempt: self.attempt_of(step),
-                    ts_utc,
-                    tz_offset,
-                    level: LogLevel::Warn.as_str().into(),
-                    target: Some(RUNNER_TARGET.into()),
-                    msg: msg.clone(),
-                    fields: Some(r#"{"hint":true}"#.into()),
-                    ..Default::default()
-                })
-            }
+            Event::Hint { step, msg } => self.say(
+                step,
+                None,
+                LogLevel::Warn,
+                msg.clone(),
+                serde_json::json!({ "hint": true }),
+            ),
             // The commit a step says its program came from goes on its
             // attempt's process row.
             Event::Capabilities {
@@ -692,9 +648,14 @@ impl EventSink for RunStoreSink {
                 }
             }
             // Nothing else to record: whether a sink streams is about what
-            // the step *can* do, and the summary repeats what `StepFinish`
-            // said.
-            Event::Capabilities { .. } | Event::RunSummary { .. } => {}
+            // the step *can* do; the plan, a pass's end, a step's finish
+            // and the summary are about the loop's busy period, which the
+            // store does not keep, and an invocation's end says the rest.
+            Event::Capabilities { .. }
+            | Event::RunPlan { .. }
+            | Event::PassEnd { .. }
+            | Event::StepFinish { .. }
+            | Event::RunSummary { .. } => {}
         }
     }
 }
@@ -702,29 +663,47 @@ impl EventSink for RunStoreSink {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::PlannedStep;
     use datalib_runs::{
-        log_after, log_query, processes, snapshot, LogCursor, LogQuery, Snapshot, Stream,
+        log_query, processes, snapshot, LogCursor, LogLine, LogQuery, Snapshot, Stream,
     };
 
     async fn run(events: &[Event]) -> (tempfile::TempDir, Snapshot) {
         let td = tempfile::tempdir().unwrap();
-        {
-            let sink = RunStoreSink::start(
-                td.path(),
-                "run-1",
-                "2026-09-11T10:00:00+01:00",
-                Some("ae2d52f0".into()),
-                Retention::default(),
-                None,
-            )
-            .expect("start the store");
-            for e in events {
-                sink.emit(e);
-            }
-        } // dropping the sink drops the writer, which flushes and joins
+        record(td.path(), events);
         let snap = snapshot(td.path()).await.unwrap();
         (td, snap)
+    }
+
+    /// The events, through a sink dropped at the end, which flushes and
+    /// joins its writer.
+    fn record(root: &std::path::Path, events: &[Event]) {
+        let sink = RunStoreSink::start(root, Some("ae2d52f0".into()), Retention::default())
+            .expect("start the store");
+        for e in events {
+            sink.emit(e);
+        }
+    }
+
+    /// Every line the store holds, oldest first; with `q`, those it keeps.
+    async fn lines(root: &std::path::Path, q: &str) -> Vec<LogLine> {
+        log_query(
+            root,
+            &LogQuery {
+                q,
+                cursor: LogCursor::After(0),
+                limit: 100,
+            },
+        )
+        .await
+        .unwrap()
+    }
+
+    /// The lines the runner did not write to say an invocation started.
+    fn but_starts(lines: Vec<LogLine>) -> Vec<LogLine> {
+        lines
+            .into_iter()
+            .filter(|l| !l.msg.starts_with("started "))
+            .collect()
     }
 
     fn metric_value(snap: &Snapshot, step: &str, name: &str) -> Option<i64> {
@@ -741,15 +720,51 @@ mod tests {
         }
     }
 
-    /// The sugar. The stream carries increments; the store must carry a
-    /// position, or coalescing would drop work.
+    /// The loop starting an invocation of `step` for request `r-1`, and
+    /// its first attempt.
+    fn begin(step: &str, invocation: &str) -> [Event; 2] {
+        [
+            Event::InvocationStart {
+                step: step.into(),
+                invocation: invocation.into(),
+                group: step.split_once('/').map(|(g, _)| g.to_string()),
+                verb: None,
+                requests: vec!["r-1".into()],
+                now: "2026-09-11T10:00:00+01:00".into(),
+                fingerprint: "fp".into(),
+                reads: BTreeMap::new(),
+            },
+            attempt(step, 1),
+        ]
+    }
+
+    fn attempt(step: &str, attempt: u32) -> Event {
+        Event::StepStart {
+            step: step.into(),
+            attempt,
+        }
+    }
+
+    fn end(step: &str, invocation: &str, status: RunState, error: Option<&str>) -> Event {
+        Event::InvocationEnd {
+            step: step.into(),
+            invocation: invocation.into(),
+            status,
+            error: error.map(str::to_string),
+            exit_code: Some(if status == RunState::Succeeded { 0 } else { 1 }),
+            signal: None,
+            attempts: 1,
+        }
+    }
+
     /// Guards the render that wrote 21 `warn` lines and counted them as
     /// the step's errors: each stays, at `debug`, and the attempt's end
     /// says what they came to, under the attempt that ran them.
     #[tokio::test]
     async fn slow_statements_are_kept_quiet_and_summed_at_the_attempts_end() {
+        let step = "slack/render_markdown";
         let slow = |secs: f64| Event::Log {
-            step: "slack/render_markdown".into(),
+            step: step.into(),
             level: LogLevel::Warn,
             msg: "slow statement: execution time exceeded alert threshold".into(),
             ts: None,
@@ -763,41 +778,34 @@ mod tests {
             .as_object()
             .cloned(),
         };
-        let (td, snap) = run(&[
-            Event::StepStart {
-                step: "slack/render_markdown".into(),
-                attempt: 1,
-            },
+        let mut events = begin(step, "i-1").to_vec();
+        events.extend([
             slow(2.0),
             slow(3.0),
-            Event::StepFinish {
-                step: "slack/render_markdown".into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: Some(0),
-                signal: None,
-            },
-        ])
-        .await;
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
+            end(step, "i-1", RunState::Succeeded, None),
+        ]);
+        let (td, snap) = run(&events).await;
+        let lines = but_starts(lines(td.path(), "").await);
         let levels: Vec<&str> = lines.iter().map(|l| l.level.as_str()).collect();
         assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
         assert_eq!(
             lines[2].msg,
             "2 slow statements took 5.0s in all, every one: SELECT id FROM records"
         );
-        assert_eq!(lines[2].step.as_deref(), Some("slack/render_markdown"));
+        assert_eq!(lines[2].step.as_deref(), Some(step));
+        assert_eq!(lines[2].invocation_id.as_deref(), Some("i-1"));
         assert_eq!(lines[2].attempt, 1);
         assert_eq!(lines[2].process.as_deref(), Some("step"));
-        assert_eq!(snap.errors.get("slack/render_markdown"), None);
+        assert_eq!(snap.errors.get(step), None);
     }
 
     /// A heavy statement's line stays, at `debug`, and the attempt's end
     /// names the statement that did the work and the file it read.
     #[tokio::test]
     async fn heavy_statements_are_kept_quiet_and_summed_at_the_attempts_end() {
+        let step = "unified_grid_and_search_index/unified_grid_and_search_index";
         let heavy = |vm_steps: u64| Event::Log {
-            step: "unified_grid_and_search_index/unified_grid_and_search_index".into(),
+            step: step.into(),
             level: LogLevel::Warn,
             msg: format!("heavy statement: {vm_steps} steps for 0 rows"),
             ts: None,
@@ -814,24 +822,14 @@ mod tests {
             .as_object()
             .cloned(),
         };
-        let step = "unified_grid_and_search_index/unified_grid_and_search_index";
-        let (td, snap) = run(&[
-            Event::StepStart {
-                step: step.into(),
-                attempt: 1,
-            },
-            heavy(30_000_000),
+        let mut events = begin(step, "i-1").to_vec();
+        events.extend([
             heavy(25_000_000),
-            Event::StepFinish {
-                step: step.into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: Some(0),
-                signal: None,
-            },
-        ])
-        .await;
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
+            heavy(30_000_000),
+            end(step, "i-1", RunState::Succeeded, None),
+        ]);
+        let (td, snap) = run(&events).await;
+        let lines = but_starts(lines(td.path(), "").await);
         let levels: Vec<&str> = lines.iter().map(|l| l.level.as_str()).collect();
         assert_eq!(levels, ["debug", "debug", "info"], "{lines:#?}");
         assert_eq!(
@@ -843,11 +841,11 @@ mod tests {
         assert_eq!(snap.errors.get(step), None);
     }
 
-    /// The runner is a process the run points at, and every line the
-    /// run stores reads the runner's commit through it.
+    /// The runner is a process of its own, outside every invocation, and
+    /// a line it writes about a step at rest is about no invocation.
     #[tokio::test]
-    async fn the_run_and_its_lines_name_the_runners_process() {
-        let (td, snap) = run(&[Event::Log {
+    async fn the_runners_lines_name_its_process_and_no_invocation() {
+        let (td, _snap) = run(&[Event::Log {
             step: "slack/raw".into(),
             level: LogLevel::Info,
             msg: "hello".into(),
@@ -863,23 +861,111 @@ mod tests {
             .unwrap()
             .into_iter()
             .find(|p| p.process == "dag")
-            .expect("the runner is a process of the run");
-        assert_eq!(runner.run_id.as_deref(), Some("run-1"));
+            .expect("the runner is a process");
+        assert_eq!(runner.run_id, None);
         assert_eq!(runner.git_hash.as_deref(), Some("ae2d52f0"));
-        assert_eq!(snap.run_id.as_deref(), Some("run-1"));
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
+        let lines = lines(td.path(), "").await;
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].process_id, runner.process_id);
+        assert_eq!(lines[0].invocation_id, None);
         assert_eq!(lines[0].process.as_deref(), Some("dag"));
         assert_eq!(lines[0].git_hash.as_deref(), Some("ae2d52f0"));
     }
 
-    /// Every line about a step carries the group the plan filed it
-    /// under — its own output, and what the runner said about it after
-    /// `StepStart` reset the step's record — so `group:` finds a source's
-    /// lines whatever step wrote them.
+    /// An invocation names the requests it served, and the store answers
+    /// "what did this request run" and "this request's log" from that.
     #[tokio::test]
-    async fn a_steps_lines_carry_its_group_from_the_plan() {
+    async fn an_invocation_is_filed_under_the_requests_it_served() {
+        let td = tempfile::tempdir().unwrap();
+        let start = |step: &str, invocation: &str, requests: &[&str]| Event::InvocationStart {
+            step: step.into(),
+            invocation: invocation.into(),
+            group: Some("slack".into()),
+            verb: None,
+            requests: requests.iter().map(|r| r.to_string()).collect(),
+            now: "2026-09-11T10:00:00+01:00".into(),
+            fingerprint: "fp-1".into(),
+            reads: BTreeMap::from([("slack/ingest".into(), "fp-0:v1".into())]),
+        };
+        let said = |step: &str| Event::Log {
+            step: step.into(),
+            level: LogLevel::Info,
+            msg: format!("{step} here"),
+            ts: None,
+            stream: Some(Stream::Stderr),
+            target: None,
+            thread: None,
+            fields: None,
+        };
+        record(
+            td.path(),
+            &[
+                start("slack/ingest", "i-1", &["r-a"]),
+                attempt("slack/ingest", 1),
+                said("slack/ingest"),
+                end("slack/ingest", "i-1", RunState::Succeeded, None),
+                start("slack/render_markdown", "i-2", &["r-a", "r-b"]),
+                attempt("slack/render_markdown", 1),
+                said("slack/render_markdown"),
+                end("slack/render_markdown", "i-2", RunState::Succeeded, None),
+            ],
+        );
+        let of = |r: &'static str| {
+            let root = td.path().to_path_buf();
+            async move {
+                datalib_runs::invocations_of(&root, r)
+                    .await
+                    .unwrap()
+                    .into_iter()
+                    .map(|i| i.invocation_id)
+                    .collect::<Vec<_>>()
+            }
+        };
+        assert_eq!(of("r-a").await, ["i-1", "i-2"]);
+        assert_eq!(of("r-b").await, ["i-2"]);
+        let render = &datalib_runs::invocations_of(td.path(), "r-b")
+            .await
+            .unwrap()[0];
+        assert_eq!(render.fingerprint.as_deref(), Some("fp-1"));
+        assert_eq!(
+            render.reads.as_deref(),
+            Some(r#"{"slack/ingest":"fp-0:v1"}"#)
+        );
+        assert_eq!(render.now.as_deref(), Some("2026-09-11T10:00:00+01:00"));
+        assert_eq!(render.state, "succeeded");
+
+        let msgs = |lines: Vec<LogLine>| -> Vec<String> {
+            but_starts(lines).into_iter().map(|l| l.row.msg).collect()
+        };
+        assert_eq!(
+            msgs(lines(td.path(), "run:r-b").await),
+            ["slack/render_markdown here"]
+        );
+        assert_eq!(
+            msgs(lines(td.path(), "run:r-a").await),
+            ["slack/ingest here", "slack/render_markdown here"]
+        );
+        assert_eq!(
+            msgs(lines(td.path(), "invocation:i-1").await),
+            ["slack/ingest here"]
+        );
+        let requests = datalib_runs::requests_of_steps(
+            td.path(),
+            Some(&["slack/render_markdown".to_string()]),
+            10,
+        )
+        .await
+        .unwrap();
+        let mut ids: Vec<String> = requests.into_iter().map(|(id, _)| id).collect();
+        ids.sort();
+        assert_eq!(ids, ["r-a", "r-b"]);
+    }
+
+    /// Every line about a step carries its group — its own output, and
+    /// what the runner said about it — so `group:` finds a source's lines
+    /// whatever step wrote them.
+    #[tokio::test]
+    async fn a_steps_lines_carry_its_group() {
         let log = |step: &str, stream: Option<Stream>| Event::Log {
             step: step.into(),
             level: LogLevel::Info,
@@ -890,40 +976,15 @@ mod tests {
             thread: None,
             fields: None,
         };
-        let (td, _snap) = run(&[
-            Event::RunPlan {
-                steps: vec![
-                    PlannedStep {
-                        step: "slack/ingest".into(),
-                        group: Some("slack".into()),
-                    },
-                    PlannedStep {
-                        step: "slack/render_markdown".into(),
-                        group: Some("slack".into()),
-                    },
-                    PlannedStep {
-                        step: "tools/backfill".into(),
-                        group: None,
-                    },
-                ],
-            },
-            Event::StepStart {
-                step: "slack/ingest".into(),
-                attempt: 1,
-            },
+        let mut events = begin("slack/ingest", "i-1").to_vec();
+        events.extend([
             log("slack/ingest", Some(Stream::Stderr)),
-            Event::StepFinish {
-                step: "slack/ingest".into(),
-                status: RunState::Failed,
-                error: Some("boom".into()),
-                exit_code: Some(1),
-                signal: None,
-            },
-            log("slack/render_markdown", None),
-            log("tools/backfill", None),
-        ])
-        .await;
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
+            end("slack/ingest", "i-1", RunState::Failed, Some("boom")),
+        ]);
+        events.extend(begin("slack/render_markdown", "i-2"));
+        events.push(log("slack/render_markdown", None));
+        let (td, _snap) = run(&events).await;
+        let lines = but_starts(lines(td.path(), "").await);
         let groups: Vec<(Option<&str>, Option<&str>)> = lines
             .iter()
             .map(|l| (l.step.as_deref(), l.group_id.as_deref()))
@@ -934,113 +995,78 @@ mod tests {
                 (Some("slack/ingest"), Some("slack")),
                 (Some("slack/ingest"), Some("slack")),
                 (Some("slack/render_markdown"), Some("slack")),
-                (Some("tools/backfill"), None),
             ]
         );
-        let slack = log_query(
-            td.path(),
-            &LogQuery {
-                q: "group:slack",
-                cursor: LogCursor::After(0),
-                limit: 10,
-            },
-        )
-        .await
-        .unwrap();
-        assert_eq!(slack.len(), 3);
+        assert_eq!(
+            but_starts(self::lines(td.path(), "group:slack").await).len(),
+            3
+        );
     }
 
-    /// A streaming consumer is spawned once per producer checkpoint, and
-    /// every such process ends — with an exit code — while the step stays
-    /// running until its last process. Without `PassEnd` every process
-    /// but the last would be left open, its exit code lost.
+    /// A streaming consumer is invoked once per producer checkpoint, and
+    /// every invocation is a process that ends with an exit code while the
+    /// next one runs.
     #[tokio::test]
-    async fn a_streaming_consumers_process_ends_and_leaves_the_step_running() {
-        let start = || Event::StepStart {
-            step: "unified_grid_and_search_index/grid".into(),
-            attempt: 1,
-        };
-        let (td, snap) = run(&[
-            start(),
-            Event::PassEnd {
-                step: "unified_grid_and_search_index/grid".into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: Some(0),
-                signal: None,
-            },
-            start(),
-        ])
-        .await;
+    async fn each_streaming_invocation_closes_its_process() {
+        let step = "unified_grid_and_search_index/grid";
+        let mut events = begin(step, "i-1").to_vec();
+        events.push(end(step, "i-1", RunState::Succeeded, None));
+        events.extend(begin(step, "i-2"));
+        let (td, snap) = run(&events).await;
         let mut passes: Vec<_> = processes(td.path(), None, Some("step"), 10)
             .await
             .unwrap()
             .into_iter()
-            .filter(|p| p.step.as_deref() == Some("unified_grid_and_search_index/grid"))
+            .filter(|p| p.step.as_deref() == Some(step))
             .collect();
         passes.sort_by(|a, b| a.started_at_utc.cmp(&b.started_at_utc));
-        assert_eq!(passes.len(), 2, "one process per pass");
+        assert_eq!(passes.len(), 2, "one process per invocation");
+        assert_eq!(passes[0].invocation_id.as_deref(), Some("i-1"));
         assert_eq!(passes[0].exit_code, Some(0));
-        assert!(passes[0].finished_at_utc.is_some(), "the first pass ended");
+        assert!(passes[0].finished_at_utc.is_some(), "the first ended");
         assert!(passes[1].finished_at_utc.is_none(), "the second is running");
-        let step = snap
-            .steps
-            .iter()
-            .find(|s| s.step == "unified_grid_and_search_index/grid")
-            .expect("the step row");
-        assert_eq!(step.state, "running");
+        let newest = snap.steps.iter().find(|s| s.step == step).unwrap();
+        assert_eq!(newest.invocation_id.as_deref(), Some("i-2"));
+        assert_eq!(newest.state, "running");
     }
 
-    /// A process that failed and was followed by one that succeeded would
-    /// leave no trace but the step's own stderr at info: the finish
-    /// reports the last process, and a clean finish writes no line. The
-    /// failed process is its own error line, naming which one and why.
+    /// An invocation that failed and was followed by one that succeeded
+    /// keeps its failure: its row says so, and its error is its last line.
     #[tokio::test]
-    async fn a_failed_process_is_an_error_line_though_the_next_one_succeeds() {
-        let start = || Event::StepStart {
-            step: "evals/score".into(),
-            attempt: 1,
-        };
-        let (td, snap) = run(&[
-            start(),
-            Event::PassEnd {
-                step: "evals/score".into(),
-                status: RunState::Failed,
-                error: Some("step evals/score exited with exit status: 1: Traceback".into()),
-                exit_code: Some(1),
-                signal: None,
-            },
-            start(),
-            Event::StepFinish {
-                step: "evals/score".into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: Some(0),
-                signal: None,
-            },
-        ])
-        .await;
+    async fn a_failed_invocation_stays_failed_though_the_next_one_succeeds() {
+        let step = "evals/score";
+        let mut events = begin(step, "i-1").to_vec();
+        events.push(end(
+            step,
+            "i-1",
+            RunState::Failed,
+            Some("step evals/score exited with exit status: 1: Traceback"),
+        ));
+        events.extend(begin(step, "i-2"));
+        events.push(end(step, "i-2", RunState::Succeeded, None));
+        let (td, snap) = run(&events).await;
         assert_eq!(snap.steps[0].state, "succeeded");
-        let log = log_after(td.path(), "run-1", Some("evals/score"), 0, 100)
+        let first = &datalib_runs::invocations_of(td.path(), "r-1")
             .await
-            .unwrap();
-        let errors: Vec<(&str, Option<&str>)> = log
-            .iter()
-            .filter(|l| l.level == "error")
-            .map(|l| (l.msg.as_str(), l.fields.as_deref()))
+            .unwrap()[0];
+        assert_eq!(first.state, "failed");
+        let errors: Vec<(String, Option<String>)> = lines(td.path(), "level:error")
+            .await
+            .into_iter()
+            .map(|l| (l.row.msg, l.row.invocation_id))
             .collect();
         assert_eq!(
             errors,
             [(
-                "pass 1 failed: step evals/score exited with exit status: 1: Traceback",
-                Some(r#"{"exit_code":1,"pass_failed":1,"signal":null}"#)
+                "step evals/score exited with exit status: 1: Traceback".to_string(),
+                Some("i-1".to_string())
             )]
         );
     }
 
     /// The most memory a step's attempt held goes on that attempt's
-    /// process row, not on the run's series alone: a retry's peak is its
-    /// own, and a fall after the peak does not lower it.
+    /// process row: a retry's peak is its own, and a fall after the peak
+    /// does not lower it.
     #[tokio::test]
     async fn a_step_attempts_peak_memory_goes_on_its_process() {
         let peak = |value| Event::Metric {
@@ -1049,28 +1075,16 @@ mod tests {
             labels: BTreeMap::new(),
             value,
         };
-        let start = |attempt| Event::StepStart {
-            step: "slack/raw".into(),
-            attempt,
-        };
-        let finish = |exit_code| Event::StepFinish {
-            step: "slack/raw".into(),
-            status: RunState::Failed,
-            error: None,
-            exit_code: Some(exit_code),
-            signal: None,
-        };
-        let (td, _snap) = run(&[
-            start(1),
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             peak(1000),
             peak(5000),
             peak(3000),
-            finish(3),
-            start(2),
+            attempt("slack/raw", 2),
             peak(2000),
-            finish(0),
-        ])
-        .await;
+            end("slack/raw", "i-1", RunState::Succeeded, None),
+        ]);
+        let (td, _snap) = run(&events).await;
         let mut attempts: Vec<_> = processes(td.path(), None, None, 10)
             .await
             .unwrap()
@@ -1082,16 +1096,13 @@ mod tests {
         assert_eq!(peaks, [Some(5000), Some(2000)], "{attempts:?}");
     }
 
-    /// Each attempt of a step is a process of the run: what came out of
-    /// its pipes is its, the commit its `capabilities` event names is its
-    /// (and never the runner's), and how it ended goes on it.
+    /// Each attempt of an invocation is a process: what came out of its
+    /// pipes is its, the commit its `capabilities` event names is its (and
+    /// never the runner's), and how the last one ended goes on it.
     #[tokio::test]
-    async fn a_step_attempt_is_a_process_with_its_lines_and_its_exit() {
-        let (td, _snap) = run(&[
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 1,
-            },
+    async fn an_invocations_attempt_is_a_process_with_its_lines_and_its_exit() {
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             Event::Capabilities {
                 step: "slack/raw".into(),
                 streams_output: false,
@@ -1107,26 +1118,18 @@ mod tests {
                 thread: None,
                 fields: None,
             },
-            Event::StepFinish {
+            attempt("slack/raw", 2),
+            Event::InvocationEnd {
                 step: "slack/raw".into(),
+                invocation: "i-1".into(),
                 status: RunState::Failed,
                 error: Some("exited 3".into()),
                 exit_code: Some(3),
                 signal: None,
+                attempts: 2,
             },
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 2,
-            },
-            Event::StepFinish {
-                step: "slack/raw".into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: Some(0),
-                signal: None,
-            },
-        ])
-        .await;
+        ]);
+        let (td, snap) = run(&events).await;
         let mut attempts: Vec<_> = processes(td.path(), None, None, 10)
             .await
             .unwrap()
@@ -1136,16 +1139,16 @@ mod tests {
         attempts.sort_by_key(|p| p.attempt);
         assert_eq!(attempts.len(), 2, "{attempts:?}");
         assert_eq!(attempts[0].step.as_deref(), Some("slack/raw"));
-        assert_eq!(attempts[0].run_id.as_deref(), Some("run-1"));
-        assert_eq!(attempts[0].exit_code, Some(3));
-        assert!(attempts[0].finished_at_utc.is_some());
+        assert_eq!(attempts[0].invocation_id.as_deref(), Some("i-1"));
+        assert_eq!(attempts[0].run_id, None);
         assert_eq!(attempts[0].git_hash.as_deref(), Some("c0ffee12"));
         assert_eq!(
             attempts[1].git_hash, None,
             "an attempt that names no commit is not given the runner's"
         );
-        assert_eq!(attempts[1].exit_code, Some(0));
-        let lines = log_after(td.path(), "run-1", None, 0, 10).await.unwrap();
+        assert_eq!(attempts[1].exit_code, Some(3));
+        assert_eq!(snap.steps[0].attempt, 2);
+        let lines = lines(td.path(), "").await;
         let piped = lines
             .iter()
             .find(|l| l.msg == "from the pipe")
@@ -1157,17 +1160,15 @@ mod tests {
             .iter()
             .find(|l| l.msg == "exited 3")
             .expect("the reason");
-        assert_ne!(reason.process_id, attempts[0].process_id);
+        assert_ne!(reason.process_id, attempts[1].process_id);
         assert_eq!(reason.process.as_deref(), Some("dag"));
+        assert_eq!(reason.invocation_id.as_deref(), Some("i-1"));
     }
 
     #[tokio::test]
     async fn increments_accumulate_into_done_and_queued() {
-        let (_td, snap) = run(&[
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 1,
-            },
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             Event::ProgressLength {
                 step: "slack/raw".into(),
                 total: Some(9),
@@ -1175,8 +1176,8 @@ mod tests {
             inc("slack/raw", 1),
             inc("slack/raw", 3),
             inc("slack/raw", 2),
-        ])
-        .await;
+        ]);
+        let (_td, snap) = run(&events).await;
 
         assert_eq!(snap.steps.len(), 1);
         assert_eq!(snap.steps[0].state, LiveState::Running.as_str());
@@ -1188,41 +1189,32 @@ mod tests {
         assert_eq!(metric_value(&snap, "slack/raw", "queued"), Some(3));
     }
 
-    /// A step that has ended has nothing ahead of it, however it ended:
-    /// its own `queued` and every `queued{from=…}` go to zero, the one
-    /// published before it started included.
+    /// An invocation that has ended has nothing ahead of it, however it
+    /// ended: its own `queued` and every `queued{from=…}` go to zero, the
+    /// one published before it started included.
     #[tokio::test]
     async fn every_ending_empties_the_queue() {
         for status in [RunState::Succeeded, RunState::Failed, RunState::Stopped] {
-            let (_td, snap) = run(&[
-                Event::Metric {
-                    step: "slack/raw".into(),
-                    name: "queued".into(),
-                    labels: BTreeMap::from([("from".to_string(), "slack/list".to_string())]),
-                    value: 5,
-                },
-                Event::StepStart {
-                    step: "slack/raw".into(),
-                    attempt: 1,
-                },
+            let mut events = vec![Event::Metric {
+                step: "slack/raw".into(),
+                name: "queued".into(),
+                labels: BTreeMap::from([("from".to_string(), "slack/list".to_string())]),
+                value: 5,
+            }];
+            events.extend(begin("slack/raw", "i-1"));
+            events.extend([
                 Event::ProgressLength {
                     step: "slack/raw".into(),
                     total: Some(9),
                 },
                 inc("slack/raw", 3),
-                Event::StepFinish {
-                    step: "slack/raw".into(),
-                    status,
-                    error: None,
-                    exit_code: None,
-                    signal: None,
-                },
-            ])
-            .await;
+                end("slack/raw", "i-1", status, None),
+            ]);
+            let (_td, snap) = run(&events).await;
             let queued: BTreeMap<String, i64> = snap
                 .metrics
                 .iter()
-                .filter(|m| m.name == "queued")
+                .filter(|m| m.name == "queued" && m.reported_in.id() == "i-1")
                 .map(|m| (m.labels.clone(), m.value))
                 .collect();
             assert_eq!(
@@ -1237,43 +1229,18 @@ mod tests {
         }
     }
 
-    /// Emptying a stopped step's queue would leave nothing to say what it
-    /// still owed: Slack's conversations, threads and files not reached
-    /// were only in its store. What its own queue held as it ended is its
-    /// `owed`, which outlives the run; a producer's queue for it is not
-    /// owed, and the next run that ends the step replaces the count. A
-    /// step that never counted owes nothing it can show.
+    /// Emptying a stopped step's queue left nothing to say what it still
+    /// owed: Slack's conversations, threads and files not reached were
+    /// only in its store. What its own queue held as its invocation ended
+    /// is its `owed`, which outlives the invocation; a producer's queue
+    /// for it is not owed, and the step's next invocation to end replaces
+    /// the count.
     #[tokio::test]
-    async fn what_a_step_owes_when_it_ends_outlives_the_run_until_its_next_ends() {
+    async fn what_a_step_owes_when_it_ends_outlives_it_until_its_next_ends() {
         let td = tempfile::tempdir().unwrap();
-        let sync = |run: &str, events: Vec<Event>| {
-            let sink = RunStoreSink::start(
-                td.path(),
-                run,
-                "2026-09-11T10:00:00+01:00",
-                None,
-                Retention::default(),
-                None,
-            )
-            .expect("start the store");
-            for e in &events {
-                sink.emit(e);
-            }
-        };
-        let start = |step: &str| Event::StepStart {
-            step: step.into(),
-            attempt: 1,
-        };
         let length = |total| Event::ProgressLength {
             step: "slack/ingest".into(),
             total: Some(total),
-        };
-        let finish = |step: &str, status| Event::StepFinish {
-            step: step.into(),
-            status,
-            error: None,
-            exit_code: None,
-            signal: None,
         };
         let from_ingest = Event::Metric {
             step: "slack/render_markdown".into(),
@@ -1286,24 +1253,22 @@ mod tests {
                 .await
                 .unwrap()
                 .into_iter()
-                .map(|m| (m.step, m.value, m.run_id))
+                .map(|m| (m.step, m.value, m.reported_in.id().to_string()))
                 .collect()
         }
 
-        sync(
-            "run-1",
-            vec![
-                start("slack/ingest"),
-                length(12),
-                inc("slack/ingest", 3),
-                finish("slack/ingest", RunState::Stopped),
-                start("slack/render_markdown"),
-                from_ingest,
-                finish("slack/render_markdown", RunState::Stopped),
-                start("tools/backfill"),
-                finish("tools/backfill", RunState::Succeeded),
-            ],
-        );
+        let mut first = begin("slack/ingest", "i-1").to_vec();
+        first.extend([
+            length(12),
+            inc("slack/ingest", 3),
+            end("slack/ingest", "i-1", RunState::Stopped, None),
+        ]);
+        first.extend(begin("slack/render_markdown", "i-2"));
+        first.extend([
+            from_ingest,
+            end("slack/render_markdown", "i-2", RunState::Stopped, None),
+        ]);
+        record(td.path(), &first);
         let snap = snapshot(td.path()).await.unwrap();
         assert_eq!(
             metric_value(&snap, "slack/ingest", QUEUED),
@@ -1313,60 +1278,51 @@ mod tests {
         assert_eq!(
             owed(td.path()).await,
             [
-                ("slack/ingest".to_string(), 9, "run-1".to_string()),
-                ("slack/render_markdown".to_string(), 0, "run-1".to_string()),
-                ("tools/backfill".to_string(), 0, "run-1".to_string()),
+                ("slack/ingest".to_string(), 9, "i-1".to_string()),
+                ("slack/render_markdown".to_string(), 0, "i-2".to_string()),
             ]
         );
 
-        sync(
-            "run-2",
-            vec![
-                start("slack/ingest"),
-                length(4),
-                inc("slack/ingest", 4),
-                finish("slack/ingest", RunState::Succeeded),
-                finish("slack/render_markdown", RunState::SkippedUpToDate),
-            ],
-        );
+        let mut second = begin("slack/ingest", "i-3").to_vec();
+        second.extend([
+            length(4),
+            inc("slack/ingest", 4),
+            end("slack/ingest", "i-3", RunState::Succeeded, None),
+        ]);
+        record(td.path(), &second);
         assert_eq!(
             owed(td.path()).await,
             [
-                ("slack/ingest".to_string(), 0, "run-2".to_string()),
-                ("slack/render_markdown".to_string(), 0, "run-1".to_string()),
-                ("tools/backfill".to_string(), 0, "run-1".to_string()),
+                ("slack/ingest".to_string(), 0, "i-3".to_string()),
+                ("slack/render_markdown".to_string(), 0, "i-2".to_string()),
             ],
-            "a step the run skipped keeps what its last run said"
+            "a step not invoked again keeps what its last invocation said"
         );
     }
 
     /// Renders and embeds end most successful runs with work still on
     /// their bar that they found they had no need to do, which read as
-    /// "20,349 owed" on a healthy source. Only an end short of done owes;
-    /// a step the run did not invoke keeps its last word.
+    /// "20,349 owed" on a healthy source. Only an end short of done owes.
     #[test]
-    fn only_a_step_that_ended_short_of_done_owes() {
+    fn only_an_invocation_that_ended_short_of_done_owes() {
         use strum::VariantArray;
-        let ends: Vec<(RunState, Option<i64>)> = RunState::VARIANTS
+        let ends: Vec<(RunState, i64)> = RunState::VARIANTS
             .iter()
-            .map(|&s| (s, owed_at_end(s, true, Some(20_349))))
+            .map(|&s| (s, owed_at_end(s, Some(20_349))))
             .collect();
         assert_eq!(
             ends,
             [
-                (RunState::Running, Some(0)),
-                (RunState::Succeeded, Some(0)),
-                (RunState::SkippedUpToDate, Some(0)),
-                (RunState::Blocked, Some(0)),
-                (RunState::Failed, Some(20_349)),
-                (RunState::Stopped, Some(20_349)),
+                (RunState::Running, 0),
+                (RunState::Succeeded, 0),
+                (RunState::SkippedUpToDate, 0),
+                (RunState::Blocked, 0),
+                (RunState::Failed, 20_349),
+                (RunState::Stopped, 20_349),
             ]
         );
-        assert_eq!(owed_at_end(RunState::Failed, true, None), Some(0));
-        assert_eq!(owed_at_end(RunState::Stopped, true, Some(-3)), Some(0));
-        for &s in RunState::VARIANTS {
-            assert_eq!(owed_at_end(s, false, Some(9)), None, "{s:?}");
-        }
+        assert_eq!(owed_at_end(RunState::Failed, None), 0);
+        assert_eq!(owed_at_end(RunState::Stopped, Some(-3)), 0);
     }
 
     /// A retry re-runs the step from the beginning, so the count has to
@@ -1374,23 +1330,17 @@ mod tests {
     /// wherever attempt 1 died and can sail past `total`.
     #[tokio::test]
     async fn a_retry_restarts_the_count() {
-        let (_td, snap) = run(&[
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 1,
-            },
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             Event::ProgressLength {
                 step: "slack/raw".into(),
                 total: Some(9),
             },
             inc("slack/raw", 7),
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 2,
-            },
+            attempt("slack/raw", 2),
             inc("slack/raw", 1),
-        ])
-        .await;
+        ]);
+        let (_td, snap) = run(&events).await;
 
         assert_eq!(
             metric_value(&snap, "slack/raw", datalib_metrics::DONE),
@@ -1410,12 +1360,13 @@ mod tests {
             labels: BTreeMap::from([("table".to_string(), t.to_string())]),
             value: v,
         };
-        let (_td, snap) = run(&[
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             table("messages", 10),
             table("channels", 2),
             table("messages", 25),
-        ])
-        .await;
+        ]);
+        let (_td, snap) = run(&events).await;
         let by_labels: BTreeMap<String, i64> = snap
             .metrics
             .iter()
@@ -1442,25 +1393,23 @@ mod tests {
             labels: BTreeMap::new(),
             value: v,
         };
-        let (td, snap) = run(&[
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             m("api_requests_total", 5),
             m("api_requests_total", 3),
             m("api_requests_total", 2),
             m("queued", 9),
             m("queued", 1),
-        ])
-        .await;
+        ]);
+        let (td, snap) = run(&events).await;
         assert_eq!(
             metric_value(&snap, "slack/raw", "api_requests_total"),
             Some(2)
         );
-        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100)
+        let warned: Vec<String> = lines(td.path(), "step:slack/raw level:warn")
             .await
-            .unwrap();
-        let warned: Vec<&str> = log
-            .iter()
-            .filter(|l| l.level == "warn")
-            .map(|l| l.msg.as_str())
+            .into_iter()
+            .map(|l| l.row.msg)
             .collect();
         assert_eq!(warned.len(), 1, "{warned:?}");
         assert!(
@@ -1469,110 +1418,32 @@ mod tests {
         );
     }
 
-    fn plan(steps: &[&str]) -> Event {
-        Event::RunPlan {
-            steps: steps
-                .iter()
-                .map(|step| PlannedStep {
-                    step: (*step).into(),
-                    group: Some("slack".into()),
-                })
-                .collect(),
-        }
-    }
-
-    /// A reader must be able to draw the whole table before the first
-    /// step starts, which is what makes the plan event worth publishing.
-    #[tokio::test]
-    async fn the_plan_lands_before_anything_runs() {
-        let td = tempfile::tempdir().unwrap();
-        let sink = RunStoreSink::start(
-            td.path(),
-            "run-1",
-            "2026-09-11T10:00:00+01:00",
-            None,
-            Retention::default(),
-            None,
-        )
-        .expect("start the store");
-        sink.emit(&plan(&["slack/raw", "slack/rendered_md"]));
-        sink.writer.flush().await;
-        let snap = snapshot(td.path()).await.unwrap();
-        drop(sink);
-
-        assert_eq!(snap.steps.len(), 2);
-        assert!(snap
-            .steps
-            .iter()
-            .all(|r| r.state == LiveState::Pending.as_str()));
-        assert!(
-            snap.metrics.is_empty(),
-            "a step that has reported nothing has no numbers"
-        );
-    }
-
-    /// A run planned every step of the config and served a request for
-    /// one source, so most of its rows read `pending` long after it
-    /// ended. A step the run never started was not part of it.
-    #[tokio::test]
-    async fn a_step_the_run_never_started_goes_when_the_run_ends() {
-        let (_td, snap) = run(&[
-            plan(&["slack/raw", "slack/rendered_md", "gmail/raw"]),
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 1,
-            },
-            Event::StepFinish {
-                step: "slack/raw".into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: Some(0),
-                signal: None,
-            },
-        ])
-        .await;
-
-        let states: Vec<(&str, &str)> = snap
-            .steps
-            .iter()
-            .map(|r| (r.step.as_str(), r.state.as_str()))
-            .collect();
-        assert_eq!(states, [("slack/raw", "succeeded")]);
-    }
-
-    /// The step's own words reach the store, and the terminal state
+    /// The step's own words reach the store, and the invocation's end
     /// sticks with its error and its finish time. The error is also the
     /// last line of the step's log, at error level, so the log panel
     /// has a line to jump to; a stop is a warning there, not an error.
     #[tokio::test]
     async fn the_last_message_and_the_outcome_are_recorded() {
-        let (td, snap) = run(&[
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 1,
-            },
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
             Event::ProgressMessage {
                 step: "slack/raw".into(),
                 msg: "conversations.list".into(),
             },
-            Event::StepFinish {
+            end("slack/raw", "i-1", RunState::Failed, Some("boom")),
+            // A late update of a finished invocation does not reopen it.
+            Event::ProgressMessage {
                 step: "slack/raw".into(),
-                status: RunState::Failed,
-                error: Some("boom".into()),
-                exit_code: None,
-                signal: None,
+                msg: "late".into(),
             },
-        ])
-        .await;
+        ]);
+        let (td, snap) = run(&events).await;
 
         let s = &snap.steps[0];
         assert_eq!(s.state, RunState::Failed.as_str());
-        assert_eq!(s.msg.as_deref(), Some("conversations.list"));
         assert_eq!(s.error.as_deref(), Some("boom"));
         assert!(s.started_at_utc.is_some() && s.finished_at_utc.is_some());
-        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100)
-            .await
-            .unwrap();
+        let log = but_starts(lines(td.path(), "step:slack/raw").await);
         assert_eq!(log.len(), 1, "{log:?}");
         assert_eq!(
             (log[0].level.as_str(), log[0].msg.as_str()),
@@ -1580,37 +1451,28 @@ mod tests {
         );
         assert_eq!(log[0].fields.as_deref(), Some(r#"{"finished":"failed"}"#));
 
-        let (td, _) = run(&[
-            Event::StepFinish {
-                step: "slack/raw".into(),
-                status: RunState::Stopped,
-                error: Some("stopped when asked to".into()),
-                exit_code: None,
-                signal: None,
-            },
-            Event::StepFinish {
-                step: "slack/rendered_md".into(),
-                status: RunState::Succeeded,
-                error: None,
-                exit_code: None,
-                signal: None,
-            },
-        ])
-        .await;
-        let log = log_after(td.path(), "run-1", None, 0, 100).await.unwrap();
-        assert_eq!(log.len(), 1, "a clean finish logs nothing: {log:?}");
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.push(end(
+            "slack/raw",
+            "i-1",
+            RunState::Stopped,
+            Some("stopped when asked to"),
+        ));
+        events.extend(begin("slack/rendered_md", "i-2"));
+        events.push(end("slack/rendered_md", "i-2", RunState::Succeeded, None));
+        let (td, _) = run(&events).await;
+        let log = but_starts(lines(td.path(), "").await);
+        assert_eq!(log.len(), 1, "a clean end logs nothing: {log:?}");
         assert_eq!(log[0].level, "warn");
     }
 
     /// Log lines, hints and checkpoints all land in the log, unwrapped,
-    /// and none of them disturbs the step's message line.
+    /// and none of them disturbs the invocation's message.
     #[tokio::test]
     async fn logs_hints_and_checkpoints_land_in_the_log() {
-        let (td, snap) = run(&[
-            Event::StepStart {
-                step: "slack/raw".into(),
-                attempt: 2,
-            },
+        let mut events = begin("slack/raw", "i-1").to_vec();
+        events.extend([
+            attempt("slack/raw", 2),
             Event::ProgressMessage {
                 step: "slack/raw".into(),
                 msg: "conversations.list".into(),
@@ -1639,17 +1501,15 @@ mod tests {
                 version: "abc".into(),
                 rows: Some(12),
             },
-        ])
-        .await;
+        ]);
+        let (td, snap) = run(&events).await;
 
         assert_eq!(snap.steps[0].msg.as_deref(), Some("conversations.list"));
         assert_eq!(
             metric_value(&snap, "slack/raw", datalib_metrics::CHECKPOINTS),
             Some(1)
         );
-        let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 100)
-            .await
-            .unwrap();
+        let log = but_starts(lines(td.path(), "step:slack/raw").await);
         assert_eq!(log.len(), 3, "{log:?}");
         assert_eq!(log[0].level, "warn");
         assert_eq!(
@@ -1667,8 +1527,9 @@ mod tests {
             "sealed checkpoint #1: 12 rows since the last, now at abc"
         );
         assert!(
-            log.iter().all(|l| l.attempt == 2),
-            "every line names the pass it belongs to"
+            log.iter()
+                .all(|l| l.attempt == 2 && l.invocation_id.as_deref() == Some("i-1")),
+            "every line names the attempt and the invocation it belongs to"
         );
     }
 }

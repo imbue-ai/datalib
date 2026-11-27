@@ -195,7 +195,7 @@ fi
     assert!(
         status
             .lines()
-            .any(|l| l.starts_with("owed a/src  7  as of run ")),
+            .any(|l| l.starts_with("owed a/src  7  as of invocation ")),
         "{status}"
     );
 

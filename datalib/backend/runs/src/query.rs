@@ -25,8 +25,8 @@ pub enum LogCursor {
 }
 
 /// One read of the log. `q` is the search, the panel's pickers included
-/// (`run:`, `process_id:`, `step:`, `attempt:`); `cursor` is where in the
-/// log.
+/// (`run:`, `invocation:`, `process_id:`, `step:`, `attempt:`); `cursor`
+/// is where in the log.
 pub struct LogQuery<'a> {
     pub q: &'a str,
     pub cursor: LogCursor,
@@ -48,17 +48,17 @@ impl std::fmt::Display for QueryError {
 /// The keys a log query understands, each the column it names — on the
 /// line (`l`), or on the process that wrote it (`p`).
 const KEYS: &[(&str, &str)] = &[
-    ("run", "l.run_id"),
+    ("invocation", "l.invocation_id"),
     ("process", "p.process"),
     // One process's lines, by its id: a launch of the server, a page of
-    // the app, or a run's runner.
+    // the app, the runner, or one attempt of an invocation.
     ("process_id", "l.process_id"),
     ("step", "l.step"),
     // Every step of one `[[groups]]` entry: a source's ingest, render and
     // index steps together.
     ("group", "l.group_id"),
-    // With `step:`, the lines about one attempt of it: what came out of
-    // the attempt, and what the runner said about it.
+    // With `invocation:`, the lines about one attempt of it: what came
+    // out of the attempt, and what the runner said about it.
     ("attempt", "l.attempt"),
     ("level", "l.level"),
     ("stream", "l.stream"),
@@ -71,6 +71,18 @@ const KEYS: &[(&str, &str)] = &[
 /// names one. Not in [`KEYS`]: a prefix, not a column's text.
 const COMMIT_KEY: &str = "commit";
 
+/// `run:<id>` — the lines of one request's or job's invocations, or of
+/// one run an older build recorded: what the app calls a run. Not in
+/// [`KEYS`]: a line names its invocation, and the request is one of the
+/// several that invocation may have served.
+const RUN_KEY: &str = "run";
+
+/// `IFNULL`, because a line has a run or an invocation and not both: the
+/// other side is NULL, and `NOT NULL` would drop every line from a
+/// negated `-run:`.
+const RUN_CLAUSE: &str = "IFNULL(l.run_id = ? OR l.invocation_id IN (SELECT invocation_id \
+     FROM invocation_requests INDEXED BY invocation_requests_by_request WHERE request_id = ?), 0)";
+
 /// `min_level:warn` — this level and above. Not in [`KEYS`]: its value
 /// is a rank, not a column's text. A level word this build does not
 /// know ranks above every known one, so a line from a newer build is
@@ -79,8 +91,9 @@ const MIN_LEVEL_KEY: &str = "min_level";
 
 /// Every key a log query reads, for the search bar to offer.
 pub fn key_names() -> Vec<&'static str> {
-    KEYS.iter()
-        .map(|(k, _)| *k)
+    [RUN_KEY]
+        .into_iter()
+        .chain(KEYS.iter().map(|(k, _)| *k))
         .chain([COMMIT_KEY, MIN_LEVEL_KEY])
         .collect()
 }
@@ -142,6 +155,15 @@ fn compile(q: &LogQuery<'_>) -> Result<Compiled, QueryError> {
                     escape_like(&t.value.to_ascii_lowercase())
                 )));
             }
+            Token::Term(t) if t.key == RUN_KEY => {
+                c.clauses.push(if t.negate {
+                    format!("NOT {RUN_CLAUSE}")
+                } else {
+                    RUN_CLAUSE.to_string()
+                });
+                c.binds.push(Bound::Text(t.value.clone()));
+                c.binds.push(Bound::Text(t.value));
+            }
             Token::Term(t) if t.key == MIN_LEVEL_KEY => {
                 let Some(level) = LogLevel::parse(&t.value) else {
                     return Err(QueryError(format!(
@@ -160,7 +182,7 @@ fn compile(q: &LogQuery<'_>) -> Result<Compiled, QueryError> {
                 let Some((_, col)) = KEYS.iter().find(|(k, _)| *k == t.key) else {
                     let known: Vec<&str> = KEYS.iter().map(|(k, _)| *k).collect();
                     return Err(QueryError(format!(
-                        "`{}:` is not something a log line has; try one of {}, {COMMIT_KEY}, {MIN_LEVEL_KEY}",
+                        "`{}:` is not something a log line has; try one of {RUN_KEY}, {}, {COMMIT_KEY}, {MIN_LEVEL_KEY}",
                         t.key,
                         known.join(", ")
                     )));
@@ -275,6 +297,9 @@ pub async fn log_values(
     }
     let col = if key == COMMIT_KEY {
         "p.git_hash"
+    } else if key == RUN_KEY {
+        // A run's id is offered by the panel's picker, from the runs list.
+        return Ok(Vec::new());
     } else {
         match KEYS.iter().find(|(k, _)| *k == key) {
             Some((_, col)) => *col,
@@ -387,19 +412,41 @@ mod tests {
         assert_eq!(c.clauses[1], "p.process = ?");
     }
 
-    /// What the panel's pickers write: a process by its id, and a step's
-    /// attempt, each one column.
+    /// What the panel's pickers write: a process by its id, and an
+    /// invocation's attempt, each one column.
     #[test]
     fn the_pickers_terms_are_columns() {
-        let c = compile(&q("process_id:p-1 step:slack/ingest attempt:2")).unwrap();
+        let c = compile(&q(
+            "process_id:p-1 invocation:i-1 step:slack/ingest attempt:2",
+        ))
+        .unwrap();
         assert_eq!(
             c.clauses,
             [
                 "l.seq > ?",
                 "l.process_id = ?",
+                "l.invocation_id = ?",
                 "l.step = ?",
                 "l.attempt = ?"
             ]
+        );
+    }
+
+    /// `run:` is what a person types and the app's links write, for a
+    /// request now and for an older build's run before: one term, both
+    /// kinds of id.
+    #[test]
+    fn a_run_is_an_old_run_or_a_requests_invocations() {
+        let c = compile(&q("run:r-1")).unwrap();
+        assert_eq!(c.clauses[1], RUN_CLAUSE);
+        assert!(
+            matches!(&c.binds[1..], [Bound::Text(a), Bound::Text(b)] if a == "r-1" && b == "r-1")
+        );
+        let c = compile(&q("-run:r-1")).unwrap();
+        assert!(
+            c.clauses[1].starts_with("NOT IFNULL(l.run_id"),
+            "{}",
+            c.clauses[1]
         );
     }
 
@@ -416,7 +463,7 @@ mod tests {
         let e = compile(&q("author:thad")).unwrap_err();
         assert!(e.0.contains("`author:`"), "{e}");
         assert!(
-            e.0.contains("run, process, process_id, step, group, attempt, level"),
+            e.0.contains("run, invocation, process, process_id, step, group, attempt, level"),
             "{e}"
         );
         assert!(e.0.ends_with("min_level"), "{e}");

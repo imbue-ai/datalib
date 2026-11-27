@@ -1,5 +1,5 @@
-// One row per process that took part: a run of the runner, each
-// attempt of each of its steps, a launch of the app's server, an applet
+// One row per process that took part: the runner, each attempt of each
+// invocation of a step, a launch of the app's server, an applet
 // it started, or a page of the app open in a browser tab (the server
 // records the last two). What a line's file and line number are
 // relative to lives here, once, rather than on every line — and so do
@@ -18,9 +18,8 @@ pub struct ProcessRow {
     /// A [`super::Process`] word: which program this was.
     #[col(sql = "VARCHAR(16)")]
     pub process: String,
-    /// The run this process belonged to — the runner's own, or the one
-    /// its step ran in. `None` for the server and a page: they run
-    /// between runs.
+    /// The busy period an older build filed the process under; `None`
+    /// for every process this build records.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: Option<String>,
     /// For a step's process: which step, and which attempt of it.
@@ -60,4 +59,7 @@ pub struct ProcessRow {
     /// nobody measured.
     #[col(sql = "BIGINT")]
     pub peak_rss_bytes: Option<i64>,
+    /// For a step's process: the invocation it is an attempt of.
+    #[col(sql = "VARCHAR(64)")]
+    pub invocation_id: Option<String>,
 }

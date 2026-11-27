@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use datalib_columns::{Chip, ChipKind};
 use datalib_problem_mutes::{Counted, Counter, Tally};
 use datalib_problems::{CountedBy, Severity, METRIC};
-use datalib_runs::MetricRow;
+use datalib_runs::MetricValue;
 
 /// What one step last reported of itself, from the run store.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -24,14 +24,15 @@ pub struct ProblemCounts {
     /// only for a step whose rows the index does not hold.
     pub errors: i64,
     pub warnings: i64,
-    /// The run that count comes from; empty when it never counted.
-    pub run_id: String,
+    /// The invocation (or an older build's run) that count comes from, as
+    /// a hover names it; empty when it never counted.
+    pub reported_in: String,
     /// A streaming step's processes that failed and were started again in
     /// the last run that invoked the step, which reports only its last
     /// process.
     pub failed_processes: i64,
-    /// The run that count comes from.
-    pub failed_processes_run_id: String,
+    /// The invocation (or old run) that count comes from.
+    pub failed_processes_reported_in: String,
 }
 
 /// `step id → counts`, from the newest [`METRIC`] samples per step and
@@ -40,8 +41,8 @@ pub struct ProblemCounts {
 /// reads as zero — but a label this build cannot name is skipped rather
 /// than guessed at.
 pub fn counts_by_step(
-    problems: &[MetricRow],
-    failed_processes: &[MetricRow],
+    problems: &[MetricValue],
+    failed_processes: &[MetricValue],
 ) -> HashMap<String, ProblemCounts> {
     let mut out: HashMap<String, ProblemCounts> = HashMap::new();
     for m in failed_processes
@@ -50,7 +51,7 @@ pub fn counts_by_step(
     {
         let entry = out.entry(m.step.clone()).or_default();
         entry.failed_processes = m.value;
-        entry.failed_processes_run_id = m.run_id.clone();
+        entry.failed_processes_reported_in = m.reported_in.to_string();
     }
     for m in problems.iter().filter(|m| m.name == METRIC) {
         let Some(severity) = Severity::from_metric_labels(&m.labels) else {
@@ -63,7 +64,7 @@ pub fn counts_by_step(
             Severity::Info => continue,
         }
         // Both series come from one run; either names it.
-        entry.run_id = m.run_id.clone();
+        entry.reported_in = m.reported_in.to_string();
     }
     out
 }
@@ -100,7 +101,7 @@ pub struct StepProblems {
     /// run it is from. Only its log says what they are.
     pub unlisted: Option<(Tally, String)>,
     pub failed_processes: i64,
-    pub failed_processes_run_id: String,
+    pub failed_processes_reported_in: String,
 }
 
 impl StepProblems {
@@ -111,12 +112,12 @@ impl StepProblems {
             _ => None,
         };
         let unlisted = match (&counter, reported) {
-            (None, Some(r)) if !r.run_id.is_empty() => Some((
+            (None, Some(r)) if !r.reported_in.is_empty() => Some((
                 Tally {
                     errors: r.errors,
                     warnings: r.warnings,
                 },
-                r.run_id.clone(),
+                r.reported_in.clone(),
             )),
             _ => None,
         };
@@ -125,8 +126,8 @@ impl StepProblems {
             counter,
             unlisted,
             failed_processes: reported.map_or(0, |r| r.failed_processes),
-            failed_processes_run_id: reported
-                .map(|r| r.failed_processes_run_id.clone())
+            failed_processes_reported_in: reported
+                .map(|r| r.failed_processes_reported_in.clone())
                 .unwrap_or_default(),
         }
     }
@@ -161,10 +162,10 @@ pub fn chips(step: &StepProblems) -> Vec<Chip> {
         unlisted_from: step
             .unlisted
             .as_ref()
-            .map(|(_, run)| format!("as of run {run}"))
+            .map(|(_, from)| format!("as of {from}"))
             .unwrap_or_default(),
         failed_processes: step.failed_processes,
-        ran: format!("as of run {}", step.failed_processes_run_id),
+        ran: format!("as of {}", step.failed_processes_reported_in),
     })
 }
 
@@ -180,9 +181,9 @@ pub fn group_chips(steps: &[StepProblems]) -> Vec<Chip> {
         shown: sum(StepProblems::shown),
         muted: sum(|s| s.rows.map(|r| r.muted).unwrap_or_default()),
         unlisted: sum(|s| s.unlisted.as_ref().map(|(t, _)| *t).unwrap_or_default()),
-        unlisted_from: "as of each step's last run".into(),
+        unlisted_from: "as of each step's last invocation".into(),
         failed_processes: steps.iter().map(|s| s.failed_processes).sum(),
-        ran: "as of each step's last run".into(),
+        ran: "as of each step's last invocation".into(),
     })
 }
 
@@ -281,9 +282,9 @@ pub fn config_warning_chips(diagnostics: &[datalib_dag::Diagnostic]) -> Vec<Chip
 mod tests {
     use super::*;
 
-    fn sample(step: &str, labels: &str, value: i64, run: &str) -> MetricRow {
-        MetricRow {
-            run_id: run.into(),
+    fn sample(step: &str, labels: &str, value: i64, run: &str) -> MetricValue {
+        MetricValue {
+            reported_in: datalib_runs::ReportedIn::Run(run.into()),
             step: step.into(),
             name: METRIC.into(),
             labels: labels.into(),
@@ -311,7 +312,7 @@ mod tests {
             sample("slack/render_markdown", "severity=warning", 12, "r9"),
             sample("slack/render_markdown", "severity=loud", 99, "r9"),
             sample("mail/render_markdown", "severity=warning", 0, "r8"),
-            MetricRow {
+            MetricValue {
                 name: "rows_upserted_total".into(),
                 ..sample("mail/ingest", "", 500, "r8")
             },
@@ -322,11 +323,11 @@ mod tests {
             ProblemCounts {
                 errors: 3,
                 warnings: 12,
-                run_id: "r9".into(),
+                reported_in: "run r9".into(),
                 ..Default::default()
             }
         );
-        assert_eq!(by["mail/render_markdown"].run_id, "r8");
+        assert_eq!(by["mail/render_markdown"].reported_in, "run r8");
         assert!(
             !by.contains_key("mail/ingest"),
             "another series is not a count"
@@ -341,7 +342,7 @@ mod tests {
         let reported = ProblemCounts {
             errors: 5,
             warnings: 5,
-            run_id: "r1".into(),
+            reported_in: "run r1".into(),
             ..Default::default()
         };
         let render = datalib_problem_mutes::counter_of("enterprise", CountedBy::Render);
@@ -381,7 +382,7 @@ mod tests {
     /// Neither is in the yellow number.
     #[test]
     fn what_only_the_log_holds_is_grey_and_apart_from_the_rows() {
-        let failed = |step: &str, value: i64, run: &str| MetricRow {
+        let failed = |step: &str, value: i64, run: &str| MetricValue {
             name: datalib_metrics::FAILED_PROCESSES.into(),
             ..sample(step, "", value, run)
         };
@@ -442,7 +443,7 @@ mod tests {
     fn the_time_series_and_occurrences_steps_count_their_rows() {
         let reported = ProblemCounts {
             warnings: 9,
-            run_id: "r1".into(),
+            reported_in: "run r1".into(),
             ..Default::default()
         };
         let series = datalib_problem_mutes::counter_of("garmin", CountedBy::TimeSeries);

@@ -451,8 +451,8 @@ impl SyncControl {
                     rows_changed();
                 }
             }
-            ServeEvent::SyncStarted { .. } => self.busy.store(true, Ordering::SeqCst),
-            ServeEvent::SyncOver { .. } => self.busy.store(false, Ordering::SeqCst),
+            ServeEvent::Busy => self.busy.store(true, Ordering::SeqCst),
+            ServeEvent::Idle => self.busy.store(false, Ordering::SeqCst),
             ServeEvent::RunStoreWritten => {
                 if let Some(nudge) = nudge {
                     nudge.the_run_store_moved();

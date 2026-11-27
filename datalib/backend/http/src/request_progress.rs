@@ -119,12 +119,7 @@ pub async fn get(
     };
     let checked = supervisor::load_config(&s.root).map_err(|e| (StatusCode::CONFLICT, e))?;
     let record = store.load_state().await.map_err(internal)?;
-    let mut progress = live_progress(
-        &s.root,
-        record.current_run.as_ref().map(|r| r.run_id.as_str()),
-    )
-    .await
-    .map_err(crate::unread)?;
+    let mut progress = live_progress(&s.root).await.map_err(crate::unread)?;
     let steps = scope(&checked.graph, &request.roots)
         .into_iter()
         .map(|(step, root)| {
@@ -135,7 +130,9 @@ pub async fn get(
                 state: rec.and_then(|r| r.state).map(StateKind::as_str),
                 state_detail: rec.and_then(|r| r.state_detail.clone()),
                 waiting_for: rec.and_then(|r| r.waiting_for).map(WaitKind::as_str),
-                last_run: rec.and_then(|r| r.last_run.as_ref()).map(DagStepRun::from),
+                last_run: rec
+                    .and_then(|r| r.last_invocation.as_ref())
+                    .map(DagStepRun::from),
                 progress: progress.remove(&step),
                 id: step,
             }
@@ -157,6 +154,8 @@ mod tests {
             id: "r".into(),
             roots: vec!["a/ingest".into()],
             opened_by: "ui".into(),
+            opened_at: "2026-09-01T10:00:00+00:00".into(),
+            closed_at: closed.map(|_| "2026-09-01T10:01:00+00:00".into()),
             stop_requested_by: None,
             closed,
             failed_step: None,
@@ -177,7 +176,6 @@ mod tests {
                 .iter()
                 .map(|(id, s)| (id.to_string(), s.clone()))
                 .collect(),
-            current_run: None,
         }
     }
 

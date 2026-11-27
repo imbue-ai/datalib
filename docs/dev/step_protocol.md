@@ -120,7 +120,8 @@ arrives in the environment.
 | variable | meaning |
 | --- | --- |
 | `DATALIB_DAG_STEP` | this step's id, and the one tree it writes (`weather/ingest`) |
-| `DATALIB_DAG_RUN_ID` | the run this invocation belongs to — a UUID the loop mints for each run (the stretch from taking a request while idle to having none left, serving every request that arrives meanwhile), or whatever the caller passed to `datalib-pipeline` as `--run-id`. Every row in `system/runs/runs.sqlite` carries it; stamp it into anything you write that should be joinable back to the run. The built-in steps end every doltlite commit message with ` run=<id>` (`doltlite_raw::stamp_run`), which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_INVOCATION_ID` | this invocation — one process the loop started for this step, a retry included — as a UUID the loop mints as it starts it. Its rows in `system/runs/runs.sqlite` carry it, and the run store files it under every request it serves; stamp it into anything you write that should be joinable back to its log. The built-in steps end every doltlite commit message with ` invocation=<id>` (`doltlite_raw::stamp_invocation`), which is how the Manage screen's commit history gets from a commit to its log |
+| `DATALIB_DAG_RUN_ID` | the same id as `DATALIB_DAG_INVOCATION_ID`, under the name it had when the loop gave one id to everything it ran between being idle and being idle again. Deprecated: read `DATALIB_DAG_INVOCATION_ID`. It is set for a step that still reads it, and will go in a later release |
 | `DATALIB_DAG_ATTEMPT` | which attempt this is, starting at `1`; a retry counts up |
 | `DATALIB_DAG_DATA_ROOT` | absolute path of the data root (== cwd) |
 | `DATALIB_DAG_PARAMS` | the entry's `params`, as JSON; unset when it has none |
@@ -128,8 +129,8 @@ arrives in the environment.
 | `DATALIB_DAG_CHANGED_INPUTS` | the subset of the above whose version moved since this step's last success, `\n`-separated; every input when there is no last success to compare against (a first run, or the step's own config changed). Empty only when nothing moved |
 | `DATALIB_DAG_FAILED_INPUTS` | the subset of `DATALIB_DAG_INPUTS` whose producer's most recent run did not succeed — it failed (`incomplete` included), was stopped, or was blocked — `\n`-separated; empty when every one succeeded or is running now. You are started anyway, on what each committed before it ended; whether to go on is yours to decide |
 | `DATALIB_READS` | a JSON object, input path → the version the runner started this invocation against, as `<fingerprint>:<version>` (§ "When you are started"); an input with no version yet is absent. A version for what you *read*, where the output's own would say less (an `embed` step reports a hash of this as its version) |
-| `DATALIB_DAG_NOW` | the run's pinned timestamp (RFC 3339). Stamp times with this instead of sampling your own clock, so one run's outputs agree |
-| `RUST_LOG` | the run's log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
+| `DATALIB_DAG_NOW` | when the sync this invocation serves was asked for (RFC 3339, to the second): the time the oldest open request it serves was opened, or for an invocation a job started (`--prepare`, `--reset`, `--compact`, `--collect`) the time the job was opened; `datalib-pipeline --now` replaces it. Stamp times with this instead of sampling your own clock, so every output of one sync agrees |
+| `RUST_LOG` | the log filter, in `tracing-subscriber`'s grammar, built from the config's `log_level` ([`logging.md`](logging.md) § "Where a line comes from"). A `RUST_LOG` already set where the runner was started is passed through instead. A step in another language may honor it or ignore it; what it prints is kept regardless |
 
 plus `PATH` (with the binary dir first), `PYTHONUNBUFFERED=1`, the
 config's `[env]`, and the entry's own `env` (which wins over everything
@@ -251,8 +252,9 @@ serves it under that name and reads its type off it
 ([`logging.md`](logging.md#from-outside-the-app)):
 
 - A running total that only grows ends in **`_total`** and is served as
-  a counter (`rows_upserted_total`). It may start again from zero next
-  run. One that goes down within a run gets a warning in your log.
+  a counter (`rows_upserted_total`). It may start again from zero in
+  your next invocation. One that goes down within an invocation gets a
+  warning in your log.
 - A count of what the last pass did, which the next pass replaces, is a
   gauge named for it: `last_pass_rows_inserted`.
 - Anything that can go down is a gauge: `queued`, `items`.
@@ -351,8 +353,9 @@ run — one arriving while the consumer's process is running is dropped)
 counts once, and one that arrives after your outcome is ignored.
 
 Everything above lands in `<data_root>/system/runs/runs.sqlite`, plain
-SQLite: one row per log line, the newest value per metric, every step's
-state, for this run and the ones before it. That is what the Manage
+SQLite: one row per log line, the newest value per metric, and a row per
+invocation saying how it went, for this invocation and the ones before
+it. That is what the Manage
 screen reads; how to read it yourself is [`logging.md`](logging.md).
 
 ### Problems: what you could not do
@@ -500,7 +503,7 @@ it. The runner holds the write end for exactly as long as it lives, so
 **end-of-file on fd 3 means the runner is gone**, even when it was
 SIGKILLed or taken by the OOM killer and could run no code to stop you.
 A step that does not watch it carries on with its store open and nobody
-recording how the run ended.
+recording how the invocation ended.
 
 `DATALIB_PARENT_PIPE` holds the descriptor's number; read it rather
 than hard-coding 3. In Rust it is one call at startup:

@@ -36,9 +36,13 @@ pub struct Commit {
     /// at second resolution and writes no offset.
     pub date: String,
     pub message: String,
-    /// The run that made the commit, when the message ends in the
-    /// ` run=<id>` stamp a step puts there (`doltlite_raw::stamp_run`).
-    /// The job id, when the app ran it.
+    /// The invocation that made the commit, when the message ends in the
+    /// ` invocation=<id>` stamp a step puts there
+    /// (`doltlite_raw::stamp_invocation`): the key of its log in the run
+    /// store.
+    pub invocation: Option<String>,
+    /// The run an older build's step made the commit in, when the message
+    /// ends in the ` run=<id>` stamp those builds wrote instead.
     pub run: Option<String>,
     /// Every table the store has, as it stood after this commit, largest
     /// first. A table that did not exist yet and was not touched is left
@@ -180,7 +184,8 @@ async fn read_from(pool: &SqlitePool, limit: usize) -> Result<StoreHistory> {
             parent: parent.clone(),
             committer,
             date: iso_utc(&date),
-            run: run_id_of(&message),
+            invocation: stamped(&message, "invocation="),
+            run: stamped(&message, "run="),
             message,
             tables,
         });
@@ -275,9 +280,10 @@ async fn table_changes(
     Ok(changes)
 }
 
-fn run_id_of(message: &str) -> Option<String> {
+/// The id in the message's last word when that word is `<key><id>`.
+fn stamped(message: &str, key: &str) -> Option<String> {
     let (_, last) = message.trim_end().rsplit_once(char::is_whitespace)?;
-    last.strip_prefix("run=")
+    last.strip_prefix(key)
         .filter(|id| !id.is_empty())
         .map(str::to_string)
 }
@@ -399,6 +405,7 @@ mod tests {
             "{messages:?}"
         );
         assert_eq!(h.commits[0].run.as_deref(), Some("job-9"));
+        assert_eq!(h.commits[0].invocation, None);
         assert_eq!(h.commits[1].run, None);
         assert!(
             h.commits[0].date.ends_with("+00:00"),
@@ -635,16 +642,27 @@ mod tests {
         }
     }
 
+    /// A commit names its invocation, and one an older build wrote names
+    /// its run: both lead to a log.
     #[test]
-    fn the_run_stamp_is_read_off_the_end_of_the_message() {
+    fn the_stamp_is_read_off_the_end_of_the_message() {
+        let run = |m: &str| stamped(m, "run=");
+        let invocation = |m: &str| stamped(m, "invocation=");
         assert_eq!(
-            run_id_of("download slack: msgs=4 run=0199-abc").as_deref(),
+            invocation("download slack: msgs=4 invocation=0199-abc").as_deref(),
             Some("0199-abc")
         );
-        assert_eq!(run_id_of("seal run=j1 ").as_deref(), Some("j1"));
-        assert_eq!(run_id_of("Initialize data repository"), None);
-        assert_eq!(run_id_of("rerun=3"), None);
-        assert_eq!(run_id_of("run="), None);
+        assert_eq!(run("download slack: msgs=4 invocation=0199-abc"), None);
+        assert_eq!(
+            run("download slack: msgs=4 run=0199-abc").as_deref(),
+            Some("0199-abc")
+        );
+        assert_eq!(invocation("download slack: msgs=4 run=0199-abc"), None);
+        assert_eq!(run("seal run=j1 ").as_deref(), Some("j1"));
+        assert_eq!(run("Initialize data repository"), None);
+        assert_eq!(run("rerun=3"), None);
+        assert_eq!(run("run="), None);
+        assert_eq!(invocation("reinvocation=3"), None);
     }
 
     #[test]

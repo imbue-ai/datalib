@@ -1,10 +1,11 @@
-// One row per run of the pipeline.
+// One row per busy period of the loop, as builds before invocations
+// recorded them. This build writes none and reads them as they are.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// What a run is for. A reader that meets a word this build does not know
-/// keeps the word.
+/// What an older build's run was for. A reader that meets a word this
+/// build does not know keeps the word.
 #[derive(
     Debug,
     Clone,
@@ -42,20 +43,11 @@ impl RunKind {
     }
 }
 
-/// Why a run started, as whoever started it knows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RunStart {
-    pub kind: RunKind,
-    /// A sentence for a person: who or what started the run, and for
-    /// which steps.
-    pub reason: String,
-}
-
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, PortableTable)]
 #[portable_table(table = "runs", primary_key = "run_id")]
 pub struct RunRow {
-    /// A UUID the runner mints, or the job id when the app started the
-    /// run — the same string every other table here keys on.
+    /// A UUID the runner minted, the key of the run's rows in
+    /// `step_runs`, `metrics`, `metric_samples`, `log` and `processes`.
     #[col(sql = "VARCHAR(64)")]
     pub run_id: String,
     /// UTC.
@@ -70,7 +62,7 @@ pub struct RunRow {
     /// A [`RunKind`] word; `None` for a run an older build recorded.
     #[col(sql = "VARCHAR(16)")]
     pub kind: Option<String>,
-    /// [`RunStart::reason`].
+    /// A sentence for a person: who or what started the run.
     #[col(sql = "TEXT")]
     pub reason: Option<String>,
 }

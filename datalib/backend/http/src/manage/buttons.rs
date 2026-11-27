@@ -3,7 +3,7 @@
 //! Pure functions over what the row builder already knows.
 
 use datalib_columns::Action;
-use datalib_dag::supervisor::record::LastRun;
+use datalib_dag::supervisor::record::LastInvocation;
 use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::FailureKind;
 
@@ -125,7 +125,7 @@ pub const CHOOSE_AGAIN: &str = "choose_again";
 /// (`docs/dev/wizard_file_pickers.md`); the browser finds the path field
 /// from the source's catalog entry, and drops the button where it has
 /// no picker or no such field.
-pub fn choose_again(status_key: &str, last: Option<&LastRun>) -> Option<Action> {
+pub fn choose_again(status_key: &str, last: Option<&LastInvocation>) -> Option<Action> {
     let refused =
         status_key == "failed" && last.is_some_and(|l| l.failure == Some(FailureKind::Permission));
     refused.then(|| Action {
@@ -147,8 +147,8 @@ pub fn choose_again(status_key: &str, last: Option<&LastRun>) -> Option<Action> 
 mod tests {
     use super::*;
 
-    fn ended(failure: Option<FailureKind>) -> LastRun {
-        LastRun {
+    fn ended(failure: Option<FailureKind>) -> LastInvocation {
+        LastInvocation {
             status: "failed".into(),
             failure,
             ..Default::default()

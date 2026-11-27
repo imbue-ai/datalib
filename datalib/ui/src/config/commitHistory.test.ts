@@ -8,12 +8,14 @@ const commit = (
   message: string,
   tables: HistoryCommit["tables"] = [],
   run: string | null = null,
+  invocation: string | null = null,
 ): HistoryCommit => ({
   hash,
   parent: null,
   committer: "doltlite",
   date,
   message,
+  invocation,
   run,
   tables,
 });
@@ -124,7 +126,10 @@ describe("historyRows", () => {
 });
 
 describe("messageWithoutRun", () => {
-  it("drops the trailing run stamp and nothing else", () => {
+  it("drops the trailing stamp, an invocation's or an older run's, and nothing else", () => {
+    expect(messageWithoutRun("download slack: msgs=4 invocation=0199-abc")).toBe(
+      "download slack: msgs=4",
+    );
     expect(messageWithoutRun("download slack: msgs=4 run=0199-abc")).toBe("download slack: msgs=4");
     expect(messageWithoutRun("render slack: 2 document(s) run=j1 ")).toBe(
       "render slack: 2 document(s)",

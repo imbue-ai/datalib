@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use datalib_runs::{MetricRow, Retention, RunWriter};
+use datalib_runs::{InvocationMetricRow, Retention};
 use datalib_sql::{test_sql_id, Sql};
 
 const MEASURED: &str = "items";
@@ -13,18 +13,20 @@ const FACTOR: u64 = 2;
 const SLACK: u64 = 2_000;
 
 /// A store holding a few samples of `MEASURED`, and with `beside`, as
-/// many samples and series of another metric as a long sync leaves. The
-/// samples go in the newest run, whose queue the snapshot reads; the
-/// series in an older one, since the snapshot answers with every series
-/// of the newest.
+/// many samples and series of another metric as a long sync leaves, in
+/// this build's invocation tables and an older build's run tables alike.
 async fn store(root: &Path, beside: bool) {
-    for (run, stamp) in [
-        ("run-1", "2026-09-01T00:00:00.000000+00:00"),
-        ("run-2", "2026-09-02T00:00:00.000000+00:00"),
+    let keep = Retention {
+        max_age_days: 36500,
+        ..Retention::default()
+    };
+    for (request, stamp) in [
+        ("r-1", "2026-09-01T00:00:00.000000+00:00"),
+        ("r-2", "2026-09-02T00:00:00.000000+00:00"),
     ] {
-        let w = RunWriter::start(root, run, run, None, Retention::default()).unwrap();
+        let w = crate::request::Request::dated(root, request, stamp, keep);
         for step in ["slack/render_markdown", "mail/render_markdown"] {
-            w.metric(MetricRow {
+            w.metric(InvocationMetricRow {
                 step: step.into(),
                 name: MEASURED.into(),
                 value: 1,
@@ -39,16 +41,28 @@ async fn store(root: &Path, beside: bool) {
     let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(root))
         .await
         .unwrap();
-    for (table, stamp, run) in [
-        ("metrics", "updated_at_utc", "run-1"),
-        ("metric_samples", "ts_utc", "run-2"),
+    for (table, key, stamp, id) in [
+        (
+            "invocation_metrics",
+            "invocation_id",
+            "updated_at_utc",
+            "r-1/big/ingest",
+        ),
+        (
+            "invocation_metric_samples",
+            "invocation_id",
+            "ts_utc",
+            "r-2/big/ingest",
+        ),
+        ("metrics", "run_id", "updated_at_utc", "old-1"),
+        ("metric_samples", "run_id", "ts_utc", "old-1"),
     ] {
-        // Safe: the table, column and run are literals, the count a
+        // Safe: the table, columns and id are literals, the count a
         // constant.
         Sql::dynamic(test_sql_id!(), format!(
             "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < {OTHER_SERIES}) \
-             INSERT INTO {table} (run_id, step, name, labels, value, {stamp}) \
-             SELECT '{run}', 'big/ingest', 'rss_bytes', 'n=' || i, i, \
+             INSERT INTO {table} ({key}, step, name, labels, value, {stamp}) \
+             SELECT '{id}', 'big/ingest', 'rss_bytes', 'n=' || i, i, \
                '2026-09-01T00:00:00.000000+00:00' FROM n"
         )).query()
         .execute(&pool)
@@ -64,13 +78,15 @@ async fn manage_reads(root: &Path, beside: bool) -> BTreeMap<String, u64> {
     store(root, beside).await;
     let recording = datalib_sql_work::record_under(root);
     let latest = datalib_runs::latest_metric(root, MEASURED).await.unwrap();
-    let by_run = datalib_runs::metric_by_run(root, MEASURED).await.unwrap();
+    let by_run = datalib_runs::metric_by_invocation(root, MEASURED)
+        .await
+        .unwrap();
     let history = datalib_runs::metric_history(root, MEASURED, "2026-09-01T12:00:00.000000+00:00")
         .await
         .unwrap();
     let snapshot = datalib_runs::snapshot(root).await.unwrap();
     assert_eq!((latest.len(), by_run.len(), history.len()), (2, 4, 4));
-    assert_eq!(snapshot.run_id.as_deref(), Some("run-2"));
+    assert_eq!(snapshot.steps.len(), 2);
     let mut most: BTreeMap<String, u64> = BTreeMap::new();
     for ran in recording.take() {
         let sql = ran.sql.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -82,14 +98,19 @@ async fn manage_reads(root: &Path, beside: bool) -> BTreeMap<String, u64> {
 
 /// Guards the Manage refresh that read every sample of every metric
 /// (143k on one library) to draw the 598 of one, and every sample the
-/// running sync had taken to find its queue's: `metric_samples` and
-/// `metrics` are keyed by run first, so a read by name scanned them.
+/// running sync had taken to find its queue's: the metric tables are keyed
+/// by run or invocation first, so a read by name scanned them.
 #[tokio::test(flavor = "multi_thread")]
 async fn manages_metric_reads_cost_the_same_beside_many_samples_of_others() {
     let (alone_dir, beside_dir) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let alone = manage_reads(alone_dir.path(), false).await;
     let beside = manage_reads(beside_dir.path(), true).await;
-    for table in ["FROM metric_samples", "FROM metrics"] {
+    for table in [
+        "FROM invocation_metric_samples",
+        "FROM invocation_metrics",
+        "FROM metric_samples",
+        "FROM metrics",
+    ] {
         assert!(
             beside.keys().any(|sql| sql.contains(table)),
             "no statement read {table}; this test checks nothing: {:#?}",

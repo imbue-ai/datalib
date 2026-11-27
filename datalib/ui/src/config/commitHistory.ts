@@ -29,8 +29,11 @@ export type HistoryRow = {
   /// Commit rows only.
   hash: string | null;
   date: string | null;
-  /// The run that made the commit, when the message names one — the
-  /// job id, when the app ran it, so it is what the log is filed under.
+  /// The invocation that made the commit, when the message names one:
+  /// what its log is filed under.
+  invocation: string | null;
+  /// The run an older build's step made the commit in, when its message
+  /// names that instead.
   run: string | null;
   /// A table row: whether the table holds the source's records rather
   /// than datalib's own bookkeeping. True on a commit row, whose counts
@@ -52,10 +55,11 @@ export function isSidecar(table: string): boolean {
   return table.endsWith("_bookkeeping");
 }
 
-/// The message with the step's ` run=<id>` stamp taken off: the id has
-/// a column of its own, and the message is for reading.
+/// The message with the step's ` invocation=<id>` stamp (or an older
+/// build's ` run=<id>`) taken off: the id has a column of its own, and
+/// the message is for reading.
 export function messageWithoutRun(message: string): string {
-  return message.replace(/\s+run=\S+\s*$/, "");
+  return message.replace(/\s+(?:invocation|run)=\S+\s*$/, "");
 }
 
 function storeName(storePath: string): string {
@@ -79,6 +83,7 @@ function tableRow(storePath: string, hash: string, t: HistoryTable): HistoryRow 
     stepId: stepOf(storePath),
     hash,
     date: null,
+    invocation: null,
     run: null,
     records: t.records,
     rows: t.rows,
@@ -103,6 +108,7 @@ function commitRows(storePath: string, c: HistoryCommit): HistoryRow[] {
     stepId: stepOf(storePath),
     hash: c.hash,
     date: c.date,
+    invocation: c.invocation,
     run: c.run,
     records: true,
     rows: sum((t) => t.rows),
@@ -129,6 +135,7 @@ export function historyRows(histories: TreeHistory[]): HistoryRow[] {
         stepId: stepOf(s.path),
         hash: null,
         date: null,
+        invocation: null,
         run: null,
         records: false,
         rows: null,

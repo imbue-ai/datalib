@@ -23,12 +23,13 @@ use datalib_step_problems::Ended;
 const PARENT_PIPE_FD: libc::c_int = 3;
 
 pub const ENV_STEP: &str = datalib_env::DATALIB_DAG_STEP;
-/// The run this invocation belongs to — the id every row of
-/// `system/runs/runs.sqlite` carries — and which attempt of this
-/// invocation it is: 1 for the first, counting up only as the runner
-/// retries a failure. A step started again later in the same run starts
-/// at 1 again. Stamp them into anything you write that should be
-/// joinable back to the run.
+/// This invocation — the id its rows in `system/runs/runs.sqlite` carry —
+/// and which attempt of it this is: 1 for the first, counting up only as
+/// the runner retries a failure. Stamp them into anything you write that
+/// should be joinable back to the invocation's log.
+pub const ENV_INVOCATION_ID: &str = datalib_env::DATALIB_DAG_INVOCATION_ID;
+/// The old name of [`ENV_INVOCATION_ID`], set to the same id for a step
+/// that still reads it.
 pub const ENV_RUN_ID: &str = datalib_env::DATALIB_DAG_RUN_ID;
 pub const ENV_ATTEMPT: &str = datalib_env::DATALIB_DAG_ATTEMPT;
 pub const ENV_DATA_ROOT: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
@@ -39,9 +40,10 @@ pub const ENV_CHANGED_INPUTS: &str = datalib_env::DATALIB_DAG_CHANGED_INPUTS;
 pub const ENV_FAILED_INPUTS: &str = datalib_env::DATALIB_DAG_FAILED_INPUTS;
 /// `StepCtx::reads` as a JSON object: input path → version.
 pub const ENV_READS: &str = datalib_env::DATALIB_READS;
-/// Run-wide pinned timestamp (RFC 3339), set by the runner on every
-/// step so all stamped outputs agree. Steps that record times should
-/// prefer it over sampling their own clock.
+/// The time the oldest open request an invocation serves was opened, or
+/// the job that started it (RFC 3339), so every output stamped for one
+/// sync agrees. Steps that record times should prefer it over sampling
+/// their own clock.
 pub const ENV_NOW: &str = datalib_env::DATALIB_DAG_NOW;
 /// The verb `datalib-pipeline free-disk-space` sends (`--compact` or `--collect`), to a step whose
 /// program takes it: the step gives back disk its store holds and runs
@@ -381,6 +383,9 @@ pub(crate) async fn run_subprocess(
                             }
                             continue;
                         }
+                        // The runner's own word on what it started and how
+                        // it ended; a step cannot say it.
+                        Event::InvocationStart { .. } | Event::InvocationEnd { .. } => continue,
                         // A capability is only ever claimed: an event that
                         // carries just a `version` leaves streaming as it was.
                         Event::Capabilities {
@@ -750,7 +755,10 @@ fn retag(ev: Event, id: &str) -> Event {
         },
         Event::Hint { msg, .. } => Event::Hint { step: id, msg },
         // through unmodified rather than inventing a policy.
-        ev @ (Event::RunSummary { .. } | Event::RunPlan { .. }) => ev,
+        ev @ (Event::RunSummary { .. }
+        | Event::RunPlan { .. }
+        | Event::InvocationStart { .. }
+        | Event::InvocationEnd { .. }) => ev,
     }
 }
 
@@ -1695,7 +1703,7 @@ mod tests {
                     "-c".into(),
                     r#"
                         mkdir -p env/out
-                        echo "$DATALIB_DAG_NOW/$OVERRIDE_ME" > env/out/probe.txt
+                        echo "$RUN_WIDE/$OVERRIDE_ME" > env/out/probe.txt
                     "#
                     .into(),
                 ],
@@ -1706,10 +1714,7 @@ mod tests {
         let g = Graph::build(vec![spec]).unwrap();
         let r = Runner::new(root.path()).child_env(
             [
-                (
-                    super::ENV_NOW.to_string(),
-                    "2026-07-21T00:00:00Z".to_string(),
-                ),
+                ("RUN_WIDE".to_string(), "2026-07-21T00:00:00Z".to_string()),
                 ("OVERRIDE_ME".to_string(), "run".to_string()),
             ]
             .into(),
@@ -1815,13 +1820,10 @@ mod tests {
 
         struct Quiet;
         impl LoopHost for Quiet {
-            fn open(
-                &self,
-                _start: datalib_runs::RunStart,
-            ) -> std::result::Result<BTreeMap<String, String>, String> {
+            fn step_env(&self) -> std::result::Result<BTreeMap<String, String>, String> {
                 Ok(BTreeMap::new())
             }
-            fn close(&self, _run_id: &str) {}
+            fn busy(&self, _busy: bool) {}
         }
 
         let store = Store::open(root).await.unwrap();

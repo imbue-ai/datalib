@@ -64,6 +64,7 @@ rust_library(
         "src/remote_media.rs",
         "src/request_log.rs",
         "src/request_progress.rs",
+        "src/runs_view.rs",
         "src/starter.rs",
         "src/step_program.rs",
         "src/supervisor.rs",
