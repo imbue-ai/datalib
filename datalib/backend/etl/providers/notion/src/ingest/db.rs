@@ -484,7 +484,7 @@ impl RawDb {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("forget the page stub {id}"))?;
-            owed::forget(&mut tx, PAGES, id).await?;
+            owed::delete_gone(&mut tx, PAGES, id).await?;
         }
         tx.commit().await?;
         Ok(())

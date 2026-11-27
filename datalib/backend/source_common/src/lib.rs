@@ -307,6 +307,36 @@ impl IngestMethod {
     }
 }
 
+pub fn held<'a>(params: &serde_json::Value, methods: &'a [IngestMethod]) -> Vec<&'a IngestMethod> {
+    methods
+        .iter()
+        .filter(|m| is_held(params.pointer(&json_pointer(m.path))))
+        .collect()
+}
+
+fn is_held(value: Option<&serde_json::Value>) -> bool {
+    !matches!(
+        value,
+        None | Some(serde_json::Value::Null) | Some(serde_json::Value::Bool(false))
+    )
+}
+
+/// A dotted params path (`gmail.user_id`) as a JSON pointer.
+pub fn json_pointer(dotted: &str) -> String {
+    format!("/{}", dotted.replace('.', "/"))
+}
+
+/// Origin if anything held reaches one, else Local, else None.
+pub fn reach_of(held: &[&IngestMethod]) -> Option<Reach> {
+    if held.iter().any(|m| m.reach == Reach::Origin) {
+        Some(Reach::Origin)
+    } else if held.is_empty() {
+        None
+    } else {
+        Some(Reach::Local)
+    }
+}
+
 /// The methods a provider's ingest config accepts, declared by the one
 /// crate that knows the answer. Every `<P>Config` implements it;
 /// `datalib-step` refuses an `ingest` step that holds none of them, and

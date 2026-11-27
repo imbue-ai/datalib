@@ -1,7 +1,7 @@
 # Contacts: a simpler UI
 
 *Plan (2026-11-24, revised 2026-11-25 after Thad's notes and answers).
-Steps 1 to 3 of §"Order of work" are built, and
+Steps 1 to 5 of §"Order of work" are built, and
 [`../contacts.md`](../contacts.md) says how they work; the rest is not. "The problem" is as it was before. What the screens do was seen by using the TNG
 demo. The numbers are counts from copies of real libraries and from one
 real address book. If this is agreed, it replaces
@@ -317,8 +317,17 @@ Each step stands alone; the first two change no stored data.
    handle is on a contact for that contact only when the names agree:
    Marie's card, with the address Robert has, is skipped and named, and
    her page is where the person says they share it.
-4. **The list**: the three sorts, and *Unfiled*.
-5. **Suggestions.**
+4. **The list**: the three sorts, and *Unfiled*. Built. One row of
+   *Unfiled* is a handle, not a person: a person's Discord account and
+   their number are two rows unless a source's record ties them, and
+   adding them together makes one contact only when they share a name.
+5. **Suggestions.** Built. An agent's link nobody said Yes to is left
+   out of every read of the person's contacts; no shape changed. The
+   suggestions open from a banner on Contacts and on the person's page.
+   *Review* went with its tab: *Hide this sender* on *Unfiled*'s
+   right-click is where a person says a sender is not real. An agent's
+   unconfirmed *not real* still hides a sender from *Unfiled*, as §"The
+   screens" says.
 6. **What goes, goes**, with the store's rung, the routes and
    [`contacts_app.md`](../../user/contacts_app.md).
 

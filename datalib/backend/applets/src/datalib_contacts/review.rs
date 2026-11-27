@@ -46,6 +46,16 @@ pub(super) fn add_routes(api: Api) -> Api {
         review_items,
     )
     .add(
+        Get,
+        "/suggestions",
+        Read,
+        "`{suggestions}`: what agents suggested that waits for the person, least sure first: \
+         each a new contact, handles for an existing one, or labels, with the `subject` that \
+         `/review/confirm` (Yes) and `/review/reject` (No) take. None of it is a contact, a \
+         link or a label anything else reads until Yes",
+        suggestions,
+    )
+    .add(
         Post,
         "/review/confirm",
         Person,
@@ -86,6 +96,11 @@ async fn propose(
 async fn review_items(State(store): AppState) -> Result<Json<serde_json::Value>, ApiError> {
     let items = store.review().await.map_err(refused)?;
     Ok(Json(json!({ "items": items })))
+}
+
+async fn suggestions(State(store): AppState) -> Result<Json<serde_json::Value>, ApiError> {
+    let suggestions = store.suggestions().await.map_err(refused)?;
+    Ok(Json(json!({ "suggestions": suggestions })))
 }
 
 #[derive(Deserialize)]
