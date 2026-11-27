@@ -52,7 +52,7 @@ pub struct GarminConfig {
 #[serde(deny_unknown_fields)]
 pub struct GarminApi {
     /// **Retired**: the token folder garth wrote. Garmin signs in
-    /// through latchkey now; parsed only so a config that still names
+    /// through latchkey; parsed only so a config that still names
     /// it fails with the fix.
     #[serde(default)]
     #[schemars(skip)]

@@ -182,7 +182,7 @@ pub(super) async fn rewrite_touched(
                 .bind(&set)
                 .execute(&mut **conn)
                 .await
-                .with_context(|| format!("settle {} nodes: {sql}", some.len()))?
+                .with_context(|| format!("rewrite {} nodes: {sql}", some.len()))?
                 .rows_affected();
         }
         let dropped: Vec<String> = ORPHANED

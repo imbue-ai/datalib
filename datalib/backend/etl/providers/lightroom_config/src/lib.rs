@@ -25,8 +25,8 @@ pub const XMP_COLUMN_PATTERNS: &[&str] = &[
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct LightroomConfig {
-    /// Shared per-source envelope (paths + cross-source tunables),
-    /// resolved by the orchestrator's `normalize()`.
+    /// Settings every download takes: the attachment size limit, when
+    /// to give up, the JSONL tape, and whether to download at all.
     pub common: SourceCommon,
 
     /// The `.lrcat` to mirror, or one backup `.zip` holding it.

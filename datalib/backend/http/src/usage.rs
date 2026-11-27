@@ -539,7 +539,7 @@ fn disk_usage_days_of(config_path: &Path) -> u32 {
 async fn delete_old_samples(repo: &DynAppRepo, root: &Path) {
     let days = disk_usage_days_of(&datalib_dag::config::root_config_path(root));
     let cutoff = retention_cutoff(&datalib_time::IsoOffsetTimestamp::now_local(), days);
-    match repo.forget_disk_stats_before(&cutoff).await {
+    match repo.delete_disk_stats_before(&cutoff).await {
         Ok(0) => {}
         Ok(n) => tracing::debug!("usage: dropped {n} sample(s) older than {days} days"),
         Err(e) => tracing::warn!("usage: could not drop samples older than {days} days: {e}"),

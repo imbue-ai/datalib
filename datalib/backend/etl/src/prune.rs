@@ -192,7 +192,7 @@ pub(crate) async fn delete_problems_in_tx(
     }
     q.execute(&mut **tx)
         .await
-        .with_context(|| format!("forget the problems of pruned {table} rows"))?;
+        .with_context(|| format!("delete the problems of pruned {table} rows"))?;
     Ok(())
 }
 
