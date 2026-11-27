@@ -217,7 +217,7 @@ store (`IndexedMarkdownStore::index_docs`); the document view and
 hit lands on the item the search index names, by its id, and its quote
 reads only what that item says (`IndexedMarkdownStore::item_texts`).
 
-The *contract* holds as before: render emits a human artifact and a
+The *contract* is this: render emits a human artifact and a
 separate machine-readable projection, and the index reads the
 projection — **it never re-parses markdown** (AGENTS.md's "Rendered
 markdown is never parsed back").
@@ -250,8 +250,8 @@ description, review or comment; a Todoist task, description or
 comment; an email's `text/html` part and Google Takeout's Gemini answers and
 My Maps descriptions after htmd; a PDF's pages as pdf-inspector wrote
 them; a Notion page. Its formatting (`<details>`, `<img>`, `<br>`,
-`<kbd>`, a table) is what its author meant, and escaping it also
-turned its code into entities that search could not read. What keeps a
+`<kbd>`, a table) is what its author meant, and escaping it would also
+turn its code into entities that search cannot read. What keeps a
 tag in it from reaching past its own message is the page, not the
 renderer: the sanitizer and the frame's policy stop scripts, and each
 message is rendered as a fragment of its own (§"One section cannot
@@ -286,7 +286,7 @@ by it and keep their own tests.
 where it came from. An email's parts are read by their own
 Content-Type: mail-parser's HTML body list follows RFC 8621 and holds a
 `text/plain` part that has no HTML alternative, and sending that
-through htmd lost every `<…>` in a plain-text patch and ran its lines
+through htmd loses every `<…>` in a plain-text patch and runs its lines
 together.
 
 **A name a person reads to tell what something is — a title, an author
@@ -322,7 +322,7 @@ shared writers apply it for every source:
   which fails on a new column that is in neither list.
 
 A change to what these write bumps
-`datalib_etl_render::SHARED_RULES_VERSION`, which rides in every
+`datalib_etl_render::SHARED_RULES_VERSION`, which is part of every
 source's render params, so every source renders again; a provider
 bumps its own version only for its own change.
 
@@ -395,8 +395,8 @@ How the UI draws the pieces (`ui/src/cards/renderDocument.ts`):
   margin or a transform in one message cannot cover another.
 
 A renderer that keys none of its sections hands its page over as
-unkeyed pieces, drawn as one fragment, as every body was before; its
-boxes still get `contain: paint`. `grep -rlnE 'Section::(keyed|boxed)'
+unkeyed pieces, drawn as one fragment; its boxes still get
+`contain: paint`. `grep -rlnE 'Section::(keyed|boxed)'
 datalib/backend/etl` lists the renderers that key theirs. Teaching
 another one is keying its `RenderedMarkdown::sections`, and the next
 render stores them.
@@ -439,11 +439,10 @@ Backpointers and outlinks are first-class in the projection schema.
   back to the provider's API.
 - `source_url` — the canonical URL on the provider's web UI (e.g.
   `pull_request.html_url`), populated everywhere we can construct it.
-- `markdown_uuid` — the document the row belongs to. Its `markdowns`
-  row holds the path to the rendered `.md`, relative to the data root,
-  and `source_id` is filled when the row is written, not by the renderer
-  ([`grid_rows.md`](grid_rows.md) §"`source_id`, and where a
-  document's file is").
+- `markdown_uuid` — the document the row belongs to, whose markdown
+  is kept in its source's render store under that id, and nowhere
+  else. `source_id` is filled when the row is written, not by the
+  renderer ([`grid_rows.md`](grid_rows.md) §"`source_id`").
 - Provider-specific cross-references (`notion_page_uuid`,
   `notion_block_uuid`, `git_sha`, …) so the UI can link sideways as well
   as out.
@@ -528,7 +527,7 @@ record's* problem, not the step's. Parse reports what it could not read
 and keeps going; only a systemically wrong input (§4's R2 third
 category) may fail the step. Concretely this means the parse of a
 collection returns the records it got **and** the problems it hit, not
-one or the other — see R1's sink. Today the parses of calendar, chatgpt,
+one or the other — see R1's sink. The parses of calendar, chatgpt,
 email, garmin and slack do this (`Unparsed`, reported through
 `RenderCtx::report_unparsed`).
 
@@ -614,7 +613,7 @@ ISO-8601, explicit offset, one column, one parser — and refuse to unify
 the value, because [§6](#6-timestamps) keeps the source's own UTC
 offset rather than normalizing to UTC. Format unification costs
 nothing and buys everything; value normalization is where information
-goes to die.
+is lost.
 
 **U2 — When a value must be unified to be comparable, derive it
 *beside* the faithful one, never over it.** This is the load-bearing
@@ -793,8 +792,8 @@ the distinction and the consumer can never get it back.
 This is the same instinct as
 [Wire-fidelity of the raw store](data_architecture_ingestion.md#wire-fidelity-of-the-raw-store)
 moved one stage later: download preserves what upstream said, render
-preserves what the projection found, and each layer resists the urge to
-pre-chew for the next one.
+preserves what the projection found, and no layer reshapes its data
+for the one after it.
 
 ### R7 — Bound what grows, and say so where it shows
 
@@ -940,7 +939,7 @@ changed documents, and an output hash puts a per-run column on
 `markdowns_carries_no_per_run_stamp` in `datalib_schema`: **nothing
 per-run may be written into a row whose content did not change.** The
 storage report is the one document the driver decides about itself,
-because its byte counts wobble run to run: it is rewritten only when a
+because its byte counts change from run to run: it is rewritten only when a
 row *count* moved (`introspect::counts_unchanged`).
 
 ### The sweep
@@ -1208,7 +1207,7 @@ What this asks of a renderer is nothing beyond the contract above: a
 render must be a pure function of the raw rows at a pin (no per-run
 stamp in a row), every row and section must carry a stable uuid, and
 the renderer must say what its sections are (`RenderedMarkdown.sections`,
-concatenated they are the `.md`) rather than leaving the driver to
+concatenated they are the document's markdown) rather than leaving the driver to
 parse them back. A renderer that declares no sections has its
 documents diff as one block.
 
