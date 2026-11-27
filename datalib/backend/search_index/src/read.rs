@@ -144,8 +144,9 @@ pub(crate) fn held_documents_sql(source_id: Option<&str>) -> Sql {
 
 impl Reader {
     /// `None` until a keyword pass has started the index: no file, or no
-    /// generation in it. Its tables are part of the grid index's shape,
-    /// which the caller checks (`search_index::open` in the grid's crate).
+    /// generation in it. Its tables are a part of the grid index's file,
+    /// whose shape the caller checks (`search_index::open` in the grid's
+    /// crate).
     /// A missing cache reads as one holding no vectors; one in another
     /// shape than this build's is refused, naming what brings it there.
     pub async fn open(index: &Path, cache: &Path) -> Result<Option<Reader>> {
