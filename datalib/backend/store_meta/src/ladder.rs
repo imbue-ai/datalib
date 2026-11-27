@@ -260,7 +260,7 @@ mod tests {
     /// how big the store is, and which statement of the rung is running
     /// (#1678: a 37-minute rung said only its name).
     #[tokio::test]
-    async fn a_rung_reports_its_climb_and_each_statement() {
+    async fn a_rung_reports_its_version_range_and_each_statement() {
         let said = std::sync::Arc::new(Mutex::new(Vec::<String>::new()));
         let sink = said.clone();
         report_to(move |msg| sink.lock().unwrap().push(msg.to_string()));
@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn a_climb_names_the_shared_tables_and_a_small_store_in_megabytes() {
+    fn a_migration_report_names_the_shared_tables_and_a_small_store_in_megabytes() {
         let climb = Climb {
             ladder: Ladder::Shared,
             from: 0,

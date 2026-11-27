@@ -2351,7 +2351,7 @@ mod tests {
     /// passed — with nothing new in the batch, and at the stamp it happened — rather
     /// than leaving the peak in the history until the queue next moves.
     #[test]
-    fn a_move_the_floor_held_back_is_written_once_it_passes() {
+    fn a_move_too_soon_after_the_last_sample_is_written_once_the_floor_passes() {
         let key: SeriesKey = ("s".into(), "queued".into(), String::new());
         let row = |value: i64, at: &str| MetricRow {
             step: "s".into(),

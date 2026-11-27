@@ -544,7 +544,7 @@ mod tests {
     /// store's own shape; a part no longer listed has its row deleted, and
     /// a write that moves nothing says so.
     #[tokio::test]
-    async fn a_parts_hash_reads_back_and_a_part_dropped_is_forgotten() {
+    async fn a_parts_hash_reads_back_and_a_part_dropped_has_its_row_deleted() {
         let td = tempfile::tempdir().unwrap();
         let p = pool(&td.path().join("s.db")).await;
         write(&p, StoreKind::GridIndex, &Shape::of_tables("whole".into()))

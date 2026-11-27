@@ -2405,7 +2405,7 @@ mod fts5 {
     /// Replacing a document's terms: its `term_id`s come from the plain
     /// table's index, and the FTS5 index deletes each one by rowid.
     #[tokio::test]
-    async fn a_contentless_delete_index_forgets_a_documents_terms_by_rowid() {
+    async fn a_contentless_delete_index_deletes_a_documents_terms_by_rowid() {
         let (_s, mut c) = two_documents().await;
         ok(
             &mut c,
