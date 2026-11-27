@@ -197,7 +197,7 @@ pub async fn sync_collection<'a, S: ObjectStore>(
         let gone = state::finish_listing(&mut tx, collection).await?;
         for href in &gone {
             synced.deleted += store.remove(&mut tx, collection, href).await? as usize;
-            state::forget(&mut tx, collection, href).await?;
+            state::delete_object(&mut tx, collection, href).await?;
         }
         tx.commit().await.context("commit the prune")?;
         run.wrote(gone.len() as u64).await;
@@ -291,14 +291,14 @@ async fn store_page<S: ObjectStore>(
     store.put(&mut tx, &rows.iter().collect::<Vec<_>>()).await?;
     for href in &page.deleted {
         synced.deleted += store.remove(&mut tx, collection, href).await? as usize;
-        state::forget(&mut tx, collection, href).await?;
+        state::delete_object(&mut tx, collection, href).await?;
     }
     let named: Vec<&str> = listed
         .iter()
         .map(|r| r.href.as_str())
         .chain(page.deleted.iter().map(String::as_str))
         .collect();
-    state::settle(&mut tx, collection, &named).await?;
+    state::confirm_named(&mut tx, collection, &named).await?;
     store
         .set_token(&mut tx, collection, page.token.as_deref())
         .await?;

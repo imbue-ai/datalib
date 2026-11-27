@@ -135,7 +135,11 @@ pub async fn owed(pool: &SqlitePool, collection: &str) -> Result<Vec<Resource>> 
 /// Upstream no longer has the object at `href`: delete its listing row,
 /// its sidecar and its fetch problem, in the transaction that removes
 /// the provider's content for it.
-pub async fn forget(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &str) -> Result<()> {
+pub async fn delete_object(
+    tx: &mut Transaction<'_, Sqlite>,
+    collection: &str,
+    href: &str,
+) -> Result<()> {
     unlist(tx, collection, href).await?;
     owed::forget(tx, RESOURCES, &resource_id(collection, href)).await
 }
@@ -248,7 +252,7 @@ pub async fn stored(pool: &SqlitePool, ids: &[String]) -> Result<HashSet<String>
 
 /// A page named these hrefs, present or deleted: delete them from
 /// `dav_unconfirmed`, since the listing has now named them.
-pub async fn settle(
+pub async fn confirm_named(
     tx: &mut Transaction<'_, Sqlite>,
     collection: &str,
     hrefs: &[&str],
@@ -270,7 +274,7 @@ pub async fn settle(
 
 /// The listing of `collection` reached its end. Returns the hrefs a
 /// whole listing never named — deleted upstream — for the provider to
-/// delete ([`forget`]); none when no whole listing was under way.
+/// delete ([`delete_object`]); none when no whole listing was under way.
 pub async fn finish_listing(
     tx: &mut Transaction<'_, Sqlite>,
     collection: &str,
@@ -460,11 +464,11 @@ mod tests {
         listed_then_held(&pool, "cal", &[r("/a", "1"), r("/b", "1"), r("/c", "1")]).await;
         let mut tx = pool.begin().await.unwrap();
         begin_whole(&mut tx, "cal").await.unwrap();
-        settle(&mut tx, "cal", &["/a"]).await.unwrap();
+        confirm_named(&mut tx, "cal", &["/a"]).await.unwrap();
         tx.commit().await.unwrap();
         // Cut short: the run ends without finishing.
         let mut tx = pool.begin().await.unwrap();
-        settle(&mut tx, "cal", &["/d", "/c"]).await.unwrap();
+        confirm_named(&mut tx, "cal", &["/d", "/c"]).await.unwrap();
         tx.commit().await.unwrap();
         let mut tx = pool.begin().await.unwrap();
         assert_eq!(
@@ -479,7 +483,7 @@ mod tests {
     /// An object is owed until it is held at the etag it is listed at:
     /// listed and never fetched, listed again at a new etag, or fetched
     /// and failed. A listing that names it at the etag it is held at
-    /// owes nothing, and once [`forget`] has deleted it nothing is owed
+    /// owes nothing, and once [`delete_object`] has deleted it nothing is owed
     /// for it.
     #[tokio::test]
     async fn an_object_is_owed_until_held_at_its_listed_etag() {
@@ -507,7 +511,7 @@ mod tests {
         )
         .await
         .unwrap();
-        forget(&mut tx, "book", "/x").await.unwrap();
+        delete_object(&mut tx, "book", "/x").await.unwrap();
         tx.commit().await.unwrap();
         assert_eq!(
             owed(&pool, "book").await.unwrap(),
