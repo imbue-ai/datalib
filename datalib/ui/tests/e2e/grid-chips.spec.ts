@@ -129,9 +129,10 @@ test("a storage report's group and step are chips that open their cards", async 
   const group = (await inDocFrame(page, 'a.chip[data-entity="datalib:group/slack"]')).first();
   await expect(group).toHaveAttribute("title", /\(slack\)\n.+/, { timeout: 10_000 });
   // The report names the step its store sits under, `slack/ingest`, which
-  // the library has, so the chip is resolved to it: its group and name.
+  // the library has, so the chip is resolved to it: its group and name,
+  // which for an ingest step that reaches a service is "Download".
   const step = (await inDocFrame(page, 'a.chip[data-entity="datalib:step/slack/ingest"]')).first();
-  await expect(step).toHaveAttribute("title", /^slack · Ingest \(slack\/ingest\)\n/, {
+  await expect(step).toHaveAttribute("title", /^slack · Download \(slack\/ingest\)\n/, {
     timeout: 10_000,
   });
 
