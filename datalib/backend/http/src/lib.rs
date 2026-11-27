@@ -1931,9 +1931,11 @@ async fn purge_groups(
 /// keeping every commit; with `drop_old_versions_on_derived_data`, also fold each render
 /// store's history into one commit (`step_protocol.md` § Compact and
 /// collect). No targets is every step that takes the verb. 204 once done;
-/// 202 while it runs, once its steps and what reads them have stopped;
-/// 409, with the reason, for a step the config lacks or whose program does
-/// not take the verb.
+/// 202 when it is not over within ten seconds, because its steps or what
+/// reads them have not stopped yet or it is still running; 409, with the
+/// reason, when a target is a step the config lacks or whose program does
+/// not take the verb, or when a step's run with the verb failed within
+/// those ten seconds.
 async fn free_disk_space(
     State(s): State<AppState>,
     Json(req): Json<FreeDiskSpaceRequest>,

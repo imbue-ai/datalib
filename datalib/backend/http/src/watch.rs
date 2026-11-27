@@ -154,10 +154,14 @@ pub enum RootEvent {
     FrontendChanged,
     /// The grid index
     /// (`unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite`)
-    /// has a new generation. Under streaming that happens many times per sync
-    /// -- once for each checkpoint `unified_grid_and_search_index` takes in -- and it is
-    /// how rows reach the grid while the download that produced them is still
-    /// running. The generation, not the file: a write in a transaction that has
+    /// has a new generation. The index step raises it once per transaction
+    /// that changes what a reader sees: one for each source whose rows it
+    /// changed, one for each source no longer among its inputs, and one
+    /// for the people the search terms name when any of those happened
+    /// (`etl/render/src/grid_index.rs`). Under streaming the step runs
+    /// again as the renders before it seal, so this happens many times per
+    /// sync, and it is how rows reach the grid while the download that
+    /// produced them is still running. The generation, not the file: a write in a transaction that has
     /// not committed is not something a reader can fetch yet.
     IndexChanged,
     /// The time-series index
