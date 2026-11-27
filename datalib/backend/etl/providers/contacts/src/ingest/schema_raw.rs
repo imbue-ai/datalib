@@ -497,8 +497,8 @@ const CONTACTS_UUID_NS: Uuid = Uuid::from_bytes([
 /// Surrogate `uid` for a vCard that carries no RFC 6350 `UID:` — most
 /// notably Google's vCard export, which omits it entirely. Derived from
 /// the contact's first + last name so the *same person* collapses onto
-/// one PK across re-exports; it's the closest thing to object permanence
-/// the data allows when there's no stable server id.
+/// one PK across re-exports; it's the closest to a stable id the data
+/// allows when there's no stable server id.
 pub fn synthesized_name_uid(given: &str, family: &str) -> String {
     synthesized_name_uid_nth(given, family, 1)
 }

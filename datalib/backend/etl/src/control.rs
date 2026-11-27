@@ -6,7 +6,7 @@ pub struct DownloadControl {
     /// How often a download seals what it has written so far, so a consumer
     /// can start on it before the whole fetch finishes.
     ///
-    /// `None` means the default cadence. The dial is the user's — how much
+    /// `None` means the default cadence. The setting is the user's — how much
     /// latency to trade for how much `dolt_log` is their call.
     pub checkpoint_cadence: Option<crate::checkpointer::Cadence>,
 

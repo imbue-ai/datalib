@@ -44,8 +44,8 @@ pub struct TranscriptRow {
 /// `transcript_id` is the one promoted column: the writer composes it
 /// (`<session_id>#<agent_id>` for a subagent) and the render's diff
 /// groups its render units by it. It leads the key, so a transcript's
-/// records are one range of the store; keyed by the uuid alone, each was
-/// one random read, and a full render spent half its time loading them.
+/// records are one range of the store, read together rather than by
+/// one random read each.
 /// Everything else a reader wants — `sessionId`, `type`, `timestamp`,
 /// `parentUuid`, `isSidechain` — is in the payload; query it as
 /// `payload->>'$.type'`.

@@ -1,4 +1,5 @@
-//! Program A `DataProcessor`s for the email source.
+//! The `DataProcessor` for the email source's download: it runs the
+//! download mode the config names.
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -20,9 +21,10 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: a live table (`jmap`, `gmail`) selects a server
-/// mode; `mbox` reads the `.mbox` at its `path`, or beside `gmail` is
-/// the Takeout that mode starts from; `apple_mail` reads Mail's folder.
+/// The download step's processor: a live table (`jmap`, `gmail`) selects
+/// a server mode; `mbox` reads the `.mbox` at its `path`, or beside
+/// `gmail` is the Takeout that mode starts from; `apple_mail` reads
+/// Mail's folder.
 pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
@@ -99,8 +101,8 @@ pub struct EmailIngest {
     blob_size_limit_bytes: Option<u64>,
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block. Both live modes use it
-    /// (JMAP's `fastmail`, Gmail's `google-gmail`); the mbox mode makes
-    /// no requests and ignores it.
+    /// (JMAP's `fastmail`, Gmail's `google-gmail`); the mbox and Apple
+    /// Mail modes make no requests and ignore it.
     latchkey: LatchkeySettings,
     /// Full mailbox label paths to limit extraction to (empty = every
     /// mailbox). Every mode.
@@ -117,10 +119,10 @@ impl DataProcessor for EmailIngest {
     }
 
     /// JMAP (Fastmail) and the Gmail API seal after each batch of
-    /// fetched messages and each batch of `.eml` bodies. mbox does not —
-    /// no seam is wired — so it commits once at the end, which costs
-    /// latency and never correctness: a consumer that gets no checkpoints
-    /// simply does one pass when the download finishes.
+    /// fetched messages and each batch of `.eml` bodies. mbox and Apple
+    /// Mail are handed no `Sealer`, so they commit once at the end, which
+    /// costs latency and never correctness: a consumer that gets no
+    /// checkpoints runs once, when the download finishes.
     fn streams_output(&self) -> bool {
         true
     }

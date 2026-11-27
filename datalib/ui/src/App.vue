@@ -167,8 +167,8 @@ onUnmounted(() => stop?.());
       </template>
     </nav>
 
-    <!-- The gates had the shell's padding before the cards went
-         edge to edge; they keep it here. -->
+    <!-- The cards go edge to edge; the gates keep the shell's
+         padding, set here. -->
     <div v-if="gate" class="datalib-gate">
       <FirstRunView
         v-if="gate === 'first-run' && config"

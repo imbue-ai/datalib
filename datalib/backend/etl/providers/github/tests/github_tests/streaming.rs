@@ -40,7 +40,7 @@ impl ProgressSink for Seals {
 }
 
 /// One run of the planned processor, sealing at every chance. Returns
-/// the commit each seal announced, and the one the run ended on. Fails
+/// the commit each seal published, and the one the run ended on. Fails
 /// unless the processor says consumers may read it as it writes.
 async fn ingest(raw: &Path, playback_tree: &Path, now: &str) -> Vec<String> {
     let mut config = GithubConfig {
@@ -157,7 +157,7 @@ async fn every_seal_holds_each_pull_request_whole() {
     }
 }
 
-/// One render pass after another, each from where the last stopped, as
+/// One render run after another, each from where the last stopped, as
 /// the runner starts them on each seal. Returns each document it wrote,
 /// in order, as `(render unit key, the markdown)`.
 fn render_each_seal(
@@ -189,7 +189,7 @@ fn render_each_seal(
 
 /// A download that takes hours leaves nearly everything queued, and
 /// render runs again on every seal. Only what a seal changed renders, so
-/// each document is written once however many passes there are. A later
+/// each document is written once however many render runs there are. A later
 /// seal that changes a PR renders that PR again, with what it now has,
 /// and leaves the others alone.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

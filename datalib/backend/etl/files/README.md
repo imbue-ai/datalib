@@ -28,12 +28,12 @@ host-local cache rather than in the provider's versioned store:
   (`providers/file_inventory/src/ingest/STORAGE_NOTES.md` has the table).
 
 It is plain SQLite (via the `doltlite_engine=sqlite` URI parameter, the same
-door `datalib_runs::store` uses), because losing a cache costs a rehash
+way `datalib_runs::store` opens its file), because losing a cache costs a rehash
 rather than correctness, and it needs no commits, no history and no prolly
 tree.
 
-Keys are **absolute paths**, so one chain per host rather than per root. This
-is the part Unison gets wrong: its `fpcache` is per replica *pair*, so
+Keys are **absolute paths**, so there is one cache per host rather than
+per root. This is the part Unison gets wrong: its `fpcache` is per replica *pair*, so
 syncing one tree against two peers hashes the same bytes twice, and scanning
 a directory tells you nothing about its parent.
 
@@ -182,17 +182,19 @@ does not count them as removed.
 **A file over `max_bytes`** is in `over_max_bytes` too.
 `Scan::report_problems` makes it a `record:<name>:<path>` warning
 (`Reason::OverSizeLimit`), which is how a person learns of a file no scan has
-ever read, since it has no row to keep. It goes the run the file is read, or
-is gone: the file shrank, the limit rose or the file was deleted.
+ever read, since it has no row to keep. The warning is deleted on the run
+in which the file is read, or is gone: the file shrank, the limit rose or
+the file was deleted.
 
 **A file the walk found and could not open** (a mode that will not let us
 read it) is there too: it goes in `present_unread` and in `unreadable`, not
 in `errors`. A walk error says the walk may have missed paths, so it holds
 back every deletion under the root; one unopenable file says nothing about
 any other path. `Scan::report_problems` makes it a `record:<name>:<path>`
-row beside the walk's `listing:<name>` row, and the row goes the run the
-file opens. A source that deletes only after reading every file still
-holds back while one is unread, since that file may hold anything.
+row beside the walk's `listing:<name>` row, and the row is deleted on the
+run in which the file opens. A source that deletes only after reading
+every file still holds back while one is unread, since that file may hold
+anything.
 
 ## Why every scan still stats every file
 
@@ -238,9 +240,9 @@ single part, or a folder holding the parts of one export, by Google
 Takeout's part names; parts of two exports are refused), and
 `for_each_entry` hands over each file of a part with its name, size and
 a reader. An entry nobody reads is skipped (a zip) or read past (a
-`.tgz`). `safe_rel` refuses an entry name that would climb out of
-wherever it lands. `google_takeout` unpacks the entries its feeds read
-into a temporary folder; the `email` source streams a Takeout's `.mbox`
+`.tgz`). `safe_rel` refuses an entry name that would resolve to a
+path outside the folder it is unpacked into. `google_takeout` unpacks
+the entries its feeds read into a temporary folder; the `email` source streams a Takeout's `.mbox`
 entries straight into its reader.
 
 ## An export can be made by anyone

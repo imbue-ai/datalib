@@ -25,8 +25,8 @@ use datalib_etl_files::fingerprint_cache::FingerprintCache;
 /// `records.transcript_id`.
 pub const DATA_TABLES: &[&str] = &["transcripts", "records"];
 
-/// What a store whose record ids do not start with their transcript's
-/// reads a transcript's records by.
+/// The index a store whose record ids do not start with their
+/// transcript's id reads a transcript's records by.
 pub const RECORDS_BY_TRANSCRIPT: &str =
     "CREATE INDEX IF NOT EXISTS records_transcript ON records(transcript_id)";
 

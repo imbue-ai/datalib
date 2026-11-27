@@ -624,8 +624,8 @@ async fn a_media_file_the_export_left_out_is_a_warning() {
 }
 
 /// The same, on the fixture's own two-file table: both reactions files
-/// land in one table, and one failing to parse once pruned every row it
-/// had contributed.
+/// land in one table, and one failing to parse must not prune the rows
+/// it contributed.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_reactions_file_that_will_not_parse_keeps_its_rows() {
     let e = Export::new().await;
@@ -647,9 +647,10 @@ async fn a_reactions_file_that_will_not_parse_keeps_its_rows() {
 }
 
 /// An export unpacked only in part, missing one chunk of a table it has
-/// the rest of, pruned that chunk's rows: the table prunes only when every
-/// chunk it was last read from is there and read. A table missing every
-/// chunk is left out of the export, and deletes nothing either.
+/// the rest of, must not prune that chunk's rows: the table prunes only
+/// when every chunk it was last read from is there and read. A table
+/// missing every chunk is left out of the export, and deletes nothing
+/// either.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_table_missing_one_of_its_chunks_deletes_nothing() {
     let e = Export::new().await;
@@ -720,9 +721,8 @@ impl Export {
     }
 }
 
-/// A post a newer export no longer holds was deleted, and the edge to its
-/// photo stayed, owned by a record that is gone. Now no edge is left
-/// owned by a gone record.
+/// A post a newer export no longer holds is deleted, and the edge to its
+/// photo goes with it: no edge is left owned by a record that is gone.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_dropped_post_takes_its_media_edges_and_no_edge_is_left_owned_by_a_gone_record() {
     let e = Export::new().await;
@@ -750,7 +750,7 @@ async fn a_dropped_post_takes_its_media_edges_and_no_edge_is_left_owned_by_a_gon
     e.db.clone().close().await;
 }
 
-/// A table held back (a chunk missing) deletes no record, so its records
+/// A table not pruned (a chunk missing) deletes no record, so its records
 /// keep their media edges too.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_held_table_keeps_its_records_media_edges() {

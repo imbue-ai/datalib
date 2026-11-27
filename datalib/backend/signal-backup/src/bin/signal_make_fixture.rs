@@ -96,8 +96,8 @@ fn write(
         out_dir,
         &SnapshotInput {
             aep,
-            // Deterministic: a "make-it-so" pun is the right choice
-            // when the AEP is also a known constant.
+            // A fixed id, so the fixture is the same bytes every build;
+            // the AEP is a known constant too.
             backup_id: b"makeitsomakeitso",
             metadata_iv: &[0u8; 12],
             main_iv: &[0u8; 16],

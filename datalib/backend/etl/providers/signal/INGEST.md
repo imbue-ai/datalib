@@ -41,7 +41,7 @@ and `src/ingest/mod.rs`:
   A contact first seen by number alone changes key once, in the first
   backup that carries their ACI.
 
-- **A snapshot is known by its bytes.** The ledger, `ingested_backups`,
+- **A snapshot is known by its bytes.** The table `ingested_backups`
   is keyed by the blake3 of each of the snapshot's three files, read through
   the host's fingerprint cache, so an unchanged folder costs a `stat`
   per file and decrypts nothing. A folder renamed or copied is the
@@ -53,7 +53,7 @@ and `src/ingest/mod.rs`:
   it out (the generated type never serializes it:
   `tools/prost_toolchain`). A read on the phone is then one small row,
   not a rewrite of the message, and the diff between two backups names
-  only the messages that changed. A snapshot read whole forgets the
+  only the messages that changed. A snapshot read whole deletes the
   marks of the messages it no longer holds. Left in their frames, since
   they are not what the account has read: a chat's `markedUnread` (a
   flag set on the chat by hand, which nothing renders), a call's `read`,
@@ -61,15 +61,15 @@ and `src/ingest/mod.rs`:
 - **A row's sidecar is stamped the first time a snapshot holds it**
   (`bulk_upsert_first_seen_in_tx`), so a day's commit holds what that
   day changed and not a re-stamp of every row.
-- **HEAD always ends on the newest snapshot.** The ledger row written
-  last names the snapshot HEAD holds. When a run reads an older
+- **HEAD always ends on the newest snapshot.** The `ingested_backups` row
+  written last names the snapshot HEAD holds. When a run reads an older
   snapshot that turned up late, the newest is read again on top, dated
   now; when HEAD already holds it, nothing more is read.
 - **The newest snapshot held, gone from the folder, leaves HEAD
   alone.** Reading an older one on top would delete what only the
   newer one held, and that would read as data loss. It is a problem on
   the Manage row until a newer snapshot arrives.
-- **A snapshot that will not open costs that snapshot.** One half
+- **A snapshot that will not open is skipped, and only it.** One half
   synced (a file missing) or corrupt is a problem keyed by its name,
   and is tried again next run; the rest are read. When every snapshot
   a run tried fails — most likely a passphrase that is not this

@@ -237,7 +237,7 @@ let viewPicked = initialState.has("view");
 // The list mounts the first time it is shown, and stays.
 const listSeen = ref(view.value === "list");
 // `query` once typing has paused: what the list and the chips ask for.
-const settledQuery = ref(query.value);
+const lastRunQuery = ref(query.value);
 // The table has not asked for the query on screen: it was hidden.
 let tableBehind = false;
 
@@ -367,7 +367,7 @@ function indexColumnsVisible(): boolean {
     .some((c) => (c.id === "search_indexed" || c.id === "search_embedded") && !c.hidden);
 }
 
-// The result set changed: forget every answer and ask afresh. With both
+// The result set changed: drop every answer and ask afresh. With both
 // columns hidden this still asks, with no documents, for the "N documents
 // searchable" line under the grid, which is the only thing on screen that
 // hints the columns exist.
@@ -386,7 +386,7 @@ function refreshIndexState() {
 // Who the Author, Contact and Subject chips are comes from `people`, the one resolver every
 // document and grid asks (docs/dev/chips.md § Resolving): a
 // cell that draws a handle asks as it draws, and when an answer changes —
-// it lands, or a link made anywhere forgets it — the cells are drawn again.
+// it lands, or a link made anywhere drops it — the cells are drawn again.
 // The Source cells are group chips, answered by `entities` the same way.
 const PERSON_COLUMNS = ["author_ref", "contact_ref", "subject_ref"];
 const SOURCE_COLUMN = "source_ref";
@@ -435,8 +435,8 @@ async function askIndexState(uuids: string[]) {
   }
 }
 
-// The grid calls this as it scrolls, many times a second; ask once it
-// settles.
+// The grid calls this as it scrolls, many times a second; ask once the
+// viewport has stayed put for 150 ms.
 let indexStateScrollTimer: ReturnType<typeof setTimeout> | null = null;
 function onViewportChanged() {
   loadWanted();
@@ -888,7 +888,7 @@ function answered(q: string, outcome: "rows" | "refused" | "failed", more = {}) 
 }
 
 /// Whether the search has words to rank, so no sort means best match.
-const ranksFreeText = computed(() => freeText(settledQuery.value) !== "");
+const ranksFreeText = computed(() => freeText(lastRunQuery.value) !== "");
 /// A selection restored from the URL may be further down the list than
 /// the first page; the grid loads through it. Typing a new search gives
 /// up on it.
@@ -1259,11 +1259,11 @@ watch(query, (q, before) => {
   const ranked = rowsSpec === null ? isSearch : rankedTable();
   debounceTimer = setTimeout(
     () => {
-      if (sameSearch(q, settledQuery.value)) {
+      if (sameSearch(q, lastRunQuery.value)) {
         loading.value = false;
         return;
       }
-      settledQuery.value = q;
+      lastRunQuery.value = q;
       void runSearch(q);
     },
     // The toolbar's box asks only when it means it, on Enter.
@@ -1483,8 +1483,9 @@ onMounted(() => runSearch(query.value));
 
 const hint = computed(() => props.placeholder ?? "search…");
 
-// The index moved under us — a `unified_grid_and_search_index` pass committed, which under
-// streaming happens many times per sync, as each source's rows arrive.
+// The index moved under us — the `unified_grid_and_search_index` step
+// committed, which under streaming happens many times per sync, as each
+// source's rows arrive.
 // Ask the shown search again; the rows update in place while the
 // download is still going.
 const cardEl = ref<HTMLElement | null>(null);
@@ -1797,7 +1798,7 @@ function menuScope(args: MenuFromCellCallbackArgs): MenuScope {
       }
     : null;
   // A row's outbound linkout is source_url (Slack permalink, LinkedIn
-  // post, …). Local files (today: the `pdf` source) carry a `file://` URL, which
+  // post, …). Local files (the `pdf` source, for one) carry a `file://` URL, which
   // `window.open` cannot usefully follow from an http origin — a
   // browser blocks it silently. Split on the URL SCHEME rather than on
   // provider, so any future local-file source inherits this.
@@ -1976,7 +1977,7 @@ const menuItems: (MenuCommandItem | "divider")[] = [
       for (const r of m.links.web) {
         // `openExternal`, not `window.open`: the desktop app has no
         // tabs and does not implement `window.open`, so the bare
-        // call was a silent no-op there.
+        // call does nothing there.
         void openExternal(linkOf(r));
       }
     },
@@ -2091,7 +2092,7 @@ function gridOptions(): GridOption {
       onAfterMenuShow: onAfterMenuShowFit,
       // The grid scrolls itself — a page landing above the viewport holds
       // the top row in place, a selection is scrolled back to — and a menu
-      // that closed on every scroll closed under the person reading it.
+      // that closed on every scroll would close under the person reading it.
       // Its entries stay with the row it opened on (`perOpening`).
       hideMenuOnScroll: false,
     },
@@ -2542,7 +2543,7 @@ if (inToolbar) {
   const registered = registerSearchCard({
     id: props.ctx.cardId,
     query,
-    settled: settledQuery,
+    lastRun: lastRunQuery,
     run: (q) => {
       query.value = q;
     },
@@ -2643,7 +2644,7 @@ onBeforeUnmount(() => {
       v-if="listSeen"
       v-show="view === 'list'"
       :ctx="ctx"
-      :query="inScope(settledQuery)"
+      :query="inScope(lastRunQuery)"
       :active="view === 'list'"
       :sort="sortOrder"
       :within="scope ? name : null"

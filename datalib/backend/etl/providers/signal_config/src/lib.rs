@@ -1,6 +1,6 @@
-//! Provider-owned config schema for the `signal` source (Program A
-//! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
-//! `SignalConfig` without linking the provider.
+//! Provider-owned config schema for the `signal` source. Schema-only
+//! (serde + anyhow), so the orchestrator can name `SignalConfig`
+//! without linking the provider.
 
 use std::path::PathBuf;
 

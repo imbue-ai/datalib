@@ -117,8 +117,8 @@ async fn fetch_from(base: &str, curl: &str, opts: FetchOptions) -> Result<FetchS
 
 /// `curl -sSfL -o <dest> <url>`. `-f` makes curl exit non-zero on
 /// HTTP 4xx/5xx so we don't write a "404 Not Found" body to disk and
-/// hand it to the parser. `-L` follows GitHub's redirects (raw.* is
-/// stable today but the redirect surface has changed before). `-S`
+/// hand it to the parser. `-L` follows GitHub's redirects (raw.* has
+/// changed where it redirects before). `-S`
 /// keeps error messages on stderr in silent mode so failures surface
 /// cleanly in the run summary.
 ///

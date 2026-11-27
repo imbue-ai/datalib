@@ -17,7 +17,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Ingest wave: present iff `api`.
+/// One download processor when `api` is set, none otherwise.
 pub fn plan_ingest(ctx: PlanContext, config: DiscordConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let raw_path = config.common.raw_path().to_path_buf();
     let mut procs: Vec<Box<dyn DataProcessor>> = Vec::new();

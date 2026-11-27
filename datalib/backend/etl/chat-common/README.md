@@ -209,7 +209,8 @@ Slack is the one provider that sets it
 messaging app's chats (Signal, WhatsApp, Messages, SMS, Beeper, Slack, Discord,
 Messenger, Google Chat and Voice, LinkedIn's messages) are `Chat`; an
 email thread or a post with its comments is `Conversation`, and an
-assistant's transcript `Transcript`, both drawn as they always were.
+assistant's transcript `Transcript`, both drawn with each message as a
+card.
 
 In a `Chat`, every message's box also carries `msg--chat`, which the UI
 draws as a row rather than a card, and its reactions are one pill per
@@ -368,7 +369,7 @@ frame whose policy is `script-src 'none'` (`ui/src/cards/docFrame.ts`),
 so markup that gets past the sanitizer still cannot run.
 `ui/tests/e2e/document-sandbox.spec.ts` checks this by writing script
 straight into a document's frame. The UI's own code still reaches into
-the frame, so the `data-section-uuid` wrappers work as before.
+the frame, so the `data-section-uuid` wrappers still work.
 
 No `<iframe>` survives the sanitizer, and the frame's policy frames
 nothing. Every attachment at its `/data/…` address, whatever type it

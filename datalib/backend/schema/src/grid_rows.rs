@@ -291,13 +291,16 @@ pub struct GridRow {
     /// or the block a discussion hangs off. Null for page-level rows.
     #[col(sql = "VARCHAR(96)")]
     pub notion_block_uuid: Option<String>,
-    /// FK into `markdowns`: every rendered `.md` gets a row there, and every
-    /// grid row inside that file points at it. Many-to-one, because a
-    /// provider may shard one conversation across files (beeper renders one
-    /// per period). The addressing primitive behind `/api/chat/{uuid}`, and
+    /// FK into `markdowns`: every rendered document gets a row there, and
+    /// every grid row inside that document points at it. Many-to-one,
+    /// because a provider may shard one conversation across documents
+    /// (beeper renders one per period). The addressing primitive behind `/api/chat/{uuid}`, and
     /// what drives incremental re-render.
     ///
-    /// Nullable until every renderer populates it.
+    /// NULL only on a row the grid index writes for a data node that no
+    /// document has a row for (`etl/render/src/grid_index/nodes.rs`). A
+    /// document's own rows must name it: the index refuses a document
+    /// holding a row that does not (`grid_index::misfiled`).
     #[col(sql = "VARCHAR(96)")]
     pub markdown_uuid: Option<String>,
     /// How many bytes the thing this row describes occupies. A file's

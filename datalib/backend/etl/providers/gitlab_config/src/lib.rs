@@ -1,5 +1,5 @@
-//! Provider-owned config schema for the `gitlab` source (Program A goal
-//! #1). Schema-only (serde + anyhow), so the orchestrator and `http` can name
+//! Provider-owned config schema for the `gitlab` source. Schema-only
+//! (serde + anyhow), so the orchestrator and `http` can name
 //! `GitlabConfig` without linking the provider.
 
 use datalib_source_common::{not_negative, LatchkeySettings, SourceCommon};

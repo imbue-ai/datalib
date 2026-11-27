@@ -1,4 +1,4 @@
-//! The render wave for the lightroom source: one document per photo or
+//! The render step for the lightroom source: one document per photo or
 //! video, with no file on disk. The `photos` applet draws it from the
 //! `source_photos` row the document carries
 //! (`lightroom/INGEST.md` § "Rendering").
@@ -142,8 +142,8 @@ fn catalog_name(path: Option<&str>) -> Option<&str> {
     Some(file.strip_suffix(".lrcat").unwrap_or(file)).filter(|n| !n.is_empty())
 }
 
-/// The mirror at the driver's pin, else HEAD; `None` before anything is
-/// committed.
+/// The mirror at the commit the render driver pinned, else HEAD; `None`
+/// before anything is committed.
 fn load(raw_path: &Path, pin: Option<&str>) -> Result<Option<(String, Catalog)>> {
     let db = datalib_etl::raw_layout::entities_db(raw_path);
     if !db.exists() {

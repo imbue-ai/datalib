@@ -109,8 +109,9 @@ that moment is an hour wrong. So the offset after a jump comes from the zone at
 the moment after it, and the offset before comes from that minus the jump. A
 reading's stretch is the folder its file is in: `archive<N>/` holds what came
 before jump N, and the top of the folder what came after the last one. That
-also settles the hour the clocks go back through twice. A real time that comes
-out twice, as in a `corrupt_` / `restored_` pair, keeps one reading.
+also decides the offset in the hour the clocks pass through twice when they
+go back. A real time that comes out twice, as in a `corrupt_` / `restored_`
+pair, keeps one reading.
 
 A device with no jump on record has only the time zone it says it is in, and
 that zone's rule for each reading.
@@ -196,8 +197,8 @@ unit, the device reports it in `latest_config_measurements.json`
 `(device_id, ts_ms)` key, the name of its file cursor, and the seed of
 the device's `grid_rows` uuid. Its **name** is what a
 person calls it: `settings.node_name` from the same file, the name on
-the device's screen and in the app. The two are the id/name split the
-runbook makes for sources, for the same reason — the name can change
+the device's screen and in the app. The two are the id/name split
+`AGENTS.md` makes for sources, for the same reason — the name can change
 without re-keying anything.
 
 Per `devices` entry, `serial` and `name` in the config override what
@@ -222,15 +223,16 @@ that failed, and is a row in the store's `problems` table:
 | a history file that would not read, or a `latest_config_measurements.json` that would not read or parse | `record:airvisual_files:<serial>/<path>` | the next run that reads it |
 | a history file that would not parse, or lines in one that could not be used | `file:airvisual/export/<serial>:<path>` | the file changes and is read again |
 
-A history file that would not read is not stamped, so every run tries
-it again, and every run reads every device; the first three kinds are
-therefore replaced whole at the end of each run, except that a device
-the run could not read keeps the `record:` rows it had (when a device
-cannot even say which serial it is, every serial the run did not read
-keeps them). A file that read but would not parse would not parse next
-time either, so it is stamped with its row and read again only once it
-changes. A run told to stop adds the rows it found before the stop and
-clears only the `record:` rows of the devices it read. A description that will not parse leaves the
+A history file that would not read gets no `ingested_files` row, so
+every run tries it again, and every run reads every device; the first
+three kinds are therefore replaced whole at the end of each run,
+except that a device the run could not read keeps the `record:` rows it
+had (when a device cannot even say which serial it is, every serial the
+run did not read keeps them). A file that read but would not parse would not parse next
+time either, so its `ingested_files` row is written with its problem
+row, and it is read again only once it changes. A run told to stop adds
+the rows it found before the stop and clears only the `record:` rows of
+the devices it read. A description that will not parse leaves the
 device row as it was rather than blanking its model, firmware and
 timezone.
 

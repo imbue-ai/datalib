@@ -45,7 +45,7 @@ sh_binary(
 # Same as :serve, but materializes a one-shot data root from the
 # checked-in TNG fixtures (`//tests/fixtures:ingested_tng`), with the
 # contacts app, into a tmpdir and points the backend at it. Useful for
-# eyeballing the grid without needing a real on-disk datalib root. The
+# eyeballing the grid without needing a real on-disk Datalib root. The
 # packaged `datalib_http_bin` serves both the embedded SPA and `/api/*`,
 # so we go through serve_dev.sh (no Vite dev server). The ingest
 # genrule links doltlite statically (via

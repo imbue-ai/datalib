@@ -5,7 +5,7 @@
 // applet, `datalib-http`'s `applets::Hangup`).
 
 import { test, expect, type Page, type Request } from "@playwright/test";
-import { EVERY_ROW, SEARCH_ROWS, shownCards, SEARCH_SETTLE } from "./grid-helpers";
+import { EVERY_ROW, SEARCH_ROWS, shownCards, SEARCH_TIMEOUT } from "./grid-helpers";
 
 const field = (page: Page) => page.getByTestId("search-input");
 const shownQuery = (page: Page) => page.locator(".grid-wrap");
@@ -44,7 +44,7 @@ test("typing asks nothing, and Enter asks for the search once", async ({ page })
   expect(sent, "nothing went out while typing").toEqual([]);
   await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   expect(sent.filter((s) => s.q === "warp core").length).toBe(1);
 });
@@ -64,7 +64,7 @@ test("Enter on what is already shown asks nothing new", async ({ page }) => {
   await field(page).pressSequentially("warp core", { delay: 60 });
   await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   const { sent } = record(page);
   await field(page).click();
@@ -76,7 +76,7 @@ test("Enter on what is already shown asks nothing new", async ({ page }) => {
   await page.keyboard.insertText("b");
   await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core b", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   expect(new Set(sent.map((s) => s.q))).toEqual(new Set(["warp core b"]));
 });
@@ -102,7 +102,7 @@ test("a search replaced is given up, every request of it", async ({ page }) => {
   await field(page).pressSequentially(" core", { delay: 60 });
   await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp core", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
 
   await expect

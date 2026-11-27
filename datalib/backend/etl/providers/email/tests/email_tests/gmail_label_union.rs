@@ -82,7 +82,7 @@ fn write_fixtures(playback: &Path) {
         ]),
     );
 
-    // What Gmail answers when both labels ride on one request: the
+    // What Gmail answers when both labels are in one request: the
     // intersection, not the union. Present so that code combining them
     // fails this test on the row count rather than on a missing fixture.
     put_gmail(

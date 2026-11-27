@@ -1,6 +1,6 @@
 // What identifies one open card: an id minted when it opens, and a type
-// read from its source. Both ride on the requests the card makes
-// (cardScope.ts), so the server's request log can say which card, and
+// read from its source. Both go out as headers on the requests the card
+// makes (cardScope.ts), so the server's request log can say which card, and
 // which kind of card, is doing the asking.
 
 // A UUIDv7 (RFC 9562): the first 48 bits are the Unix time in ms, so

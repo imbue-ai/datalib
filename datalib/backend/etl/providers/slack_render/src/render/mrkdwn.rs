@@ -1,5 +1,4 @@
-//! Slack mrkdwn → CommonMark converter. Port of `src/ingest/providers/
-//! slack/mrkdwn.py`.
+//! Slack mrkdwn → CommonMark converter.
 
 use datalib_html_entities::decode;
 use std::collections::BTreeMap;

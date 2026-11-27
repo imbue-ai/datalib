@@ -98,8 +98,8 @@ async fn a_search_that_fails_is_a_problem_until_it_lists() {
     assert_eq!(problems(&out).await, [], "the scope listed this time");
 }
 
-/// Raises the stop flag when the run announces how many PRs it will
-/// fetch: after discovery, before the first fetch.
+/// Raises the stop flag when the run reports how many PRs it will
+/// fetch (`set_length`): after discovery, before the first fetch.
 struct StopBeforeFetching(StopFlag);
 
 impl ProgressSink for StopBeforeFetching {

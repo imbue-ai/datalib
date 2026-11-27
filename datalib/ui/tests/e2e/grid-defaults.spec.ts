@@ -3,7 +3,7 @@
 // the app opens on tabs, so the defaults are checked there too.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { GRID, gridSettled, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, untilGridLoaded, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 async function total(request: APIRequestContext, q: string): Promise<number> {
   const r = await request.get(
@@ -28,7 +28,7 @@ async function expectDefaults(page: Page, request: APIRequestContext) {
   await expect(page.getByTestId("search-input")).toHaveAttribute("data-query", "is:document");
   await expect(page.locator(".grid-column .status")).toContainText(`(of ${documents})`);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const notDocuments = await page.evaluate(() =>
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi
       .rows()

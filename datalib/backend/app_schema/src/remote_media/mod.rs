@@ -1,6 +1,6 @@
 // A rendered document's images on remote hosts are blocked until asked
 // for (issue #648). The store `system/remote_media.doltlite_db` holds
-// the asking and the answer: an allow row records a decision to load —
+// two kinds of row: an allow row records a decision to load —
 // one URL, everything in one document, everything on one host,
 // everything from one source — and a media row records a URL fetched
 // into the download CAS beside it, so opening the document again never

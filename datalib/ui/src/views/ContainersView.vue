@@ -190,9 +190,9 @@ onBeforeUnmount(() => {
 });
 
 // The cards a URL names (a link, a popped-out card), in a Columns
-// container of their own, so what they open lands beside them as it
-// did when the URL was the whole layout. The tree, not the URL, is
-// what this layout keeps, so once opened the address goes back to "/".
+// container of their own, so what they open lands beside them. The
+// tree, not the URL, is what this layout keeps, so once opened the
+// address goes back to "/".
 // Whoever wrote the link wrote their source, so the library does not
 // keep them until the person does (`kept`; docs/dev/cards.md).
 function routeNode(): TreeNode | null {

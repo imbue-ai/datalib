@@ -31,7 +31,7 @@ import type { PackageCommand } from "@/api";
 import { editStringArray, quote } from "./tomlText";
 import { deleteIn, setIn } from "./tomlPatch";
 
-/// Which wave a step belongs to, for display and for picking the right
+/// Which phase a step belongs to, for display and for picking the right
 /// half of a catalog entry's fields. Read off the function part of its id.
 export type StepPhase = "ingest" | "render" | "index" | "other";
 

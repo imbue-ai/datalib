@@ -18,7 +18,7 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 ///
 /// **Bump this whenever `render_markdown` changes what it writes.**
 /// Without it, changing the shared layout means editing the version
-/// constant in all ten providers by hand and re-rendering nothing in
+/// constant in every chat provider by hand and re-rendering nothing in
 /// the one you forget. It reaches the render step as a render param
 /// ([`layout_params`]), so a bump renders every document again the way
 /// any param change does. The provider's own number stays its own —
@@ -26,10 +26,11 @@ pub const ENTITY_KIND_CONVERSATION: &str = "conversation";
 /// disk is one its processors declare, so this must not be mixed into
 /// the stored value.
 ///
-/// It also covers what `render_markdown` writes beside the markdown:
-/// v10 moved only the `source_contacts` rows (`people.rs` counts
-/// reactors), and every document had to be rendered again for an
-/// existing root to hold them.
+/// It also covers what `render_markdown` writes beside the markdown,
+/// the `source_contacts` rows and the search terms among them: a change
+/// only there still needs every document rendered again for an
+/// existing root to hold it. v10 was such a change: it moved only the
+/// `source_contacts` rows (`people.rs` counts reactors).
 /// v12: the people baseline counts a reactor to a message not in
 /// the mirror, which moves only the `source_contacts` rows.
 /// v13: an attachment's size comes from its bytes when the provider
@@ -184,7 +185,7 @@ pub struct RenderSummary {
     /// Every chat rendered, with what it was built from — the render units
     /// the caller declares through `RenderCtx::declare_render_unit`. A chat
     /// handed in that produced nothing is here too, which is how its
-    /// old documents go.
+    /// old documents are deleted.
     pub render_units: RenderUnits,
 }
 
@@ -222,7 +223,7 @@ pub struct ChatRenderer<'a> {
 }
 
 impl<'a> ChatRenderer<'a> {
-    /// `docs_total` is announced as the queue straight away.
+    /// `docs_total` is set as the progress bar's total straight away.
     pub fn new(
         profile: &'a RenderProfile,
         source_id: &'a str,
@@ -1152,7 +1153,7 @@ fn build_grid_rows(
             GridRow::builder()
                 .uuid(item.message_uuid.clone())
                 .provider(profile.provider)
-                // Per-item role override (ChatGPT/Anthropic) or the profile default.
+                // Per-item role override (ChatGPT/Claude) or the profile default.
                 .kind(
                     item.kind_label
                         .clone()
@@ -1432,8 +1433,8 @@ fn attachment_search_text(item: &NormalizedChatItem) -> String {
 // Format helpers
 use datalib_time::{record_stamp_from_unix_millis_at, RecordStampPrecision};
 
-/// Seconds precision, as this renderer has always emitted. Changing it
-/// would re-render every document chat-common has written.
+/// Seconds precision. Changing it would re-render every document
+/// chat-common has written.
 fn human_bytes(n: i64) -> String {
     let n = n as f64;
     if n < 1024.0 {
@@ -3025,9 +3026,8 @@ mod tests {
         }
     }
 
-    /// The bug this whole `Option<i64>` change exists to remove: an item
-    /// upstream never stamped used to land in the grid as a real-looking
-    /// `1970-01-01T00:00:00+00:00`. It must be null instead.
+    /// An item upstream never stamped must reach the grid with a null
+    /// stamp, not a real-looking `1970-01-01T00:00:00+00:00`.
     #[test]
     fn undated_item_gets_a_null_created_at_not_the_epoch() {
         let profile = test_profile();

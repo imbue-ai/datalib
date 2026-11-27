@@ -545,8 +545,8 @@ mod tests {
     }
 
     /// The wizard says to paste a link, and a link copied from a browser
-    /// can point inside the PR. The fragment used to be read as the PR
-    /// number, which failed the whole sync.
+    /// can point inside the PR. Reading the fragment as the PR number
+    /// failed the whole sync.
     #[test]
     fn a_pasted_link_may_point_inside_the_pr() {
         for link in [

@@ -15,8 +15,10 @@ pub struct SourceCursorRow {
     /// finished consuming it. The next run passes this as `from_ref`.
     #[col(sql = "VARCHAR(64)")]
     pub store_commit: String,
-    /// That commit's tree (`dolt_hashof_db`). When a fold has replaced the
-    /// commit, the next run diffs from the commit that holds this tree.
+    /// That commit's tree (`dolt_hashof_db`). When the step's `--compact`
+    /// has squashed the render store's history into one commit, so
+    /// `store_commit` no longer exists, the next run diffs from the
+    /// commit that holds this tree.
     #[col(sql = "VARCHAR(64)")]
     pub store_tree: Option<String>,
     /// When this cursor was last advanced, in UTC.

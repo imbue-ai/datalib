@@ -1,4 +1,4 @@
-//! The render wave for the todoist source: its planner and the
+//! The render step for the todoist source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use std::path::Path;

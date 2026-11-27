@@ -2,8 +2,8 @@
 //! row says nobody knows, which is most of them. Who said so is on the
 //! row: a person, or an agent whose word waits for one. These are the
 //! rules, over values alone; nothing here knows what a subject is, so
-//! they can serve any store that labels things. The contacts store is
-//! the first (`review.rs`). Each label stands alone: what one says never
+//! they can serve any store that labels things. The contacts store uses
+//! them (`review.rs`). Each label stands alone: what one says never
 //! changes another.
 
 use crate::schema::labels::LabelRow;

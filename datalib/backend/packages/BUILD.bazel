@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Packages: programs from outside datalib that a data root runs as steps
+# Packages: programs from outside Datalib that a data root runs as steps
 # and applets, published as a manifest at a URL. The manifest's shape,
 # what a person types to name one, and the fetch that unpacks one under
 # `system/packages/`. docs/dev/packages.md. Linked by datalib-http.

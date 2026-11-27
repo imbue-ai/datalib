@@ -19,7 +19,7 @@ use crate::support::{channels_with_messages, checked_at, fetch_into, Tree};
 use datalib_sql::test_sql;
 
 /// Raises the stop on the download's first progress tick — what the SIGINT
-/// handler does, at a point the test controls. The first tick now lands
+/// handler does, at a point the test controls. The first tick lands
 /// part-way through the first channel rather than at its end, so this
 /// asserts the stronger thing: the channel already in flight still
 /// finishes, and none after it starts.
@@ -129,7 +129,7 @@ async fn a_stopped_run_leaves_on_its_queue_the_channels_it_did_not_walk() {
 }
 
 /// Stops the run on its first tick, as [`StopOnFirstChannel`] does, and
-/// keeps the total it announced and what it counted done.
+/// keeps the total it reported and what it counted done.
 #[derive(Clone, Default)]
 struct StopAndCount {
     stop: StopFlag,

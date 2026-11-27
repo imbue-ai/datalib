@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `markdown` source.
+//! The download `DataProcessor`s for the `markdown` source.
 
 use std::path::PathBuf;
 

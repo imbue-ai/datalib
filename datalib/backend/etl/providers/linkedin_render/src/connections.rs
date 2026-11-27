@@ -206,10 +206,10 @@ mod tests {
         render_connections(&source, &Progress::noop(), &mut |_| Ok(()))
     }
 
-    /// A connections table that failed to load read as an export without
-    /// it, so every connection's document was rendered from nothing and
-    /// swept, with the step reporting success. Only a table that does not
-    /// exist is "no rows".
+    /// A connections table that fails to load must not read as an export
+    /// without it: every connection's document would be rendered from
+    /// nothing and deleted, with the step reporting success. Only a table
+    /// that does not exist is "no rows".
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_connections_table_that_will_not_load_fails_the_render() {
         let d = tempfile::tempdir().unwrap();
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn connected_on_normalizes_to_offset_bearing_midnight_utc() {
-        // The grid bug: a bare `DD Mon YYYY` date must become a valid
+        // A bare `DD Mon YYYY` date must become a valid
         // offset-bearing created_at, and the result must round-trip through
         // the same `split_record_stamp` the load step uses to build the
         // sortable `created_at_utc` column.

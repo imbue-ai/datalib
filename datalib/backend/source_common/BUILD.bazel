@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
-# Schema-only foundation crate (Program A): the shared per-source `common`
+# Schema-only foundation crate: the shared per-source `common`
 # envelope (SourceCommon), the global Defaults block, the cross-source
 # download knobs, and the `Origin` / `Local` reach an ingest method
 # declares, and which of them a step's params hold. Sits BELOW the

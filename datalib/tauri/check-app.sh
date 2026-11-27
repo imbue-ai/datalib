@@ -8,10 +8,10 @@
 # auth" button does, which is what loads playwright. Run after
 # `tauri build`, on the .app it produced, because the bundler's copy of
 # the staged tree is what stage_runtime.sh's own smoke test cannot
-# see: it drops every symlink, and before the tree was staged
-# `--no-symlinks` the only symptom was "Test connection" failing in
-# the app. A tree with playwright pruned ran `--version` fine and
-# failed every browser login.
+# see: it drops every symlink, and a tree staged without
+# `--no-symlinks` shows only as "Test connection" failing in the app.
+# A tree with playwright pruned runs `--version` fine and fails every
+# browser login.
 #
 # The login check needs a Chrome on the machine (GitHub's macOS runners
 # have one); a mac without it cannot do a browser login either.

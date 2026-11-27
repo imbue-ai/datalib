@@ -1,4 +1,4 @@
-//! The render wave for the linkedin source: its planner and the
+//! The render step for the linkedin source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -12,7 +12,7 @@ use datalib_etl_render::processor::{
 };
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// One render processor, always (it renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: LinkedinRenderConfig,
@@ -41,7 +41,7 @@ pub struct Source<'a> {
     pub range: RawRange<'a>,
 }
 
-/// What one feed's render pass did: every render unit it looked at, named
+/// What one feed's render run did: every render unit it looked at, named
 /// first with nothing and then, for the rendered ones, with what they
 /// read; and the commit it read.
 #[derive(Debug, Default)]
@@ -51,8 +51,8 @@ pub struct FeedOutcome {
 }
 
 /// LinkedIn's render processor — renders the four feeds (messages,
-/// connections, posts, skills) and emits each rendered markdown through the
-/// fused-Load callback.
+/// connections, posts, skills) and emits each rendered document through
+/// `RenderCtx::emit_doc`.
 struct LinkedinRender;
 
 #[async_trait]

@@ -352,9 +352,9 @@ mod tests {
         Some((r.props.etag.as_deref(), r.props.vcard.as_deref()?))
     }
 
-    /// A grouped property (`item1.EMAIL`) is the same property. Every
-    /// email-only card in a real Google export was rendering with no
-    /// fields at all because the matcher compared the whole `item1.EMAIL`.
+    /// A grouped property (`item1.EMAIL`) is the same property. A matcher
+    /// that compares the whole `item1.EMAIL` renders every email-only
+    /// card of a real Google export with no fields at all.
     #[test]
     fn grouped_properties_match_by_their_name() {
         let card = "BEGIN:VCARD\nitem1.EMAIL;TYPE=INTERNET:a@x.test\nitem1.X-ABLabel:\nEMAIL;TYPE=WORK:b@x.test\nitem2.TEL:+1-555\nEND:VCARD";
@@ -472,8 +472,8 @@ END:VCARD&#13;
     }
 
     /// The card's CRs arrive as `&#13;` references between text runs.
-    /// When the reader trimmed each run, the card lost its line feeds,
-    /// so no UID was found and every contact was skipped.
+    /// A reader that trims each run loses the card's line feeds, so no
+    /// UID is found and every contact is skipped.
     #[test]
     fn sync_collection_yields_changes_and_deletes_and_token() {
         let ms = parse(SYNC_COLLECTION);
@@ -597,9 +597,9 @@ END:VCARD&#13;
   <sync-token>data:,1780602923-240</sync-token>
 </multistatus>";
 
-    /// Fastmail wraps every value in CDATA. Before the reader took CDATA
-    /// as text, the addressbook had no name (so an `addressbooks` filter
-    /// matched nothing) and every vCard was dropped as having no data.
+    /// Fastmail wraps every value in CDATA. A reader that does not take
+    /// CDATA as text gives the addressbook no name (so an `addressbooks`
+    /// filter matches nothing) and drops every vCard as having no data.
     #[test]
     fn reads_fastmail_cdata_values() {
         let ms = parse(ADDRESSBOOK_LIST_FASTMAIL);

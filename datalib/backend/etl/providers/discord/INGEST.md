@@ -135,7 +135,8 @@ the next run does not ask again.
 Pages come newest first, 100 at a time, and are asked for newest first
 across every conversation: a run cut off part way has the newest of the
 account. A page is stored with the people it names, the edges of its
-files and the stretch it settles, in the run's open transaction. A page
+files and the stretch of ids it shows read whole, in the run's open
+transaction. A page
 shorter than 100 is not read as the end; an empty one is, for everything
 older.
 
@@ -224,8 +225,9 @@ datalib-doltlite -readonly <root>/discord/ingest/entities.doltlite_db \
 ## Sample data
 
 `tests/fixtures/discord_tng/` is Picard's account in the
-[TNG corpus](/tests/fixtures/README.md): `world.json`, everything it can
-be answered, and the files its messages carry.
+[TNG corpus](/tests/fixtures/README.md): `world.json`, which says what
+the account can see and so every response a request about it can get,
+and the files its messages carry.
 `tests/fixtures/make_discord_fixtures.py` writes it, and its header lists
 the cases it covers. `src/synthesize.rs` turns it into playback tapes.
 `tests/discord_tests/world.rs` builds smaller accounts for the walk's own

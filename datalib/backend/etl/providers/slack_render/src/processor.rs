@@ -1,5 +1,5 @@
-//! The render wave for the slack source: its planner and the
-//! [`RenderProcessor`] it plans.
+//! The render step's processor for the slack source: its planner and
+//! the [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -10,7 +10,8 @@ use datalib_etl_render::processor::{
 use datalib_etl_slack_config::SlackRenderConfig;
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// The render step's processor: always present (renders whatever is in
+/// the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: SlackRenderConfig,

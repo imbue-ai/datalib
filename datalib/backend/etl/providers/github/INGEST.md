@@ -82,8 +82,8 @@ request leaves a store the next run finishes
 checks that). A seal holds each PR whole or not at all, so render starts
 on the first seal and runs again on each later one, writing only the
 documents that seal changed (`tests/github_tests/streaming.rs`). Each
-pass still reads the whole store to find them, which is under two seconds
-at 1,500 PRs.
+render run still reads the whole store to find them, which is under two
+seconds at 1,500 PRs.
 
 GitHub's search answers at most 1000 results, newest first, and a search
 is 30 requests a minute of its own limit, one per page of 100. A search

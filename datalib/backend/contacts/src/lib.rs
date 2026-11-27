@@ -378,7 +378,7 @@ impl DecidedHow {
     }
 }
 
-/// The one label agents curate today, in when the person or sender is
+/// The one label agents curate, in when the person or sender is
 /// not spam: someone the person deals with, or a machine they want (a
 /// receipt, a notification). What the review shows a toggle for.
 pub const REAL: &str = "real";
@@ -1235,8 +1235,9 @@ impl Store {
     /// memberships, labels and turned-down links move over, and so does
     /// its mark as me; its photo and note fill in where the survivor has
     /// none, and `from` is kept as a row pointing at `into` so an id saved
-    /// anywhere (a `contact:` search) still reaches the person. A contact already merged into `from` now points at `into`,
-    /// so a chain is never more than one step.
+    /// anywhere (a `contact:` search) still reaches the person. A contact
+    /// already merged into `from` now points at `into`, so a chain is never
+    /// more than one step.
     pub async fn merge(&self, from: &str, into: &str) -> Result<()> {
         if from == into {
             bail!("a contact cannot be merged into itself");

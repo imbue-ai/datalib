@@ -609,8 +609,8 @@ type Said = (String, String, bool);
 /// What a reader of every step's problems logs of what it could not read:
 /// each thing once, the first pass it appears in, and again only after a
 /// pass without it. The Manage screen reads them on every refresh, so
-/// saying each every time drowned the log (26,830 lines in two hours on
-/// one library). One reader per process, so one record of what it said.
+/// saying each every time would fill the log (26,830 lines in two hours
+/// on one library). One reader per process, so one record of what it said.
 pub fn say_unread(steps: &[OfStep]) {
     static SAID: std::sync::Mutex<std::collections::BTreeSet<Said>> =
         std::sync::Mutex::new(std::collections::BTreeSet::new());

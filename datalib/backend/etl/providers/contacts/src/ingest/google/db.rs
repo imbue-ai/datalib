@@ -145,7 +145,7 @@ impl RawDb {
         let people = prune::prune_scope_in_tx(tx, PEOPLE, &scope, &none).await?;
         prune::delete_owned_in_tx(tx, PHOTOS, GooglePhotoRow::OWNING_COLUMN, &people).await?;
         prune::prune_scope_in_tx(tx, GROUPS, &scope, &none).await?;
-        Self::forget_google_sync_token(tx, book).await?;
+        Self::delete_google_sync_token(tx, book).await?;
         Ok(people.len())
     }
 
@@ -225,7 +225,7 @@ impl RawDb {
         token: &str,
         labels: Option<&str>,
     ) -> Result<()> {
-        Self::forget_google_sync_token(tx, book).await?;
+        Self::delete_google_sync_token(tx, book).await?;
         dr::upsert_scope_state(&mut **tx, &token_scope(book), token).await?;
         if let Some(labels) = labels {
             dr::upsert_scope_state(&mut **tx, &labels_scope(book), labels).await?;
@@ -233,7 +233,7 @@ impl RawDb {
         Ok(())
     }
 
-    pub async fn forget_google_sync_token(
+    pub async fn delete_google_sync_token(
         tx: &mut Transaction<'_, Sqlite>,
         book: &str,
     ) -> Result<()> {

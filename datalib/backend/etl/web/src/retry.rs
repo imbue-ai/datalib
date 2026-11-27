@@ -157,7 +157,7 @@ impl RetryGuard {
             .expect("the request semaphore is never closed")
     }
 
-    /// The source is done asking this run. The request that found out
+    /// The source sends no more requests this run. The request that found out
     /// still fails as itself, for its caller to report; the next one stops
     /// the source ([`RetryGuard::gave_up`]).
     pub fn give_up(&self, why: impl Into<String>) {
@@ -206,10 +206,10 @@ tokio::task_local! {
     static GUARD: Arc<RetryGuard>;
 }
 
-/// Install `guard` as the ambient retry-guard context for the duration of
-/// `fut`. The chokepoint (and report-in providers) invoked anywhere within
-/// `fut` on the same task accumulate into it. Everything outside any
-/// `scope` is a no-op.
+/// Install `guard` as the retry guard for the duration of `fut`: every
+/// request through `datalib_etl_web::http` made within `fut` on the same
+/// task counts against it. A request outside any `scope` gets a fresh
+/// guard of its own ([`current_or_default`]).
 pub async fn scope<F>(guard: Arc<RetryGuard>, fut: F) -> F::Output
 where
     F: Future,
@@ -286,7 +286,7 @@ mod tests {
 
     /// A request handed back as failed must not reset the backoff for the
     /// next one, or an outage would use up the failure count in minutes
-    /// instead of riding out the guard's time.
+    /// instead of taking the guard's full time.
     #[test]
     fn the_next_request_backs_off_from_the_sources_streak() {
         let g = RetryGuard::new(

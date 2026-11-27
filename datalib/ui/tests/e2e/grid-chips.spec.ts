@@ -3,9 +3,9 @@ import {
   EVERY_ROW,
   SEARCH_MENU,
   cardOf,
-  gridSettled,
+  untilGridLoaded,
   inDocFrame,
-  searchAndSettle,
+  searchAndAwaitResults,
   searchMenuItem,
   openRowByUuid,
   stubClipboard,
@@ -122,8 +122,8 @@ test("a storage report's group and step are chips that open their cards", async 
   const report = rows.find((r) => r.conversation_name === "slack storage" && r.markdown_uuid);
   expect(report, "the fixture must have the slack storage report").toBeTruthy();
   await page.goto(EVERY_ROW);
-  await searchAndSettle(page, "source:datalib");
-  await gridSettled(page);
+  await searchAndAwaitResults(page, "source:datalib");
+  await untilGridLoaded(page);
   await openRowByUuid(page, report!.uuid);
 
   const group = (await inDocFrame(page, 'a.chip[data-entity="datalib:group/slack"]')).first();

@@ -1,7 +1,7 @@
 //! How far a PDF may expand as it is read. A person may be handed a PDF, and
-//! two kilobytes of one can ask a parser for gigabytes, so this measures a
-//! file before `lopdf` or `pdf-inspector` reads it. `pdf-inspector` takes
-//! bytes and no limit, so no setting reaches the streams it inflates itself.
+//! two kilobytes of one can make a parser allocate gigabytes, so this
+//! measures a file before `lopdf` or `pdf-inspector` reads it.
+//! `pdf-inspector` takes bytes and no limit, so no setting reaches the streams it inflates itself.
 //! `INGEST.md` § "A PDF can be made by anyone" has the rules.
 
 use std::collections::HashSet;
@@ -373,7 +373,7 @@ const UNEXPANDED_OBJECT_STREAM: &[u8] = b"DatalibUnexpandedObjStm";
 
 /// A loader expands what `/Type` calls an object stream as it meets it, so
 /// the name goes first. `lopdf` keeps the object this was handed, and of the
-/// answer reads only whether it is `None`.
+/// returned value reads only whether it is `None`.
 fn leave_object_stream_unexpanded(id: ObjectId, object: &mut Object) -> Option<(ObjectId, Object)> {
     if let Object::Stream(stream) = object {
         if stream.dict.has_type(b"ObjStm") {
@@ -417,7 +417,8 @@ fn object_starts(dict: &Dictionary, content: &[u8]) -> Vec<usize> {
     starts().unwrap_or_default()
 }
 
-/// `lopdf`'s parser is private, so this asks it through a stream of one.
+/// `lopdf`'s parser is private, so this parses `text` as the one object of
+/// an object stream.
 fn parse_object(text: &[u8]) -> Option<Object> {
     const INDEX: &[u8] = b"0 0 ";
     let mut content = Vec::with_capacity(INDEX.len() + text.len());
@@ -524,7 +525,8 @@ pub(crate) mod tests {
         assert!(refused.contains("more than 1024 bytes"), "{refused}");
     }
 
-    /// Two layers ask for a thousand times a thousand from the same bytes.
+    /// A stream behind two filters, Flate over Flate or hex over Flate, is
+    /// decoded through both and measured.
     #[test]
     fn a_stream_behind_a_second_filter_is_measured_too() {
         let twice = zlib(&zlib(&[b' '; 4096]));

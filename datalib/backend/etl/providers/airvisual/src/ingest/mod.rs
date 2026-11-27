@@ -1244,9 +1244,9 @@ mod tests {
         e.db.close().await;
     }
 
-    /// A `latest_config_measurements.json` that will not parse used to
-    /// read as an empty one, and the device row's model, firmware and
-    /// timezone were overwritten with nothing.
+    /// Guards against reading a `latest_config_measurements.json` that
+    /// will not parse as an empty one, which overwrote the device row's
+    /// model, firmware and timezone with nothing.
     #[tokio::test]
     async fn an_unreadable_description_leaves_the_device_row_alone() {
         let e = env().await;

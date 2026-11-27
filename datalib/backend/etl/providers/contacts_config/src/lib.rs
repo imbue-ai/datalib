@@ -1,7 +1,6 @@
-//! Provider-owned config schema for the `contacts` source (Program A
-//! goal #1). Schema-only (serde + anyhow), so the orchestrator can name
-//! `ContactsConfig` without linking the provider. The crate keeps its
-//! protocol name until the mechanical rename; the type is `contacts`.
+//! Provider-owned config schema for the `contacts` source. Schema-only
+//! (serde + anyhow), so `datalib-step` can name `ContactsConfig` without
+//! linking the provider.
 
 use datalib_source_common::{LatchkeySettings, LocalPath, SourceCommon};
 use serde::{Deserialize, Serialize};

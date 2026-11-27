@@ -241,8 +241,8 @@ pub struct WalkError {
 enum EntryKind {
     Dir,
     File,
-    /// A symlink, or something a listing does not name, which a stat of the
-    /// path settles.
+    /// A symlink, or something a listing does not name, whose kind a stat
+    /// of the path decides.
     Other,
 }
 

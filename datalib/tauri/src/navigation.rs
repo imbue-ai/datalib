@@ -117,8 +117,8 @@ mod tests {
     }
 
     /// Every other scheme a page could name, a file dropped on the
-    /// window among them, goes nowhere: it was followed in place or
-    /// opened as a window of the app before.
+    /// window among them, goes nowhere, rather than being followed in
+    /// place or opened as a window of the app.
     #[test]
     fn every_other_scheme_goes_nowhere() {
         for next in [

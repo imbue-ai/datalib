@@ -3,8 +3,9 @@
 //! keyword-indexed and embedded every source itself, or registered the
 //! collections that each source's `keyword_index`, reading it, then filled.
 //!
-//! Now each source's `keyword_index` reads only its render, its `embed`
-//! reads that, and `qmd_aggregator` reads both, downstream of them all.
+//! In the shape this rewrite writes, each source's `keyword_index` reads
+//! only its render, its `embed` reads that, and `qmd_aggregator` reads
+//! both, downstream of them all.
 //! The rewrite renames the step, points it at the per-source steps, adds
 //! any a source lacks (both of them, in the first shape, which embedded
 //! everything), and points the embedding map at the aggregator.

@@ -11,7 +11,7 @@ import { test, expect, type Page } from "@playwright/test";
 import {
   GRID,
   type GridApi,
-  gridSettled,
+  untilGridLoaded,
   groupByDragging,
   SEARCH_ROWS,
   searchGrid,
@@ -61,7 +61,7 @@ test("clicking a group header folds the group and opens nothing", async ({ page 
     (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.scrollToRow(0),
   );
   // The groups on screen have read their rows; nothing is still arriving.
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const group = page.locator(".grid-box .slick-row.slick-group").first();
   await expect(group).toBeVisible();
   const title = (await group.textContent())!.trim();

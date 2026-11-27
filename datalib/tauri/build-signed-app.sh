@@ -44,7 +44,7 @@
 #
 # The signing identity is imported into a throwaway keychain that is
 # deleted on exit, so local runs never touch the login keychain and no
-# sudo is needed (unlike the sculptor-era import_cert.sh shipped inside
+# sudo is needed (unlike the import_cert.sh shipped inside
 # the certs tarball, which changes the default keychain and writes to the
 # System keychain). The Apple intermediate CAs are imported next to the
 # identity because codesign needs them to build the signature chain and
@@ -220,8 +220,7 @@ MSG
     fi
 
     # The dmg maker (AppleScript + hdiutil) intermittently fails to detach the
-    # volume, same flake sculptor hits; retry, clearing any stale mount between
-    # tries.
+    # volume; retry, clearing any stale mount between tries.
     local attempt=0
     until "$tauri" "${bundle_args[@]}"; do
         attempt=$((attempt + 1))

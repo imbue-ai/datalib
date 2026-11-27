@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor` for the `whatsapp` source: decrypt the
+//! The `DataProcessor` for the `whatsapp` source: decrypt the
 //! on-disk `msgstore.db.crypt15`, mirror it through the shared SQLite
 //! mirror engine, register `Media/` in the CAS. Present when `backup` is
 //! configured; the render processor lives in `datalib_etl_whatsapp_render`.
@@ -61,7 +61,7 @@ impl DataProcessor for WhatsappIngest {
 
     async fn run(&self, ctx: &RunCtx<'_>) -> Result<String> {
         // Before the store: opening it seals a commit, and a store that
-        // exists reads as published to the render and the migrate pass.
+        // exists reads as published to the render and to the prepare pass.
         let env_var = self
             .sync
             .key_env_var
@@ -101,7 +101,7 @@ mod tests {
 
     /// A download with no key fails and leaves no store: a store, even an
     /// empty one, reads as published, so the render ran on it and the
-    /// launch's migrate pass reported the step succeeded (#1251).
+    /// prepare pass reported the step succeeded (#1251).
     #[tokio::test]
     async fn no_key_leaves_no_store() {
         let td = tempfile::tempdir().unwrap();

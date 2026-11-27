@@ -79,7 +79,7 @@ impl RawDb {
         })
     }
 
-    /// Open the store to *read* it, for the render pass: no discard of
+    /// Open the store to *read* it, for the render step: no discard of
     /// the working set, no DDL, no commit — three writes to a file render
     /// does not own. See `datalib_etl::doltlite_raw::open_reader`.
     ///
@@ -269,8 +269,8 @@ async fn read_export(opts: FetchOptions, found: RunProblems) -> Result<FetchSumm
 /// Delete the media edges that are no longer true, in the transaction that
 /// prunes the records: a deleted record's, and those of a record read this
 /// run, in a table that pruned, to a `uri` it no longer names. A record in
-/// a table held back keeps its edges, as it keeps its row. Returns how many
-/// went.
+/// a table not pruned this run keeps its edges, as it keeps its row.
+/// Returns how many went.
 async fn prune_media_edges(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     by_table: &Tables,

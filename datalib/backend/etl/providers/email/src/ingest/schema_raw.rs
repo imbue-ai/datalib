@@ -1,6 +1,6 @@
-//! Raw-store schema for the email provider. One schema for both download
-//! modes — mbox synthesizes a JMAP-shaped envelope so the two are identical
-//! from here on.
+//! Raw-store schema for the email provider. One schema for every download
+//! mode — the mbox, Gmail API and Apple Mail modes synthesize a JMAP-shaped
+//! envelope, so all four are identical from here on.
 //!
 //! The `.eml` in the CAS is the canonical body; everything here is metadata
 //! around it, and there is deliberately no `email_attachments` table. What
@@ -35,9 +35,9 @@ pub const DATA_TABLES: &[&str] = &[
     super::listed::LISTED,
 ];
 
-/// `blobs.kind` discriminator for the RFC5322 `.eml` source of an
-/// email, stored in the shared `blobs` table keyed by JMAP
-/// `Email.blobId` (or `sha256(eml_bytes)` for Mbox).
+/// The kind name of an email's RFC 5322 `.eml` source. The `.eml` itself
+/// is in the CAS, its edge in `email_blobs`, keyed by JMAP's
+/// `Email.blobId` or, for the other modes, the `.eml`'s blake3.
 pub const BLOB_KIND_EML: &str = "email";
 
 // ── entity rows ─────────────────────────────────────────────────────
@@ -598,10 +598,10 @@ pub const LADDER: &[Migration] = &[
 ];
 
 /// The column is made here because a mark is written from `$muted` below,
-/// before an open adds what the DDL declares. A store that climbed rung 8
-/// in this same open has it already. An mbox is read again for its `Muted`
-/// labels, which no row kept; the Gmail API's are asked for every run, and
-/// a JMAP server's were the keyword moved here.
+/// before an open adds what the DDL declares. A store that rung 8
+/// migrated in this same open has it already. An mbox is read again for
+/// its `Muted` labels, which no row kept; the Gmail API's are asked for
+/// every run, and a JMAP server's were the keyword moved here.
 async fn add_muted_to_read_marks(conn: &mut SqliteConnection) -> anyhow::Result<()> {
     let has_column: bool = sql!(
         "email.migrate_muted.has_muted_column",

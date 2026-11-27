@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the datalib dev UI pointed at a one-shot data root that
+# Launch the Datalib dev UI pointed at a one-shot data root that
 # only contains the Perseus tiny fixture — Thucydides 1.1, two
 # sections, both languages. Useful for eyeballing the bilingual
 # `edges` UI without populating a real on-disk data root.

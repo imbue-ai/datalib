@@ -18,7 +18,7 @@
 //! what to read, hashes first, on every core: `Scan`. README.md § "Answering
 //! "did it change?" for a file-backed source" says which is which.
 //!
-//! One walk joining two halves that live apart for good reason. The cache is
+//! One walk reads two records kept apart for good reason. The cache is
 //! expensive to compute, identical for every consumer, and deliberately
 //! unversioned because it describes a machine rather than a history. The
 //! caller's own [`FileScanCursor`] is what *this* source has ingested, and lives

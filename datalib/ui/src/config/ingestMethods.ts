@@ -7,8 +7,8 @@
 // `bazel run //datalib/backend/datalib_step:ingest_methods.update`, and
 // a test there fails when it drifts, so nothing here is a hand-kept copy.
 //
-// The rule is `datalib-step`'s (`methods.rs`): a method is held when its
-// path is written and its value is neither null nor false — a table
+// The rule is `datalib-step`'s (`methods.rs`): a method is selected when
+// its path is written and its value is neither null nor false — a table
 // counts by presence (`api = {}` is a complete selection).
 import DECLARED from "./ingestMethods.json";
 
@@ -40,7 +40,7 @@ function valueAt(params: Record<string, unknown>, path: string): unknown {
   return cur;
 }
 
-export function methodsHeld(
+export function methodsSelected(
   type: string | null | undefined,
   params: Record<string, unknown>,
 ): IngestMethod[] {
@@ -50,13 +50,13 @@ export function methodsHeld(
   });
 }
 
-/// "origin" if anything held reaches one, else "local", else null — the
-/// step names no method, or its type is unknown here.
+/// "origin" if any selected method reaches one, else "local", else
+/// null — the step names no method, or its type is unknown here.
 export function ingestReach(
   type: string | null | undefined,
   params: Record<string, unknown>,
 ): Reach | null {
-  const held = methodsHeld(type, params);
-  if (held.some((m) => m.reach === "origin")) return "origin";
-  return held.length ? "local" : null;
+  const selected = methodsSelected(type, params);
+  if (selected.some((m) => m.reach === "origin")) return "origin";
+  return selected.length ? "local" : null;
 }

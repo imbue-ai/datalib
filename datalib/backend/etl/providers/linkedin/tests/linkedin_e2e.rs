@@ -42,17 +42,16 @@ fn build_export(root: &Path) -> Result<()> {
     // export → a comment-only thread).
     // The third row is the undated case, and it is real: the live
     // manual-e2e corpus contains a comment whose `Date` the export left
-    // blank, on a post that isn't in Shares. Before `created_at` learned to
-    // be null it rendered as `1970-01-01 00:00:00 UTC` in the transcript
-    // and sorted to the top of the grid as a genuine-looking 1970 row.
-    // No checked-in fixture had an undated record, so nothing caught it.
+    // blank, on a post that isn't in Shares. Its `created_at` must be
+    // null, not `1970-01-01 00:00:00 UTC` in the transcript and a
+    // genuine-looking 1970 row at the top of the grid.
     // The fourth row is how the real export quotes a comment: an embedded
     // quote is `\"`, not `""`, and the message spans lines. Read as
     // RFC-4180 it splits into fragment rows, one with message text in
     // `Date`.
     // The fifth is a second comment on the first row's post. A comment
     // has no id of its own in the export, and keying the table on `Link`
-    // alone kept only the last comment per post.
+    // alone would keep only the last comment per post.
     fs::write(
         root.join("Comments_17529409.csv"),
         "Date,Link,Message\n\
@@ -588,7 +587,7 @@ async fn a_walk_error_deletes_no_article() -> Result<()> {
 }
 
 /// A CSV that is nothing (0 bytes, or the Notes preamble and no header)
-/// read as one listing no rows and emptied its table. A CSV the export
+/// must not read as one listing no rows and empty its table. A CSV the export
 /// left out keeps its table: the export form offers a subset. Only a
 /// well-formed CSV with a header and no rows empties it.
 #[tokio::test(flavor = "multi_thread")]

@@ -1,7 +1,7 @@
 //! Discord's API (`discord.com/api/v9`) through `latchkey curl`, which
 //! adds the account's own credential. Every request is a GET and every
 //! one is built here, so a test's playback tape is keyed the way the
-//! download asks.
+//! download sends it.
 
 use std::time::Duration;
 
@@ -64,7 +64,7 @@ impl DiscordError {
     }
 
     /// Asking again would be answered the same.
-    pub fn is_settled(&self) -> bool {
+    pub fn retrying_changes_nothing(&self) -> bool {
         matches!(self, Self::NoAccess(_) | Self::Gone(_))
     }
 
@@ -276,12 +276,12 @@ mod tests {
             "u",
             &resp(403, r#"{"message": "Missing Access", "code": 50001}"#),
         );
-        assert!(no.is_settled() && !no.ends_the_run(), "{no}");
+        assert!(no.retrying_changes_nothing() && !no.ends_the_run(), "{no}");
         let gone = status_error(
             "u",
             &resp(404, r#"{"message": "Unknown Channel", "code": 10003}"#),
         );
-        assert!(gone.is_settled(), "{gone}");
+        assert!(gone.retrying_changes_nothing(), "{gone}");
         for body in [
             r#"{"message": "401: Unauthorized", "code": 0}"#,
             r#"{"message": "You need to verify your account", "code": 40002}"#,

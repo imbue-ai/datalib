@@ -168,7 +168,7 @@ async fn mirror_inputs(
             backup.file.rel,
             stats.summary()
         );
-        // Not announced as a checkpoint: nothing reads this store while
+        // No `progress.checkpoint` call: nothing reads this store while
         // the step runs, so the runner has no use for the version.
         let date = backups::commit_date(backup.taken_at);
         dr::commit_run_dated(pool, &msg, date.as_deref()).await?;

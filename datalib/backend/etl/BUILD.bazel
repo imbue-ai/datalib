@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# Framework crate. Provider-specific Extract/Translate code lives in
+# Framework crate. Provider-specific download and render code lives in
 # sibling crates under providers/<name>/ (see providers/slack/BUILD.bazel).
 rust_library(
     name = "datalib_etl",

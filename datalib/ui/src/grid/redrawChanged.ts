@@ -5,8 +5,8 @@
 // replaced, and the click or menu aimed at one goes with it. A row whose
 // item changed in place it redraws only when filtering is on, which no
 // grid here turns on, so every row the data view reports is redrawn here:
-// a refreshed row that was not showed its old values (and a muted
-// problem stayed unmarked).
+// a refreshed row not redrawn would show its old values (and a muted
+// problem would stay unmarked).
 import type { SlickDataView, SlickGrid } from "@slickgrid-universal/common";
 
 export function redrawChanged(grid: SlickGrid, dataView: SlickDataView, mutate: () => void) {

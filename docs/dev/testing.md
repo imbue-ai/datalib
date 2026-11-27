@@ -331,7 +331,7 @@ straddle a redraw. For example, the status from before a sync can sit
 beside the stamp that sync just wrote, which reads as the sync having
 stopped. `sampleRow` reads every cell in one pass. Likewise, once a poll
 has matched, use the value the poll saw rather than reading again:
-`readRow` and `settleRow` both do this.
+`readRow` and `untilRowFinishesNewRun` both do this.
 
 **Hold a state before asserting it.** `Running`, `Queued` and a toast are
 states the page passes through, and a fast step on a fast runner can

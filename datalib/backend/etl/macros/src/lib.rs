@@ -34,9 +34,9 @@ fn expand(input: DeriveInput) -> syn::Result<TokenStream2> {
     let (id_and_payload_ident, promoted) = split_id_and_payload(&fields, &struct_name)?;
 
     // DDL: build the promoted-columns slice the existing
-    // `wire_payload_table_ddl` helper expects. Aligning column names
-    // to a uniform width matches the visual style of the hand-written
-    // DDLs the macro is replacing. Shared with `RawTable` payload mode.
+    // `wire_payload_table_ddl` helper expects. Column names are aligned
+    // to a uniform width, the style of a hand-written DDL. Shared with
+    // `RawTable` payload mode.
     let ddl_literals = promoted_decl_literals(&promoted);
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
     let ddl_and_indexes = match &cluster_by {
@@ -1047,7 +1047,7 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     let ddl = format!("CREATE TABLE IF NOT EXISTS {table} (\n    {body}\n)");
 
     let table_lit = LitStr::new(&table, proc_macro2::Span::call_site());
-    // `quote` repeats only iterables, so the table name rides along once
+    // `quote` repeats only iterables, so the table name is repeated once
     // per index.
     let index_table_lits = vec![table_lit.clone(); index_ddl_lits.len()];
     let struct_name_lit = LitStr::new(&struct_name.to_string(), proc_macro2::Span::call_site());
@@ -1063,7 +1063,8 @@ fn expand_portable_table(input: DeriveInput) -> syn::Result<TokenStream2> {
     // the reason to generate this rather than hand-write it. Only for a
     // single text key: `BulkUpsertable::id` returns `&str`, so an
     // integer key (a rowid alias the store assigns) gets DDL and
-    // columns and writes itself, the same as a composite key.
+    // columns, and its owner writes its rows with statements of its own,
+    // the same as a composite key.
     let composite_pk = primary_key.contains(',');
     let write_path = if composite_pk || !pk_is_text {
         quote! {}

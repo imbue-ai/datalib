@@ -549,8 +549,7 @@ mod tests {
         assert_eq!(WhenDeletedUpstream::parse("keep"), None);
     }
 
-    /// Omitting the key keeps today's behaviour: the copy follows
-    /// upstream.
+    /// Omitting the key keeps the default: the copy follows upstream.
     #[test]
     fn when_deleted_upstream_defaults_to_deleting_the_copy() {
         #[derive(serde::Deserialize)]

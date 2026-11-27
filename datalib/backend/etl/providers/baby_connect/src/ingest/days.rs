@@ -58,13 +58,14 @@ pub fn owed(from: NaiveDate, to: NaiveDate, held: &[Span]) -> Vec<NaiveDate> {
 /// Whether a day read whole may be recorded as read for good. The last
 /// two days may still be written to, by a parent who logs the night's
 /// feeds the next morning, so they are read again by every run.
-pub fn settled(d: NaiveDate, today: NaiveDate) -> bool {
+pub fn may_record_as_read(d: NaiveDate, today: NaiveDate) -> bool {
     d < today - Duration::days(1)
 }
 
 /// The span that records `d` as read. Spans merge only where they
-/// overlap, so a day whose eve is held reaches back to it: a run of days
-/// stays one span, not a row per day.
+/// overlap, so when a stored span already covers the day before `d`,
+/// the span starts at that day: a run of days stays one span, not a row
+/// per day.
 pub fn span_for(d: NaiveDate, held: &[Span]) -> Span {
     let eve = key(d - Duration::days(1));
     let lo = if held.iter().any(|s| s.lo <= eve && eve <= s.hi) {
@@ -165,11 +166,11 @@ mod tests {
     }
 
     #[test]
-    fn the_last_two_days_are_never_settled() {
+    fn the_last_two_days_are_never_recorded_as_read() {
         let today = d("2031-03-10");
-        assert!(settled(d("2031-03-08"), today));
-        assert!(!settled(d("2031-03-09"), today));
-        assert!(!settled(today, today));
+        assert!(may_record_as_read(d("2031-03-08"), today));
+        assert!(!may_record_as_read(d("2031-03-09"), today));
+        assert!(!may_record_as_read(today, today));
     }
 
     #[test]

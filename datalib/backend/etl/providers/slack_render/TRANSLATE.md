@@ -150,9 +150,9 @@ messages are never unread.
 Both marks are rows of the raw store's `read_marks` table
 (`datalib_etl::read_marks`): a conversation's under its conversation id,
 a thread's under its thread key. A mark is content, so a moved one
-moves the store's version and wakes the render, but no thread declares
-one as an input: that would re-render every thread of a conversation
-whose mark moved. The scan in `src/render/parse.rs` asks
+moves the store's version and the render step runs again, but no
+thread declares one as an input: that would re-render every thread of
+a conversation whose mark moved. The scan in `src/render/parse.rs` asks
 `read_marks::moved` instead, and re-renders the threads whose root lies
 between a conversation's old and new mark, or whose own mark moved. A
 thread that is unread on both sides of a move is left alone.

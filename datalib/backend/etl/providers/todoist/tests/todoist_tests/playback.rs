@@ -243,8 +243,7 @@ async fn completed_tasks_are_left_alone_when_turned_off() {
 
 /// `since` stops the walk at its date rather than at the day the account
 /// joined: of the tape's windows, only the newest is asked. An offset
-/// counts back from the run, as every source's `since` does; before, the
-/// setting took only a date.
+/// counts back from the run, as every source's `since` does.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn since_bounds_the_walk_as_a_date_or_an_offset() {
     let windows = tape::windows_of(Edition::Before, &[]);

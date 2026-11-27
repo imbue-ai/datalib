@@ -6,7 +6,7 @@ import {
   GRID,
   actOnRowByUuid,
   firstRowUuid,
-  gridSettled,
+  untilGridLoaded,
   runSearch,
   selectRowByUuid,
   shownCards,
@@ -88,7 +88,7 @@ test("a selection survives a re-sort, and a search keeps the rows still in it", 
 
   await openTable(page);
   await runSearch(page, q);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await selectRowByUuid(page, a);
   await actOnRowByUuid(page, b, (row) =>
     row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
@@ -97,16 +97,16 @@ test("a selection survives a re-sort, and a search keeps the rows still in it", 
   expect(await isSelected(page, a), "a ⌘-click adds to the selection").toBe(true);
 
   await sortPick(page).selectOption({ label: "Oldest first" });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await expect.poll(() => isSelected(page, a), { message: "a, after the re-sort" }).toBe(true);
   await expect.poll(() => isSelected(page, b), { message: "b, after the re-sort" }).toBe(true);
 
   await runSearch(page, withoutB);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await expect.poll(() => isSelected(page, a), { message: "a, in the narrower search" }).toBe(true);
 
   await runSearch(page, q);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await expect.poll(() => isSelected(page, a), { message: "a, in the wider search" }).toBe(true);
   expect(await isSelected(page, b), "b, left out by the narrower search, stays out").toBe(false);
 
@@ -140,24 +140,24 @@ test("a search of many rows keeps the selected rows it holds past the loaded pag
   await page.goto(EVERY_ROW);
   await viewTab(page, "Table").click();
   await firstRowUuid(page);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await selectRowByUuid(page, a.uuid);
   await actOnRowByUuid(page, b.uuid, (row) =>
     row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
   );
   await expect.poll(() => isSelected(page, b.uuid), { message: "the ⌘-clicked row" }).toBe(true);
   await sortPick(page).selectOption({ label: "Oldest first" });
-  await gridSettled(page);
+  await untilGridLoaded(page);
 
   // The question is asked after the rows land; wait for its answer before
   // the next search, which would make it moot.
   const asked = page.waitForResponse((r) => r.url().includes("among="));
   await runSearch(page, narrower);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await asked;
 
   await runSearch(page, "");
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await page.evaluate(
     async (ids) => {
       const api = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
@@ -186,7 +186,7 @@ test("a plain click forgets a selected row the search had hidden", async ({ page
 
   await openTable(page);
   await runSearch(page, q);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await selectRowByUuid(page, first.uuid);
   await actOnRowByUuid(page, other!.uuid, (row) =>
     row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
@@ -194,14 +194,14 @@ test("a plain click forgets a selected row the search had hidden", async ({ page
   await expect.poll(() => isSelected(page, other!.uuid), { message: "⌘-clicked" }).toBe(true);
 
   await runSearch(page, narrower);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await actOnRowByUuid(page, third!.uuid, (row) =>
     row.click({ position: { x: 40, y: 10 }, timeout: 3_000 }),
   );
   await expect.poll(() => isSelected(page, third!.uuid), { message: "plain-clicked" }).toBe(true);
 
   await runSearch(page, q);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await expect.poll(() => isSelected(page, third!.uuid), { message: "the one row" }).toBe(true);
   expect(await isSelected(page, other!.uuid), "the hidden row stays forgotten").toBe(false);
   expect(await isSelected(page, first.uuid)).toBe(false);
@@ -224,7 +224,7 @@ test("a selected row a re-sort pushes past the loaded rows is selected when it l
   await page.goto(EVERY_ROW);
   await viewTab(page, "Table").click();
   await firstRowUuid(page);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await selectRowByUuid(page, a);
   await actOnRowByUuid(page, b, (row) =>
     row.click({ modifiers: ["ControlOrMeta"], position: { x: 40, y: 10 }, timeout: 3_000 }),
@@ -232,7 +232,7 @@ test("a selected row a re-sort pushes past the loaded rows is selected when it l
   await expect.poll(() => isSelected(page, b), { message: "the ⌘-clicked row" }).toBe(true);
 
   await sortPick(page).selectOption({ label: "Oldest first" });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await page.evaluate(
     async (ids) => {
       const api = (window as unknown as { __fwGridApi: GridApi }).__fwGridApi;
@@ -274,7 +274,7 @@ test("Tab leaves the table's rows, and comes back to the selected one", async ({
 /// selected the next row alone.
 test("the arrows move among several selected rows and keep them", async ({ page }) => {
   await openTable(page);
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const uuidAt = (row: number) =>
     page.evaluate(
       (r) => (window as unknown as { __fwGridApi: GridApi }).__fwGridApi.uuidAt(r)!,

@@ -238,7 +238,7 @@ async fn parse_async(
         };
         chats[idx].inputs.read("message", &rowid.to_string());
         // Two rows with one natural key would mint one uuid twice; keep
-        // the first, the way the store's old unique key did.
+        // the first.
         if !seen_keys.insert(key.clone()) {
             dropped.push(Dropped::new(
                 "message",
@@ -294,8 +294,8 @@ async fn parse_async(
         // the message's `file_path` didn't resolve to a `wa_media_files` row.
         // Either way the renderer's "(not yet fetched)" placeholder fires,
         // so the item's problem is what says which attachment it is: a join
-        // that silently matched nothing is exactly how every attachment once
-        // rendered as a placeholder while its bytes sat in the CAS.
+        // that silently matches nothing renders every attachment as a
+        // placeholder while its bytes sit in the CAS, with nothing to say why.
         if ref_id.is_none() {
             if let Some(p) = file_path.as_deref() {
                 unresolved
@@ -936,9 +936,9 @@ mod jid_names_tests {
         assert_eq!(names.handle("bridge-crew@g.us"), None);
     }
 
-    /// The precedence the issue asked for: a learned name, else the
-    /// phone number behind the linked id, else the linked id's last
-    /// digits — and a mapping that is missing must not turn into a blank.
+    /// The precedence: a learned name, else the phone number behind the
+    /// linked id, else the linked id's last digits — and a mapping that is
+    /// missing must not turn into a blank.
     #[test]
     fn name_then_mapped_phone_then_raw_jid() {
         let mut names = JidNames::default();

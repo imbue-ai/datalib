@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INGEST_METHODS, ingestReach, methodsHeld } from "../src/config/ingestMethods";
+import { INGEST_METHODS, ingestReach, methodsSelected } from "../src/config/ingestMethods";
 import { CATALOG } from "../src/config/catalog";
 
 describe("ingestReach", () => {
@@ -16,7 +16,7 @@ describe("ingestReach", () => {
     expect(ingestReach("email", { gmail: { user_id: "me" } })).toBe("origin");
     expect(ingestReach("email", { jmap: { hostname: "api.fastmail.com" } })).toBe("origin");
     expect(ingestReach("email", { mbox: { path: "/mail.mbox" } })).toBe("local");
-    expect(methodsHeld("email", { mbox: { path: "/mail.mbox" } })).toHaveLength(1);
+    expect(methodsSelected("email", { mbox: { path: "/mail.mbox" } })).toHaveLength(1);
   });
 
   it("tells claude's two methods apart", () => {

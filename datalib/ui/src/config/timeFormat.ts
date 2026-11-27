@@ -1,4 +1,4 @@
-// How this app renders one of the tree's timestamps.
+// How this app renders a timestamp.
 //
 // Two functions, and they are a pair: `formatRelative` is what a
 // timestamp column *shows* ("5 minutes ago"), and `formatStamp` is what
@@ -38,8 +38,8 @@ export function formatShortStamp(iso: string | null, view = timeView.value): str
 /// and trails descending, and one click on the header is how you ask
 /// "what has never run?". The alternative — keeping nulls at the
 /// bottom whichever way the column points — needs the sort direction
-/// threaded in and negated back out, which is two orders wearing one
-/// function's clothes.
+/// threaded in and negated back out, which is two orders in one
+/// function.
 ///
 /// A row that has never run sorts as **forever ago** — older than any
 /// real stamp, rather than as a special case pinned to one end.

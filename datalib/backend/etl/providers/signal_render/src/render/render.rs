@@ -1,7 +1,7 @@
 //! Signal's render stage: normalize, then hand off to `chat-common`.
 //!
-//! Everything about *how* a Signal message looks now lives in
-//! `datalib_etl_chat_common`. What is left here is the stage plumbing —
+//! Everything about *how* a Signal message looks lives in
+//! `datalib_etl_chat_common`. What is here is the stage plumbing —
 //! the progress accounting parse's skip-load needs, and the render
 //! cursor.
 

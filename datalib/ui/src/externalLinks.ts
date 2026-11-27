@@ -11,8 +11,8 @@
  * - `target="_blank"` (what the `↗` carries) reaches the shell's
  *   `on_new_window` handler (`datalib/tauri/src/main.rs`), which opens
  *   a page of the app as a second window of the app, hands a web, mail
- *   or phone link to the OS, and refuses anything else. Before that handler existed the click was
- *   silently swallowed — a webview has no tab strip.
+ *   or phone link to the OS, and refuses anything else. Without that
+ *   handler a webview, which has no tab strip, drops the click.
  * - a plain `<a href="https://…">` **navigates the app window** onto
  *   that site. The whole UI is replaced by someone's marketing page,
  *   with no back button in the chrome to return from it.

@@ -21,10 +21,11 @@ with a per-path cursor (`ingested_files`, scope `markdown/files`):
   the same text) nothing is written. Otherwise its row is written and
   the file stamped, in one transaction.
 - **A file that is gone takes its note with it**, in the transaction
-  that forgets its stamp. A moved or renamed file is a new row at its
-  new path; the old path's row goes once the new one is stored. Nothing
-  is deleted after a walk that reported an error, or while a file that
-  changed could not be read, since a vanished note may be where it went.
+  that deletes its row from `ingested_files`. A moved or renamed file
+  is a new row at its new path; the old path's row goes once the new
+  one is stored. Nothing is deleted after a walk that reported an
+  error, or while a file that changed could not be read, since a
+  vanished note may be where it went.
 
 Folders whose names start with a dot are never opened (`.*/` is always
 the first ignore pattern, `MarkdownConfig::scan_ignores`): `.obsidian/`

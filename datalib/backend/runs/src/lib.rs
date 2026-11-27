@@ -51,7 +51,7 @@ pub fn runs_path(data_root: &Path) -> PathBuf {
 
 /// The two states the store itself names. Every other value of
 /// [`StepRunRow::state`] is a terminal status minted by whoever writes the
-/// store — the DAG runner's `RunState`, today — which this crate
+/// store — the DAG runner's `RunState` — which this crate
 /// deliberately does not enumerate: the scheduler's vocabulary is not its
 /// business. "Not one of these two" is the whole of what it needs to know.
 #[derive(
@@ -105,8 +105,9 @@ impl Default for Retention {
 }
 
 /// Bumped whenever the tables change shape. A store at an older version
-/// climbs the rungs in `store.rs`'s `UPGRADES` in place; one at a version
-/// with no rung, newer ones included, is emptied and remade.
+/// gets the rungs above it in `store.rs`'s `UPGRADES` applied in order,
+/// in place; one at a version with no rung, newer ones included, is
+/// emptied and remade.
 pub const SCHEMA_VERSION: i32 = 15;
 
 /// The indexes, beside the tables' own DDL. `log.seq` is the rowid, so

@@ -1,6 +1,6 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
-# Shared observability init for every datalib Rust binary: stderr
+# Shared observability init for every Datalib Rust binary: stderr
 # fmt layer (pretty or JSON), an `IndicatifWriter` that coordinates
 # log emission with a shared `MultiProgress` (exposed via
 # `shared_multi()`), optional OTLP exporter, and EnvFilter wired to
@@ -50,9 +50,8 @@ rust_binary(
 )
 
 # Runs this crate's inline `#[cfg(test)]` unit tests under `bazel test`.
-# Present (even with no tests today) so that the moment one is added it
-# actually runs, and to satisfy the repo-wide invariant enforced by
-# //tools/check_rust_unit_tests.sh.
+# Required by the repo-wide invariant //tools/check_rust_unit_tests.sh
+# enforces.
 rust_test(
     name = "datalib_obs_unittests",
     size = "small",

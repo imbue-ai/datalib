@@ -229,7 +229,7 @@ The tool diffs `dirs` before `files`, and that order is what makes a
 big move cheap. The `dirs` diff is a few percent of the rows, and a
 moved directory's row already says everything the interior would:
 same digest on both sides, plus `size` and `entries` for the subtree.
-So the moves and copies found among the directory rows are settled
+So the moves and copies among the directory rows are paired
 first, and the `files` diff is then read **leaving those subtrees
 out** — every file under a moved directory is implied by the
 directory, and the tree-hash guarantees the interiors match exactly.
@@ -302,8 +302,9 @@ after.doltlite_db @HEAD 05bca079b9cc · 2 duplicated within this tree, 35B recla
 
 This costs one full scan of both tables per side — the
 `size >= threshold` filter cuts transfer and grouping work, not the
-scan, since neither table has an index on `size`. It announces itself on
-stderr like the copy check does.
+scan, since neither table has an index on `size`. Like the copy check,
+it logs a line on stderr saying it is a full corpus scan before it
+starts.
 
 ## Finding where the diff actually is
 
@@ -364,8 +365,8 @@ anything under it changes, so "modified" on a directory only ever means
 ## Cost, and the one expensive query
 
 The diff itself is O(changes) — that is what the prolly tree buys — and
-move detection is free, because both halves of a move are already in the
-diff.
+move detection is free, because both the removed and the added row of a
+move are already in the diff.
 
 Distinguishing `deleted` from `gone (copy remains)` is not free: it asks
 whether a digest exists *anywhere* on the other side, and neither table
@@ -394,8 +395,8 @@ ancestor directories, which is derived from the diff alone.
 
 ## The shape of the code
 
-There is a deliberate seam between "what we read" and "what we
-concluded", because everything interesting lives on the second side and
+What was read and what was concluded from it are kept apart on
+purpose, because everything interesting is in the conclusions, and they
 should be testable without a database or a browser in the way:
 
 ```
@@ -422,11 +423,12 @@ datalib-dirtree-diff --left before.doltlite_db --right after.doltlite_db \
     --json run.json -o run.html
 ```
 
-`tests/analyze_test.rs` builds `Inputs` literals and asserts on
-`DiffResult` — no `.doltlite_db`, no HTML, no browser. A moved subtree
-is four `Entry` values and an assertion about which single row survives
-the rollup. `tests/store_test.rs` covers the half only a real store can
-prove: that two independent files unify and diff across each other.
+`tests/dirtree_diff_tests/analyze_test.rs` builds `Inputs` literals and
+asserts on `DiffResult` — no `.doltlite_db`, no HTML, no browser. A
+moved subtree is four `Entry` values and an assertion about which single
+row survives the rollup. `tests/dirtree_diff_tests/store_test.rs` covers
+what only a real store can prove: that two independent files unify and
+diff across each other.
 
 ### Fetching and reading share a connection
 
@@ -482,8 +484,8 @@ number before anyone reopens that debate.
   distinction is cosmetic.
 - **`identity_uuid` is unused.** file_inventory can stamp directories with a
   breadcrumb UUID that survives a move *and* an edit; this tool matches
-  on content only, so a directory that moved and changed in the same
-  pass reads as a delete plus an add. Pairing on `identity_uuid` first
+  on content only, so a directory that moved and changed between the
+  two scans reads as a delete plus an add. Pairing on `identity_uuid` first
   would fix that.
 - **Duplicate groups are whole-corpus.** The scan is one pass per
   side and groups in RAM, which is the workflow `STORAGE_NOTES.md`

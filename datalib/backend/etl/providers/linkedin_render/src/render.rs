@@ -469,8 +469,6 @@ mod tests {
     }
 
     /// A date we can't read must produce no timestamp, not the epoch.
-    /// The old helper's own doc comment admitted the consequence:
-    /// "sorts such rows to the top."
     #[test]
     fn unparseable_dates_yield_none_not_the_epoch() {
         for bad in ["", "   ", "not a date", "2026-06-16", "16/06/2026 22:11:33"] {

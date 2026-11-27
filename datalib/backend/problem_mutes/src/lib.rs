@@ -1,10 +1,10 @@
 //! Problem rows a person muted: "I have seen this, stop telling me". The
 //! store's shape, its reads and writes over a pool someone else opened,
-//! and the Manage counts: the grid index's rows less the muted ones, with
-//! the problems grid's query for exactly those rows. Opening the
+//! and the Manage counts: every step's problem rows less the muted ones,
+//! with the problems grid's query for exactly those rows. Opening the
 //! store to write it is the `unified_grid_and_search_index` applet's
-//! (`applets/src/unified_grid_and_search_index/mutes.rs`), so this crate links
-//! no ingest machinery and `datalib-http` can read the store through it.
+//! (`applets/src/unified_grid_and_search_index/mutes.rs`), so this crate
+//! links no ingest machinery and `datalib-http` can read the store through it.
 //! The design: `README.md` beside this file.
 
 use std::collections::{HashMap, HashSet};
@@ -214,7 +214,7 @@ pub fn counter_of(source_id: &str, by: CountedBy) -> Counter {
     }
 }
 
-/// One counter's rows in the index: those a person has not muted, which
+/// One counter's rows: those a person has not muted, which
 /// are the number shown, and those they have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Counted {
@@ -456,8 +456,8 @@ mod tests {
     }
 
     /// Each row is counted against the step that found it, a muted one
-    /// apart, an info row nowhere, and a mute of a row the index no
-    /// longer holds counts nothing.
+    /// apart, an info row nowhere, and a mute of a row no step holds any
+    /// more counts nothing.
     #[test]
     fn rows_are_counted_by_whose_they_are_and_whether_muted() {
         assert!(count_rows(&[], &HashSet::new()).is_empty());

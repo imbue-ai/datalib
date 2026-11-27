@@ -2,10 +2,9 @@ load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 load("//tools:live.bzl", "live_run")
 
 # Checked-in TNG-themed vCard fixture consumed by both this crate's
-# parse tests and //tests/fixtures:ingested_tng (which runs the
-# translate path end-to-end into the grid). The directory shape is
-# `carddav_tng/<addressbook>/<name>.vcf` — the parser uses the
-# first subdirectory as the addressbook label.
+# parse tests and //tests/fixtures:ingested_tng (which ingests and
+# renders it into the grid). Each `carddav_tng*/<name>.vcf` is one
+# address book, labelled by the file's stem.
 filegroup(
     name = "tng_fixture",
     srcs = glob(["tests/fixtures/carddav_tng*/**/*.vcf"]),

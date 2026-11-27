@@ -49,7 +49,7 @@ pub struct Commit {
 #[derive(Debug, Clone, Serialize)]
 pub struct TableState {
     pub table: String,
-    /// [`holds_records`]: the source's data rather than datalib's own
+    /// [`holds_records`]: the source's data rather than Datalib's own
     /// bookkeeping. What the totals a person reads are summed over.
     pub records: bool,
     /// Rows after this commit.
@@ -59,7 +59,7 @@ pub struct TableState {
     pub modified: i64,
 }
 
-/// The tables every raw store has that are datalib's, not the source's:
+/// The tables every raw store has that are Datalib's, not the source's:
 /// `datalib_etl::doltlite_raw::SHARED_TABLES`, the file-scan cursor
 /// `ingested_files`, the walked ranges of `datalib_etl_web::coverage` and
 /// when they were last checked,

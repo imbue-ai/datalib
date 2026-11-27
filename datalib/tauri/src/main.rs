@@ -1016,7 +1016,7 @@ fn under_title_bar<'a>(
 ///
 /// **A `target="_blank"` link opens a window.** A webview has no tab
 /// strip, so without this the card chrome's "open this card alone" ↗
-/// and the grid's double-click were dead in the app. A page of the app
+/// and the grid's double-click would do nothing in the app. A page of the app
 /// gets a second window of the app, under the same rules; anything else
 /// goes where a navigation to it would.
 ///
@@ -1033,7 +1033,7 @@ fn app_window<'a>(
     under_title_bar(builder)
         // Tauri's file-drop handler claims every drag over the webview,
         // so WebKit never fires a page's own dragover or drop: the grids'
-        // drag-a-column-to-group bar (SortableJS) did nothing. Nothing
+        // drag-a-column-to-group bar (SortableJS) would do nothing. Nothing
         // here listens for Tauri's drop events. Without it, a file
         // dropped from Finder is WebKit's to open: see `on_navigation`.
         .disable_drag_drop_handler()
@@ -1075,8 +1075,8 @@ fn app_window<'a>(
 /// back to WebKit as the answer to `window.open`. That answer must use
 /// the opener's configuration, scripts included, and Tauri's script
 /// naming the window (`__TAURI_INTERNALS__.metadata`) cannot be
-/// redefined, so the opener's runs first and wins: the new window
-/// believed it was `main`, and dragging its toolbar moved the main
+/// redefined, so the opener's runs first and wins: a window built that
+/// way believes it is `main`, and dragging its toolbar moves the main
 /// window. Both windows use the default website data store, so they
 /// still share the session cookie. Built on a task, not in the
 /// callback: Tauri warns that building a window from a synchronous
@@ -1114,7 +1114,7 @@ fn app_origin(app: &AppHandle) -> Option<Url> {
 }
 
 /// Spawn the bundled `datalib-http` against `root` on an ephemeral
-/// localhost port and wait for it to announce its URL. Blocking: run on a
+/// localhost port and wait for it to print its URL. Blocking: run on a
 /// worker thread, not the event loop.
 fn start_backend(app: &AppHandle, root: PathBuf, init: bool) -> anyhow::Result<String> {
     let http_bin = resolve_bundled(app, "datalib-http", "DATALIB_HTTP_BIN").ok_or_else(|| {

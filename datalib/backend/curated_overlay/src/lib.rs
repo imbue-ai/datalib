@@ -83,9 +83,9 @@ pub fn copy_in(src: &Path, data_root: &Path) {
     }
 }
 
-/// Each store opened as its one writer opens it at launch, which climbs
-/// its migration ladder: the contacts applet's `Store::open`, and the
-/// index applet's open of the mutes
+/// Each store opened as its one writer opens it at launch, which runs
+/// its migrations up to this build's shape: the contacts applet's
+/// `Store::open`, and the index applet's open of the mutes
 /// (`applets/src/unified_grid_and_search_index/mutes.rs`).
 pub fn open_as_owners(data_root: &Path) {
     runtime().block_on(async {
@@ -223,7 +223,7 @@ fn sources(found: &[(String, String)]) -> Value {
 /// What the curated stores come to over this root's data, as the app's
 /// search answers: for each contact, the sources each of its handles and
 /// the contact itself reach; for `from:me`, the same per handle of the
-/// contact marked as you; for each mute, the problem it holds down.
+/// contact marked as you; for each mute, the problem it mutes.
 ///
 /// Fails on a handle no document has, a merged-away contact that finds
 /// other rows than its survivor, a group that misses a member's rows, a
@@ -409,8 +409,9 @@ fn mutes_overlay(data_root: &Path, failures: &mut Vec<String>) -> BTreeMap<Strin
     out
 }
 
-/// Each store this build changed (a rung climbed, a table added), with
-/// the checked-in file it came from: `(the root's copy, the checked-in file)`.
+/// Each store this build changed (a migration run, a table added), with
+/// the checked-in file it came from: `(the root's copy, the checked-in
+/// file)`.
 pub fn changed_by_this_build(data_root: &Path, src: &Path) -> Vec<(PathBuf, PathBuf)> {
     let curated = data_root.join(datalib_runtime::layout::CURATED_DIR);
     stores(data_root)

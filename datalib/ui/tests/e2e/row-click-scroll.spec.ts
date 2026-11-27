@@ -43,10 +43,8 @@ test("opening rows highlights and scrolls to the right message", async ({ page, 
     // Providers stamp chat-level rows with their own prefix ("Signal
     // Chat", "WhatsApp Chat", "Beeper:Signal Chat"); accept any suffix
     // ending in "Chat" / "Thread" / "Reaction" so we only walk
-    // per-message rows here. (Previously `=== "Chat"` was used, but it
-    // missed `WhatsApp Chat`; keep the broader pattern even now that
-    // the backend `null → 0` read-path bug is fixed, since the
-    // taxonomy is genuinely prefixed.)
+    // per-message rows here. (An exact `=== "Chat"` would miss
+    // `WhatsApp Chat`: the kinds are genuinely prefixed.)
     if (/(Chat|Thread|Reaction)$/.test(r.kind)) continue;
     if (r.message_index == null) continue;
     const list = byConv.get(r.conversation_uuid) ?? [];

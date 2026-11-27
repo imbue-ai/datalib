@@ -48,7 +48,8 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
     pub control: DownloadControl,
-    /// Seals as pages land, when the step driver hands one over.
+    /// Told after each page is stored, so it seals when a seal is due;
+    /// the processor passes the one `RunCtx::run_store` gives it.
     pub sealer: Option<Sealer>,
 }
 

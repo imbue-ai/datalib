@@ -102,8 +102,8 @@ describe("browseColumns", () => {
   });
 
   /// Columns that would be dead weight for a source never appear, which
-  /// is the half the adaptive rule cannot do on its own: it hides what
-  /// is empty, not what is meaningless.
+  /// the adaptive rule cannot do on its own: it hides what is empty, not
+  /// what is meaningless.
   it("keeps irrelevant columns out per type", () => {
     expect(browseColumns("github")).not.toContain("channel");
     expect(browseColumns("whatsapp")).not.toContain("project");

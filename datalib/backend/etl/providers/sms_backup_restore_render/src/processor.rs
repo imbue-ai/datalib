@@ -1,4 +1,4 @@
-//! The render wave for the sms_backup_restore source: its planner and the
+//! The render step for the sms_backup_restore source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
@@ -8,7 +8,7 @@ use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcess
 use datalib_etl_sms_backup_restore_config::SmsBackupRestoreRenderConfig;
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// One render processor, always (it renders whatever is in the raw store).
 pub fn plan_render(
     ctx: PlanContext,
     config: SmsBackupRestoreRenderConfig,
@@ -17,7 +17,8 @@ pub fn plan_render(
 }
 
 /// sms_backup_restore's render processor — renders the texts + calls as one
-/// chat per phone number through the fused-Load callback.
+/// chat per phone number, and emits each document through
+/// `RenderCtx::emit_doc`.
 struct SmsRender;
 
 #[async_trait]

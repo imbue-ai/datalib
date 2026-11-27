@@ -1,10 +1,11 @@
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 # The wire format of "Check connection" and a picker's "Load" —
-# `ProbeReport`, what a probe is asked, its progress — and nothing else. Its own crate, not part of `source_common`, so
-# that a change here rebuilds the four providers that can be probed
-# rather than everything that composes a config (135 test targets
-# behind source_common, measured 2026-09-11).
+# `ProbeReport`, what a probe is asked, its progress — and nothing
+# else. Its own crate, not part of `source_common`, so that a change
+# here rebuilds the providers that can be probed rather than everything
+# that composes a config (135 test targets behind source_common at the
+# last count).
 rust_library(
     name = "datalib_probe",
     srcs = glob(["src/**/*.rs"]),

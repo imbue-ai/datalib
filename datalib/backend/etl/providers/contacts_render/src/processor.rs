@@ -1,5 +1,5 @@
-//! The render wave for the contacts source: its planner and the
-//! [`RenderProcessor`] it plans.
+//! The render step's processor for the contacts source: its planner and
+//! the [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -9,7 +9,7 @@ use datalib_etl_contacts_config::ContactsRenderConfig;
 use datalib_etl_render::processor::{plan_source_render, RenderCtx, RenderProcessor, SourceRender};
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// Always planned: it renders whatever is in the raw store.
 pub fn plan_render(
     ctx: PlanContext,
     config: ContactsRenderConfig,
@@ -21,8 +21,9 @@ pub fn plan_render(
     ))
 }
 
-/// Contacts' render processor — reads the raw store and emits one
-/// rendered markdown per contact through the fused-Load callback.
+/// Contacts' render processor — reads the raw store and hands one
+/// rendered markdown per contact to the `DocCallback`, which stores each
+/// as it comes.
 pub struct ContactsRender;
 
 #[async_trait]

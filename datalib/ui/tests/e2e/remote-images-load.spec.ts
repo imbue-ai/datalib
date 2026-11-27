@@ -1,7 +1,7 @@
 // Loading a document's remote images (issue #648, second half): a
 // click records an allow row — one URL, one host, this document, this
 // source — the body re-renders with those references proxied through
-// `/api/remote_media`, the rows survive a reload and can be forgotten
+// `/api/remote_media`, the rows survive a reload and can be deleted
 // from the banner. Writes the allow store, so it runs on its own root.
 
 import { test, expect, type Page } from "@playwright/test";
@@ -59,7 +59,7 @@ async function openMarketingEmail(page: Page): Promise<string> {
 }
 
 /// This spec's tests share a root, and each starts from no rows.
-async function forgetEveryRule(page: Page): Promise<void> {
+async function deleteEveryRule(page: Page): Promise<void> {
   const resp = await page.request.get("/api/remote_media/allow");
   const { rows } = (await resp.json()) as { rows: { allow_uuid: string }[] };
   for (const { allow_uuid } of rows) {
@@ -125,7 +125,7 @@ test("a click records an allow, which loads, persists and can be forgotten", asy
   await expect(loaded).toHaveCount(2);
   await expect(chips).toHaveCount(0);
 
-  // Forgetting a rule holds its images again.
+  // Deleting a rule holds its images back again.
   await rules.filter({ hasText: "everything on risa.tourism" }).locator("button").click();
   await expect(chips).toHaveCount(1);
   await expect(chips.first().locator(".remote-media-host")).toHaveText("risa.tourism");
@@ -210,7 +210,7 @@ test.describe("with only the session cookie", () => {
       expect(hits).toBe(1);
     } finally {
       sender.close();
-      await forgetEveryRule(page);
+      await deleteEveryRule(page);
     }
   });
 });

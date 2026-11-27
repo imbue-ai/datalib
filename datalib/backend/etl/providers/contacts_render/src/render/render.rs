@@ -499,7 +499,7 @@ mod tests {
             n.contact.modified_at.as_deref(),
             Some("2026-06-05T19:18:39+00:00")
         );
-        // The grid's own contract must accept it (this is what was failing).
+        // The grid's own contract must accept it.
         datalib_time::validate_iso_offset(n.contact.modified_at.as_deref().unwrap())
             .expect("normalized modified_at must satisfy GridRow's RFC 3339 contract");
     }

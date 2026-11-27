@@ -169,8 +169,8 @@ async fn write_store(spec: &Spec, raw_dir: &std::path::Path, now: &str) -> Resul
     // and every run cold-starts.
     // `--date` pins the commit's timestamp; without it `dolt_log()`
     // reports build time, which then shows up in the rendered page's
-    // commit-log table. (The two commits `doltlite_raw::open` already
-    // made are still wall-clock — see the module docs.)
+    // commit-log table. (The commits `doltlite_raw::open` already made
+    // still carry the wall clock.)
     sql!(
         "yolink.fixture.commit_store",
         "SELECT dolt_commit('-Am', 'yolink tng fixture', '--date', ?1)"

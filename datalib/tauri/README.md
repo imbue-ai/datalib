@@ -8,7 +8,7 @@ spawns the bundled **`datalib-http` binary** — the same binary the
 web packaging runs — on an ephemeral 127.0.0.1 port and opens the main
 window at that URL. That server serves both the rust-embed'd Vue UI and
 `/api/*`, so the UI's relative `fetch('/api/…')` transport works
-unchanged — same code as the hosted packaging, two front doors.
+unchanged — the same code the hosted packaging serves.
 
 The backend is deliberately **not** linked in-process: the shell is a
 thin process manager, so there is no backend crate graph in this cargo
@@ -21,10 +21,10 @@ launcher are Bazel-built (fully cached) and shipped under the .app's
 (`stage-runtime.sh`); see `tauri.conf.json`'s
 `beforeBuildCommand` + `bundle.resources` and `resolve_bundled` in
 `src/main.rs`. Port handshake: the child gets
-`DATALIB_BIND=127.0.0.1:0` and `--url-stdout`, and announces its bound
+`DATALIB_BIND=127.0.0.1:0` and `--url-stdout`, and prints its bound
 URL as the first line of its stdout, a pipe only the shell holds; the
 shell reads it, opens the window, and kills the child on exit. That
-announced URL carries the backend's per-process API token as `?token=…`
+URL carries the backend's per-process API token as `?token=…`
 (every route requires it — see `datalib/backend/http/src/auth.rs`); the
 webview trades it for an HttpOnly session cookie on the first load and
 is redirected to the clean URL, so nothing else in the shell has to know

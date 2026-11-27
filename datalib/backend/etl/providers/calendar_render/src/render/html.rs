@@ -113,7 +113,8 @@ mod tests {
     }
 
     /// A Google-made event that Fastmail serves over CalDAV keeps its HTML
-    /// in `DESCRIPTION`, and its page showed the tags, escaped, as text.
+    /// in `DESCRIPTION`; guards against its page showing the tags,
+    /// escaped, as text.
     #[test]
     fn html_is_told_from_plain_text_that_has_a_bracket() {
         assert!(holds_html(

@@ -107,7 +107,7 @@ fn as_server(args: &Args) -> (u64, String) {
     (written, process_id)
 }
 
-/// Wait for the starting gun, then publish `--rounds` × `--per-round`
+/// Wait for the `start` file to appear, then publish `--rounds` × `--per-round`
 /// lines, pausing between rounds so the writer thread flushes many
 /// times over the run rather than once at the end.
 fn pound(args: &Args, mut publish: impl FnMut(u64)) -> u64 {

@@ -1,7 +1,7 @@
 //! Discord provider for [`datalib_etl`]: the download half, which mirrors
 //! what the signed-in account can read from `discord.com` into raw JSON
 //! tables. The render half is `datalib_etl_discord_render`; INGEST.md has
-//! the whole account.
+//! the full description.
 
 pub mod ingest;
 pub mod probe;

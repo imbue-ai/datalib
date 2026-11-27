@@ -424,8 +424,8 @@ impl Handle {
     /// The handle a URI names, or `None` for one that names no handle
     /// this build knows: `mailto:` (its query dropped), `tel:`,
     /// `slack://user?team=…&id=…` with the parameters in either order, a
-    /// LinkedIn profile's web address, and `datalib:handle/<kind>/<value>`, the spelling for a kind that
-    /// has no standard scheme of its own.
+    /// LinkedIn profile's web address, and `datalib:handle/<kind>/<value>`,
+    /// the spelling for a kind that has no standard scheme of its own.
     pub fn from_uri(uri: &str) -> Option<Self> {
         let uri = uri.trim();
         if strip_prefix_ignore_case(uri, "mailto:").is_some() {
@@ -587,7 +587,8 @@ pub fn last_digits(digits: &str) -> &str {
 /// The digits of a phone number written without its country code, the way
 /// it is dialled at home: `(202) 555-0101` is `2025550101`. Less what is
 /// dialled before a number and is no part of it: any leading zero, and the
-/// 1 before ten digits. `None` for one written in international form, and for anything else.
+/// 1 before ten digits. `None` for one written in international form,
+/// and for anything else.
 pub fn home_digits(number: &str) -> Option<String> {
     let number = number.trim();
     let number = strip_prefix_ignore_case(number, "tel:").unwrap_or(number);

@@ -22,8 +22,10 @@ use serde::{Deserialize, Serialize};
 pub enum RunKind {
     /// The loop serving what it was asked to sync.
     Sync,
-    /// The first launch of a build asking each step to bring what it
-    /// stored up to date. Nothing is downloaded.
+    /// The prepare pass when the loop starts: each step whose program
+    /// takes `--prepare` has its command run with `--prepare` appended,
+    /// to bring what it stored to this build's shape. Nothing is
+    /// downloaded.
     Migrate,
     /// Giving back disk: a compaction or a collection, from the command
     /// line.
@@ -44,7 +46,8 @@ impl RunKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunStart {
     pub kind: RunKind,
-    /// A sentence for a person: what asked, and for which steps.
+    /// A sentence for a person: who or what started the run, and for
+    /// which steps.
     pub reason: String,
 }
 

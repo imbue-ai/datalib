@@ -16,7 +16,7 @@ rust_library(
     edition = "2021",
     # Sets CARGO_PKG_VERSION, which `build_id::DATALIB_VERSION` reads:
     # this is the crate every store-owning binary links, so it is where
-    # "which datalib wrote this store" comes from. Must match
+    # "which Datalib build wrote this store" comes from. Must match
     # [package].version in datalib/backend/Cargo.toml;
     # //datalib/backend:version_consistency_test asserts that.
     version = "0.57.1",
@@ -50,7 +50,7 @@ rust_test(
     ],
 )
 
-# What a run of the pinned latchkey does when datalib starts it.
+# What a run of the pinned latchkey does when Datalib starts it.
 rust_test(
     name = "latchkey_counting_test",
     size = "small",

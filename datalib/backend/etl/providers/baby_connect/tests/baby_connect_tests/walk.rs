@@ -113,10 +113,11 @@ async fn the_first_run_reads_every_day_since_the_eldest_birthday() {
     );
 }
 
-/// A second run asks only for the days the first left unsettled, and an
-/// entry edited on one of them is stored at its new version.
+/// A second run asks only for the days the first did not record as
+/// read, and an entry edited on one of them is stored at its new
+/// version.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn later_runs_read_only_the_days_not_yet_settled() {
+async fn later_runs_read_only_the_days_not_yet_recorded_as_read() {
     let store = tempfile::tempdir().unwrap();
     let (before, after) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     tape::write(before.path(), Edition::Before);

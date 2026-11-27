@@ -51,8 +51,8 @@ pub async fn head(pool: &sqlx::SqlitePool) -> Result<Option<Pin>> {
 
 /// Whether the store's HEAD holds any of its tables.
 ///
-/// A doltlite file is born with an "Initialize data repository" commit that
-/// holds nothing, so HEAD answers for a store whose tables have never been
+/// A doltlite file is created with an "Initialize data repository" commit
+/// that holds nothing, so HEAD answers for a store whose tables have never been
 /// committed — a writer that died between its `CREATE TABLE` and its first
 /// commit, or one a reader opened in the moment between. Read as a store,
 /// that commit is a source with no rows, and a consumer that took it so
@@ -304,7 +304,7 @@ mod reader_tests {
     /// table at all. Under streaming a producer that has just created its
     /// store is an ordinary state, so the answer must be `None` — "I cannot
     /// read this yet" — which every consumer handles by skipping the source
-    /// this pass.
+    /// in this run.
     #[tokio::test]
     async fn a_store_with_no_tables_at_all_is_not_readable() {
         let dir = tempfile::tempdir().unwrap();
@@ -327,8 +327,9 @@ mod reader_tests {
     }
 
     /// The shape that deletes a source: tables written, nothing committed.
-    /// HEAD is the birth commit, which holds no table, so a reader there
-    /// would read zero rows and call it a completed walk.
+    /// HEAD is the commit the file was created with, which holds no
+    /// table, so a reader there would read zero rows and call it a
+    /// completed walk.
     #[tokio::test]
     async fn a_store_whose_tables_were_never_committed_is_not_readable() {
         let dir = tempfile::tempdir().unwrap();

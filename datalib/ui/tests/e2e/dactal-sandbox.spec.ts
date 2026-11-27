@@ -2,7 +2,7 @@
 // the page keeps its own CSP against the vendored engine's dactal.org
 // paths (issue #138, mitigation 4) and against any query running as code.
 // All of it is checked from inside the running app, because the sandbox is
-// the property under test: the page on its own no longer does anything.
+// the property under test: the page on its own does nothing.
 
 import { test, expect, type Frame, type Page } from "@playwright/test";
 
@@ -84,8 +84,8 @@ test("the page opened on its own does nothing", async ({ page }) => {
 
 test("a query in a link does math and runs no code", async ({ page }) => {
   // Every letter comes from the words the engine's math filter allows: it
-  // rewrites `cos` to `Math.cos` even inside a string. Before the filter
-  // stopped being the only guard, this reached `Function` and ran.
+  // rewrites `cos` to `Math.cos` even inside a string. With the filter
+  // as the only guard, this would reach `Function` and run.
   const letter = (c: string) => {
     if (c === ".") return "'cos'[4]";
     if ("=1".includes(c)) return `'${c}'`;

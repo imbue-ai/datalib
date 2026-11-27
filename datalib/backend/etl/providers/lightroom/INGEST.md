@@ -691,12 +691,22 @@ that backup is a problem on the Manage row until a newer one arrives.
 A zip is unpacked into a temporary directory for the length of its
 mirror, so a run needs free space for one catalog at a time; the
 unpacked copy is read without a snapshot, since nothing else has it
-open. `tests/backups_folder.rs` covers the order, the dates, the
-messages, the ledger, a late older backup, the filter change, the live
-catalog on top, an unchanged catalog committing nothing, a HEAD left
-behind put right, a deleted newest backup, backups known by their
-bytes, a backup that will not mirror and a stopped run, against zipped
-copies of the TNG catalog.
+open.
+
+`tests/backups_folder.rs` checks these against zipped copies of the TNG
+catalog:
+
+- the order, dates and messages of the commits;
+- the `lightroom_snapshots` rows;
+- a late older backup;
+- a changed filter;
+- the live catalog on top;
+- an unchanged catalog committing nothing;
+- a HEAD left behind, put right;
+- a deleted newest backup;
+- backups known by their bytes;
+- a backup that will not mirror;
+- a stopped run.
 
 ## Store size and `gc`
 
@@ -729,9 +739,8 @@ measure it without touching the store.
 
 `gc = true` runs it at the start of each run, which collects the
 *previous* run's garbage. Same steady-state result, and it happens while
-the working tree is provably clean and outside the commit lifecycle the
-orchestrator owns — but it does mean a brand-new store isn't collected
-until its second run.
+the working tree is provably clean, before the run has written anything —
+but it does mean a brand-new store isn't collected until its second run.
 It is **off by default** because gc rewrites the whole file, which is
 time a routine no-op run shouldn't spend. It runs once per sync, before
 the sync's first mirror, and every sync mirrors at least the newest
