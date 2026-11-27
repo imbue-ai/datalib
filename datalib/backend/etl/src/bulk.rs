@@ -33,7 +33,7 @@ pub const SQL_CHUNK: usize = 400;
 /// every small test and fails on the user with the big mailbox (#1156);
 /// bind an IN list as one JSON array instead (`etl/README.md`
 /// §"Binding a set of values").
-pub const SQLITE_MAX_VARIABLES: usize = 32_766;
+pub const SQLITE_MAX_VARIABLES: usize = datalib_sql::values::MAX_VARIABLES;
 
 pub fn push_placeholders(sql: &mut String, count: usize, cols: usize) {
     for i in 0..count {

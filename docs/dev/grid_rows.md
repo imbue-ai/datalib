@@ -63,7 +63,10 @@ The `unified_grid_and_search_index` step (`build_grid_index` in
 into the grid index. It asks each store for the `dolt_diff` between the
 commit the index last consumed (`source_cursors`) and the store's HEAD,
 applies each changed document's rows, and copies its `markdowns` row
-across. The cursor keeps that commit's tree too, so when the store's
+across. It reads and writes them a page of 500 documents at a time
+(`LOAD_PAGE`), each table's rows in a few multi-row statements
+(`grid_index::apply_page`), so a source read whole costs memory for one
+page, not for the source. The cursor keeps that commit's tree too, so when the store's
 history has been folded and the commit is gone, the diff starts from
 the commit that holds the same tree. Each source is one transaction,
 its cursor moving inside it, so a stopped or failed pass keeps every
@@ -372,7 +375,8 @@ takes a `RENDER_VERSION` bump to reach a store already rendered.
 `source_id` is the id of the source a row is filed under: its group's
 id, the directory under the data root, never the display name the
 config may also give it. A renderer does not set it. The one writer
-every document passes through (`grid_index::apply_one`) files each row
+every document passes through (`grid_index::apply_page`, which
+`apply_one` calls with a page of one) files each row
 under the group whose render store holds its document, and a storage
 row (provider `datalib`) under `datalib`
 (`grid_rows::filed_under`). A document that names no source

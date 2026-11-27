@@ -312,3 +312,77 @@ async fn a_sources_documents_are_read_by_its_index() {
     );
     index.close().await;
 }
+
+/// What the index's tables hold, ids and all, and where each word lands.
+async fn held(
+    index: &Index,
+) -> (
+    Vec<(i64, String, String, bool)>,
+    Vec<(i64, i64, i64, Option<String>, i64, i64)>,
+    Vec<Vec<(String, Option<String>)>>,
+) {
+    let docs = sql!(
+        "search_index.test.list_documents_whole",
+        "SELECT doc_id, markdown_uuid, content_hash, conversation FROM search_documents ORDER BY doc_id"
+    )
+    .query_as()
+    .fetch_all(index.pool())
+    .await
+    .unwrap();
+    let sections = sql!(
+        "search_index.test.list_sections_whole",
+        "SELECT section_id, doc_id, seq, uuid, start_byte, end_byte FROM search_sections \
+         ORDER BY section_id"
+    )
+    .query_as()
+    .fetch_all(index.pool())
+    .await
+    .unwrap();
+    let mut words = Vec::new();
+    for word in ["planning", "lunch", "thursday", "warp", "nothing"] {
+        words.push(hits(index, word).await);
+    }
+    (docs, sections, words)
+}
+
+/// One put of a batch indexes what putting its documents one at a time
+/// does, over an index that already holds some of them: a changed one
+/// keeps its id and has its sections replaced, an unchanged one is left
+/// alone, and new ones are added.
+#[tokio::test]
+async fn a_batch_indexes_what_its_documents_one_at_a_time_do() {
+    let before = [
+        thread("h1"),
+        doc(
+            "d2",
+            "h1",
+            "Warp core",
+            &[(None, "the warp core is stable\n")],
+        ),
+    ];
+    let batch = [
+        thread("h2"),
+        doc(
+            "d2",
+            "h1",
+            "Warp core",
+            &[(None, "the warp core is stable\n")],
+        ),
+        doc("d3", "h1", "Lunch", &[(Some("m3"), "lunch is at noon\n")]),
+        doc("d4", "h1", "", &[]),
+    ];
+    let (_a_dir, batched) = open().await;
+    let (_b_dir, single) = open().await;
+    for index in [&batched, &single] {
+        index.put(&before).await.unwrap();
+    }
+    batched.put(&batch).await.unwrap();
+    for d in &batch {
+        single.put(std::slice::from_ref(d)).await.unwrap();
+    }
+    let (docs, sections, words) = held(&batched).await;
+    assert_eq!((docs.clone(), sections, words.clone()), held(&single).await);
+    assert_eq!(docs.len(), 4);
+    assert_eq!(docs[0].0, 1, "the changed thread keeps its id");
+    assert_eq!(words[1], [hit("d1", Some("m1")), hit("d3", Some("m3"))]);
+}

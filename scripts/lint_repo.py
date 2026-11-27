@@ -1433,6 +1433,9 @@ _RUN_ALLOWED: dict[tuple[str, str], str] = {
     ("datalib/backend/etl/render/src/search_terms.rs", "per_row"): (
         "the helper's own `(?, ?)` tuple; its callers are checked"
     ),
+    ("datalib/backend/sql/src/values.rs", "columns"): (
+        "one row's tuple, a `?` per column the caller writes; the rows are chunked"
+    ),
 }
 
 
