@@ -89,7 +89,7 @@ pub async fn start_probe(
     // In the environment, as the runner hands a step its params: the
     // wizard's typed credentials are in here, and argv is readable by
     // every user on the machine.
-    cmd.env(datalib_env::DATALIB_DAG_PARAMS, &params)
+    cmd.env(datalib_step_protocol::env::DATALIB_DAG_PARAMS, &params)
         .current_dir(s.root.as_path())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

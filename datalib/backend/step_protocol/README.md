@@ -20,8 +20,8 @@ program Datalib ships, writes its own with it.
 ## A whole step
 
 The step below is built as `:minimal_step` and run under the real
-runner by `//datalib/backend/dag:dag_tests` (`rust_example_step.rs`), and
-a test checks that this README holds it as written.
+runner by the runner's own tests (`rust_example_step.rs` in `dag_tests`),
+and a test checks that this README holds it as written.
 
 ```rust
 //! A step that notes which of its inputs moved and reports a content

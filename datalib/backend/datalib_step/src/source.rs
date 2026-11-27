@@ -4,12 +4,10 @@
 //! `command` spells.
 
 use anyhow::{Context, Result};
+use datalib_step_protocol::env::{DATALIB_DAG_INPUTS, DATALIB_DAG_PARAMS, DATALIB_DAG_STEP};
 
 use crate::function::Function;
 
-pub const STEP_ID_ENV: &str = datalib_env::DATALIB_DAG_STEP;
-pub const INPUTS_ENV: &str = datalib_env::DATALIB_DAG_INPUTS;
-pub const PARAMS_ENV: &str = datalib_env::DATALIB_DAG_PARAMS;
 /// The group `type` that means "render what changed in another group's
 /// raw store": the source's own type then comes in `--source-type`.
 pub const DIFF_GROUP_TYPE: &str = "diff";
@@ -48,13 +46,13 @@ pub struct StepEnv {
 impl StepEnv {
     /// From `DATALIB_DAG_STEP`, `DATALIB_DAG_INPUTS` and the argv.
     pub fn from_env(args: &RunArgs) -> Result<StepEnv> {
-        let step = std::env::var(STEP_ID_ENV).with_context(|| {
+        let step = std::env::var(DATALIB_DAG_STEP).with_context(|| {
             format!(
-                "{STEP_ID_ENV} is not set. `datalib-step run` expects to be run by \
+                "{DATALIB_DAG_STEP} is not set. `datalib-step run` expects to be run by \
                  `datalib-pipeline`, which sets it to the step's id."
             )
         })?;
-        let inputs = std::env::var(INPUTS_ENV)
+        let inputs = std::env::var(DATALIB_DAG_INPUTS)
             .unwrap_or_default()
             .lines()
             .map(str::trim)
@@ -156,9 +154,9 @@ impl StepEnv {
 /// The step's params: the JSON object in `DATALIB_DAG_PARAMS`, or an
 /// empty one when the step has none.
 pub fn params_from_env() -> Result<serde_json::Value> {
-    match std::env::var(PARAMS_ENV) {
+    match std::env::var(DATALIB_DAG_PARAMS) {
         Ok(text) if !text.trim().is_empty() => {
-            parse_params(&text).with_context(|| format!("read {PARAMS_ENV}"))
+            parse_params(&text).with_context(|| format!("read {DATALIB_DAG_PARAMS}"))
         }
         _ => Ok(empty_params()),
     }
@@ -204,13 +202,6 @@ mod tests {
         // through; the provider config's deny_unknown/ignore rules
         // decide its fate downstream, not this layer.
         assert!(parse_params(r#"{"type":"slack"}"#).is_ok());
-    }
-
-    #[test]
-    fn the_env_names_agree_with_the_runners() {
-        assert_eq!(PARAMS_ENV, datalib_dag::subprocess::ENV_PARAMS);
-        assert_eq!(STEP_ID_ENV, datalib_dag::subprocess::ENV_STEP);
-        assert_eq!(INPUTS_ENV, datalib_dag::subprocess::ENV_INPUTS);
     }
 
     #[test]

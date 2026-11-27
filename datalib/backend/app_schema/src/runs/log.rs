@@ -4,40 +4,11 @@
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
-/// A line's severity. The store's column is text and every write goes
-/// through [`LogLevel::as_str`]; a reader that meets a word this build
+/// A line's severity: the step protocol's `log` levels, which are the
+/// levels the run store keeps. The store's column is text and every write
+/// goes through `LogLevel::as_str`; a reader that meets a word this build
 /// does not know keeps the word rather than guessing a level.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Serialize,
-    Deserialize,
-    strum::EnumString,
-    strum::IntoStaticStr,
-    strum::VariantArray,
-)]
-#[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn parse(s: &str) -> Option<LogLevel> {
-        s.parse().ok()
-    }
-}
+pub use datalib_step_protocol::LogLevel;
 
 /// Which datalib program a process was: the runner (its own lines), a
 /// step it spawned (what came out of the step's pipes), the app's

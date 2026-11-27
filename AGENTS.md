@@ -274,6 +274,12 @@ datalib/
                    step runs it with `command = "datalib-step run
                    <function> <type>"`, and it reads its params from
                    `DATALIB_DAG_PARAMS`.
+    step_protocol/ `datalib_step_protocol`: the step's side of the step
+                   protocol for a step written in Rust: what the runner
+                   hands a step, every line a step prints, and the
+                   problems' closed sets. No first-party deps; the
+                   runner reads a step's stdout with it and
+                   `datalib-step` writes its own with it (README.md).
     etl/           shared ingest machinery (raw stores, blob CAS, render
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
@@ -872,9 +878,11 @@ upstream (block types, MIME types), free-form display text
 |---|---|---|
 | what a step is doing in a run | `RunState` | `dag/src/run_state.rs` |
 | what a run is for | `RunKind` | `app_schema/src/runs/run.rs` |
-| why a step failed | `FailureKind` | `dag/src/step.rs` |
+| why a step failed | `FailureKind` | `step_protocol/src/outcome.rs` (`datalib_step_protocol`) |
+| what the runner asks of a step besides a run (`--reset`, …) | `Verb` | `step_protocol/src/invocation.rs` (`datalib_step_protocol`) |
 | what the run store names | `LiveState` | `runs/src/lib.rs` |
-| a log line's severity and pipe | `LogLevel`, `Stream` | `app_schema/src/runs/log.rs` |
+| a log line's severity | `LogLevel` | `step_protocol/src/event.rs` (`datalib_step_protocol`), re-exported by `app_schema` |
+| which pipe a log line came from | `Stream` | `app_schema/src/runs/log.rs` |
 | what the loop made of a step (`steps.state`) | `StateKind` | `dag/src/supervisor/tick.rs` |
 | what a waiting step waits for (`steps.waiting_for`) | `WaitKind` | `dag/src/supervisor/tick.rs` |
 | how a sync request ended | `RequestOutcome` | `dag/src/supervisor/store.rs` |
@@ -886,7 +894,7 @@ upstream (block types, MIME types), free-form display text
 | how a pass (the prepare pass at a start, a wipe that frees disk) stands with one step | `PassState` | `dag/src/supervisor/pass.rs` |
 | the list a picker loads | `ProbeList` | `probe/src/lib.rs` (`datalib_probe`) |
 | the `grid_rows.provider` tag | `Provider` | `schema/src/providers.rs` |
-| what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `problems/src/lib.rs` (`datalib_problems`) |
+| what a step could not fully do to a record | `Outcome`, `Reason`, `ScopeKind`, `Severity`, `Stage` | `step_protocol/src/problems.rs` (`datalib_step_protocol`), re-exported by `datalib_problems` |
 | a configured entry upstream does not have; a listing or phase a run could not do | `ProblemReason`, `RunProblemKind` | `etl/src/download_problems.rs` |
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
 | what an edge means, stored as its number | `EdgeKind` | `schema/src/edges.rs` (`datalib_schema`) |
@@ -911,7 +919,8 @@ unions in `datalib/ui/src/generated/enums.ts`, written from the Rust by
 `bazel run //datalib/backend/http:ui_enums.update`; a test in
 `datalib_http` fails when it drifts. Add an enum to that generator
 rather than hand-writing a union in `api.ts`. The environment variables
-one process sets for another live once, in `datalib/backend/env`.
+one process sets for another live once, in `datalib/backend/env`; the
+ones the runner sets for a step are in `datalib_step_protocol::env`.
 
 ## A `deps` entry you don't use is a build error
 

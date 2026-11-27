@@ -1,5 +1,7 @@
 load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 
+exports_files(["README.md"])  # compiled into `datalib-step help step-protocol-rust`
+
 # The step's side of the step protocol (docs/dev/step_protocol.md), for a
 # step program in Rust: what the runner hands a step, and every line a
 # step may print. No first-party dependencies, so a step outside Datalib

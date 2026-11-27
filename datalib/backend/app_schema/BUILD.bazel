@@ -13,6 +13,7 @@ rust_library(
         # For the `BulkUpsertable` impl `PortableTable` generates; the
         # impl itself binds through sqlx.
         "//datalib/backend/table:datalib_table",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         "@datalib_crates//:serde",
         "@datalib_crates//:sqlx",
         "@datalib_crates//:strum",

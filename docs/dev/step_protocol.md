@@ -9,7 +9,12 @@ incrementality, progress reporting or failure handling.
 
 This doc is the contract from the command's side. The runner's side
 (when a step is stale, retries, what a dropped config entry costs) is
-[the runner's README](../../datalib/backend/dag/README.md).
+[the runner's README](../../datalib/backend/dag/README.md). A step
+written in Rust can take this side of it as a crate,
+[`datalib_step_protocol`](../../datalib/backend/step_protocol/README.md):
+it reads what the runner hands a step and prints every line below. This
+doc describes protocol version 1, the `step_protocol` a package's
+manifest declares.
 
 ## The config entry
 
@@ -308,7 +313,17 @@ form, which the runner turns into the `done_total` and `queued` metrics:
 ```
 
 `progress_message` is the step's own words: a phase, not a number.
-`log`'s `target` and `fields` are optional; a plain `msg` is fine.
+`log`'s `target` and `fields` are optional; a plain `msg` is fine. So
+are `ts`, the line's own timestamp (RFC 3339, in the local offset),
+which the run store keeps in place of the time the runner read it, and
+`thread`, the name of the thread that wrote it.
+
+A failure a person fixes, such as a credential to sign in again with,
+can say how in a `hint`, which the app shows apart from the log:
+
+```json
+{"event":"hint","step":"me","msg":"Sign in again: latchkey auth browser slack"}
+```
 
 A step that seals part of its output while still running says so with a
 `checkpoint`, and should say how many rows that seal added:
@@ -882,6 +897,13 @@ for f in sorted((root / out).rglob("*")):
 emit({"event": "outcome",
       "outputs": [{"path": out, "version": h.hexdigest()}]})
 ```
+
+A Rust step that reads its inputs the same way and reports a content
+version of its files is in
+[`datalib_step_protocol`'s README](../../datalib/backend/step_protocol/README.md),
+built and run under the runner by a test. It does not open a store:
+that needs the doltlite library, which `imbue-datalib-reader` wraps for
+Python.
 
 ## How `datalib-step` fits
 

@@ -32,7 +32,7 @@ use sqlx::Row;
 use datalib_sql::sql;
 use pictures::{Level, Size};
 
-const DATA_ROOT_ENV: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
+const DATA_ROOT_ENV: &str = datalib_step_protocol::env::DATALIB_DAG_DATA_ROOT;
 const COMPONENT_JS: &str = include_str!("component.js");
 const COMPONENT_NAME: &str = "photos";
 /// Which of a header's values says where a picture came from.

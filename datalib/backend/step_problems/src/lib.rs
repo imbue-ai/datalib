@@ -9,11 +9,11 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_problems::{Outcome, Problem, ProblemRow, Reason, Scope, ScopeKind, Severity, Stage};
+use datalib_problems::{Problem, ProblemRow, Scope, ScopeKind, Stage};
 use datalib_sql::{sql, sql_id, Sql};
+use datalib_step_protocol::Covered;
 use datalib_table::BulkUpsertable as _;
 use datalib_time::StoredStamp;
-use serde::{Deserialize, Serialize};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 pub const FILE_NAME: &str = "problems.sqlite";
@@ -22,94 +22,34 @@ pub fn file_of(data_root: &Path, step_id: &str) -> PathBuf {
     data_root.join(step_id).join(FILE_NAME)
 }
 
-/// One problem as a `problem` line spells it: a [`ProblemRow`] without
-/// the columns the writer fills (its id, its source, its stamps).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Found {
-    pub stage: Stage,
-    pub scope_kind: ScopeKind,
-    /// What the problem is about within the step: `<table>:<id>` for a
-    /// record, `file:<path>` for a file, `listing:<name>` or
-    /// `phase:<name>` for a part of the run. [`Covered`] matches it.
-    pub scope_key: String,
-    pub outcome: Outcome,
-    pub reason: Reason,
-    #[serde(default)]
-    pub severity: Option<Severity>,
-    #[serde(default)]
-    pub sample: String,
-    #[serde(default)]
-    pub item_uuid: Option<String>,
-    #[serde(default)]
-    pub field: Option<String>,
-    #[serde(default)]
-    pub path: Option<String>,
-    #[serde(default)]
-    pub rule: Option<String>,
-    #[serde(default)]
-    pub upstream_entity_kind: Option<String>,
-    #[serde(default)]
-    pub upstream_id: Option<String>,
-    #[serde(default)]
-    pub upstream_account: Option<String>,
-}
-
-impl Found {
-    pub fn into_row(self, source_id: &str) -> ProblemRow {
-        let scope = match self.scope_kind {
-            ScopeKind::Markdown => Scope::Markdown(&self.scope_key),
-            ScopeKind::Entity => Scope::Entity(&self.scope_key),
-        };
-        let problem = Problem {
-            reason: self.reason,
-            field: self.field.clone(),
-            path: self.path.clone(),
-            rule: self.rule.clone(),
-            sample: self.sample.clone(),
-            severity: self.severity,
-        };
-        ProblemRow {
-            upstream_entity_kind: self.upstream_entity_kind.clone(),
-            upstream_id: self.upstream_id.clone(),
-            upstream_account: self.upstream_account.clone(),
-            ..ProblemRow::new(
-                source_id,
-                self.stage,
-                scope,
-                self.item_uuid.as_deref(),
-                self.outcome,
-                problem,
-                None,
-            )
-        }
+/// The row a `problem` line describes, in the source `source_id`.
+pub fn row_of(found: datalib_step_protocol::Problem, source_id: &str) -> ProblemRow {
+    let scope = match found.scope_kind {
+        ScopeKind::Markdown => Scope::Markdown(&found.scope_key),
+        ScopeKind::Entity => Scope::Entity(&found.scope_key),
+    };
+    let problem = Problem {
+        reason: found.reason,
+        field: found.field.clone(),
+        path: found.path.clone(),
+        rule: found.rule.clone(),
+        sample: found.sample.clone(),
+        severity: found.severity,
+    };
+    ProblemRow {
+        upstream_entity_kind: found.upstream_entity_kind.clone(),
+        upstream_id: found.upstream_id.clone(),
+        upstream_account: found.upstream_account.clone(),
+        ..ProblemRow::new(
+            source_id,
+            found.stage,
+            scope,
+            found.item_uuid.as_deref(),
+            found.outcome,
+            problem,
+            None,
+        )
     }
-}
-
-/// What a run checked again, and so may clear: the body of a `covered`
-/// line. A records or files kind that names neither `all_but` nor
-/// `only` vouches for every one of them, which only a run that succeeds
-/// can.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum Covered {
-    All,
-    /// Every `listing:` and `phase:` scope.
-    Listings,
-    /// The `<table>:<id>` scopes of one table: every one but `all_but`,
-    /// or exactly `only`.
-    Records {
-        table: String,
-        #[serde(default)]
-        all_but: Option<Vec<String>>,
-        #[serde(default)]
-        only: Option<Vec<String>>,
-    },
-    /// The `file:<path>` scopes under a folder, but `all_but`.
-    Files {
-        under: String,
-        #[serde(default)]
-        all_but: Option<Vec<String>>,
-    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1181,7 +1181,7 @@ impl Runner {
             .collect();
         self.sink.emit(&Event::RunPlan { steps: plan });
         let started_at = child_env
-            .get(crate::subprocess::ENV_NOW)
+            .get(datalib_step_protocol::env::DATALIB_DAG_NOW)
             .cloned()
             .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs());
         let clock = datalib_time::RunClock::starting_at(
@@ -1189,7 +1189,7 @@ impl Runner {
                 .unwrap_or_else(|_| datalib_time::IsoOffsetTimestamp::now_local()),
         );
         let run_id = child_env
-            .get(crate::subprocess::ENV_RUN_ID)
+            .get(datalib_step_protocol::env::DATALIB_DAG_RUN_ID)
             .cloned()
             .unwrap_or_else(new_run_id);
         state.current_run = Some(CurrentRun {
@@ -3514,7 +3514,10 @@ mod tests {
         let store = Store::open(f.root.path()).await.unwrap();
         store.open_request(&["a/raw".into()], "ui").await.unwrap();
         let pinned = "2369-04-15T00:00:00+00:00";
-        let env = BTreeMap::from([(crate::subprocess::ENV_NOW.to_string(), pinned.to_string())]);
+        let env = BTreeMap::from([(
+            datalib_step_protocol::env::DATALIB_DAG_NOW.to_string(),
+            pinned.to_string(),
+        )]);
         Runner::new(f.root.path())
             .child_env(env)
             .serve(&f.graph, &store)

@@ -131,7 +131,7 @@ rust_binary(
     visibility = ["//visibility:public"],
     deps = [
         ":datalib_etl_yolink",
-        "//datalib/backend/env:datalib_env",
+        "//datalib/backend/step_protocol:datalib_step_protocol",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/sql:datalib_sql",
         "//datalib/backend/time:datalib_time",

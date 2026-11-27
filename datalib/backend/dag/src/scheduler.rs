@@ -2951,9 +2951,12 @@ mod tests {
         let g = fx.graph();
         let pinned = "2026-08-31T12:34:56+02:00";
         let r = runner(fx.root.path()).child_env(BTreeMap::from([
-            (crate::subprocess::ENV_NOW.to_string(), pinned.to_string()),
             (
-                crate::subprocess::ENV_RUN_ID.to_string(),
+                datalib_step_protocol::env::DATALIB_DAG_NOW.to_string(),
+                pinned.to_string(),
+            ),
+            (
+                datalib_step_protocol::env::DATALIB_DAG_RUN_ID.to_string(),
                 "run-abc".to_string(),
             ),
         ]));
@@ -2974,7 +2977,7 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..2 {
             let r = runner(fx.root.path()).child_env(BTreeMap::from([(
-                crate::subprocess::ENV_NOW.to_string(),
+                datalib_step_protocol::env::DATALIB_DAG_NOW.to_string(),
                 "2026-08-31T12:34:56+02:00".to_string(),
             )]));
             assert!(r.run(&g).await.unwrap().all_ok());

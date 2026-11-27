@@ -8,13 +8,18 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use process_wrap::tokio::{CommandWrap, ProcessGroup};
-use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::events::{Event, EventSink, LogLevel, Stream};
-use crate::problems_relay::{self, Line, Relay};
+use crate::problems_relay::{self, Relay};
 use crate::step::{ArtifactState, FailureKind, StepCtx, StepError, StepOutcome};
 use datalib_step_problems::Ended;
+use datalib_step_protocol::env::{
+    DATALIB_DAG_ATTEMPT, DATALIB_DAG_CHANGED_INPUTS, DATALIB_DAG_DATA_ROOT,
+    DATALIB_DAG_FAILED_INPUTS, DATALIB_DAG_INPUTS, DATALIB_DAG_PARAMS, DATALIB_DAG_STEP,
+    DATALIB_READS,
+};
+use datalib_step_protocol::{Covered, Line, Problem};
 
 /// Where a step finds the runner's pipe, named to the child in
 /// `datalib_parent_watch::ENV_VAR`. Deliberately not stdin: a step is an
@@ -22,27 +27,6 @@ use datalib_step_problems::Ended;
 /// immediate end-of-file would block forever on a pipe nobody writes to.
 const PARENT_PIPE_FD: libc::c_int = 3;
 
-pub const ENV_STEP: &str = datalib_env::DATALIB_DAG_STEP;
-/// The run this invocation belongs to — the id every row of
-/// `system/runs/runs.sqlite` carries — and which attempt of this
-/// invocation it is: 1 for the first, counting up only as the runner
-/// retries a failure. A step started again later in the same run starts
-/// at 1 again. Stamp them into anything you write that should be
-/// joinable back to the run.
-pub const ENV_RUN_ID: &str = datalib_env::DATALIB_DAG_RUN_ID;
-pub const ENV_ATTEMPT: &str = datalib_env::DATALIB_DAG_ATTEMPT;
-pub const ENV_DATA_ROOT: &str = datalib_env::DATALIB_DAG_DATA_ROOT;
-/// The step's `params`, as JSON. Set only when it has some.
-pub const ENV_PARAMS: &str = datalib_env::DATALIB_DAG_PARAMS;
-pub const ENV_INPUTS: &str = datalib_env::DATALIB_DAG_INPUTS;
-pub const ENV_CHANGED_INPUTS: &str = datalib_env::DATALIB_DAG_CHANGED_INPUTS;
-pub const ENV_FAILED_INPUTS: &str = datalib_env::DATALIB_DAG_FAILED_INPUTS;
-/// `StepCtx::reads` as a JSON object: input path → version.
-pub const ENV_READS: &str = datalib_env::DATALIB_READS;
-/// Run-wide pinned timestamp (RFC 3339), set by the runner on every
-/// step so all stamped outputs agree. Steps that record times should
-/// prefer it over sampling their own clock.
-pub const ENV_NOW: &str = datalib_env::DATALIB_DAG_NOW;
 /// The verb `datalib-pipeline free-disk-space` sends (`--compact` or `--collect`), to a step whose
 /// program takes it: the step gives back disk its store holds and runs
 /// nothing else (`step_protocol.md` § Compact and collect). Collecting
@@ -63,35 +47,45 @@ impl Shrink {
     }
 }
 
-/// The final stdout line a subprocess step may emit.
-#[derive(Debug, Default, Deserialize)]
+/// A step's `outcome` line, with each output's path checked.
+#[derive(Debug, Default)]
 struct WireOutcome {
-    #[serde(default)]
     outputs: Vec<WireArtifactState>,
-    /// A `--migrate` answer: what this step wrote is in a shape it cannot
-    /// reach in place, so it has to run again.
-    #[serde(default)]
     needs_rerun: bool,
-    /// A `--collect` or `--compact` answer: the store's size before and after.
-    #[serde(default)]
     store_bytes: Option<crate::step::StoreBytes>,
-    /// A `--check` answer: what the step would run but warns about.
-    #[serde(default)]
     warnings: Vec<String>,
-    /// Set (with a non-zero exit) to classify the failure.
-    #[serde(default)]
     failure: Option<FailureKind>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct WireArtifactState {
     path: crate::ArtifactPath,
     version: Option<String>,
-    #[serde(default)]
     rows: Option<u64>,
 }
 
 impl WireOutcome {
+    fn read(outcome: datalib_step_protocol::Outcome) -> anyhow::Result<WireOutcome> {
+        let outputs = outcome
+            .outputs
+            .into_iter()
+            .map(|o| {
+                Ok(WireArtifactState {
+                    path: crate::ArtifactPath::parse(&o.path)?,
+                    version: o.version,
+                    rows: o.rows,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        Ok(WireOutcome {
+            outputs,
+            needs_rerun: outcome.needs_rerun,
+            store_bytes: outcome.store_bytes,
+            warnings: outcome.warnings,
+            failure: outcome.failure,
+        })
+    }
+
     fn into_outputs(self, sink: &Arc<dyn EventSink>, step: &str) -> Vec<ArtifactState> {
         let mut out = Vec::with_capacity(self.outputs.len());
         for row in self.outputs {
@@ -179,19 +173,19 @@ pub(crate) async fn run_subprocess(
     #[cfg(target_os = "macos")]
     cmd.env(datalib_env::MALLOC_LARGE_CACHE, "0");
     match params {
-        Some(json) => cmd.env(ENV_PARAMS, json),
+        Some(json) => cmd.env(DATALIB_DAG_PARAMS, json),
         // Unset for a step with no params, even if the runner's own
         // environment carries one.
-        None => cmd.env_remove(ENV_PARAMS),
+        None => cmd.env_remove(DATALIB_DAG_PARAMS),
     };
-    cmd.env(ENV_STEP, &ctx.step_id)
-        .env(ENV_ATTEMPT, attempt.to_string())
-        .env(ENV_DATA_ROOT, &ctx.data_root)
-        .env(ENV_INPUTS, inputs.join("\n"))
-        .env(ENV_CHANGED_INPUTS, changed.join("\n"))
-        .env(ENV_FAILED_INPUTS, failed.join("\n"))
+    cmd.env(DATALIB_DAG_STEP, &ctx.step_id)
+        .env(DATALIB_DAG_ATTEMPT, attempt.to_string())
+        .env(DATALIB_DAG_DATA_ROOT, &ctx.data_root)
+        .env(DATALIB_DAG_INPUTS, inputs.join("\n"))
+        .env(DATALIB_DAG_CHANGED_INPUTS, changed.join("\n"))
+        .env(DATALIB_DAG_FAILED_INPUTS, failed.join("\n"))
         .env(
-            ENV_READS,
+            DATALIB_READS,
             serde_json::to_string(&ctx.reads).expect("a string map is JSON"),
         )
         // Run-wide env from the runner (PATH with binary_dir
@@ -332,66 +326,38 @@ pub(crate) async fn run_subprocess(
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<serde_json::Value>(&line) {
-            Ok(v) if v.get("event").and_then(|e| e.as_str()) == Some("outcome") => {
-                match serde_json::from_value::<WireOutcome>(v) {
-                    Ok(w) => outcome = Some(w),
-                    Err(e) => {
-                        relay.finish(None).await;
-                        return Err(internal(anyhow::anyhow!(
-                            "step {}: malformed outcome line {line:?}: {e}",
-                            ctx.step_id
-                        )));
-                    }
-                }
+        match read_stdout_line(&ctx.step_id, &line) {
+            StdoutLine::Outcome(w) => outcome = Some(w),
+            StdoutLine::MalformedOutcome(e) => {
+                relay.finish(None).await;
+                return Err(internal(anyhow::anyhow!(
+                    "step {}: malformed outcome line {line:?}: {e}",
+                    ctx.step_id
+                )));
             }
-            Ok(v) if Line::read(&v).is_some() => match Line::read(&v).expect("matched above") {
-                Ok(l) => relay.take(l).await,
-                Err(e) => sink.emit(&Event::Log {
-                    step: ctx.step_id.clone(),
-                    level: LogLevel::Error,
-                    msg: format!("a problem line that does not read ({e}): {line}"),
-                    ts: None,
-                    stream: Some(Stream::Stdout),
-                    target: Some("datalib_dag::problems_relay".into()),
-                    thread: None,
-                    fields: None,
-                }),
+            StdoutLine::Problem(p) => relay.take_problem(p).await,
+            StdoutLine::Covered(c) => relay.take_covered(c),
+            // A checkpoint goes to the scheduler, not to the event stream:
+            // it is the one event that changes what the runner does next,
+            // and the scheduler emits it once it has recorded it, as it
+            // does an in-process step's seal. Forwarded here too, each
+            // seal would be on the stream twice.
+            StdoutLine::Event(Event::Checkpoint { version, rows, .. }) => match rows {
+                Some(n) => ctx.checkpoint_rows(&version, n),
+                None => ctx.checkpoint(&version),
             },
-            Ok(v) => match serde_json::from_value::<Event>(v) {
-                // Forward, re-tagged with the authoritative id.
-                Ok(ev) => {
-                    match &ev {
-                        // A checkpoint goes to the scheduler, not to the
-                        // event stream: it is the one event that changes
-                        // what the runner does next, and the scheduler
-                        // emits it once it has recorded it -- the same
-                        // path an in-process step's seal takes, so a seal
-                        // is announced once whichever kind of step made
-                        // it. Forwarding it here as well put every
-                        // subprocess seal on the stream twice, and the
-                        // Manage screen counted four for a download that
-                        // made two.
-                        Event::Checkpoint { version, rows, .. } => {
-                            match rows {
-                                Some(n) => ctx.checkpoint_rows(version, *n),
-                                None => ctx.checkpoint(version),
-                            }
-                            continue;
-                        }
-                        // A capability is only ever claimed: an event that
-                        // carries just a `version` leaves streaming as it was.
-                        Event::Capabilities {
-                            streams_output: true,
-                            ..
-                        } => ctx.declare_streams_output(true),
-                        _ => {}
-                    }
-                    sink.emit(&retag(ev, &ctx.step_id))
+            StdoutLine::Event(ev) => {
+                // A capability is only ever claimed: an event that carries
+                // just a `version` leaves streaming as it was.
+                if let Event::Capabilities {
+                    streams_output: true,
+                    ..
+                } = ev
+                {
+                    ctx.declare_streams_output(true);
                 }
-                Err(_) => sink.emit(&unwrap_line(&ctx.step_id, Stream::Stdout, &line)),
-            },
-            Err(_) => sink.emit(&unwrap_line(&ctx.step_id, Stream::Stdout, &line)),
+                sink.emit(&ev)
+            }
         }
     }
 
@@ -669,86 +635,45 @@ pub fn parse_envelope(line: &str) -> Option<Envelope> {
     })
 }
 
-fn retag(ev: Event, id: &str) -> Event {
-    let id = id.to_string();
-    match ev {
-        Event::StepStart { attempt, .. } => Event::StepStart { step: id, attempt },
-        Event::StepFinish {
-            status,
-            error,
-            exit_code,
-            signal,
-            ..
-        } => Event::StepFinish {
-            step: id,
-            status,
-            error,
-            exit_code,
-            signal,
+/// What the runner does with one line of a step's stdout.
+#[derive(Debug)]
+enum StdoutLine {
+    /// For the event stream, with the step's real id.
+    Event(Event),
+    Problem(Problem),
+    Covered(Covered),
+    Outcome(WireOutcome),
+    /// An `outcome` line that does not read, which fails the step.
+    MalformedOutcome(String),
+}
+
+/// A line that names no event, or one that does not read as the event
+/// it names, is kept as a log line. A `problem` or `covered` line that
+/// does not read is said at `error`, since what it reported is lost.
+fn read_stdout_line(step: &str, line: &str) -> StdoutLine {
+    match datalib_step_protocol::read_line(line) {
+        Ok(Line::Event { event, .. }) => StdoutLine::Event(Event::from_step(step, event)),
+        Ok(Line::Problem(p)) => StdoutLine::Problem(p),
+        Ok(Line::Covered(c)) => StdoutLine::Covered(c),
+        Ok(Line::Outcome(o)) => match WireOutcome::read(o) {
+            Ok(w) => StdoutLine::Outcome(w),
+            Err(e) => StdoutLine::MalformedOutcome(e.to_string()),
         },
-        Event::PassEnd {
-            status,
-            error,
-            exit_code,
-            signal,
-            ..
-        } => Event::PassEnd {
-            step: id,
-            status,
-            error,
-            exit_code,
-            signal,
+        Ok(Line::Text) => StdoutLine::Event(unwrap_line(step, Stream::Stdout, line)),
+        Err(m) => match m.event.as_str() {
+            "outcome" => StdoutLine::MalformedOutcome(m.error),
+            "problem" | "covered" => StdoutLine::Event(Event::Log {
+                step: step.to_string(),
+                level: LogLevel::Error,
+                msg: format!("a problem line that does not read ({}): {line}", m.error),
+                ts: None,
+                stream: Some(Stream::Stdout),
+                target: Some("datalib_dag::problems_relay".into()),
+                thread: None,
+                fields: None,
+            }),
+            _ => StdoutLine::Event(unwrap_line(step, Stream::Stdout, line)),
         },
-        Event::Checkpoint { version, rows, .. } => Event::Checkpoint {
-            step: id,
-            version,
-            rows,
-        },
-        Event::Capabilities {
-            streams_output,
-            version,
-            ..
-        } => Event::Capabilities {
-            step: id,
-            streams_output,
-            version,
-        },
-        Event::ProgressLength { total, .. } => Event::ProgressLength { step: id, total },
-        Event::ProgressInc { delta, .. } => Event::ProgressInc { step: id, delta },
-        Event::ProgressMessage { msg, .. } => Event::ProgressMessage { step: id, msg },
-        Event::Metric {
-            name,
-            labels,
-            value,
-            ..
-        } => Event::Metric {
-            step: id,
-            name,
-            labels,
-            value,
-        },
-        Event::Log {
-            level,
-            msg,
-            ts,
-            stream,
-            target,
-            thread,
-            fields,
-            ..
-        } => Event::Log {
-            step: id,
-            level,
-            msg,
-            ts,
-            stream,
-            target,
-            thread,
-            fields,
-        },
-        Event::Hint { msg, .. } => Event::Hint { step: id, msg },
-        // through unmodified rather than inventing a policy.
-        ev @ (Event::RunSummary { .. } | Event::RunPlan { .. }) => ev,
     }
 }
 
@@ -857,6 +782,267 @@ mod tests {
             argv: vec!["/bin/sh".into(), "-c".into(), script.into()],
             env: BTreeMap::new(),
             params: None,
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct Printed(Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for Printed {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn json(event: &Event) -> serde_json::Value {
+        serde_json::to_value(event).unwrap()
+    }
+
+    /// Everything a step can print through `datalib_step_protocol`
+    /// reaches the runner as what it says, filed under the step's real
+    /// id, and none of it as a plain log line.
+    #[test]
+    fn every_line_the_protocol_crate_prints_reaches_the_runner_as_itself() {
+        use datalib_step_protocol as wire;
+        let printed = Printed::default();
+        let out = wire::Emitter::to_writer("whatever the step says", printed.clone());
+        out.metric("rows_upserted_total", &[("table", "messages")], 1234)
+            .unwrap();
+        out.metric("queued", &[], 17).unwrap();
+        out.progress_length(Some(42)).unwrap();
+        out.progress_length(None).unwrap();
+        out.progress_inc(1).unwrap();
+        out.progress_message("page 3").unwrap();
+        out.log(wire::LogLevel::Warn, "careful").unwrap();
+        let fields = serde_json::json!({"page": 3}).as_object().unwrap().clone();
+        out.event(&wire::Event::Log {
+            level: wire::LogLevel::Trace,
+            msg: "hello".into(),
+            ts: Some("2364-04-11T10:00:00+01:00".into()),
+            target: Some("me::fetch".into()),
+            thread: Some("worker".into()),
+            fields: Some(fields.clone()),
+        })
+        .unwrap();
+        out.hint("sign in again").unwrap();
+        out.checkpoint("v1", Some(3)).unwrap();
+        out.checkpoint("v2", None).unwrap();
+        out.capabilities(true, None).unwrap();
+        out.capabilities(false, Some("ae2d52f0".into())).unwrap();
+        let problem = wire::Problem {
+            sample: "HTTP 404".into(),
+            ..wire::Problem::new(
+                wire::problems::Stage::Fetch,
+                wire::problems::ScopeKind::Entity,
+                "messages:1",
+                wire::problems::Outcome::Dropped,
+                wire::problems::Reason::FetchFailed,
+            )
+        };
+        out.problem(&problem).unwrap();
+        let covered = [
+            wire::Covered::All,
+            wire::Covered::Listings,
+            wire::Covered::Records {
+                table: "messages".into(),
+                all_but: Some(vec!["2".into()]),
+                only: None,
+            },
+            wire::Covered::Files {
+                under: "notes".into(),
+                all_but: None,
+            },
+        ];
+        for c in &covered {
+            out.covered(c).unwrap();
+        }
+        out.outcome(&wire::Outcome {
+            outputs: vec![
+                wire::Output {
+                    rows: Some(5),
+                    ..wire::Output::versioned("g/out", "v3")
+                },
+                wire::Output {
+                    path: "g/out".into(),
+                    version: None,
+                    rows: None,
+                },
+            ],
+            needs_rerun: true,
+            store_bytes: Some(wire::StoreBytes {
+                before: 10,
+                after: 4,
+            }),
+            warnings: vec!["`x` does nothing".into()],
+            failure: Some(FailureKind::Incomplete),
+        })
+        .unwrap();
+
+        let text = String::from_utf8(printed.0.lock().unwrap().clone()).unwrap();
+        let mut read = text.lines().map(|l| read_stdout_line("g/out", l));
+        let step = || "g/out".to_string();
+        let log =
+            |level, msg: &str, ts: Option<&str>, target: Option<&str>, thread, fields| Event::Log {
+                step: step(),
+                level,
+                msg: msg.into(),
+                ts: ts.map(str::to_string),
+                stream: None,
+                target: target.map(str::to_string),
+                thread,
+                fields,
+            };
+        let events = [
+            Event::Metric {
+                step: step(),
+                name: "rows_upserted_total".into(),
+                labels: BTreeMap::from([("table".into(), "messages".into())]),
+                value: 1234,
+            },
+            Event::Metric {
+                step: step(),
+                name: "queued".into(),
+                labels: BTreeMap::new(),
+                value: 17,
+            },
+            Event::ProgressLength {
+                step: step(),
+                total: Some(42),
+            },
+            Event::ProgressLength {
+                step: step(),
+                total: None,
+            },
+            Event::ProgressInc {
+                step: step(),
+                delta: 1,
+            },
+            Event::ProgressMessage {
+                step: step(),
+                msg: "page 3".into(),
+            },
+            log(LogLevel::Warn, "careful", None, None, None, None),
+            log(
+                LogLevel::Trace,
+                "hello",
+                Some("2364-04-11T10:00:00+01:00"),
+                Some("me::fetch"),
+                Some("worker".into()),
+                Some(fields),
+            ),
+            Event::Hint {
+                step: step(),
+                msg: "sign in again".into(),
+            },
+            Event::Checkpoint {
+                step: step(),
+                version: "v1".into(),
+                rows: Some(3),
+            },
+            Event::Checkpoint {
+                step: step(),
+                version: "v2".into(),
+                rows: None,
+            },
+            Event::Capabilities {
+                step: step(),
+                streams_output: true,
+                version: None,
+            },
+            Event::Capabilities {
+                step: step(),
+                streams_output: false,
+                version: Some("ae2d52f0".into()),
+            },
+        ];
+        for want in &events {
+            match read.next() {
+                Some(StdoutLine::Event(got)) => assert_eq!(json(&got), json(want)),
+                other => panic!("wanted {want:?}, read {other:?}"),
+            }
+        }
+        match read.next() {
+            Some(StdoutLine::Problem(got)) => assert_eq!(got, problem),
+            other => panic!("wanted the problem, read {other:?}"),
+        }
+        for want in covered {
+            match read.next() {
+                Some(StdoutLine::Covered(got)) => assert_eq!(got, want),
+                other => panic!("wanted {want:?}, read {other:?}"),
+            }
+        }
+        match read.next() {
+            Some(StdoutLine::Outcome(w)) => {
+                assert!(w.needs_rerun);
+                assert_eq!(w.store_bytes.map(|b| (b.before, b.after)), Some((10, 4)));
+                assert_eq!(w.warnings, ["`x` does nothing"]);
+                assert_eq!(w.failure, Some(FailureKind::Incomplete));
+                let outputs: Vec<_> = w
+                    .outputs
+                    .iter()
+                    .map(|o| (o.path.as_str().to_string(), o.version.clone(), o.rows))
+                    .collect();
+                assert_eq!(
+                    outputs,
+                    [
+                        ("g/out".to_string(), Some("v3".to_string()), Some(5)),
+                        ("g/out".to_string(), None, None),
+                    ]
+                );
+            }
+            other => panic!("wanted the outcome, read {other:?}"),
+        }
+        assert!(read.next().is_none());
+    }
+
+    /// A line that is not one a step may print is kept as a log line:
+    /// plain text, an event the protocol does not have (the runner's own
+    /// reports of a step among them), and a known event that does not
+    /// read. An outcome that does not read, a bad output path included,
+    /// fails the step.
+    #[test]
+    fn a_line_a_step_may_not_print_is_kept_as_its_text() {
+        for line in [
+            "plain chatter",
+            r#"{"event":"no_such_event","step":"s"}"#,
+            r#"{"event":"step_finish","step":"s","status":"succeeded"}"#,
+            r#"{"event":"progress_inc","delta":1}"#,
+        ] {
+            match read_stdout_line("g/out", line) {
+                StdoutLine::Event(Event::Log {
+                    level: LogLevel::Info,
+                    msg,
+                    stream: Some(Stream::Stdout),
+                    ..
+                }) => assert_eq!(msg, line),
+                other => panic!("{line}: {other:?}"),
+            }
+        }
+        match read_stdout_line("g/out", r#"{"event":"problem","stage":"fetch"}"#) {
+            StdoutLine::Event(Event::Log {
+                level: LogLevel::Error,
+                msg,
+                ..
+            }) => assert!(
+                msg.starts_with("a problem line that does not read"),
+                "{msg}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        for line in [
+            r#"{"event":"outcome","failure":"bored"}"#,
+            r#"{"event":"outcome","outputs":[{"path":"a/../b","version":"v"}]}"#,
+        ] {
+            assert!(
+                matches!(
+                    read_stdout_line("g/out", line),
+                    StdoutLine::MalformedOutcome(_)
+                ),
+                "{line}"
+            );
         }
     }
 
@@ -1702,7 +1888,7 @@ mod tests {
         let r = Runner::new(root.path()).child_env(
             [
                 (
-                    super::ENV_NOW.to_string(),
+                    datalib_step_protocol::env::DATALIB_DAG_NOW.to_string(),
                     "2026-07-21T00:00:00Z".to_string(),
                 ),
                 ("OVERRIDE_ME".to_string(), "run".to_string()),

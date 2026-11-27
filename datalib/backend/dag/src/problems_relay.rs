@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use datalib_step_problems::{Covered, Ended, Found, StepFile};
+use datalib_step_problems::{Ended, StepFile};
+use datalib_step_protocol::env::DATALIB_DAG_NOW;
+use datalib_step_protocol::{Covered, Problem};
 
 use crate::events::{Event, EventSink, LogLevel};
-use crate::subprocess::ENV_NOW;
 
 /// A lull this long writes what is waiting, so a problem shows while its
 /// step goes quiet.
@@ -26,7 +27,7 @@ pub(crate) struct Relay {
     source_id: String,
     now: datalib_time::StoredStamp,
     file: Option<StepFile>,
-    pending: Vec<Found>,
+    pending: Vec<Problem>,
     covered: Vec<Covered>,
     /// Whether the step sent any problem event this run: a step that sent
     /// none writes its own file, or keeps none, and is left alone.
@@ -37,25 +38,6 @@ pub(crate) struct Relay {
     sink: Arc<dyn EventSink>,
 }
 
-/// What one stdout line asks of the relay, if it is one of its events.
-pub(crate) enum Line {
-    Problem(Found),
-    Covered(Covered),
-}
-
-impl Line {
-    /// `Err` for a line that names one of these events and does not read
-    /// as one: said in the log rather than taken as plain output.
-    pub(crate) fn read(v: &serde_json::Value) -> Option<Result<Self, String>> {
-        let read = match v.get("event").and_then(|e| e.as_str())? {
-            "problem" => serde_json::from_value(v.clone()).map(Line::Problem),
-            "covered" => serde_json::from_value(v.clone()).map(Line::Covered),
-            _ => return None,
-        };
-        Some(read.map_err(|e| e.to_string()))
-    }
-}
-
 impl Relay {
     pub(crate) fn new(
         data_root: PathBuf,
@@ -64,7 +46,7 @@ impl Relay {
         sink: Arc<dyn EventSink>,
     ) -> Self {
         let now = extra_env
-            .get(ENV_NOW)
+            .get(DATALIB_DAG_NOW)
             .map(|s| datalib_time::split_stamp(s))
             .unwrap_or_else(|| {
                 datalib_time::split_stamp(
@@ -92,17 +74,17 @@ impl Relay {
         !self.pending.is_empty()
     }
 
-    pub(crate) async fn take(&mut self, line: Line) {
+    pub(crate) async fn take_problem(&mut self, problem: Problem) {
         self.spoke = true;
-        match line {
-            Line::Problem(found) => {
-                self.pending.push(found);
-                if self.pending.len() >= BATCH {
-                    self.flush().await;
-                }
-            }
-            Line::Covered(c) => self.covered.push(c),
+        self.pending.push(problem);
+        if self.pending.len() >= BATCH {
+            self.flush().await;
         }
+    }
+
+    pub(crate) fn take_covered(&mut self, covered: Covered) {
+        self.spoke = true;
+        self.covered.push(covered);
     }
 
     /// Write what is waiting. A file that will not take it is said in the
@@ -114,7 +96,7 @@ impl Relay {
         let source_id = self.source_id.clone();
         let batch: Vec<_> = std::mem::take(&mut self.pending)
             .into_iter()
-            .map(|f| f.into_row(&source_id))
+            .map(|p| datalib_step_problems::row_of(p, &source_id))
             .collect();
         let n = batch.len();
         if let Err(e) = self.write(batch).await {

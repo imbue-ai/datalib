@@ -12,8 +12,8 @@ use datalib_runs::{RunKind, RunStart};
 use crate::config::DagConfig;
 use crate::run_state::RunState;
 use crate::runs_sink::RunStoreSink;
-use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
 use crate::supervisor::store::{JobKind, JobRow, RequestRow, Store};
+use datalib_step_protocol::env::{DATALIB_DAG_NOW, DATALIB_DAG_RUN_ID};
 use strum::VariantArray;
 
 /// The environment every step of one busy period gets on top of the
@@ -48,8 +48,8 @@ pub fn step_env(
         let joined = std::env::join_paths(all).context("build the steps' PATH")?;
         vars.insert("PATH".into(), joined.to_string_lossy().into_owned());
     }
-    vars.insert(ENV_RUN_ID.into(), run_id.to_string());
-    vars.insert(ENV_NOW.into(), now.to_string());
+    vars.insert(DATALIB_DAG_RUN_ID.into(), run_id.to_string());
+    vars.insert(DATALIB_DAG_NOW.into(), now.to_string());
     // A step's stdout is a pipe, and Python block-buffers a pipe by
     // default: its progress lines would arrive in 4KB lumps, long after
     // the stderr they belong beside. Rust and sh need no help.
