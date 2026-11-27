@@ -44,6 +44,9 @@ tauri-plugin-window-state = "2"
 # Bazel can test it. Already in the lock under tauri, which re-exports
 # its `Url`.
 url = "2"
+# Opens a `datalib:` link clicked in another app (`src/deep_link.rs`);
+# registers the scheme in the bundle's Info.plist on macOS.
+tauri-plugin-deep-link = "2"
 
 # Which app the OS would open a raw store with (`src/raw_store.rs`), and
 # the protected folder (`src/protected.rs`). Both are already in the lock

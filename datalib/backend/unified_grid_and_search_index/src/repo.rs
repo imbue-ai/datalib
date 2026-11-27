@@ -66,6 +66,9 @@ pub trait IndexRepo: Send + Sync {
     /// The sources that hold places at their top, by id.
     async fn sources_with_places(&self) -> Result<Vec<String>, RepoError>;
 
+    /// The node `uuid` names, `None` when the index holds none.
+    async fn node(&self, uuid: &str) -> Result<Option<crate::places::Node>, RepoError>;
+
     /// Every row `query`'s structured terms match, in the group `within`
     /// names (all of them, for an empty path), as uuids in `sort`'s order,
     /// or newest first with none. Its free text is the search index's; nothing here

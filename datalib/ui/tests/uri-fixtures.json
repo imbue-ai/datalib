@@ -13,7 +13,7 @@
     }
   },
   { "name": "another scheme", "link": "mailto:riker@enterprise.org", "doc": null },
-  { "name": "the old copied-id form", "link": "datalib://chat/abc-123?msg=def-456", "doc": null },
+  { "name": "a datalib:// link, which no build reads", "link": "datalib://chat/abc-123?msg=def-456", "doc": null },
   { "name": "a kind this build does not know", "link": "datalib:ship/enterprise", "doc": null },
   { "name": "no page", "link": "datalib:doc/", "doc": null },
   { "name": "a page with a slash", "link": "datalib:doc/a/b", "doc": null },
@@ -95,5 +95,35 @@
   { "name": "no node", "link": "datalib:node/", "doc": null },
   { "name": "a node with a slash", "link": "datalib:node/a/b", "doc": null },
   { "name": "a node that climbs out", "link": "datalib:node/..", "doc": null },
-  { "name": "a node named for its source", "link": "datalib:node/source:slack", "doc": null }
+  { "name": "a node named for its source", "link": "datalib:node/source:slack", "doc": null },
+  {
+    "name": "a page in a library",
+    "link": "datalib:doc/00000000-0000-8000-a000-000000000001?library=9b1d0000-0000-4000-8000-0000000000aa",
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": null },
+    "library": "9b1d0000-0000-4000-8000-0000000000aa"
+  },
+  {
+    "name": "a message on a page in a library, the library before the message",
+    "link": "datalib:doc/Ten-Forward-00000000-0000-8000-a000-000000000001?library=9b1d0000-0000-4000-8000-0000000000aa#0190a5e1-0000-7000-8000-00000000000c",
+    "title": "Ten Forward",
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": "0190a5e1-0000-7000-8000-00000000000c" },
+    "library": "9b1d0000-0000-4000-8000-0000000000aa"
+  },
+  {
+    "name": "a message on an untitled page in a library",
+    "link": "datalib:doc/00000000-0000-8000-a000-000000000001?library=9b1d0000-0000-4000-8000-0000000000aa#0190a5e1-0000-7000-8000-00000000000c",
+    "doc": { "page": "00000000-0000-8000-a000-000000000001", "section": "0190a5e1-0000-7000-8000-00000000000c" },
+    "library": "9b1d0000-0000-4000-8000-0000000000aa"
+  },
+  {
+    "name": "a node in a library",
+    "link": "datalib:node/00000000-0000-8000-a000-000000000003?library=9b1d0000-0000-4000-8000-0000000000aa",
+    "doc": null,
+    "node": "00000000-0000-8000-a000-000000000003",
+    "library": "9b1d0000-0000-4000-8000-0000000000aa"
+  },
+  { "name": "a library named, not by its id", "link": "datalib:node/00000000-0000-8000-a000-000000000003?library=Default", "doc": null },
+  { "name": "a library after the message", "link": "datalib:doc/00000000-0000-8000-a000-000000000001#0190a5e1-0000-7000-8000-00000000000c?library=9b1d0000-0000-4000-8000-0000000000aa", "doc": null },
+  { "name": "a library and more", "link": "datalib:node/00000000-0000-8000-a000-000000000003?library=9b1d0000-0000-4000-8000-0000000000aa&x=1", "doc": null },
+  { "name": "an empty query", "link": "datalib:node/00000000-0000-8000-a000-000000000003?", "doc": null }
 ]

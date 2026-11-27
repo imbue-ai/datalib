@@ -3,6 +3,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod backend_output;
+mod deep_link;
 mod launcher;
 mod navigation;
 mod protected;
@@ -18,6 +19,7 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, MenuItemKind, PredefinedMenuItem, Submenu};
 use tauri::webview::{NewWindowFeatures, NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, Url, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::StateFlags;
@@ -244,12 +246,12 @@ fn launcher_create(app: AppHandle, input: String, protect: bool) -> Result<(), S
     let shown = launcher::tilde(&root, &home);
     match launcher::classify(&root) {
         launcher::Target::Library => {
-            tauri::async_runtime::spawn(boot(app, root, false));
+            tauri::async_runtime::spawn(boot(app, root, false, None));
         }
         launcher::Target::New => {
             launcher::create_library_dir(&root, &parent)
                 .map_err(|e| format!("Could not create {shown}: {e}"))?;
-            tauri::async_runtime::spawn(boot(app, root, true));
+            tauri::async_runtime::spawn(boot(app, root, true, None));
         }
         launcher::Target::Occupied => {
             return Err(format!(
@@ -286,7 +288,7 @@ fn launcher_open(app: AppHandle, path: String) -> Result<(), String> {
             root.display()
         ));
     }
-    tauri::async_runtime::spawn(boot(app, root, false));
+    tauri::async_runtime::spawn(boot(app, root, false, None));
     Ok(())
 }
 
@@ -307,7 +309,7 @@ async fn launcher_pick(app: AppHandle) -> Result<bool, String> {
     let root = choice
         .into_path()
         .map_err(|e| format!("unusable folder selection: {e}"))?;
-    tauri::async_runtime::spawn(boot(app, root, false));
+    tauri::async_runtime::spawn(boot(app, root, false, None));
     Ok(true)
 }
 
@@ -477,7 +479,7 @@ fn library_switch(app: AppHandle, path: String) -> Result<(), String> {
         return Err(format!("{} is no longer a data library.", root.display()));
     }
     leave_library(&app).map_err(|e| e.to_string())?;
-    tauri::async_runtime::spawn(boot(app, root, false));
+    tauri::async_runtime::spawn(boot(app, root, false, None));
     Ok(())
 }
 
@@ -668,9 +670,11 @@ fn macos_guards_the_container() -> bool {
 fn make_protected_container() -> Result<PathBuf, String> {
     use objc2_foundation::{NSFileManager, NSString};
     if !macos_guards_the_container() {
-        return Err("A protected library needs macOS 15 or later. On this version, \
+        return Err(
+            "A protected library needs macOS 15 or later. On this version, \
                     macOS does not keep other apps out of the folder."
-            .into());
+                .into(),
+        );
     }
     let url = NSFileManager::defaultManager()
         .containerURLForSecurityApplicationGroupIdentifier(&NSString::from_str(protected::GROUP_ID))
@@ -712,6 +716,10 @@ fn main() {
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // `datalib:` links from other apps (`src/deep_link.rs`). macOS
+        // learns the scheme from the bundle's Info.plist, which the
+        // plugin's `tauri.conf.json` entry writes.
+        .plugin(tauri_plugin_deep_link::init())
         // Backs two things: the grid's "Reveal in Finder" action, and
         // handing an off-origin link to the OS browser (the `↗`
         // outlink and any link inside a rendered document). The webview
@@ -777,6 +785,12 @@ fn main() {
                 *handle.state::<PageZoom>().0.lock().unwrap() = zoom::load(&file);
             }
             handle.set_menu(app_menu(&handle)?)?;
+            let links = handle.clone();
+            app.deep_link().on_open_url(move |event| {
+                for url in event.urls() {
+                    open_link(&links, url.as_str());
+                }
+            });
             // A data root supplied non-interactively (positional arg or
             // `$DATALIB_DATA_ROOT`) skips the launcher and boots
             // straight into it — mirrors `datalib_http_bin <root>`
@@ -784,7 +798,7 @@ fn main() {
             // libraries screen asks which library to open.
             match explicit_data_root() {
                 Some(root) => {
-                    tauri::async_runtime::spawn(boot(handle, root, false));
+                    tauri::async_runtime::spawn(boot(handle, root, false, None));
                 }
                 None => show_launcher(&handle)?,
             }
@@ -928,9 +942,10 @@ fn resolve_bundled(app: &AppHandle, name: &str, env: &str) -> Option<PathBuf> {
     p.is_file().then_some(p)
 }
 
-/// Start `root`'s server and show it in the main window. `init` writes
-/// the starter config first, for a library just created.
-async fn boot(app: AppHandle, root: PathBuf, init: bool) {
+/// Start `root`'s server and show it in the main window, at `then` when
+/// a link asked for it. `init` writes the starter config first, for a
+/// library just created.
+async fn boot(app: AppHandle, root: PathBuf, init: bool, then: Option<deep_link::Link>) {
     remember(&app, &root);
     let url = match tauri::async_runtime::spawn_blocking({
         let app = app.clone();
@@ -942,10 +957,13 @@ async fn boot(app: AppHandle, root: PathBuf, init: bool) {
         Ok(Err(e)) => return boot_failed(&app, format!("could not start the backend: {e:#}")),
         Err(e) => return boot_failed(&app, format!("backend startup task panicked: {e}")),
     };
-    let Ok(url) = url.parse::<Url>() else {
+    let Ok(launch) = url.parse::<Url>() else {
         return boot_failed(&app, format!("backend produced an unusable URL: {url}"));
     };
-    *app.state::<AppOrigin>().0.lock().expect("app origin lock") = Some(url.clone());
+    *app.state::<AppOrigin>().0.lock().expect("app origin lock") = Some(launch.clone());
+    let url = then
+        .and_then(|link| link_address(&launch, &link))
+        .unwrap_or(launch);
     let shown = match app.get_webview_window(MAIN_WINDOW) {
         Some(window) => window.navigate(url),
         None => main_window(&app, WebviewUrl::External(url))
@@ -955,6 +973,115 @@ async fn boot(app: AppHandle, root: PathBuf, init: bool) {
     if let Err(e) = shown {
         boot_failed(&app, format!("could not open the library: {e}"));
     }
+}
+
+// --- `datalib:` links from other apps (src/deep_link.rs) -----------------
+
+/// Show `raw` in the open library, or in the one it names once the person
+/// agrees to open it. Any app or page can hand the OS a `datalib:` link,
+/// so a link never closes or opens a library unasked.
+fn open_link(app: &AppHandle, raw: &str) {
+    let Some(link) = deep_link::read(raw) else {
+        return tell(
+            app,
+            "Datalib cannot open that link",
+            format!("{raw} is not a link Datalib opens."),
+        );
+    };
+    let open = app
+        .state::<DataRoot>()
+        .0
+        .lock()
+        .expect("data root lock")
+        .clone();
+    let home = home_dir(app).unwrap_or_default();
+    let known: Vec<PathBuf> =
+        launcher::libraries(&launcher::recents_file(&home), &libraries_dirs(app))
+            .into_iter()
+            .filter(|l| l.found)
+            .map(|l| l.path)
+            .collect();
+    match deep_link::plan(&link, open.as_deref(), &known) {
+        deep_link::Plan::Here => show_link(app, &link),
+        deep_link::Plan::Open(root) => ask_to_open(app, root, open, link),
+        deep_link::Plan::NoSuchLibrary => tell(
+            app,
+            "That link is for another library",
+            "No library on this computer has the id the link names. It may be on another \
+             computer, or deleted."
+                .into(),
+        ),
+        deep_link::Plan::NoneOpen => tell(
+            app,
+            "Open a library first",
+            "The link does not say which library it is from. Open that library, then open \
+             the link again."
+                .into(),
+        ),
+    }
+}
+
+fn show_link(app: &AppHandle, link: &deep_link::Link) {
+    let (Some(launch), Some(window)) = (app_origin(app), app.get_webview_window(MAIN_WINDOW))
+    else {
+        return tell(
+            app,
+            "Datalib is still opening the library",
+            "Open the link again in a moment.".into(),
+        );
+    };
+    if let Some(url) = link_address(&launch, link) {
+        let _ = window.navigate(url);
+        let _ = window.set_focus();
+    }
+}
+
+fn ask_to_open(app: &AppHandle, root: PathBuf, open: Option<PathBuf>, link: deep_link::Link) {
+    let name = launcher::display_name(&root);
+    let message = match &open {
+        Some(open) => format!(
+            "The link is from the library “{name}”. Opening it closes “{}”, whose syncing \
+             stops until you open it again.",
+            launcher::display_name(open)
+        ),
+        None => format!("The link is from the library “{name}”."),
+    };
+    let app = app.clone();
+    app.dialog()
+        .message(message)
+        .title(format!("Open the library “{name}”?"))
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            "Open".into(),
+            "Cancel".into(),
+        ))
+        .show(move |yes| {
+            if !yes {
+                return;
+            }
+            if open.is_some() {
+                if let Err(e) = leave_library(&app) {
+                    return tell(
+                        &app,
+                        "Datalib could not close the open library",
+                        e.to_string(),
+                    );
+                }
+            }
+            tauri::async_runtime::spawn(boot(app, root, false, Some(link)));
+        });
+}
+
+/// Where `link` opens at the server `launch` started.
+fn link_address(launch: &Url, link: &deep_link::Link) -> Option<Url> {
+    deep_link::address(launch.as_str(), link)?.parse().ok()
+}
+
+fn tell(app: &AppHandle, title: &str, message: String) {
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
 }
 
 /// A boot that did not show its library. The main window is still on

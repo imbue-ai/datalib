@@ -87,6 +87,11 @@ pub const SUPERVISOR_DB: &str = "supervisor.sqlite";
 /// advisory, naming the holder so a refused server can say where the
 /// running one is.
 pub const LOCK_FILE: &str = "lock";
+/// This library's id, relative to `system/`: one uuid on one line,
+/// minted the first time a server opens the library and never changed.
+/// A copied `datalib:` link carries it (`datalib/backend/uri/README.md`),
+/// and the desktop app reads it to find which library a link is for.
+pub const LIBRARY_ID_FILE: &str = "library-id";
 /// The packages this root's config lists, unpacked, relative to the
 /// data root: one directory per package, named by its pinned manifest
 /// hash (`docs/dev/packages.md`).
@@ -167,6 +172,10 @@ pub fn remote_media_db(data_root: &Path) -> PathBuf {
 
 pub fn remote_media_dir(data_root: &Path) -> PathBuf {
     system_dir(data_root).join(REMOTE_MEDIA_DIR)
+}
+
+pub fn library_id_file(data_root: &Path) -> PathBuf {
+    system_dir(data_root).join(LIBRARY_ID_FILE)
 }
 
 pub fn lock_file(data_root: &Path) -> PathBuf {

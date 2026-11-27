@@ -59,7 +59,9 @@ group is
 (`datalib_columns::Entity::uri`); a document is `datalib:doc/<uuid>`
 (`datalib_uri::Name::doc`, `ui/src/uri.ts::writeDoc`), and a node of a
 source's tree `datalib:node/<uuid>` (`datalib_uri::Name::node`,
-`ui/src/uri.ts::writeNode`).
+`ui/src/uri.ts::writeNode`). Those three kinds, the library a copied one
+carries, their `/name/` addresses and how the desktop app opens one are
+in [`datalib/backend/uri/README.md`](../../datalib/backend/uri/README.md).
 
 Two functions in `datalib_etl_render::message` write every chip link
 the backend writes, so the escaping lives in one place:
@@ -388,11 +390,11 @@ from the cell alone, and a new search shows the new title.
   the row does.
 - **right-click**: Open “<title>”; Copy ID (the uuid), the title, or
   Copy title and link, which puts a link on the clipboard —
-  `<a href="datalib:doc/<uuid>">Captain's log</a>` for whatever pastes
-  rich text, `Captain's log (datalib:doc/<uuid>)` as plain text. The
-  href is the document's name, which Datalib reads; no app registers
-  the scheme, so outside Datalib it is a name, not a link that opens
-  anything. The rest of the title
+  `<a href="datalib:doc/<uuid>?library=<id>">Captain's log</a>` for
+  whatever pastes rich text, `Captain's log (datalib:doc/<uuid>?library=<id>)`
+  as plain text. The link carries the library it is in, and the desktop
+  app opens it from any other app
+  ([`datalib/backend/uri/README.md`](../../datalib/backend/uri/README.md)). The rest of the title
   bar's menu (`documentMenu.ts`: open at the source, copy as Markdown) needs the
   document itself, which a chip does not hold.
 - **drag**: it drags as a link, with no search

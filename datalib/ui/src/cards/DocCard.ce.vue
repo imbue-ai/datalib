@@ -22,6 +22,7 @@ import {
 } from "@/api";
 import { useApi } from "@/cards/cardApi";
 import { copyToClipboard } from "@/clipboard";
+import { outsideLink } from "@/outsideLink";
 import { oneAtATime, subscribeLive } from "@/live";
 import ChatBody from "./ChatBody.ce.vue";
 import { absoluteRemote, type RemoteRef } from "./remoteMedia";
@@ -422,7 +423,7 @@ async function onDocAction(id: DocumentAction) {
       if (doc.source_ref) props.ctx.host.openCards(sourceSource({ group: doc.source_ref.id }));
       return;
     case "copy-link":
-      return copy(documentLink(doc), "the link");
+      return copy(outsideLink(documentLink(doc)), "the link");
     case "copy-id":
       return copy(doc.markdown_uuid);
     case "copy-name":

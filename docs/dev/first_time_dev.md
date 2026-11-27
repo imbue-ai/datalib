@@ -114,8 +114,9 @@ Skipping Bazel skips that cache.
 
 Runs:
 - Rust unit tests (`//datalib/backend/{schema,core,etl,http}:*_unittests`)
-- Cross-language deeplink fixture test (Rust loads the same JSON the Vitest
-  suite loads, asserting both implementations agree)
+- Cross-language link fixture test (`datalib_uri`'s tests and the Vitest
+  suite read the same `ui/tests/uri-fixtures.json`, so the Rust and
+  TypeScript readers of a `datalib:` name agree)
 - Playwright e2e suite (`//datalib/ui:e2e_test`) — not hermetic: under
   `bazel test` it runs from the `rules_js`-linked `node_modules` and a
   Bazel-managed Node, but the browsers come from Playwright's cache under

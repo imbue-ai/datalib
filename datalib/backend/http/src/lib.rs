@@ -41,6 +41,7 @@ mod embed;
 pub mod frontend;
 pub mod history;
 pub mod library_bin;
+pub mod library_id;
 pub mod lock;
 pub mod logging;
 pub mod loop_guard;
@@ -163,6 +164,9 @@ pub struct Health {
     /// can tell a coding agent where to read it (see `handoff.ts`);
     /// reaching this response already required holding the token.
     pub token_file: String,
+    /// The library's id (`library_id`), which a copied `datalib:` link
+    /// carries. `None` only for a state no boot built.
+    pub library_id: Option<String>,
     /// A latchkey run from a person's terminal signs in to `~/.latchkey`,
     /// not this library, so the wizard offers no command to run.
     pub protected_library: bool,
@@ -369,6 +373,7 @@ async fn health(State(s): State<AppState>) -> Json<Health> {
         root: s.root.display().to_string(),
         root_exists: s.root.exists(),
         token_file: s.api_token.token_file().display().to_string(),
+        library_id: crate::library_id::read(&s.root).ok().flatten(),
         protected_library: protected_library(),
     })
 }

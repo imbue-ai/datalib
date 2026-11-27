@@ -34,6 +34,18 @@ rust_test(
     ],
 )
 
+# Same arrangement for `src/deep_link.rs`: what a `datalib:` link another
+# app opened asks for, which library it is in, and the address it opens.
+# Nothing in it may reference `tauri`.
+rust_test(
+    name = "deep_link_test",
+    size = "small",
+    srcs = ["src/deep_link.rs"],
+    crate_root = "src/deep_link.rs",
+    edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
+)
+
 # Same arrangement for `src/zoom.rs`: the View menu's zoom levels and
 # the file the level is kept in. Nothing in it may reference `tauri`.
 rust_test(

@@ -1158,6 +1158,18 @@ impl IndexRepo for DoltRepo {
         }
     }
 
+    async fn node(&self, uuid: &str) -> Result<Option<places::Node>, RepoError> {
+        let Some(mut at) = self.pinned().await? else {
+            return Ok(None);
+        };
+        places::NODE_SQL
+            .query_as()
+            .bind(uuid)
+            .fetch_optional(&mut *at.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("read the node {uuid}: {e}")))
+    }
+
     async fn sources_with_places(&self) -> Result<Vec<String>, RepoError> {
         let Some(mut at) = self.pinned().await? else {
             return Ok(Vec::new());

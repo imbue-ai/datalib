@@ -113,6 +113,10 @@
                                                   (`packages.md`)
 <data_root>/system/latchkey/                      a protected library's sign-ins, latchkey's
                                                   own files (`datalib/tauri/README.md`)
+<data_root>/system/library-id                     the library's uuid, minted by the first
+                                                  server to open it and never changed; a
+                                                  copied `datalib:` link carries it
+                                                  (`datalib/backend/uri/README.md`)
 <data_root>/system/library-summary.json           source count, bytes on disk and the last
                                                   sync's end, for the desktop app's list of
                                                   libraries; datalib-http rewrites it when

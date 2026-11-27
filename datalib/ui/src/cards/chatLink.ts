@@ -3,6 +3,7 @@
 // document card decides where each goes. Also the link a 🔗 button
 // copies.
 
+import { outsideLink } from "@/outsideLink";
 import { writeDoc } from "@/uri";
 
 // Accepts the three internal-link shapes our renderers emit:
@@ -94,7 +95,8 @@ export function chatSectionFromHref(href: string): string | null {
  *  the message in it the button names, with the document's title. */
 export function linkOfButton(btn: HTMLElement, markdownUuid: string, title = ""): string {
   const uuid = btn.dataset.uuid ?? "";
-  return writeDoc({ page: markdownUuid, section: uuid === markdownUuid ? null : uuid }, title);
+  const section = uuid === markdownUuid ? null : uuid;
+  return outsideLink(writeDoc({ page: markdownUuid, section }, title));
 }
 
 /** A 🔗 button inside a copied selection becomes the link it copies,

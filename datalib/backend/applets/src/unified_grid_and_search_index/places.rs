@@ -1,13 +1,14 @@
 //! `GET /places/{parent}`: the places directly in a place, or at the top
 //! of a source (`source:<id>`), a page at a time
 //! ([`datalib_unified_grid_and_search_index::places`]); and
-//! `GET /sources_with_places`, which sources hold any.
+//! `GET /sources_with_places`, which sources hold any; and
+//! `GET /node/{uuid}`, one node by its uuid.
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
 use base64::Engine as _;
-use datalib_unified_grid_and_search_index::places::{Key, Parent, Place, PlacesPage};
+use datalib_unified_grid_and_search_index::places::{Key, Node, Parent, Place, PlacesPage};
 use serde::{Deserialize, Serialize};
 
 use super::Index;
@@ -57,6 +58,21 @@ pub async fn handler(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("list the places in {parent}: {e}"),
         )),
+    }
+}
+
+/// `GET /node/{uuid}`: the node a `datalib:node/…` link names, or 404.
+pub async fn node_handler(
+    State(s): State<Index>,
+    Path(uuid): Path<String>,
+) -> Result<Json<Node>, Refusal> {
+    match s.repo.node(&uuid).await {
+        Ok(Some(node)) => Ok(Json(node)),
+        Ok(None) => Err(refuse(
+            StatusCode::NOT_FOUND,
+            format!("this library has no node {uuid}"),
+        )),
+        Err(e) => Err(refuse(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
 }
 

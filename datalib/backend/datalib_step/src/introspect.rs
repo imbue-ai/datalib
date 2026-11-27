@@ -356,7 +356,7 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
             path = s.path,
             size = s.bytes.map(human_bytes).unwrap_or_default(),
             count = s.items.map(|n| plural(n, s.counts())).unwrap_or_default(),
-            // The full uuid is on the span for the deeplink and the
+            // The full uuid is on the span for the `datalib:doc` link and the
             // copy button; the cell shows the head of it, which is what
             // a person compares against a grid row.
             short = &uuid[..8.min(uuid.len())],
