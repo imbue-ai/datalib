@@ -201,7 +201,7 @@ impl<'a> Batch<'a> {
     /// did not, what is open is rolled back: the failure may have struck
     /// between two writes that belong together. Either way the store's
     /// one connection is free after.
-    pub async fn settle(self, result: Result<()>) -> Result<()> {
+    pub async fn finish_or_roll_back(self, result: Result<()>) -> Result<()> {
         match result {
             Ok(()) => self.finish().await,
             Err(e) => {

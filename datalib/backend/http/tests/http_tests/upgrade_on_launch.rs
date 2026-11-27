@@ -347,7 +347,7 @@ async fn a_sync_waits_only_for_the_steps_the_pass_has_not_reached() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    while supervisor_store.load_record().await.unwrap().steps["a/ingest"].waiting_for
+    while supervisor_store.load_state().await.unwrap().steps["a/ingest"].waiting_for
         != Some(WaitKind::Prepare)
     {
         assert!(

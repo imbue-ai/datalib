@@ -1993,7 +1993,7 @@ pub fn now_split() -> (String, Option<String>) {
     (utc, Some(offset))
 }
 
-/// Record the process and apply retention.
+/// LoopState the process and apply retention.
 async fn begin(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     if insert_process(&mut tx, &scope.process).await? {

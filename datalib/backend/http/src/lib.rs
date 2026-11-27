@@ -820,7 +820,7 @@ fn load_dag_config(path: &std::path::Path) -> anyhow::Result<datalib_dag::config
 fn source_ids(checked: &datalib_dag::config::ConfigCheck) -> Vec<String> {
     checked
         .graph
-        .fringe_ids()
+        .ids_without_inputs()
         .into_iter()
         .map(str::to_string)
         .collect()
@@ -1002,7 +1002,7 @@ async fn get_config(State(s): State<AppState>) -> Json<ConfigResponse> {
 
 async fn rerun_offer(graph: &datalib_dag::Graph, sync: &supervisor::SyncControl) -> Vec<String> {
     let record = match sync.supervisor_store().await {
-        Ok(store) => store.load_record().await,
+        Ok(store) => store.load_state().await,
         Err(e) => Err(e),
     };
     match record {
@@ -1389,7 +1389,7 @@ pub struct DagSnapshot {
     pub states: std::collections::BTreeMap<String, String>,
     /// step id → its row in the loop's `steps` table: its state now, what
     /// it did the last time a request reached it, when it last succeeded.
-    pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRecord>,
+    pub steps: std::collections::BTreeMap<String, datalib_dag::supervisor::record::StepRow>,
     /// step id → what its newest invocation has reported.
     pub progress: std::collections::HashMap<String, DagStepProgress>,
     /// step id → what it last reported of its problems, and the streaming
@@ -1455,7 +1455,7 @@ pub async fn dag_snapshot(
 
     let problems = manage::counts_by_step(
         &datalib_runs::latest_metric(root, datalib_problems::METRIC).await?,
-        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PASSES).await?,
+        &datalib_runs::latest_metric(root, datalib_metrics::FAILED_PROCESSES).await?,
     );
     // Read-only, from the index and the mutes store (problem_mutes/README.md).
     let problem_rows = datalib_problem_mutes::counts(root)
@@ -1505,11 +1505,11 @@ pub async fn dag_snapshot(
 async fn record_and_requests(
     store: &datalib_dag::supervisor::store::Store,
 ) -> anyhow::Result<(
-    datalib_dag::supervisor::record::Record,
+    datalib_dag::supervisor::record::LoopState,
     Vec<datalib_dag::supervisor::store::RequestRow>,
     Option<datalib_dag::supervisor::store::RequestRow>,
 )> {
-    let record = store.load_record().await?;
+    let record = store.load_state().await?;
     let open = store.open_requests().await?;
     let newest = match open.is_empty() {
         true => store.recent_requests(1).await?.into_iter().next(),
@@ -1522,7 +1522,7 @@ async fn record_and_requests(
 /// blocked now, or how its last outcome ended when that outcome was for
 /// this request. A step the request has not reached has no entry.
 fn states_for(
-    record: &datalib_dag::supervisor::record::Record,
+    record: &datalib_dag::supervisor::record::LoopState,
     request: &str,
 ) -> std::collections::BTreeMap<String, String> {
     use datalib_dag::supervisor::tick::StateKind;
@@ -1872,7 +1872,7 @@ async fn request_open(
     // it for the next sync, so the wait is bounded.
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
     for id in &opened {
-        while !store.taken_on(id).await.map_err(internal)? {
+        while !store.serving_started(id).await.map_err(internal)? {
             if tokio::time::timeout_at(deadline, listener.next())
                 .await
                 .is_err()

@@ -974,5 +974,5 @@ serving it. A step stopped with its request reads Stopping until its
 process has exited. `POST /api/requests`
 opens one request per group its roots belong to, so each source's sync
 has a Stop of its own, and answers only once some step's `requests`
-column names each new request or it has closed (`Store::taken_on`), so the rows read
+column names each new request or it has closed (`Store::serving_started`), so the rows read
 after a Sync already show them.

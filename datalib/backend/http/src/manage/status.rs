@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
-use datalib_dag::supervisor::record::StepRecord;
+use datalib_dag::supervisor::record::StepRow;
 use datalib_dag::supervisor::tick::StateKind;
 use datalib_dag::{Diagnostic, Severity};
 
@@ -118,7 +118,7 @@ pub fn dropped_detail(d: &Diagnostic) -> String {
 /// reading "Up to date" from last week, for an entry no longer in the
 /// graph, is what #209 was about. `open` are the requests open now.
 pub fn step_status(
-    step: Option<&StepRecord>,
+    step: Option<&StepRow>,
     open: &BTreeSet<String>,
     dropped: Option<&Diagnostic>,
 ) -> StatusView {
@@ -210,8 +210,8 @@ mod tests {
     const ENDED: &str = "2026-09-01T10:00:09+02:00";
     const YESTERDAY: &str = "2026-08-31T09:00:00+02:00";
 
-    fn succeeded_yesterday() -> StepRecord {
-        StepRecord {
+    fn succeeded_yesterday() -> StepRow {
+        StepRow {
             last_invocation: Some(LastInvocation {
                 invocation_id: "i0".into(),
                 requests: vec!["r0".into()],
@@ -227,8 +227,8 @@ mod tests {
         }
     }
 
-    fn at(state: StateKind, detail: Option<&str>) -> StepRecord {
-        StepRecord {
+    fn at(state: StateKind, detail: Option<&str>) -> StepRow {
+        StepRow {
             state: Some(state),
             state_detail: detail.map(str::to_string),
             ..succeeded_yesterday()

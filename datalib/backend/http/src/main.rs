@@ -167,7 +167,7 @@ async fn main() -> anyhow::Result<()> {
     // needs the person, their library and their sources. A root with no
     // config gets the first-run screen there instead.
     let url = format!("{base_url}/?token={}", api_token.value());
-    // Record where we ended up, so a later would-be owner's refusal can
+    // LoopState where we ended up, so a later would-be owner's refusal can
     // point at this server instead of just saying "taken".
     root_lock.write_url(&base_url);
     tracing::info!("datalib-http listening on {base_url}");
