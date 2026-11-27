@@ -514,18 +514,15 @@ async fn put_source_contacts(
         conn,
         sql_id!("etl.render.grid.upsert_source_contacts"),
         "INSERT OR REPLACE INTO source_contacts \
-         (markdown_uuid, contact_key, source_id, name, seen_items, last_seen_at, contact_json)",
-        7,
+         (markdown_uuid, contact_key, source_id, name, contact_json)",
+        5,
         "",
         &records,
         |q, (md, c, json)| {
-            let seen = c.seen.as_ref();
             q.bind(*md)
                 .bind(&c.key)
                 .bind(&c.source_id)
                 .bind(c.name())
-                .bind(seen.map_or(0, |s| s.items as i64))
-                .bind(seen.and_then(|s| s.last_at.as_deref()))
                 .bind(json)
         },
     )
@@ -693,17 +690,13 @@ mod tests {
         md
     }
 
-    fn person(key: &str, name: &str, items: u64) -> NormalizedContact {
+    fn person(key: &str, name: &str) -> NormalizedContact {
         let mut c = NormalizedContact::new("src", key, ContactKind::Person);
         c.names = vec![name.to_string()];
         c.handles = vec![
             ContactHandle::email(None, format!("{key}@enterprise.org")),
             ContactHandle::phone(None, "(907) 555-0142"),
         ];
-        c.seen = Some(datalib_contact_schema::Seen {
-            items,
-            last_at: Some("2369-01-01".into()),
-        });
         c
     }
 
@@ -731,7 +724,7 @@ mod tests {
     /// the page drops.
     fn earlier() -> Vec<RenderedMarkdown> {
         let mut a = with_messages("src", "md-a", &["a-1", "a-stale"]);
-        a.contacts = vec![person("riker", "Will Riker", 1)];
+        a.contacts = vec![person("riker", "Riker")];
         vec![
             a,
             with_messages("src", "md-old", &["moving"]),
@@ -745,7 +738,7 @@ mod tests {
     fn page() -> Vec<RenderedMarkdown> {
         let mut a = with_messages("src", "md-a", &["a-1", "a-2"]);
         a.rows[1].author = Some("a changed author".into());
-        a.contacts = vec![person("riker", "Will Riker", 3)];
+        a.contacts = vec![person("riker", "Will Riker")];
         a.edges = vec![EdgeRow {
             edge_uuid: "e-1".into(),
             src_markdown_uuid: "md-a".into(),
@@ -756,10 +749,7 @@ mod tests {
             kind: 1,
         }];
         let mut b = with_messages("src", "md-b", &["b-1"]);
-        b.contacts = vec![
-            person("riker", "Will Riker", 5),
-            person("troi", "Deanna Troi", 2),
-        ];
+        b.contacts = vec![person("riker", "Will Riker"), person("troi", "Deanna Troi")];
         b.data_nodes = vec![node("md-b", "n-bridge")];
         b.filings = vec![FilingRow::new("md-b", "b-1", "n-bridge")];
         let c = with_messages("src", "md-c", &["moving"]);

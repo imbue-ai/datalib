@@ -114,22 +114,12 @@ async fn rows_in(at: &mut At, uuids: &[String]) -> Result<Vec<SearchRow>, RepoEr
 }
 
 /// Each record of a person holding one of the handles in the JSON array
-/// `?1`, with what they wrote over every document that carries it.
+/// `?1`.
 pub const PEOPLE_SQL: Sql = sql!(
     "unified_grid_and_search_index.list_people_by_handles",
     "\
-    WITH seen AS MATERIALIZED ( \
-      SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
-             SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
-        FROM document_contacts INDEXED BY document_contacts_by_record \
-       WHERE record_id IN ( \
-         SELECT record_id FROM contact_record_handles \
-           INDEXED BY contact_record_handles_by_handle \
-          WHERE handle IN (SELECT value FROM json_each(?1))) \
-       GROUP BY record_id) \
-    SELECT h.handle, r.contact_json, s.items, s.last_at, s.credit \
+    SELECT h.handle, r.record_id, r.source_id, r.contact_json \
       FROM contact_record_handles h INDEXED BY contact_record_handles_by_handle \
-      JOIN seen s ON s.record_id = h.record_id \
       JOIN contact_records r ON r.record_id = h.record_id \
      WHERE h.handle IN (SELECT value FROM json_each(?1)) \
      ORDER BY h.handle, h.record_id"
@@ -144,16 +134,9 @@ pub const SAME_DIGITS_SQL: Sql = sql!(
     WITH written AS MATERIALIZED ( \
       SELECT record_id, digits FROM contact_record_numbers \
         INDEXED BY contact_record_numbers_by_last_digits \
-       WHERE substr(digits, -7) IN (SELECT value FROM json_each(?1))), \
-    seen AS MATERIALIZED ( \
-      SELECT record_id, SUM(seen_items) AS items, MAX(last_seen_at) AS last_at, \
-             SUM(MAX(COALESCE(seen_items, 0), 1)) AS credit \
-        FROM document_contacts INDEXED BY document_contacts_by_record \
-       WHERE record_id IN (SELECT record_id FROM written) \
-       GROUP BY record_id) \
-    SELECT w.digits AS handle, r.contact_json, s.items, s.last_at, s.credit \
+       WHERE substr(digits, -7) IN (SELECT value FROM json_each(?1))) \
+    SELECT w.digits AS handle, r.record_id, r.source_id, r.contact_json \
       FROM written w \
-      JOIN seen s ON s.record_id = w.record_id \
       JOIN contact_records r ON r.record_id = w.record_id \
      ORDER BY w.digits, w.record_id"
 );
@@ -175,7 +158,7 @@ pub const FULL_NUMBERS_SQL: Sql = sql!(
 pub const CONTACT_PAGES_SQL: Sql = sql!(
     "unified_grid_and_search_index.list_people_of_contact_pages",
     "\
-    SELECT g.uuid AS handle, r.contact_json, NULL AS items, NULL AS last_at, 1 AS credit \
+    SELECT g.uuid AS handle, r.record_id, r.source_id, r.contact_json \
       FROM grid_rows g \
       JOIN document_contacts d ON d.markdown_uuid = g.markdown_uuid \
       JOIN contact_records r ON r.record_id = d.record_id \
@@ -183,14 +166,52 @@ pub const CONTACT_PAGES_SQL: Sql = sql!(
        AND g.uuid = g.markdown_uuid AND g.contact IS NOT NULL"
 );
 
+/// Each record in the JSON array `?1`: what its first name is credited
+/// with, which is the grid's rows its handles wrote in each document that
+/// carries it and at least one for a document they wrote nothing in; and
+/// whether a contact's own page carries it.
+pub const RECORD_WEIGHTS_SQL: Sql = sql!(
+    "unified_grid_and_search_index.weigh_people",
+    "\
+    SELECT d.record_id, \
+           SUM(MAX(1, (SELECT count(*) FROM contact_record_handles h \
+                         JOIN grid_rows g INDEXED BY grid_rows_by_author \
+                           ON g.author_handle = h.handle AND g.source_id = r.source_id \
+                          AND g.markdown_uuid = d.markdown_uuid \
+                        WHERE h.record_id = d.record_id))) AS credit, \
+           MAX(d.page) AS about \
+      FROM document_contacts d INDEXED BY document_contacts_by_record \
+      JOIN contact_records r ON r.record_id = d.record_id \
+     WHERE d.record_id IN (SELECT value FROM json_each(?1)) \
+     GROUP BY d.record_id"
+);
+
+/// How many rows each handle in the JSON array `?1` wrote in each source
+/// in `?2`, and its newest: the one count of what someone wrote, which
+/// `from:` finds too.
+pub const AUTHORED_SQL: Sql = sql!(
+    "unified_grid_and_search_index.count_rows_by_author",
+    "\
+    SELECT author_handle, source_id, count(*) AS n, MAX(created_at_utc) AS last_at \
+      FROM grid_rows INDEXED BY grid_rows_by_author \
+     WHERE author_handle IN (SELECT value FROM json_each(?1)) \
+       AND source_id IN (SELECT value FROM json_each(?2)) \
+     GROUP BY author_handle, source_id"
+);
+
 #[derive(sqlx::FromRow)]
 struct PersonRecord {
     handle: String,
+    record_id: i64,
+    source_id: String,
     contact_json: String,
-    /// Null when no document counts what they wrote.
-    items: Option<i64>,
-    last_at: Option<String>,
-    credit: i64,
+}
+
+/// A record as read, its person parsed.
+struct Read {
+    handle: String,
+    record_id: i64,
+    contact: NormalizedContact,
 }
 
 fn json_array(values: &[String]) -> Result<String, RepoError> {
@@ -221,7 +242,10 @@ async fn add_subject_people<'r>(
     let found: Vec<(String, String, Option<String>, Option<i64>)> = match sql!(
         "unified_grid_and_search_index.list_subject_people", // A document's own row has the document's uuid; its supplied
         // terms are `[kind, value]` pairs.
-        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), MAX(d.seen_items) \
+        "SELECT g.uuid, json_extract(t.value, '$[1]') AS person, MAX(r.name), \
+                (SELECT count(*) FROM grid_rows a INDEXED BY grid_rows_by_author \
+                  WHERE a.author_handle = json_extract(t.value, '$[1]') \
+                    AND a.source_id = g.source_id AND a.markdown_uuid = g.uuid) \
            FROM grid_rows g, json_each(g.supplied_terms) t \
            LEFT JOIN contact_record_handles h ON h.handle = json_extract(t.value, '$[1]') \
            LEFT JOIN document_contacts d \
@@ -703,11 +727,7 @@ fn grouping<R>(
 
 impl At {
     /// The records `sql` reads for the strings in `of`.
-    async fn person_records(
-        &mut self,
-        sql: Sql,
-        of: &[String],
-    ) -> Result<Vec<crate::people::HandleRow>, RepoError> {
+    async fn person_records(&mut self, sql: Sql, of: &[String]) -> Result<Vec<Read>, RepoError> {
         if of.is_empty() {
             return Ok(Vec::new());
         }
@@ -719,24 +739,87 @@ impl At {
             .map_err(|e| RepoError::Internal(format!("read people: {e}")))?;
         rows.into_iter()
             .map(|row| {
-                let mut contact: NormalizedContact = serde_json::from_str(&row.contact_json)
-                    .map_err(|e| {
+                let contact: NormalizedContact =
+                    serde_json::from_str(&row.contact_json).map_err(|e| {
                         RepoError::Internal(format!(
                             "a source contact for {} will not read: {e}",
                             row.handle
                         ))
                     })?;
-                contact.seen = row.items.map(|items| Seen {
-                    items: items.max(0) as u64,
-                    last_at: row.last_at,
-                });
-                Ok(crate::people::HandleRow {
+                if contact.source_id != row.source_id {
+                    return Err(RepoError::Internal(format!(
+                        "record {} is filed under {} but says {}",
+                        row.record_id, row.source_id, contact.source_id
+                    )));
+                }
+                Ok(Read {
                     handle: row.handle,
+                    record_id: row.record_id,
                     contact,
-                    credit: row.credit.max(0) as u64,
                 })
             })
             .collect()
+    }
+
+    /// What the grid's rows say of `records`: each one's credit and whether
+    /// a contact's page carries it, and how much each of their handles
+    /// wrote in their source.
+    async fn weigh(
+        &mut self,
+        records: Vec<Vec<Read>>,
+    ) -> Result<(Vec<Vec<crate::people::HandleRow>>, crate::people::Authored), RepoError> {
+        use std::collections::{BTreeSet, HashMap};
+        let all = || records.iter().flatten();
+        fn encode<T: serde::Serialize>(values: &BTreeSet<T>) -> Result<String, RepoError> {
+            serde_json::to_string(values).map_err(|e| RepoError::Internal(format!("encode: {e}")))
+        }
+        let ids: BTreeSet<i64> = all().map(|r| r.record_id).collect();
+        let weights: HashMap<i64, (i64, bool)> = RECORD_WEIGHTS_SQL
+            .query_as::<(i64, i64, bool)>()
+            .bind(encode(&ids)?)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("weigh people: {e}")))?
+            .into_iter()
+            .map(|(id, credit, about)| (id, (credit, about)))
+            .collect();
+        let handles: BTreeSet<String> = all()
+            .flat_map(|r| &r.contact.handles)
+            .filter_map(|h| h.handle.as_ref().map(|h| h.as_str().to_string()))
+            .collect();
+        let sources: BTreeSet<String> = all().map(|r| r.contact.source_id.clone()).collect();
+        let wrote: Vec<(String, String, i64, Option<String>)> = AUTHORED_SQL
+            .query_as()
+            .bind(encode(&handles)?)
+            .bind(encode(&sources)?)
+            .fetch_all(&mut *self.tx)
+            .await
+            .map_err(|e| RepoError::Internal(format!("count what people wrote: {e}")))?;
+        let authored: crate::people::Authored = wrote
+            .into_iter()
+            .map(|(handle, source, n, last_at)| {
+                let items = n.max(0) as u64;
+                ((handle, source), Seen { items, last_at })
+            })
+            .collect();
+        let rows = records
+            .into_iter()
+            .map(|set| {
+                set.into_iter()
+                    .map(|r| {
+                        let (credit, about) =
+                            weights.get(&r.record_id).copied().unwrap_or((0, false));
+                        crate::people::HandleRow {
+                            handle: r.handle,
+                            credit: credit.max(0) as u64,
+                            about,
+                            contact: r.contact,
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok((rows, authored))
     }
 
     /// Every full number a source knows ending in one of `last_digits`.
@@ -1646,11 +1729,16 @@ impl IndexRepo for DoltRepo {
             .collect();
         let ends: Vec<String> = ends.into_iter().collect();
         let full_numbers = at.full_numbers(&ends).await?;
+        let (weighed, authored) = at.weigh(vec![holding, same_digits, pages]).await?;
+        let [holding, same_digits, pages]: [Vec<crate::people::HandleRow>; 3] = weighed
+            .try_into()
+            .map_err(|_| RepoError::Internal("weighed three sets of people".into()))?;
         Ok(crate::people::PeopleRows {
             holding,
             same_digits: crate::people::for_each_number(&numbers, same_digits),
             pages,
             full_numbers,
+            authored,
         })
     }
 
