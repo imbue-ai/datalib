@@ -26,13 +26,25 @@ driver, the generators, and the tests over the result.
 | see the corpus in the app | `bazelisk run //datalib:dev_tng` ([`first_time_dev.md`](../../docs/dev/first_time_dev.md) §"Quickest first run") |
 | build the synced corpus | `bazelisk build //tests/fixtures:ingested_tng` |
 | sync it from scratch and check it | `bazelisk test //tests/fixtures:ingested_tng_test` |
+| sync the library `dev_tng` opens | `bazelisk test //tests/fixtures:tng_library_test` |
 
-`dev_tng` builds a data root from the corpus in a temporary directory
+`dev_tng` lays the corpus down as a library in a temporary directory
 and opens the app on it, with Picard's curated contacts and mutes
-([`curated/`](curated/)) in its contacts app. Browsing, search and
-curating work. Syncing a source
-does not: the root holds the rendered documents but not the raw stores
-they came from.
+([`curated/`](curated/)) in its contacts app. Browsing, search,
+curating and syncing all work. The library is the synced corpus with
+every source's raw stores, in two kinds:
+
+- **Synced.** A source that reads files where they lie (the table below
+  says "files") reads a copy of them under the library's `inputs/`
+  folder, so a sync really reads them again.
+- **Kept.** Every other source stands in for a service or is built from
+  a spec, and nothing outside the fixture build can replay that. Its
+  download is turned off (`common.download = false`), and it publishes
+  what its raw store already holds, as a source whose upstream is gone
+  does in a person's library.
+
+The library has no record of having run anything, so the first sync
+runs every step, and each finds nothing new.
 
 ## Conventions
 
@@ -184,7 +196,8 @@ it name its index themselves. One source is synced this way:
 | `rendered.tar` | every source's render tree: markdown, render stores, blobs |
 | `rendered_md.tar` | the markdown alone, for the UI's render preview |
 | `time_series.tar` | the time-series stores and their index |
-| `config_body.toml` | every source as a render-only group, for `materialize_tng_root` |
+| `config_body.toml` | the library's config: every source, the fan-ins and the embeds, with `@INPUTS@` where `materialize_tng_root` writes where the inputs are |
+| `library.tar` | every source's raw stores, and the copies of the files the synced sources read |
 | `sql_scans.jsonl` | every statement the sync ran, and whether its plan walks a whole table or index, for `sql_scans_test` |
 
 Three more genrules build the search index over it, in steps that Bazel

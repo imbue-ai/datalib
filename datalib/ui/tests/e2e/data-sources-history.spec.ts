@@ -1,8 +1,9 @@
 // Right-click a row on the Manage screen → "Show commit history" → a
 // card beside it with the store's dolt_log as a tree: the store, its
-// commits, and under each commit the tables it left behind. The fixture root's render
-// stores are real doltlite stores with real commits, so the rows here are
-// read from Slack's.
+// commits, and under each commit the tables it left behind. The fixture
+// library's stores are real doltlite stores with real commits, so the rows
+// here are read from Slack's: its download's store, synced twice, and its
+// render's.
 
 import { test, expect } from "@playwright/test";
 import {
@@ -37,9 +38,11 @@ test("a group's commit history opens from the context menu as a card", async ({ 
   // the shape that has collapsed to 2px in WebKit before.
   await expectGridPainted(card.locator(".slickgrid-container"), "commit history grid");
 
-  // The store leads, open, with its commits under it.
-  const store = rows.filter({ has: page.locator(".hc-store") }).first();
-  await expect(store).toContainText("indexed_markdown.doltlite_db");
+  // The download's store leads, open, with its commits under it, and the
+  // render's follows.
+  const stores = rows.filter({ has: page.locator(".hc-store") });
+  await expect(stores.first()).toContainText("slack/ingest");
+  await expect(stores.filter({ hasText: "indexed_markdown.doltlite_db" })).toHaveCount(1);
   const commit = rows.filter({ hasText: "document(s)" }).first();
   await expect(commit.locator(".hc-copy-id")).toHaveAttribute("title", /\(([0-9a-f]{40})\)$/);
   // The fixture is built by `datalib-pipeline`, so its commits carry the run
@@ -90,9 +93,8 @@ test("an applet row leaves out what an applet cannot do", async ({ page }) => {
   await expect(menuEntry(page, "Show commit history")).toHaveCount(0);
 });
 
-/// "Compare two versions…" opens the same card, set up to compare. The
-/// fixture root renders from a cached ingest and keeps no raw store, so
-/// what it sets up is the reason there is nothing to compare yet.
+/// "Compare two versions…" opens the same card, set up to compare what
+/// the last sync changed: the newest two commits of the download's store.
 test("Compare two versions opens the history ready to compare", async ({ page }) => {
   await page.goto("/data_sources");
   await expect(page.getByRole("button", { name: "Sync everything" })).toBeVisible();
@@ -104,16 +106,17 @@ test("Compare two versions opens the history ready to compare", async ({ page })
 
   const card = shownCards(page).filter({ has: page.locator(".hc") });
   await expect(card).toBeVisible({ timeout: 10_000 });
-  await expect(card.locator(".hc-compare")).toContainText("This source has no synced data yet.");
+  await expect(card.locator(".hc-compare")).toContainText("→");
+  await expect(card.getByRole("button", { name: "Create comparison" })).toBeVisible();
   await card.getByRole("button", { name: "Cancel" }).click();
   await expect(card.locator(".hc-compare")).toHaveCount(0);
 });
 
 /// Creating a comparison writes it to the config and asks for its first
-/// sync. The fixture's Slack has no download step, so the history is
-/// served here with two commits of one, and the save and the sync are
-/// answered here too: the server would refuse a comparison of a source
-/// with no download, and a sync would render commits that do not exist.
+/// sync. The history is served here with two commits of its own, and the
+/// save and the sync are answered here too, so the spec checks what the
+/// card sends without rewriting the shared library's config or rendering
+/// a comparison of commits that do not exist.
 test("Compare two versions writes a comparison of the two commits and syncs it", async ({
   page,
 }) => {

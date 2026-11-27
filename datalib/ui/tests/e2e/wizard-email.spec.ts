@@ -9,6 +9,7 @@ import {
   MANAGE_WITH_CONFIG,
   savedConfig,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 import { probeAsk, probeDone, reportFor, type ProbeAsk } from "./probe-stub";
 
@@ -193,7 +194,7 @@ test.afterEach(async ({ page }) => {
   await openManager(page);
   await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 });
 
 test("Gmail and Fastmail are separate tiles over one step type", async ({ page }) => {
@@ -320,7 +321,7 @@ test("the render filter is offered folders, never flags", async ({ page }) => {
 
   await tick(page, "Render only these labels", "Inbox");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Bridge mail.")).toBeVisible();
+  await expect(page.getByText("Added Bridge mail.")).toBeVisible({ timeout: SAVE_ANSWERED });
   await expandGroup(page, "bridge-mail");
   await expect(
     page.locator('.tg-grid .slick-row[data-key="bridge-mail/render_markdown"]'),
@@ -402,7 +403,7 @@ test("an existing source reopens on the form that wrote it", async ({ page }) =>
   await pickTile(page, "fastmail", "Copy a Fastmail mailbox over JMAP.");
   await field(page, "Name").fill("Personal mail");
   await wizard(page).getByRole("button", { name: "Add source" }).click();
-  await expect(page.getByText("Added Personal mail.")).toBeVisible();
+  await expect(page.getByText("Added Personal mail.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // Not "Email (mbox or JMAP)": the ingest step's own params say
   // which variant it is, and a preset with no field — on either step —

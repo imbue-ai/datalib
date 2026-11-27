@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
-# Materialize a datalib data root from the bazel-built TNG fixture.
+# Lay down the TNG library: a data root built from the bazel-built TNG
+# fixture, synced and ready to sync again.
 #
 # Single source of truth for the on-disk layout shared between:
 #   * `bazelisk run //datalib:dev_tng`           (datalib/dev_tng.sh)
 #   * `bazelisk test //datalib/ui:e2e_test`      (run_e2e.sh → playwright)
 #
 # Produces, under <out-root>:
-#   <stanza>/render_markdown/...       Conversation markdown trees (from rendered.tar).
-#   <stanza>/ingest/blobs.sqlite       the blob store its pages link attachments in
-#                                      (from rendered.tar; no raw store beside it).
+#   <stanza>/render_markdown/...       each source's render store (from rendered.tar).
+#   <stanza>/ingest/...                its raw stores, the blob store its pages
+#                                      link attachments in among them
+#                                      (from library.tar).
+#   inputs/<stanza>/...                the files a file-reading source reads
+#                                      (from library.tar).
 #   unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite  the plain SQLite grid index the
 #                                      backend reads, with the search index's
 #                                      tables (`:ingested_tng_search_index`).
@@ -19,12 +23,19 @@
 #   <stanza>/render_time_series/...    each time-series source's store, and
 #   unified_time_series_index/time_series_index/...  the index over them
 #                                      (from time_series.tar).
-#   config.toml                        { data_root }, every source as a
-#                                      render-only group, the fan-ins, and
-#                                      the two applets: `unified_grid_and_search_index`,
+#   config.toml                        { data_root }, every source, the
+#                                      fan-ins, the embeds, and the two
+#                                      applets: `unified_grid_and_search_index`,
 #                                      which serves the grid, and
 #                                      `unified_time_series_index`, which
 #                                      serves the Time series card.
+#
+# The root has no `system/`, so the loop has no record of having run
+# anything: the first sync runs every step, and each finds what it
+# reads already done. A source that reads files reads its copy under
+# `inputs/`; every other source keeps what its raw store holds
+# (`common.download = false`), because what it downloads from is a
+# recording only the fixture build can replay.
 #
 # Usage: materialize_tng_root.sh <out-root>
 #
@@ -51,12 +62,14 @@ VECTORS_FILE="$(rlocation _main/tests/fixtures/ingested/inference_cache.sqlite)"
 RENDERED_TAR="$(rlocation _main/tests/fixtures/ingested/rendered.tar)"
 TIME_SERIES_TAR="$(rlocation _main/tests/fixtures/ingested/time_series.tar)"
 CONFIG_BODY="$(rlocation _main/tests/fixtures/ingested/config_body.toml)"
+LIBRARY_TAR="$(rlocation _main/tests/fixtures/ingested/library.tar)"
 [[ -x "$APPLET_BIN" ]]    || { echo "ERROR: datalib_applet not found at $APPLET_BIN" >&2; exit 1; }
 [[ -f "$DB_FILE" ]]       || { echo "ERROR: search_index.sqlite not found at $DB_FILE" >&2; exit 1; }
 [[ -f "$VECTORS_FILE" ]]  || { echo "ERROR: inference_cache.sqlite not found at $VECTORS_FILE" >&2; exit 1; }
 [[ -f "$RENDERED_TAR" ]]  || { echo "ERROR: rendered.tar not found at $RENDERED_TAR" >&2; exit 1; }
 [[ -f "$TIME_SERIES_TAR" ]] || { echo "ERROR: time_series.tar not found at $TIME_SERIES_TAR" >&2; exit 1; }
 [[ -f "$CONFIG_BODY" ]]   || { echo "ERROR: config_body.toml not found at $CONFIG_BODY" >&2; exit 1; }
+[[ -f "$LIBRARY_TAR" ]]   || { echo "ERROR: library.tar not found at $LIBRARY_TAR" >&2; exit 1; }
 
 command -v python3 >/dev/null || { echo "ERROR: python3 not on PATH" >&2; exit 1; }
 
@@ -69,6 +82,7 @@ tar -xf "$RENDERED_TAR" -C "$OUT_ROOT" --strip-components=1
 # The index names each source's store by its path under the root and the
 # commit it read, so the stores land where they were written.
 tar -xf "$TIME_SERIES_TAR" -C "$OUT_ROOT" --strip-components=1
+tar -xf "$LIBRARY_TAR" -C "$OUT_ROOT" --strip-components=1
 
 # Drop the grid index, with the search index's tables, into the
 # `unified_grid_and_search_index` step's tree, and the vectors beside it, where the backend
@@ -91,18 +105,14 @@ chmod u+w "$OUT_ROOT/unified_grid_and_search_index/search_index/inference_cache.
 # a space-free cache dir, so this only bites the `bazelisk run
 # //datalib:dev_tng` path, which resolves through the source tree.
 #
-# The groups come from the pipeline that rendered the trees
-# (`config_body.toml`): every source, and the `unified_grid_and_search_index` group, for
-# the same reason a real root declares them — a group is one row on the
-# Manage screen, the storage endpoint measures one tree per *declared*
-# group and step, and Browse needs a row to start from. Each source is
-# render-only with no raw store behind it: the steps are declared so the
-# rows exist, and the index arrives pre-built in the tars above. Syncing
-# one of them fails on the missing store.
+# The rest is the library's config, from the pipeline that built the
+# stores (`config_body.toml`), with the place its inputs now are written
+# in for the placeholder it leaves.
+body="$(cat "$CONFIG_BODY")"
 {
   echo "data_root = \"$OUT_ROOT\""
   echo
-  cat "$CONFIG_BODY"
+  printf '%s\n' "${body//@INPUTS@/$OUT_ROOT/inputs}"
   cat <<EOF
 
 [[applets]]
