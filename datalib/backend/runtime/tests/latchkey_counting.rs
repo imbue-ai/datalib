@@ -1,4 +1,4 @@
-//! A latchkey that datalib runs does not report itself to latchkey's usage
+//! A latchkey that Datalib runs does not report itself to latchkey's usage
 //! counter, which it otherwise pings once a day from any run.
 
 use std::path::{Path, PathBuf};
@@ -44,9 +44,9 @@ fn run_in(mut cmd: Command, work: &Path, name: &str) -> PathBuf {
 }
 
 /// Guards the README's "nothing leaves your machine" against the pinned
-/// latchkey. The second half is the proof the first half means something: the
-/// real package does count without the variable, so a bump that renames the
-/// variable or the file fails here instead of quietly turning the ping back on.
+/// latchkey. It then runs the same command without the variable and checks
+/// that the real package does count, so a bump that renames the variable or
+/// the file fails here instead of quietly turning the ping back on.
 #[test]
 fn the_command_turns_off_latchkeys_daily_count() {
     let tree = tempfile::tempdir().unwrap();

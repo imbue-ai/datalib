@@ -113,8 +113,9 @@ fn storage_digests(storage: &[&Map<String, Value>]) -> Vec<Value> {
     digests.collect()
 }
 
-/// Dumped as the live bake dumps its stores. `git diff --word-diff` shows
-/// which field of a row moved.
+/// Dumped as `//datalib/backend/dag:manual_e2e_live_sync_golden` (the
+/// sync of real accounts into goldens) dumps its stores. `git diff
+/// --word-diff` shows which field of a row moved.
 #[tokio::test]
 async fn snapshot_grid_rows_and_documents() {
     let path = fixture_db_path().canonicalize().expect("the fixture index");

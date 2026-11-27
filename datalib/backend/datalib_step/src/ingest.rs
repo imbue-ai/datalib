@@ -1,4 +1,4 @@
-//! The ingest step driver: one source's ingest wave, written to the
+//! The ingest step driver: one source's ingest processors, written to the
 //! tree the step id names.
 
 use std::path::Path;
@@ -41,8 +41,8 @@ pub async fn run(
     let progress = emitter.progress();
     let metrics = datalib_etl::download_metrics::DownloadMetrics::publishing_to(progress.clone());
     let diagnostics = datalib_obs::diagnostics::Diagnostics::new();
-    // Every processor in this source's wave writes the one raw store, so the
-    // step can only claim what all of them can support. `all` on an empty
+    // Every processor of this source's ingest step writes the one raw
+    // store, so the step can only claim what all of them can support. `all` on an empty
     // iterator is `true`, which is why the emptiness check above matters.
     emitter.declare_streams_output(processors.iter().all(|p| p.streams_output()));
     let guard = datalib_etl_web::retry::RetryGuard::from_params(

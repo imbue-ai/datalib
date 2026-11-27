@@ -370,7 +370,7 @@ pub async fn get_metrics(State(s): State<AppState>) -> Result<impl IntoResponse,
     let metrics = datalib_runs::latest_metrics(&s.root)
         .await
         .map_err(crate::unread)?;
-    let records = match s.sync.mailbox().await {
+    let records = match s.sync.supervisor_store().await {
         Ok(store) => store
             .load_record()
             .await
@@ -554,8 +554,8 @@ mod tests {
         }
     }
 
-    /// The disk the root lives on, and the floor the loop holds steps
-    /// under, so an alert can fire before syncs stop rather than after.
+    /// The disk the root lives on, and the floor under which the loop
+    /// starts no step, so an alert can fire before syncs stop rather than after.
     #[test]
     fn the_disk_and_its_floor_are_gauges() {
         let text = scrape(&[]);

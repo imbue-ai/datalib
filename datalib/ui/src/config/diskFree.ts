@@ -1,13 +1,13 @@
 // What the status bar says about free disk space: its hover, and when it
-// raises or clears the toast that says syncs are paused. The loop holds
-// every step from under the config's `[disk_space]` pause line until the
-// resume line (`datalib/backend/dag/src/disk_space.rs`); this only
-// reports it.
+// raises or clears the toast that says syncs are paused. From under the
+// config's `[disk_space]` pause line until the resume line, the loop
+// starts no step and stops the running ones
+// (`datalib/backend/dag/src/disk_space.rs`); this only reports it.
 
 import type { DiskFree } from "@/api";
 import { formatBytes } from "./bytes";
 
-/// What changed since the last answer: the steps were held (or already
+/// What changed since the last answer: the steps were paused (or already
 /// were when the page opened), were let go, or neither. `wasLow` is null
 /// before the first answer.
 export function diskCrossing(wasLow: boolean | null, disk: DiskFree): "low" | "cleared" | null {

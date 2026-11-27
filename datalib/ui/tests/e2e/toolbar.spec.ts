@@ -8,7 +8,7 @@ import {
   tabLabels,
   typeInto,
   PINNED,
-  SEARCH_SETTLE,
+  SEARCH_TIMEOUT,
 } from "./grid-helpers";
 
 // The chrome around the cards: the toolbar's search box opens a search
@@ -165,7 +165,7 @@ test.describe("toolbar", () => {
     await searchBox(page).press("Enter");
     const warp = cardOf(page, 'searchView({"q":"warp"})');
     await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp", {
-      timeout: SEARCH_SETTLE,
+      timeout: SEARCH_TIMEOUT,
     });
     await expect(shownTabName(page)).toHaveText("Search: warp");
     await expect(tabLabels(page)).toHaveCount(5);
@@ -174,7 +174,7 @@ test.describe("toolbar", () => {
     // On one, what is typed waits for Enter, and then changes that tab.
     await typeInto(searchBox(page), "warp core");
     await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp", {
-      timeout: SEARCH_SETTLE,
+      timeout: SEARCH_TIMEOUT,
     });
     // The first closes any suggestions; the next puts back what is shown.
     await searchBox(page).press("Escape");
@@ -184,7 +184,7 @@ test.describe("toolbar", () => {
     await typeInto(searchBox(page), "warp core");
     await searchBox(page).press("Enter");
     await expect(warp.locator(".grid-wrap")).toHaveAttribute("data-shown-query", "warp core", {
-      timeout: SEARCH_SETTLE,
+      timeout: SEARCH_TIMEOUT,
     });
     await expect(tabLabels(page), "changing a search adds no tab").toHaveCount(5);
 

@@ -9,8 +9,8 @@
 // finishes at once when the test lets go. No window to miss on a slow
 // runner, and no sleeping on a fast one.
 //
-// Every sync is its own request, and the server's one loop takes each on
-// as it arrives, beside whatever is already running.
+// Every sync is its own request, and the server's one loop starts
+// serving each as it arrives, beside whatever is already running.
 //
 // Every test leaves no request open and the loop idle behind it: a
 // request left open by one test would run against the config the next
@@ -27,8 +27,8 @@ import {
   pipelineRow as row,
   readRow,
   rowMenuEntry,
-  settleRow,
-  settleRunner,
+  untilRowFinishesNewRun,
+  untilNoSyncThenReload,
   stampOf,
   stampsBefore,
   statusOf,
@@ -95,8 +95,8 @@ async function writeConfig(page: Page, text: string) {
   await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
-  // Remount, so the rows are painted from the config and the runner's
-  // record together — see data-sources-sync.spec.ts for the frame this
+  // Remount, so the rows are painted from the config and the loop's
+  // store together — see data-sources-sync.spec.ts for the frame this
   // avoids.
   await openManager(page);
 }
@@ -206,7 +206,7 @@ async function untilClosed(
 }
 
 /// What a failure about a stop would otherwise leave unsaid: the requests
-/// as the API serves them, the loop's record, and the last lines this
+/// as the API serves them, `GET /api/dag`, and the last lines this
 /// spec's backend wrote — where the loop says what it sent and saw.
 /// Playwright puts test stdout in the report and in bazel's test log,
 /// which is the only place a CI run can be read from.
@@ -248,7 +248,7 @@ async function drainRequests(page: Page) {
       message: "a request never closed",
     })
     .toBe(0);
-  await settleRunner(page, 60_000);
+  await untilNoSyncThenReload(page, 60_000);
 }
 
 let original = "";
@@ -346,8 +346,8 @@ test.describe("sources run independently", () => {
     await expect(stopBtn(page, `group:${CHATGPT.id}`)).toBeVisible();
 
     // ── 2. add a second source while the first is still going ─────────
-    // Saving the config rewrites the file under a live loop, which takes
-    // the new config on without disturbing the first sync: its row must
+    // Saving the config rewrites the file under a live loop, which starts
+    // using the new config without disturbing the first sync: its row must
     // still say Running once the table is remounted from the new config
     // — and with the tape held, it can say nothing else.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
@@ -373,13 +373,13 @@ test.describe("sources run independently", () => {
     expect(await statusOf(page, ingestOf(CHATGPT))).toBe("Running");
     expect(await statusOf(page, ingestOf(CLAUDE))).toBe("Running");
 
-    // ── every source finishes, in whatever order the loop took them ───
+    // ── every source finishes, in whatever order the loop ran them ────
     release();
     for (const [id, before] of Object.entries({ ...was, ...claudeWas, ...pdfsWas })) {
-      const st = await settleRow(page, id, before, 180_000);
+      const st = await untilRowFinishesNewRun(page, id, before, 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
-    await settleRunner(page, 60_000);
+    await untilNoSyncThenReload(page, 60_000);
     for (const s of [CHATGPT, CLAUDE, PDFS]) await untilClosed(request, s, ["done"]);
   });
 
@@ -479,11 +479,12 @@ test.describe("sources run independently", () => {
     // Its download's row says what happened: stopped — not failed,
     // nothing went wrong, and not finished, the work is not done. The
     // step answered SIGINT with a `cancelled` outcome, which the loop
-    // records as `stopped`, while it goes on with the other source. A stopped download is not a fence
-    // over its render: the held download
-    // sealed nothing, so the render is up to date with what it committed
-    // — or, if this root has never rendered the source, it was waiting
-    // for a first seal and the stop ended that wait.
+    // records as `stopped`, while it goes on with the other source. A
+    // stopped download leaves its render Up to date or Stopped, not
+    // Blocked: the held download sealed nothing, so the render is up to
+    // date with what it committed — or, if this root has never rendered
+    // the source, it was waiting for a first seal and the stop ended that
+    // wait.
     await expect
       .poll(() => statusOf(page, ingestOf(CHATGPT)), {
         timeout: 30_000,
@@ -505,12 +506,12 @@ test.describe("sources run independently", () => {
     expect(other?.state, `${CLAUDE.id}'s request after stopping ${CHATGPT.id}`).toBe("open");
     release();
     for (const id of [ingestOf(CLAUDE), renderOf(CLAUDE)]) {
-      const st = await settleRow(page, id, was[id], 180_000);
+      const st = await untilRowFinishesNewRun(page, id, was[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     // Its rows are done; the request still owns the index pass behind them.
     await untilClosed(request, CLAUDE, ["done"], 120_000);
-    await settleRunner(page, 60_000);
+    await untilNoSyncThenReload(page, 60_000);
 
     // ── edit the stopped source, then start it again ──────────────────
     // The edit is what a person would do here — narrow the source —
@@ -525,10 +526,10 @@ test.describe("sources run independently", () => {
     // Released, the restart is over in well under a second — too quick
     // for a poll to see it Running. The stamps moving is the proof it ran.
     for (const id of [ingestOf(CHATGPT), renderOf(CHATGPT), INDEX]) {
-      const st = await settleRow(page, id, again[id], 180_000);
+      const st = await untilRowFinishesNewRun(page, id, again[id], 180_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
-    await settleRunner(page, 60_000);
+    await untilNoSyncThenReload(page, 60_000);
     await untilClosed(request, CHATGPT, ["done"]);
     // Two requests for this source now: the one that was stopped, and
     // the one that finished. Neither is the other's.
@@ -546,7 +547,7 @@ test.describe("steering one source among several", () => {
     page,
     request,
   }) => {
-    // One loop takes on the second source while it runs the first — not
+    // One loop starts serving the second source while it runs the first — not
     // a second process on the same stores.
     await writeConfigAndOpen(page, [CHATGPT, CLAUDE]);
     await start(page, CHATGPT);
@@ -608,7 +609,7 @@ test.describe("steering one source among several", () => {
   test("a backlogged step can be turned off, and turned back on", async ({ page }) => {
     // A step switched off on its row is not started, and what reads it
     // waits; the sync of its source runs everything else and closes.
-    // Turned back on from the menu, the next sync takes it on.
+    // Turned back on from the menu, the next sync runs it.
     await writeConfigAndOpen(page, [PDFS]);
     const inSyncs = row(page, INDEX).getByRole("switch", { name: "Runs in syncs" });
     await expect(inSyncs).toHaveAttribute("aria-checked", "true");
@@ -621,7 +622,7 @@ test.describe("steering one source among several", () => {
     const was = await stampsBefore(page, [ingestOf(PDFS), renderOf(PDFS), INDEX]);
     await start(page, PDFS);
     for (const id of [ingestOf(PDFS), renderOf(PDFS)]) {
-      const st = await settleRow(page, id, was[id], 120_000);
+      const st = await untilRowFinishesNewRun(page, id, was[id], 120_000);
       expect(st, `${id} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
     }
     await untilClosed(page.request, PDFS, ["done"]);
@@ -635,7 +636,7 @@ test.describe("steering one source among several", () => {
     await expect(inSyncs).toHaveAttribute("aria-checked", "true");
     const again = await stampsBefore(page, [INDEX]);
     await start(page, PDFS);
-    const st = await settleRow(page, INDEX, again[INDEX], 120_000);
+    const st = await untilRowFinishesNewRun(page, INDEX, again[INDEX], 120_000);
     expect(st, `${INDEX} settled as ${st}`).toMatch(/^(Succeeded|Up to date)$/);
   });
 });

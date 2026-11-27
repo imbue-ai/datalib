@@ -2,14 +2,14 @@
 // thread, a channel, a label, a page. A container is carried by every
 // document that names it, the way a person is (`document_contacts`): a
 // re-render replaces its own rows, and a channel named by many threads
-// has a row under each. The index step settles them into one row per
+// has a row under each. The index step combines them into one row per
 // container, `nodes`, which is what a reader reads.
 
 use datalib_etl_macros::PortableTable;
 use serde::{Deserialize, Serialize};
 
 /// A node's accounts by its uuid, the newest found with one seek however
-/// many documents name it. In the grid index alone, which settles them
+/// many documents name it. In the grid index alone, which combines them
 /// into `nodes`.
 pub const BY_UUID_INDEX: &str =
     "CREATE INDEX IF NOT EXISTS data_nodes_by_uuid ON data_nodes (uuid, markdown_uuid)";

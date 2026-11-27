@@ -5,11 +5,11 @@ import {
   EVERY_ROW,
   GRID,
   openRowByUuid,
-  gridSettled,
+  untilGridLoaded,
   inDocFrame,
   MENU_DISABLED,
   menuEntry,
-  searchAndSettle,
+  searchAndAwaitResults,
   searchMenuItem,
   selectRowByUuid,
   shownCards,
@@ -53,8 +53,8 @@ async function openMessageBy(page: Page, request: APIRequestContext, handle: str
   const message = rows.find((r) => r.markdown_uuid && r.message_index != null);
   expect(message, `the fixture must have a message by ${handle}`).toBeTruthy();
   await page.goto(EVERY_ROW);
-  await searchAndSettle(page, `datalib_document_id:${message!.conversation_uuid}`);
-  await gridSettled(page);
+  await searchAndAwaitResults(page, `datalib_document_id:${message!.conversation_uuid}`);
+  await untilGridLoaded(page);
   await openRowByUuid(page, message!.uuid);
 }
 
@@ -655,8 +655,8 @@ test("the selected cards of an address book are added to contacts", async ({ pag
   const toasts = page.locator(".datalib-toast");
   const selectAndAdd = async () => {
     await page.goto(GRID);
-    await searchAndSettle(page, "source:tng_contacts");
-    await gridSettled(page);
+    await searchAndAwaitResults(page, "source:tng_contacts");
+    await untilGridLoaded(page);
     await selectRowByUuid(page, uuid("Seven of Nine"));
     for (const name of ["Hugh", "Senior Staff"]) {
       await actOnRowByUuid(page, uuid(name), (row) =>

@@ -3,7 +3,7 @@
 // over the query it still is.
 
 import { test, expect, type Page } from "@playwright/test";
-import { cardOf, GRID, SEARCH_SETTLE, tabLabels, typeInto } from "./grid-helpers";
+import { cardOf, GRID, SEARCH_TIMEOUT, tabLabels, typeInto } from "./grid-helpers";
 
 const field = (page: Page) => page.getByTestId("search-input");
 const menu = (page: Page) => page.locator(".cm-tooltip-autocomplete");
@@ -38,11 +38,11 @@ test("what is typed while the app loads stays when the search card arrives", asy
   await expect(field(page)).toHaveAttribute("data-query", "warp");
   // It is still a draft: the card shows its own search until Enter.
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "is:document", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await field(page).press("Enter");
   await expect(shownQuery(page)).toHaveAttribute("data-shown-query", "warp", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(field(page)).toHaveAttribute("data-query", "warp");
 });
@@ -75,7 +75,7 @@ test("Enter while the app loads opens the search, and the box shows what ran", a
 
   letThrough();
   await expect(ownCard(page)).toHaveAttribute("data-shown-query", "source:slack", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(field(page)).toHaveAttribute("data-query", "source:slack");
 });
@@ -91,7 +91,7 @@ test("what is typed after an Enter while the app loads stays too", async ({ page
 
   letThrough();
   await expect(ownCard(page)).toHaveAttribute("data-shown-query", "source:slack", {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
   await expect(field(page)).toHaveAttribute("data-query", "source:slack warp");
 });

@@ -16,7 +16,7 @@ import {
   pipelineRow,
   savedConfig,
   SEARCH_ROWS,
-  searchAndSettle,
+  searchAndAwaitResults,
   searchHeader,
   TABLE_ROWS,
   expectSyncEverything,
@@ -155,7 +155,7 @@ test("a source's row opens that source, with its type's columns", async ({ page 
 
   // The messages are one chip-delete away: drop `is:document` and the
   // Kind column earns its place back, with the thread's rows under it.
-  await searchAndSettle(page, "source:slack");
+  await searchAndAwaitResults(page, "source:slack");
   await expect
     .poll(async () => {
       const kinds = await columnValues(page, "kind");
@@ -186,7 +186,7 @@ test("a different type gets a different column set", async ({ page }) => {
   // trims it. A preset is a ceiling, not a fixed set — and the two PRs
   // share an author too, so the column shows once the review comments
   // are back in the grid.
-  await searchAndSettle(page, "source:github");
+  await searchAndAwaitResults(page, "source:github");
   await expect(searchHeader(page, "author_ref")).toBeVisible();
   await expect(searchHeader(page, "channel")).toHaveCount(0);
 });

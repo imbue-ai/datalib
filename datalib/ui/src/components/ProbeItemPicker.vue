@@ -133,7 +133,7 @@ const COLUMNS: Record<ProbeItemKind, Layout> = {
       },
     ],
   },
-  // A calendar is named by the name the filter matches; its id rides in
+  // A calendar is named by the name the filter matches; its id goes in
   // `title`, shown on hover, and Google's `primary` / `read-only` in role.
   calendar: {
     placeholder: "Search these calendars…",
@@ -261,7 +261,7 @@ function onSelectedRowsChanged(_e: SlickEventData, args: OnSelectedRowsChangedEv
   );
   // In the order they were chosen, the grid's row order notwithstanding:
   // what was already in the value stays where it was, a new tick goes
-  // on the end. Values from outside this list ride along untouched.
+  // on the end. Values from outside this list are kept as they are.
   const kept = props.modelValue.filter((v) => !listed.has(v) || picked.has(v));
   const added = [...picked].filter((p) => !props.modelValue.includes(p));
   emit("update:modelValue", [...kept, ...added]);

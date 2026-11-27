@@ -47,7 +47,7 @@ test("a /chat/<uuid> link is the document alone", async ({ page, request }) => {
   }
 });
 
-/** The 2026-10-19 hole: a path segment holding JavaScript ran as card source. */
+/** A path segment holding JavaScript once ran as card source. */
 test("a URL holding JavaScript opens a card that shows it and runs nothing", async ({ page }) => {
   const code = "(() => { window.__cardRan = 1; return searchView() })()";
   await page.goto("/" + encodeURIComponent(code));

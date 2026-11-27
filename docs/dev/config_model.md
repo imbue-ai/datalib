@@ -81,8 +81,12 @@ since the runner infers nothing from the program's name:
   `embedding_map` and perseus's
   `render_markdown` read their inputs off disk and write
   `reads = "files"`. Every other step writes `reads = "pinned"`, even
-  while its `inputs` are empty (a fan-in's are, until a source is
-  added).
+  while its `inputs` are empty. A fan-in's are, until a source is
+  added: a **fan-in** is a step that reads one function of every
+  group, by a pattern such as `*/render_markdown`. The three are
+  `unified_grid_and_search_index` (`*/render_markdown`),
+  `embedding_map` (`*/embed`) and `time_series_index`
+  (`*/render_time_series`).
 - **`locks`.** `embed` writes `locks = ["embedder"]`, and every other
   step under a group with no `type` (`unified_grid_and_search_index`,
   `embedding_map`, `time_series_index`) writes `locks = ["index"]`. A
@@ -137,7 +141,8 @@ source's store, so comparing them again rebuilds it. Removing a diff
 group on the Manage screen therefore offers, checked by default, to
 delete the tree too (`POST /api/purge` with the group ids, once they
 are out of the config): the loop stops the group's steps, deletes
-`<root>/<group>/` and forgets the steps in its record
+`<root>/<group>/` and deletes the group's steps' rows from
+`system/supervisor.sqlite`
 ([`dag/README.md`](../../datalib/backend/dag/README.md#resets-and-purges)).
 Without that, a group re-added under the same id and definition would
 read as up to date and write nothing.
@@ -380,14 +385,14 @@ and may also hold the method it pairs with (Gmail's shows its Takeout).
 A test loads and plans every stanza.
 
 Neither the runner nor the server can read a step's params: they
-belong to its program. So both ask, through the `--check` verb
-(`step_protocol.md` § Check): `datalib-pipeline check`, `PUT
-/api/config` and `POST /api/config/check` invoke every step whose
+belong to its program. So both run the step's command with `--check`
+appended (`step_protocol.md` § Check): `datalib-pipeline check`, `PUT
+/api/config` and `POST /api/config/check` do it for every step whose
 program takes the verb, `datalib-step`'s included
 (`datalib/backend/dag/src/check.rs`). A step that would refuse its
 params is an ordinary `rejected` diagnostic at the misspelled key's
-line: the save is refused and the check exits 2. A warning it answers
-with, such as one of the keys below that no longer do anything, is a
+line: the save is refused and the check exits 2. A warning in its
+outcome line, such as one of the keys below that no longer do anything, is a
 `warning` there.
 
 ## `Reach`: origin or local
@@ -430,9 +435,14 @@ A refusal of a retired shape names the rewrite: the app makes it when
 it next reads the file, and `datalib-migrate-config` from a terminal
 (§"The retired shapes").
 
-Warnings: a group with nothing filed under it; an applet filed under an
-undeclared group; and a verb a `[[programs]]` entry lists that the
-runner does not know, which is ignored. The Manage screen's System row
+Warnings:
+
+- a group with nothing filed under it;
+- an applet filed under an undeclared group;
+- a verb a `[[programs]]` entry lists that the runner does not know,
+  which is ignored.
+
+The Manage screen's System row
 counts the config's warnings and names them on hover; a double-click
 opens the config.
 
@@ -528,13 +538,13 @@ A source's `embed` (input:
 documents into chunks with the model's tokenizer, files them in the
 inference cache and fills their vectors; it fetches the model when it
 is missing, and only once it has a document to cut or a chunk to
-embed. After the keyword passes `unified_grid_and_search_index` sweeps the vectors no
-chunk names from the inference cache, and reports each searched
-source's documents and how many of them are not embedded yet; each
-`embed` reports what it left of its own. Nothing of a source's reads a step that reads
+embed. Each `embed` reports the chunks of its own source it left
+without vectors, as the metric `search_chunks_not_embedded{source=…}`:
+the chunks the cache had no vector for when it began, less those it
+embedded (`datalib_step/src/index_steps.rs`). Nothing of a source's reads a step that reads
 every source, and that is what lets each source's `embed` finish on its
-own: the runner holds a step's finish back while anything upstream of
-it is still running, so a step downstream of a fan-in would finish only
+own: the runner does not count a step as finished while anything
+upstream of it is still running, so a step downstream of a fan-in would finish only
 when the slowest source did. Search by meaning is off for a source with
 no `embed`, or with its `embed` turned off; removing `unified_grid_and_search_index` takes
 every `embed` with it. A `qmd_index`, `keyword_index` or
@@ -567,16 +577,22 @@ reads.
 
 ## What the Manage screen and the wizard make of it
 
-One row per group, its steps and applets under a chevron. A group row's
-status is running if any child is, else waiting, else failed, else
-queued, else stopped, else the last step's, passing over a child turned
-off (the group reads off only when every child is) and one that has
-never run while a sibling has (it reads never run only when nothing
-under it has run); last synced and last
-success are the ingest step's instants, else the newest child's; bytes
-are the group directory's own measured series, never a sum across
-children; a sync of the group starts at its steps with no inputs (for
-a diff group, at what its step reads). A child step is labelled by the
+One row per group, its steps and applets under a chevron. Of a group
+row:
+
+- its status is running if any child is, else waiting, else failed,
+  else queued, else stopped, else the last step's, passing over a child
+  turned off (the group reads off only when every child is) and one
+  that has never run while a sibling has (it reads never run only when
+  nothing under it has run);
+- last synced and last success are the ingest step's instants, else
+  the newest child's;
+- bytes are the group directory's own measured series, never a sum
+  across children;
+- a sync of the group starts at its steps with no inputs (for a diff
+  group, at what its step reads).
+
+A child step is labelled by the
 rest of its id after the group (its function, for a step of
 `datalib-step`), with the whole id muted beside it. The grid's Source
 column joins `source_id` to a group's `name`.
@@ -783,8 +799,8 @@ the next would put the first back:
     to add the line.
 17. The `check` verb (`upgrade_check_verb`, `check_verb.rs`): a
     `[[programs]]` entry for `datalib-step` whose `verbs` leave out
-    `check` gets it, so a save and `datalib-pipeline check` ask each of
-    its steps about its params. An entry with no `verbs` is left alone;
+    `check` gets it, so a save and `datalib-pipeline check` run each of
+    its steps' commands with `--check` appended to check its params. An entry with no `verbs` is left alone;
     one whose `verbs` spans lines is refused, naming it.
 
 `datalib-migrate-config` is Datalib's own migration tool, and it may

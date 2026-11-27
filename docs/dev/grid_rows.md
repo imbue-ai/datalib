@@ -59,8 +59,8 @@ render store,
 `<root>/<source_id>/render_markdown/indexed_markdown.doltlite_db`.
 
 The `unified_grid_and_search_index` step (`build_grid_index` in
-`datalib/backend/etl/render/src/grid_index.rs`) stacks those stores
-into the grid index. It asks each store for the `dolt_diff` between the
+`datalib/backend/etl/render/src/grid_index.rs`) copies the rows of
+those stores into the grid index. It asks each store for the `dolt_diff` between the
 commit the index last consumed (`source_cursors`) and the store's HEAD,
 applies each changed document's rows, and copies its `markdowns` row
 across. It reads and writes them a page of 500 documents at a time
@@ -93,7 +93,7 @@ the grouping are all built from. The grid's own column ids
 
 Every request reads inside one read transaction on a read-only
 connection (`DoltRepo::pinned`), so it sees one state of the index.
-Which index answers which key, and how SQLite is held to it, is in
+Which index answers which key, and how SQLite is made to use it, is in
 [`search.md`](search.md) §"The indexes".
 
 Free text never reaches `grid_rows`' SQL: the applet works out what the
@@ -131,21 +131,22 @@ From a checkout:
    `grid_rows` column it sorts and filters by in `GridColumn::backing`
    (`unified_grid_and_search_index/src/grid_columns.rs`), and give that column `search`
    on its `#[col]` so Keep only, Exclude and dropping it on the search
-   bar work; `every_filter_key_is_served_by_an_index` then asks for an
-   index or a place in its `SCANS` list.
+   bar work; `every_filter_key_is_served_by_an_index` then fails until
+   the key has an index or a place in its `SCANS` list.
 5. If it is a string, say whether a person reads it as a name or a
-   label: clean it in `clean_row` (`etl/render/src/names.rs`), which
+   label: add it to `clean_row` (`etl/render/src/names.rs`), which
    strips its bidi controls as the document is stored, or add it to
    that file's `KEPT` list as an id, a path, a stamp or a body.
    `every_grid_row_string_is_cleaned_or_kept` fails until it is one or
    the other.
-6. Re-bake the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
+6. Rebuild the fixture: `bazelisk build //tests/fixtures:ingested_tng`.
 
 On an existing root, a render store and the grid index change shape
-only when the step that writes them runs. Each start of the loop asks
-each step (`--prepare`) whether its store's recorded shape is this
-build's; the app then offers to re-render them all, downloading
-nothing, and until then a source's own sync re-renders that source
+only when the step that writes them runs. Each start of the loop runs
+each step's command with `--prepare` appended, and the step compares
+its store's recorded shape with this build's; once every `--prepare`
+has exited, the loop opens one request that re-runs each step whose
+store is in another shape, downloading nothing
 ([the runner](../../datalib/backend/dag/README.md#upgrading-a-root)).
 The render step sees its own DDL hash moved (`_store_schema`, one of
 its params) and re-renders every document into the new shape, and the
@@ -294,13 +295,13 @@ workspace and its channel) is its tree, below.
 
 Every row sits in a tree of **containers**: the chat, thread, channel,
 page, calendar or label it lives in, each one row of the grid index's
-`nodes` table, by its uuid. `nodes` is settled from what the documents
-say: each carries a `data_nodes` row for every container it sits in, the
+`nodes` table, by its uuid. Each `nodes` row is recomputed from what
+the documents say: each carries a `data_nodes` row for every container it sits in, the
 way it carries its contacts, so a channel has one there under every
-thread. The document that holds a container's own grid row tells of it,
-else the newest that names it does. Every reader reads `nodes`;
-`data_nodes` is there for when the document that told of one goes, and
-the next one tells.
+thread. A container's `nodes` row is taken from the document that holds
+its own grid row, else from the newest document that names it. Every
+reader reads `nodes`; `data_nodes` is kept so that when that document
+is deleted, the row can be taken from the next one.
 
 `parent_uuid` is the container that holds the row. `sort_key` is how
 it sorts among that container's children: its `created_at` in UTC
@@ -516,9 +517,10 @@ What may be a term:
   GitHub `@login`, each an exact id. Never an address found in running
   text: quoted replies repeat every earlier message, and signatures add
   noise.
-- **Every recipient, with no cap.** Dropping some would make the record
-  lie. If the size of long reply-all threads ever matters, store each
-  distinct recipient list once and point the emails at it.
+- **Every recipient, with no cap.** Dropping some would leave the row
+  naming fewer recipients than the message had. If the size of long
+  reply-all threads ever matters, store each distinct recipient list
+  once and point the emails at it.
 - **Never a message's text, nor its preview.** Words in the body are the
   keyword index's.
 

@@ -139,8 +139,8 @@ pub async fn record(
     let worth = worth(&method, &path, status, live_refetch);
     let sql = sql.filter(|_| shows_statements(worth, ms));
     let code = status.as_u16();
-    // Zero is every request nothing caused; leaving it off keeps the
-    // line as it was for them.
+    // Zero is every request nothing caused; leaving it off keeps their
+    // lines free of it.
     let chain = (chain > 0).then_some(chain);
     if let Some(c) = chain.filter(|&c| crate::loop_guard::warns_at(c)) {
         tracing::warn!(

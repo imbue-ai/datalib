@@ -167,7 +167,7 @@ inputs = ["*/embed"]
         assert_eq!(rewrite(&after).unwrap(), after);
     }
 
-    /// A step that runs its own program is not datalib's index, whatever
+    /// A step that runs its own program is not Datalib's index, whatever
     /// its function is called, and neither is what reads it.
     #[test]
     fn a_custom_grid_index_is_left_alone() {

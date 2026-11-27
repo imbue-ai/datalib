@@ -4,7 +4,7 @@
 // page, so the counts cannot come from the rows the grid holds.
 
 import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
-import { GRID, gridSettled, groupByDragging, SEARCH_ROWS, type GridApi } from "./grid-helpers";
+import { GRID, untilGridLoaded, groupByDragging, SEARCH_ROWS, type GridApi } from "./grid-helpers";
 
 type Group = { values: (string | null)[]; count: number };
 
@@ -58,7 +58,7 @@ test("opening a group reads its rows", async ({ page }) => {
   await page.goto(GRID);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
   await groupByDragging(page, "kind");
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await page.locator(".grid-box .slick-group-toggle-all").click();
 
   await expect.poll(async () => (await titles(page)).length).toBeGreaterThan(1);

@@ -34,12 +34,12 @@ Add `libdoltlite-dev_${VER}_${ARCH}.deb` for the header and static library.
 > 💡 **GUI companion (read-only):** A `doltlite`-aware build of DB Browser is
 > available at
 > [github.com/thadd3us/sqlitebrowser/releases](https://github.com/thadd3us/sqlitebrowser/releases).
-> It's handy for browsing `fruits.db` and poking at the `dolt_log` /
+> It's handy for browsing `fruits.db` and looking at the `dolt_log` /
 > `dolt_tags` / `dolt_diff_fruits` virtual tables visually — but it holds a
 > write lock on the open database, so you'll want to do the codelab's writes
 > in the `doltlite` shell and close the GUI before each commit step.
 
-`doltlite` is a drop-in `sqlite3` shell, with one superpower: every change can be committed, every commit can be named with a tag, and every pair of commits can be diffed. In this lab you'll build a tiny inventory table, evolve it through three tagged commits, then use SQL alone to see exactly what changed — including across a `DROP TABLE` that rebuilds the table from scratch.
+`doltlite` is a drop-in `sqlite3` shell, with one addition: every change can be committed, every commit can be named with a tag, and every pair of commits can be diffed. In this lab you'll build a tiny inventory table, evolve it through three tagged commits, then use SQL alone to see exactly what changed — including across a `DROP TABLE` that rebuilds the table from scratch.
 
 ---
 

@@ -76,8 +76,8 @@ impl AppStore {
         store.init_remote_media_tables().await?;
         // Which build wrote each store, beside its tables. Remote media
         // is committed per row with `-Am`, so a changed meta row is
-        // sealed here rather than left to ride into the next commit; disk
-        // stats is plain SQLite and its rows just land.
+        // committed here rather than left to go out with the next row's
+        // commit; disk stats is plain SQLite and has no commits.
         for (pool, kind, ddl, indexes) in [
             (
                 &store.disk_stats_pool,
@@ -729,9 +729,9 @@ mod tests {
         assert_eq!(again, 0, "a second pass over the same cutoff drops nothing");
     }
 
-    /// A start of the server reads the newest samples and forgets the old
-    /// ones. Both read every sample kept (154k on one library) until there
-    /// was an index on the time.
+    /// A start of the server reads the newest samples and deletes those
+    /// older than the cutoff. Both read every sample kept (154k on one
+    /// library) until there was an index on the time.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_start_reads_no_more_samples_for_there_being_many() {
         const CUTOFF: &str = "2026-09-01T00:00:00.000000+00:00";
@@ -796,7 +796,7 @@ mod tests {
 
     /// Each of the stores says which build wrote it, with its own
     /// kind; remote media's rows are committed on the spot rather than
-    /// left to ride into the next decision, and a second open by the
+    /// left to go out with the next decision's commit, and a second open by the
     /// same build commits nothing more.
     #[tokio::test]
     async fn every_app_store_names_the_build_that_wrote_it() {

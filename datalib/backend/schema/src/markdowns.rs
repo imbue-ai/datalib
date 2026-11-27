@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PortableTable, sqlx::FromRow)]
 #[portable_table(table = "markdowns", primary_key = "markdown_uuid")]
 pub struct MarkdownRow {
-    /// Stable identifier for one rendered `.md` file. For providers
-    /// whose native id maps 1:1 to a rendered file (Anthropic
+    /// Stable identifier for one rendered document. For providers
+    /// whose native id maps 1:1 to a rendered document (Anthropic
     /// conversation_uuid, Notion page_id) we reuse it verbatim; for
-    /// sharded renders (Beeper per-period files) or ts-keyed providers
+    /// sharded renders (Beeper per-period documents) or ts-keyed providers
     /// (Slack threads) we synthesize a UUIDv5 from the canonical tuple
     /// `grid_rows.uuid` uses. Must be deterministic so re-ingest is
     /// idempotent.
@@ -35,7 +35,7 @@ pub struct MarkdownRow {
     #[col(sql = "VARCHAR(32)")]
     pub provider: String,
     /// Markdown-level category. Distinct from `grid_rows.kind` (which is
-    /// per-row); this is the shape of the rendered file.
+    /// per-row); this is the shape of the rendered document.
     #[col(sql = "VARCHAR(32)")]
     pub kind: String,
     /// Human-readable title — same value the renderer puts in the
@@ -75,7 +75,8 @@ pub struct MarkdownRow {
     /// The render unit this document was rendered from — the unit the
     /// provider loads, a conversation or a thread or a page — so a
     /// render unit that re-renders to fewer documents can drop the extras.
-    /// NULL from a renderer that has not been ported to declare render units.
+    /// Every provider's renderer sets it; NULL only on the storage report
+    /// (`datalib_step::introspect::plan`), which no render unit produces.
     #[col(sql = "VARCHAR(256)")]
     pub render_unit_key: Option<String>,
     /// blake3 of the document's text, its sections end to end, as hex: what

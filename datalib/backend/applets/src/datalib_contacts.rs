@@ -72,7 +72,7 @@ pub fn serve(port: u16) -> Result<()> {
             crate::unified_grid_and_search_index::require_gateway,
         ));
         tracing::info!(address = %bound, "listening");
-        crate::announce_port(bound.port());
+        crate::print_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
 }

@@ -27,12 +27,11 @@ pub fn shared_multi() -> Option<Arc<MultiProgress>> {
 /// when bars can actually draw (stderr is a TTY), which suspends draws
 /// across the write so the line lands above the bar block instead of
 /// overprinting it. Falls back to `eprintln!` before `init` runs, in
-/// tests that skip observability, and — crucially — whenever the draw
-/// target is hidden (stderr piped/redirected): `MultiProgress::println`
-/// is documented to *do nothing* in that case, which once swallowed
-/// every status line (including the sync phase markers the http worker
-/// scrapes) when the pipeline ran as a child process. Same
-/// `format!` argument grammar as `eprintln!`.
+/// tests that skip observability, and whenever the draw target is
+/// hidden (stderr piped or redirected): `MultiProgress::println` is
+/// documented to *do nothing* in that case, so a process whose stderr
+/// is a pipe would lose every status line. Same `format!` argument
+/// grammar as `eprintln!`.
 #[macro_export]
 macro_rules! status_line {
     ($($arg:tt)*) => {{
@@ -40,10 +39,10 @@ macro_rules! status_line {
         match $crate::shared_multi() {
             // `MultiProgress::println` is documented to do *nothing*
             // when the draw target is hidden — which is exactly the
-            // off-TTY case (stderr piped, e.g. spawned by the http
-            // worker). Only route through it when it will actually
-            // draw; otherwise fall through to raw stderr so status
-            // lines (incl. the sync phase markers) reach the pipe.
+            // off-TTY case (stderr piped, as for a child process). Only
+            // route through it when it will actually draw; otherwise
+            // fall through to raw stderr so status lines reach the
+            // pipe.
             Some(mp) if !mp.is_hidden() => { let _ = mp.println(&__msg); }
             // Pre-`init` (tracing not up yet), hidden draw target, and
             // out-of-band fallback. The lint exception is part of the
@@ -65,8 +64,8 @@ mod tests {
     /// as a no-op, so taking that branch silently swallows the line.
     /// Off a TTY (child process with piped stderr, CI, `bazel test`)
     /// a stderr-targeted `MultiProgress` *is* hidden, so the macro's
-    /// `!mp.is_hidden()` guard is what keeps the sync phase markers
-    /// flowing to the http worker's pipe.
+    /// `!mp.is_hidden()` guard is what keeps status lines reaching the
+    /// parent's pipe.
     #[test]
     fn stderr_multi_is_hidden_off_tty() {
         if std::io::IsTerminal::is_terminal(&std::io::stderr()) {

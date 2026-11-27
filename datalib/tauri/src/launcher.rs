@@ -33,11 +33,12 @@ pub fn record_recent(file: &Path, root: &Path) -> std::io::Result<()> {
     write_recents(file, &roots)
 }
 
-/// Whether the screen offers to forget `root`. A library in one of the
-/// app's libraries folders (`~/Datalib`, and the protected one) is listed
-/// because it is there, not because it was opened, so it stays while it
-/// is there; one elsewhere is listed only from the recent list, and so is
-/// one whose folder is gone.
+/// Whether the screen offers to forget `root`, which takes it off the
+/// recent list. A library in one of the app's libraries folders
+/// (`~/Datalib`, and the protected one) is listed because it is there,
+/// not because it was opened, so it stays while it is there; one
+/// elsewhere is listed only from the recent list, and so is one whose
+/// folder is gone.
 pub fn forgettable(root: &Path, libraries_dirs: &[PathBuf]) -> bool {
     !deletable(root, libraries_dirs)
 }

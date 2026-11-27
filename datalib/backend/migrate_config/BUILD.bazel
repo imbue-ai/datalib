@@ -7,8 +7,8 @@ load("@rules_rust//rust:defs.bzl", "rust_binary", "rust_library", "rust_test")
 # The runner refuses most old shapes, naming this tool. The rewrites safe
 # to make unattended, text edits that keep the file as written, are
 # listed in `UNATTENDED`, and `datalib-http` makes them itself on seeing
-# an old shape. It holds one rewrite at a time, "any earlier shape → the
-# current one"; the next shape change extends it.
+# an old shape. Its rewrites run in order, so any earlier shape comes out
+# in the current one; the next shape change adds one.
 rust_library(
     name = "datalib_migrate_config",
     srcs = glob(

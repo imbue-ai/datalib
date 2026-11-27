@@ -66,9 +66,9 @@ describe("the Slack attachment cap", () => {
     expect(out).toContain('blob_size_limit_bytes = "5 MB"');
   });
 
-  // The regression that matters. Before the create-only rule, opening
+  // The regression that matters: without the create-only rule, opening
   // an uncapped source's form to change an unrelated field and saving
-  // would have silently imposed 5 MB on it.
+  // would silently impose 5 MB on it.
   it("leaves an existing uncapped source uncapped", () => {
     const existing = step({ api: { media: true, channels: ["general"] } });
     const seeded = seedFieldValues(SLACK, { ingest: existing });

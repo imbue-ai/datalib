@@ -1,4 +1,4 @@
-//! A secret one of datalib's processes hands another. It goes through a
+//! A secret one of Datalib's processes hands another. It goes through a
 //! private file, never an environment variable or an argument: `ps eww`
 //! shows both to any other process of the same user. Keep the file in the
 //! data root, beside what the secret opens: anywhere else it is a way around

@@ -83,9 +83,8 @@ test("the auth button is offered even when the service can't do it yet", async (
 });
 
 /// Claude has an account box like every other latchkey source: a
-/// browser login stores under the name in it (imbue-ai/latchkey#148,
-/// which filed every login under the unnamed default, is fixed), so a
-/// second claude.ai account is a second name.
+/// browser login stores under the name in it, so a second claude.ai
+/// account is a second name.
 test("the login runs as the account named in the box", async ({ page }) => {
   await openClaude(page, WITH_BROWSER);
 

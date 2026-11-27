@@ -11,9 +11,9 @@
  * The plugin package owns the part that can drift upstream: the IPC
  * command name (`plugin:opener|reveal_item_in_dir`) and its argument
  * shape. A Tauri major that renames either is then a `pnpm update`
- * rather than a silent no-op — hand-rolling the `invoke` looked
- * appealing (the package is four lines deep over
- * `window.__TAURI_INTERNALS__.invoke`) but left exactly that hole.
+ * rather than a silent no-op. Calling `invoke` by hand (the package is
+ * four lines deep over `window.__TAURI_INTERNALS__.invoke`) would
+ * leave exactly that hole.
  *
  * `@tauri-apps/plugin-dialog` is here on the same terms, for the same
  * reason: it owns `plugin:dialog|open` and that command's argument

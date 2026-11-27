@@ -5,7 +5,7 @@
 // 'none'`, so a `<script>`, an `onerror=` or a `javascript:` link the
 // sanitizer missed is inert, and it can load nothing from another host.
 // The UI's own code still reaches in, so highlighting, copy buttons,
-// edges and selection work as they did.
+// edges and selection still work.
 //
 // Why a policy and not `sandbox` without `allow-scripts`: WebKit — the
 // desktop app's engine — then runs no listener on the frame's document

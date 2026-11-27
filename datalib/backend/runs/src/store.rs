@@ -419,8 +419,8 @@ const UPGRADES: &[(i32, &[&str])] = &[
     (14, &[METRICS_BY_NAME, METRIC_SAMPLES_BY_NAME]),
 ];
 
-/// `true` when the file carries this build's schema, climbing the
-/// [`UPGRADES`] to it first where there are rungs; `false` for a version
+/// `true` when the file carries this build's schema, running the
+/// [`UPGRADES`] up to it first where there are rungs; `false` for a version
 /// with none. A brand-new file (version 0, no tables) gets the schema
 /// installed and reads as a match.
 async fn schema_matches(pool: &SqlitePool) -> Result<bool, sqlx::Error> {
@@ -472,7 +472,7 @@ async fn climb(pool: &SqlitePool, statements: &[&str], to: i32) -> Result<(), sq
 /// One transaction, because another process deciding what to do with
 /// this file decides by what it can see: tables without the version
 /// stamp read as a store from some other build, and
-/// [`open_or_recreate`] answers one of those by deleting it. The DDL is
+/// [`open_or_recreate`] empties one of those, keeping a copy. The DDL is
 /// all `IF NOT EXISTS`, so two processes installing at once is the
 /// second one finding it already done.
 async fn install_schema(pool: &SqlitePool) -> Result<(), sqlx::Error> {
@@ -1592,7 +1592,7 @@ fn writer_loop(
         match rt.block_on(flush_or_retry(&pool, &scope, &batch, &mut series, done)) {
             Ok(()) if !batch.is_empty() => wrote(&path),
             Ok(()) => {}
-            // One bad flush must not stop the record for every other
+            // One bad flush must not stop the recording for every other
             // step, and must never take the run down. Say how many
             // lines went with it: the count is the only trace left of
             // them, and a silent loss here is what makes anyone
@@ -1824,7 +1824,7 @@ async fn delete_rows_of_runs(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ClosedRun {
     /// Whether the run itself was still open. False when the runner
-    /// closed its own books, which is the ordinary case.
+    /// closed its own run, which is the ordinary case.
     pub run_was_open: bool,
     /// Steps that were still `pending` or `running`.
     pub steps_closed: u64,
@@ -1838,10 +1838,10 @@ impl ClosedRun {
 
 /// Close a run whose runner is gone, so nothing reads `running` for ever.
 ///
-/// A runner normally closes its own books. One that was SIGKILLed ran no
+/// A runner normally closes its own run. One that was SIGKILLed ran no
 /// code to do it with, and the row it leaves behind is what the Manage
-/// screen joins against — so whoever outlives the runner has to finish
-/// the sentence. Idempotent: a run already closed is left alone and
+/// screen joins against — so whoever outlives the runner has to close
+/// it. Idempotent: a run already closed is left alone and
 /// reported as such.
 ///
 /// `step_state` is the caller's word for what a step that never reported
@@ -1849,8 +1849,8 @@ impl ClosedRun {
 /// business (see [`crate::LiveState`]). `why` goes on each step's
 /// `error`, so a person can tell a step that stopped itself from one the
 /// server gave up on. A step still `pending` takes it too, where [`end`]
-/// deletes one: a runner that died never settled the steps it was asked
-/// for, so a pending row here may be one it was about to run.
+/// deletes one: a runner that died never wrote how the steps it was
+/// asked for ended, so a pending row here may be one it was about to run.
 ///
 /// Processes are deliberately untouched. This crate would have to invent
 /// an exit code or a signal for them, and it does not know one: the
@@ -2021,9 +2021,9 @@ fn days_before(at: datalib_time::IsoOffsetTimestamp, days: u32) -> String {
 /// The process is over, and its run with it. Counted as a change to
 /// the runs and the processes so a watcher redraws a run that just
 /// finished, and its runner in the log's picker; a launch ending is
-/// nobody's live question. By now the runner has settled every step a
-/// request reached, so a step still `pending` is one no request asked
-/// for: it was not part of this run, and its row goes rather than
+/// nobody's live question. By now the runner has written how every step
+/// a request reached ended, so a step still `pending` is one no request
+/// asked for: it was not part of this run, and its row goes rather than
 /// reading as waiting forever.
 async fn end(pool: &SqlitePool, scope: &Scope) -> Result<(), sqlx::Error> {
     let (finished_at_utc, _) = scope.clock.now().to_utc_and_offset();
@@ -2221,10 +2221,10 @@ struct SeriesPlan {
 }
 
 /// A sample is due when a series has moved and the floor between
-/// samples has passed. A move the floor held back is written once the
-/// floor has passed, even if the series has not moved again — at the
-/// stamp it moved at: a queue that fills and then empties in one pass
-/// would otherwise keep its peak in the history until its next move. On
+/// samples has passed. A move that came too soon after the last sample
+/// is written once the floor has passed, even if the series has not
+/// moved again — at the stamp it moved at: a queue that fills and then
+/// empties within one floor would otherwise keep its peak in the history until its next move. On
 /// the last flush of a run, whatever each series ended at is written
 /// however recent its previous sample: a rate drawn to the end of the
 /// run needs that point.
@@ -2347,11 +2347,11 @@ mod tests {
     }
 
     /// A queue that fills and then empties within the sample floor: the
-    /// drop is held back, then written once the floor has passed — with
-    /// nothing new in the batch, and at the stamp it happened — rather
+    /// drop is not written at first, then written once the floor has
+    /// passed — with nothing new in the batch, and at the stamp it happened — rather
     /// than leaving the peak in the history until the queue next moves.
     #[test]
-    fn a_move_the_floor_held_back_is_written_once_it_passes() {
+    fn a_move_too_soon_after_the_last_sample_is_written_once_the_floor_passes() {
         let key: SeriesKey = ("s".into(), "queued".into(), String::new());
         let row = |value: i64, at: &str| MetricRow {
             step: "s".into(),

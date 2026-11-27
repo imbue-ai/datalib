@@ -242,8 +242,9 @@ export function useSourcesCard(ctx: CardCtx) {
     }
   }
   const busy = ref(false);
-  /// The rows, joined server-side from the config, the loop's record and
-  /// requests, the run store and the usage sampler — see
+  /// The rows, joined server-side from the config, the loop's store
+  /// (`system/supervisor.sqlite`: step states and requests), the run
+  /// store and the usage sampler — see
   /// `datalib/backend/http/src/manage/`. Bytes are measured by the backend
   /// on a tick *while a sync is running*, not walked per request; between
   /// runs nothing walks, which is why the two loads that matter ask for a
@@ -1103,7 +1104,7 @@ export function useSourcesCard(ctx: CardCtx) {
   const cardEl = ref<HTMLElement | null>(null);
 
   /// Everything this table shows, refetched together. The rows come from
-  /// the server with the config and the loop's record already joined.
+  /// the server with the config and the loop's store already joined.
   async function reloadAll(freshStorage = false) {
     await Promise.all([loadConfig(), loadRows(freshStorage)]);
   }
@@ -1120,12 +1121,13 @@ export function useSourcesCard(ctx: CardCtx) {
             // cadence; this just reads what it found.
             refreshRows();
           }
-          // The loop's record moving is the nearest thing to "a step
-          // committed" — nothing watches the stores themselves — and its
-          // requests live beside it.
+          // A change to the loop's store is the nearest thing to "a step
+          // committed" — nothing watches the stores themselves — and the
+          // requests are a table in it.
           if (changed(e, "dag")) void retireBanner();
           if (e.kind === "config_changed") {
-            // Config and record together, for the "Never run" reason above.
+            // Config and the loop's store together, for the "Never run"
+            // reason above.
             void reloadAll();
           }
         },

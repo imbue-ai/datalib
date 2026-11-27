@@ -1,6 +1,7 @@
 //! What the index holds of each source: its documents, and how many of
 //! them are not embedded yet. `unified_grid_and_search_index` reports it;
-//! the live bake checks it.
+//! `//datalib/backend/dag:manual_e2e_live_sync_golden`, the sync of real
+//! accounts into goldens (`docs/dev/testing.md`), checks it.
 
 use std::path::Path;
 

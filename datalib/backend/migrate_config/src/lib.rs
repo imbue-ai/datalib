@@ -3,43 +3,55 @@
 //!
 //! The runner refuses a retired shape, naming this tool, and the editor
 //! cannot change it; the rewrite has to live somewhere, and this is that
-//! somewhere. One rewrite lives here at a time — "any earlier shape to
-//! this one" — and when the shape moves again the next rewrite replaces
-//! it. Nothing pre-TOML is convertible any more: a root that still has a
+//! somewhere. Its rewrites run in order, each from the shape before it,
+//! so a config in any earlier shape comes out in the current one; a new
+//! shape change adds a rewrite to the list below. Nothing pre-TOML is convertible any more: a root that still has a
 //! `config.yaml` is set up again from the app.
 //!
-//! What the rewrite covers today is the header of `convert.rs` — the
-//! `datalib-step download <type>` command lines, the `_api` / `_backup`
-//! type words, and the `sync` / `common.input_path` / `common.raw_path`
-//! params — and, after it, `lowercase_ids.rs`: every id that names a
-//! folder becomes lower case; then `qmd_steps.rs`: the `qmd_index` fan-in becomes
-//! `qmd_aggregator`, downstream of each source's own qmd steps; then
-//! `index_name.rs`: the `unified_index` or `unified_document_index`
-//! group, its steps and its applet become `unified_grid_and_search_index`; then `time_series_steps.rs`:
-//! a source with time series gets its `render_time_series` step and the
-//! config its time-series index; then `time_series_embeds.rs`: a
-//! time-series source loses its `embed` step; then `step_commands.rs`: a
-//! step of datalib's own names `datalib-step` as its `command`; then
-//! `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
-//! `since`; then `conversation_settings.rs`: the ChatGPT and Claude
-//! ingests' API settings take the names they share; then
-//! `keyword_fold.rs` and `aggregator_drop.rs`: the search's own steps
-//! fold into the index step; then `index_step_name.rs`: the index step's
-//! function, `grid_index`, becomes `unified_grid_and_search_index`; then
-//! `input_patterns.rs`: the index steps read every source by pattern,
-//! which finds them by their current functions; then `unread_inputs.rs`:
-//! the index step stops naming the `render_time_series` and
-//! `render_occurrences` steps it does not read; then `lock_names.rs`:
-//! the `qmd_embed` lock is `embedder` and `qmd_keyword` goes; then
-//! `explicit_steps.rs`: each step writes its `id`, its whole
-//! `datalib-step run …` command, and the locks and `reads` the runner
-//! used to work out for it, and the file its `[[programs]]`, `[[locks]]`
-//! and `[env]`; then `backup_secrets.rs`: a WhatsApp or Signal
-//! ingest names the variable holding its backup secret; and last
-//! `check_verb.rs`: that entry's `verbs` take `check`. Every rewrite
-//! after `convert.rs` is also one `datalib-http` makes by itself
-//! ([`UNATTENDED`]), and every one before `explicit_steps.rs` reads the
-//! shape from before it.
+//! The rewrites, in the order they run:
+//!
+//! 1. `convert.rs`, whose header has the details: the `datalib-step
+//!    download <type>` command lines, the `_api` / `_backup` type words,
+//!    and the `sync` / `common.input_path` / `common.raw_path` params.
+//! 2. `lowercase_ids.rs`: every id that names a folder becomes lower
+//!    case.
+//! 3. `qmd_steps.rs`: the `qmd_index` fan-in becomes `qmd_aggregator`,
+//!    downstream of each source's own qmd steps.
+//! 4. `index_name.rs`: the `unified_index` or `unified_document_index`
+//!    group, its steps and its applet become
+//!    `unified_grid_and_search_index`.
+//! 5. `time_series_steps.rs`: a source with time series gets its
+//!    `render_time_series` step and the config its time-series index.
+//! 6. `time_series_embeds.rs`: a time-series source loses its `embed`
+//!    step.
+//! 7. `step_commands.rs`: a step of Datalib's own names `datalib-step`
+//!    as its `command`.
+//! 8. `todoist_since.rs`: a Todoist ingest's `completed_since` becomes
+//!    `since`.
+//! 9. `conversation_settings.rs`: the ChatGPT and Claude ingests' API
+//!    settings take the names they share.
+//! 10. `keyword_fold.rs` and `aggregator_drop.rs`: the search's own steps
+//!     fold into the index step.
+//! 11. `index_step_name.rs`: the index step's function, `grid_index`,
+//!     becomes `unified_grid_and_search_index`.
+//! 12. `input_patterns.rs`: the index steps read every source by
+//!     pattern, which finds them by their current functions.
+//! 13. `unread_inputs.rs`: the index step stops naming the
+//!     `render_time_series` and `render_occurrences` steps it does not
+//!     read.
+//! 14. `lock_names.rs`: the `qmd_embed` lock is `embedder` and
+//!     `qmd_keyword` goes.
+//! 15. `explicit_steps.rs`: each step writes its `id`, its whole
+//!     `datalib-step run …` command, and the locks and `reads` the runner
+//!     used to work out for it, and the file its `[[programs]]`,
+//!     `[[locks]]` and `[env]`.
+//! 16. `backup_secrets.rs`: a WhatsApp or Signal ingest names the
+//!     variable holding its backup secret.
+//! 17. `check_verb.rs`: the `datalib-step` entry's `verbs` take `check`.
+//!
+//! Every rewrite after `convert.rs` is also one `datalib-http` makes by
+//! itself ([`UNATTENDED`]), and every one before `explicit_steps.rs`
+//! reads the shape from before it.
 
 pub mod aggregator_drop;
 pub mod backup_secrets;
@@ -295,12 +307,6 @@ pub fn upgrade_todoist_since(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
-/// Write into the file what the runner used to work out for
-/// `datalib-step`'s steps (`explicit_steps.rs`). Refused when the result
-/// would lose a group, applet or lock the original loaded, or drop more
-/// entries than the original. The runner refuses every step of the
-/// original, so its steps cannot be compared; the tests hold the rewrite
-/// of every config this repo shipped to the runner it was written for.
 /// Name the default variable in a WhatsApp or Signal ingest that relies
 /// on it (`backup_secrets.rs`). Refused, naming the step, when its
 /// `backup` table is written inline.
@@ -324,6 +330,12 @@ pub fn upgrade_check_verb(text: &str) -> Result<Option<String>> {
     Ok(Some(out))
 }
 
+/// Write into the file what the runner used to work out for
+/// `datalib-step`'s steps (`explicit_steps.rs`). Refused when the result
+/// would lose a group, applet or lock the original loaded, or drop more
+/// entries than the original. The runner refuses every step of the
+/// original, so its steps cannot be compared; the tests hold the rewrite
+/// of every config this repo shipped to the runner it was written for.
 pub fn upgrade_explicit_steps(text: &str) -> Result<Option<String>> {
     if !explicit_steps::is_retired(text).unwrap_or(false) {
         return Ok(None);
@@ -721,9 +733,8 @@ command = "datalib-applet slack"
 tree = "slack/rendered_md"
 "#;
 
-    /// The shape slice 1 of the groups plan wrote: grouped, but with the
-    /// function and the provider still on the command line and the old
-    /// function names.
+    /// The first grouped shape: grouped, but with the function and the
+    /// provider still on the command line and the old function names.
     const GROUPED_WITH_COMMANDS: &str = r#"
 [[groups]]
 id = "slack"
@@ -762,7 +773,7 @@ id = "unified_index"
 command = "datalib-applet unified_index"
 "#;
 
-    /// The shape slice 2 wrote: command-less, but with the type spelled
+    /// The next grouped shape: command-less, but with the type spelled
     /// for the method and the method as a `sync` table or a
     /// `common.input_path`.
     const GROUPED_PRE_METHOD_TABLES: &str = r#"
@@ -890,8 +901,8 @@ function = "grid_index"
 inputs = ["slack/render_markdown"]
 "#;
 
-    /// The top-level tables ride through a rewrite, the checkpoint cadence
-    /// into `[env]`. A rewrite that dropped one would silently reset the
+    /// The top-level tables come through a rewrite unchanged, and the
+    /// checkpoint cadence moves into `[env]`. A rewrite that dropped one would silently reset the
     /// retention or the checkpoint cadence a person had set.
     #[test]
     fn top_level_tables_survive_the_rewrite() {
@@ -1033,8 +1044,8 @@ inputs = ["slack/render_markdown"]
         assert!(err.contains("already"), "{err}");
     }
 
-    /// The pre-TOML era is gone from here: a YAML config is refused with
-    /// a message that says what to do instead.
+    /// A YAML config is not converted: it is refused with a message that
+    /// says what to do instead.
     #[test]
     fn yaml_and_empty_input_are_refused() {
         for text in ["", "sources:\n  - name: slack\n", "steps:\n  - id: x\n"] {
@@ -1315,7 +1326,7 @@ inputs = ["mail/render_markdown"]
     }
 
     /// A custom step that already writes where a renamed step will is a
-    /// clash the loader settles by dropping one of them, so the rename is
+    /// clash the loader resolves by dropping one of them, so the rename is
     /// refused rather than made.
     #[test]
     fn the_index_name_upgrade_refuses_a_rename_that_drops_a_step() {

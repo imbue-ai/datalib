@@ -130,7 +130,7 @@ pub enum Retired {
     NoTimeSeries,
     /// A time-series source with an `embed` step (`time_series_embeds.rs`).
     TimeSeriesEmbed,
-    /// A step of datalib's own with no `command` (`step_commands.rs`).
+    /// A step of Datalib's own with no `command` (`step_commands.rs`).
     ImplicitStepCommand,
     /// A Todoist ingest's window named `completed_since` (`todoist_since.rs`).
     TodoistCompletedSince,

@@ -58,7 +58,7 @@ struct Cli {
     #[arg(long, global = true)]
     frontend_dir: Option<PathBuf>,
     /// Port to serve on. Loopback only. `0` — what the gateway passes
-    /// — means "any": the OS picks, and [`announce_port`] reports back
+    /// — means "any": the OS picks, and [`print_port`] reports back
     /// which one it picked.
     #[arg(short = 'p', long, global = true)]
     port: Option<u16>,
@@ -119,7 +119,7 @@ struct SearchArgs {
     within: Option<String>,
 }
 
-pub fn announce_port(port: u16) {
+pub fn print_port(port: u16) {
     use std::io::Write;
     let mut out = std::io::stdout().lock();
     // Best effort on both counts: a gateway that has already given up
@@ -171,8 +171,9 @@ fn run(cli: Cli) -> Result<()> {
         _ => serde_json::Value::Null,
     };
     // Write, then serve. The order is the contract: the gateway waits
-    // for `announce_port` and then scans the store, so announcing
-    // early would race the scan.
+    // for the `DATALIB_APPLET_PORT=` line `print_port` prints on
+    // stdout and then scans the store, so printing it early would race
+    // the scan.
     match cli.applet {
         Which::Slack => {
             if let Some(dir) = &cli.frontend_dir {

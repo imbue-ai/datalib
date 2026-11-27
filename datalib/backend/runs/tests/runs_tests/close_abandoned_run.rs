@@ -1,4 +1,4 @@
-//! Finishing the sentence for a runner that was killed. A runner that
+//! Closing the run of a runner that was killed. A runner that
 //! exits closes its own run; one that was SIGKILLed ran no code to do it
 //! with, and something that outlived it has to.
 
@@ -72,8 +72,8 @@ async fn finished_at(root: &std::path::Path, run_id: &str) -> Option<String> {
 
 /// An open run is closed, and every step that was still live takes the
 /// state the caller named, with the reason on it — a pending one too,
-/// which a run that ended normally would have deleted: nothing settled
-/// it, so it may have been about to run. A step that had already
+/// which a run that ended normally would have deleted: nothing wrote how
+/// it ended, so it may have been about to run. A step that had already
 /// reported is left exactly as it was.
 #[tokio::test]
 async fn it_closes_the_run_and_the_steps_that_never_reported() {
@@ -120,8 +120,8 @@ async fn it_closes_the_run_and_the_steps_that_never_reported() {
     );
 }
 
-/// Calling it twice is calling it once. The server closes the books on
-/// every job it finishes, so the second call is the common case, not an
+/// Calling it twice is calling it once. The server calls it for every
+/// job it finishes, so the second call is the common case, not an
 /// edge one — and it must not restamp a run with a later time.
 #[tokio::test]
 async fn closing_a_closed_run_changes_nothing() {

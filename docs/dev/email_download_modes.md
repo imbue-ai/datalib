@@ -204,8 +204,8 @@ The Gmail mode keeps the same tables as the JMAP mode, and the same
 rule: what Gmail **listed** (`listed_messages`, a row per message id
 with the `historyId` that last named it as changed) is stored apart
 from what is **held** (the `historyId` each message was fetched for, in
-`held_version` on the listing's sidecar), and what is **owed** is asked
-of the store each time. The email row a Gmail id produced is keyed by
+`held_version` on the listing's sidecar), and what is **owed** is
+queried from the store each time. The email row a Gmail id produced is keyed by
 that id, so no mapping is stored. The provider's
 [`INGEST.md`](/datalib/backend/etl/providers/email/INGEST.md)
 §"Incrementality" has the rule in full.
@@ -226,7 +226,8 @@ same namespacing discipline as the JMAP path's `jmap:` keys. A run:
    window (documented as "typically at least one week"). That is not an
    error: with no cursor to replay from — that, or a first run — the
    run stores the `historyId` the profile reported
-   before any walk, and forgets which labels were listed whole. What is
+   before any walk, and deletes every `listed_whole` row, so every
+   label is walked again (`listed::start_over`). What is
    already held is not fetched again, at 60 units a message; so a label
    change made while no cursor was replaying is not seen.
 2. **Walks `messages.list`** over each configured label (or the whole
@@ -325,7 +326,7 @@ Google is the authority on the limit, and the code is built to bump
 into it and keep going, the way the Slack provider does.
 
 - **A rate-limit response is retried with backoff** through the shared
-  HTTP chokepoint (`latchkey_curl_classified` with `gmail_retryability`).
+  HTTP layer (`latchkey_curl_classified` with `gmail_retryability`).
   Google spells the per-user limit two ways — 429 `rateLimitExceeded`
   and **403 `userRateLimitExceeded`** — and a 403 read as an auth error
   is the trap: the run would walk on and "succeed" with every
@@ -337,7 +338,7 @@ into it and keep going, the way the Slack provider does.
   the rest of the run (once per batch of responses seen since the last
   request), to a floor of a quarter of the configured value, and empty
   the bucket so the retry is not another burst. A long
-  backfill therefore settles under whatever Google actually enforces
+  backfill therefore runs under whatever Google actually enforces
   instead of hitting it once a minute.
 - **When the retry loop gives up** — the run's `download` bounds
   (`DownloadParams`: by default thirty minutes without a successful

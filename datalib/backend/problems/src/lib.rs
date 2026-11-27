@@ -94,7 +94,7 @@ closed_vocabulary! {
         /// It did, with at least one field discarded.
         Nulled,
         /// It did, intact. A finding worth publishing, claiming nothing
-        /// was lost — R6 in miniature.
+        /// was lost.
         Ok,
     }
 }
@@ -117,8 +117,8 @@ closed_vocabulary! {
         /// lost but its look.
         UnsupportedJson,
         /// A deliberate lossy rule fired (truncation, chrome-stripping).
-        /// These are the rows R3's judgment-call table is generated
-        /// from, which is why `Problem::rule` exists.
+        /// `Problem::rule` names the rule, so these rows can be grouped
+        /// by it.
         DeliberateLoss,
         /// The projection itself failed on this record — a converter
         /// error, a renderer that gave up on the document. → drop it
@@ -331,8 +331,8 @@ pub struct Problem {
     pub field: Option<String>,
     /// Where in the stored payload, as a JSON pointer, when we know it.
     pub path: Option<String>,
-    /// The R3 judgment-call rule that fired, when this was a deliberate
-    /// lossy rule rather than a defect. Must be stable across runs —
+    /// The rule that fired, when this was a deliberate lossy rule rather
+    /// than a defect. Must be stable across runs —
     /// name it for the rule, not for the value it happened to see.
     pub rule: Option<String>,
     /// First 80 characters of the offending value — see [`sample_of`] —
@@ -383,8 +383,8 @@ impl Problem {
         }
     }
 
-    /// A deliberate lossy rule fired. `rule` is what R3's generated
-    /// table groups by.
+    /// A deliberate lossy rule fired. `rule` names it, so the rows can be
+    /// grouped by rule.
     pub fn lossy(rule: impl Into<String>, field: Option<String>, sample: &str) -> Self {
         Self {
             reason: Reason::DeliberateLoss,

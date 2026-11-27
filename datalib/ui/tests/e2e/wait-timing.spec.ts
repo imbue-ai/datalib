@@ -4,7 +4,13 @@
 // per-request times recorded it, spread over three requests.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, SEARCH_ROWS, firstRowUuid, openRowByUuid, searchAndSettle } from "./grid-helpers";
+import {
+  GRID,
+  SEARCH_ROWS,
+  firstRowUuid,
+  openRowByUuid,
+  searchAndAwaitResults,
+} from "./grid-helpers";
 
 type Posted = { name: string; level?: string; fields?: Record<string, unknown> };
 
@@ -39,14 +45,14 @@ test("a search card logs how long its rows and a document took to show", async (
       }),
     );
 
-  await searchAndSettle(page, "-is:document");
+  await searchAndAwaitResults(page, "-is:document");
   await expect
     .poll(() => waits("search_answered"), POSTED)
     .toContainEqual(
       expect.objectContaining({ trigger: "search", outcome: "rows", q: "-is:document" }),
     );
 
-  await searchAndSettle(page, "is:document");
+  await searchAndAwaitResults(page, "is:document");
   await openRowByUuid(page, await firstRowUuid(page));
   await expect
     .poll(() => waits("doc_shown"), POSTED)

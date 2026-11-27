@@ -1,8 +1,8 @@
 //! A `[[programs]]` entry for `datalib-step` whose `verbs` leave out
-//! `check`. The runner sends `--check` only to a program that lists it,
-//! and `datalib-step` answers it with what a sync would make of its
-//! step's params (`docs/dev/step_protocol.md` § Check), so the verb is
-//! added: without it, a save and `datalib-pipeline check` would let a
+//! `check`. The runner appends `--check` to a step's command only when
+//! its program lists the verb, and `datalib-step`, run that way, reports
+//! what a sync would make of its step's params
+//! (`docs/dev/step_protocol.md` § Check), so the verb is added: without it, a save and `datalib-pipeline check` would let a
 //! misspelled param through to the first sync.
 //!
 //! A text edit: every comment and key the file holds survives. An entry

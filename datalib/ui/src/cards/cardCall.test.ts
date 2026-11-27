@@ -42,7 +42,7 @@ describe("parseCardSource", () => {
     expect(parseCardSource(formatCardCall("tableView", args))).toEqual({ name: "tableView", args });
   });
 
-  /** The 2026-10-19 hole: a URL path segment holding JavaScript ran with `new Function`. */
+  /** A URL path segment holding JavaScript once ran with `new Function`. */
   it.each([
     ["an arrow function", '(root) => { root.textContent = "hi" }'],
     ["a call on a call's result", "gridView().constructor"],

@@ -1,4 +1,4 @@
-//! Which build this is: the datalib version, and the commit it came
+//! Which build this is: the Datalib version, and the commit it came
 //! from. The run store records the commit beside each run so the log
 //! view can link a line back to the source that wrote it; every store
 //! records both in `_datalib_meta` so a later build knows who wrote it.

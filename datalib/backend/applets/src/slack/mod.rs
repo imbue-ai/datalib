@@ -290,7 +290,7 @@ fn channel_response(tree: &Path, channel: &str) -> ChannelResponse {
         .unwrap_or_default();
     // Oldest first, the way a channel reads. Ties break on the uuid so
     // the order is identical on every request over unchanged data (the
-    // directory walk itself is unordered).
+    // query that reads the rows has no `ORDER BY`).
     threads.sort_by(|a, b| {
         when_key(&a.created_at)
             .cmp(&when_key(&b.created_at))
@@ -325,7 +325,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let gate = crate::gate::Gate::from_env(bound)?;
     tracing::info!(port = bound, tree = %tree, "listening");
     // Written and bound, in that order — now the gateway may look.
-    crate::announce_port(bound);
+    crate::print_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -666,14 +666,14 @@ mod tests {
         write_thread(
             tmp.path(),
             "t1",
-            "#cat-qi",
+            "#ten-forward",
             "2026-07-01T00:00:00Z",
             &[("ann", "hello"), ("bob", "hi back")],
         );
         write_thread(
             tmp.path(),
             "t2",
-            "#cat-qi",
+            "#ten-forward",
             "2026-07-02T00:00:00Z",
             &[("cid", "joined")],
         );
@@ -687,7 +687,11 @@ mod tests {
 
         let resp = channels_response(tmp.path(), "ws");
         assert_eq!(resp.channels.len(), 2);
-        let cat = resp.channels.iter().find(|c| c.name == "#cat-qi").unwrap();
+        let cat = resp
+            .channels
+            .iter()
+            .find(|c| c.name == "#ten-forward")
+            .unwrap();
         assert_eq!(cat.threads, 2);
         assert_eq!(cat.messages, 3);
     }
@@ -761,8 +765,8 @@ mod tests {
         assert!(channel_response(tmp.path(), "#nope").threads.is_empty());
     }
 
-    /// Thread order must not depend on the directory walk, which is a
-    /// LIFO stack over unordered `read_dir`.
+    /// Thread order must not depend on the order the store returns rows
+    /// in: the query that reads them has no `ORDER BY`.
     #[tokio::test(flavor = "multi_thread")]
     async fn thread_order_is_stable_across_runs() {
         let mut seen = std::collections::HashSet::new();
@@ -785,7 +789,10 @@ mod tests {
     /// delimiter, so the round trip has to survive encoding.
     #[test]
     fn channel_names_survive_the_query_string() {
-        assert_eq!(query_param("name=%23cat-qi", "name").unwrap(), "#cat-qi");
+        assert_eq!(
+            query_param("name=%23ten-forward", "name").unwrap(),
+            "#ten-forward"
+        );
         assert_eq!(query_param("x=1&name=%23a%20b", "name").unwrap(), "#a b");
         assert!(query_param("nope=1", "name").is_none());
     }
@@ -794,7 +801,7 @@ mod tests {
     /// told so rather than handed a short list that looks whole.
     #[tokio::test(flavor = "multi_thread")]
     async fn unreadable_input_is_reported_not_swallowed() {
-        // The store is one file now, so "unreadable input" is a store
+        // The store is one file, so "unreadable input" is a store
         // that will not open rather than one bad document among many.
         // The card must say the listing is empty *because something
         // broke* — an empty listing with no warning reads as

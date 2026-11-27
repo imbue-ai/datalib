@@ -693,8 +693,9 @@ fn redact(header: &str) -> String {
     }
 }
 
-/// See the module docs for why this is a global rather than a field on
-/// [`crate::AppState`].
+/// A global rather than a field on [`crate::AppState`]: an attempt
+/// outlives the request that started it, and `AppState` is cloned per
+/// request.
 fn attempts() -> &'static Mutex<HashMap<String, Arc<Mutex<ConnectStatus>>>> {
     static ATTEMPTS: OnceLock<Mutex<HashMap<String, Arc<Mutex<ConnectStatus>>>>> = OnceLock::new();
     ATTEMPTS.get_or_init(|| Mutex::new(HashMap::new()))

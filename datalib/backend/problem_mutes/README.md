@@ -89,10 +89,10 @@ drift. `//datalib/backend/applets` checks it: for every
 counter over rows of every stage and severity, the number is the rows
 its query lists.
 
-What is not a row is not in those numbers. A pass that failed and was
-run again, and the count of a step that writes no problem rows (a
-package's own program), are a grey number beside them, and a
-double-click on that opens the step's log. The time-series and
+What is not a row is not in those numbers. A step's process that
+failed and was started again in the same run, and the count of a step
+that writes no problem rows (a package's own program), are a grey
+number beside them, and a double-click on that opens the step's log. The time-series and
 calendar-occurrence renders write rows in their own stores, read like
 any other step's (`etl/README.md` §"Problems stay in the step that found
 them").

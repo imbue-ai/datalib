@@ -79,8 +79,8 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
   expect(cfg.diagnostics[0].entry.id).toBe("broken/ingest");
   expect(cfg.diagnostics[0].message).toContain("title");
 
-  // The applet the whole app runs on is untouched — the assertion that
-  // would have failed before #209, and the one that matters most.
+  // The applet the whole app runs on is untouched: one broken entry costs
+  // that entry, not the app. The assertion that matters most.
   const search = await request.get("/applet/unified_grid_and_search_index/search?q=&limit=1");
   expect(search.status()).toBe(200);
 
@@ -105,8 +105,8 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
 
 test("a config warning drops nothing, and the System row counts it", async ({ page }) => {
   // A group with nothing under it loads, with a warning. No entry's row
-  // is dropped, so before the System row carried the count the app
-  // never showed it.
+  // is dropped, so the System row's count is the only place the warning
+  // shows.
   writeConfig(`${original}\n[[groups]]\nid = "lonely"\n`);
 
   await page.goto("/data_sources");

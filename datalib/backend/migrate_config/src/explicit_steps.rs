@@ -4,12 +4,15 @@
 //! `datalib-step`'s steps the locks, `reads` and verbs it knew they
 //! needed. The rewrite writes all of that into the file, as
 //! `docs/dev/config_model.md` §"The retired shapes" lists:
-//! each step gets its `id`, its whole `command`, and the `reads` and
-//! `locks` the runner used to give it; the file gets a `[[programs]]`
-//! entry for `datalib-step`, the `[[locks]]` its steps hold, and an
-//! `[env]` table in place of `checkpoint_cadence`, `render_pages` and
-//! `[modal]`; `embed_contexts` and `embed_search_index`, which no step
-//! reads any more, are taken out; a group loses its `source`.
+//!
+//! - each step gets its `id`, its whole `command`, and the `reads` and
+//!   `locks` the runner used to give it;
+//! - the file gets a `[[programs]]` entry for `datalib-step`, the
+//!   `[[locks]]` its steps hold, and an `[env]` table in place of
+//!   `checkpoint_cadence`, `render_pages` and `[modal]`;
+//! - `embed_contexts` and `embed_search_index`, which no step reads any
+//!   more, are taken out;
+//! - a group loses its `source`.
 //!
 //! A text edit, like `step_commands.rs`: every comment and key the file
 //! holds survives, and the comments above a top-level key that moves into

@@ -116,7 +116,7 @@ pub fn switch(
     }
 }
 
-/// The id of the button that asks for a step's folder again.
+/// The id of the button that opens the picker for a step's folder again.
 pub const CHOOSE_AGAIN: &str = "choose_again";
 
 /// Offered while a step's last run failed because the OS would not let

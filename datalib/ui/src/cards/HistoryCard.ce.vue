@@ -2,9 +2,10 @@
 // `historyView({ trees, title, source, compare })`: every commit in the
 // doltlite stores under some trees — one per sync, checkpoint or render
 // pass — as a tree of store, commit and table, re-read whenever the
-// runner's record moves. Opened from a Manage row's menu. On a source,
-// two commits of its download's store can be compared: the comparison
-// is a diff group added to the config and synced.
+// loop's store (`system/supervisor.sqlite`) changes. Opened from a
+// Manage row's menu. On a source, two commits of its download's store
+// can be compared: the comparison is a diff group added to the config
+// and synced.
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { Column } from "@slickgrid-universal/common";
 import type { ColumnSpec } from "@/api";
@@ -329,7 +330,7 @@ onMounted(() => {
   void load();
   unsubscribe = subscribeLive(
     {
-      // The loop's record moving is the nearest thing to "a step
+      // A change to the loop's store is the nearest thing to "a step
       // committed" — nothing watches the stores themselves.
       root: (e) => {
         if (changed(e, "dag")) void load();

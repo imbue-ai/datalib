@@ -97,7 +97,7 @@ describe("compareCommits", () => {
     });
     expect(renderId).toBe("enterprise-changes/render_markdown");
     expect(text).toContain('inputs = ["enterprise/ingest"]');
-    // The group no longer names its source; the step's command carries
+    // The group does not name its source; the step's command carries
     // the source's type, and `datalib-step` gets its verbs.
     expect(text).not.toContain('source = "enterprise"');
     expect(text).toContain('command = "datalib-step run render_markdown diff --source-type slack"');

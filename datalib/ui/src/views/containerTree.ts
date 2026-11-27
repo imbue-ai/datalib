@@ -332,8 +332,8 @@ function openedFrom(box: BoxNode, id: string): Set<string> {
 }
 
 // A "New card" left before anything was picked in it: the tab `left`,
-// once another is selected, if it is still the gallery. It closes, where
-// it used to stay behind as an empty tab.
+// once another is selected, if it is still the gallery. It closes rather
+// than stay behind as an empty tab.
 export function withoutLeftGallery(root: BoxNode, left: string | null): BoxNode {
   if (left === null || left === root.selected) return root;
   const tab = root.children.find((c) => c.id === left);

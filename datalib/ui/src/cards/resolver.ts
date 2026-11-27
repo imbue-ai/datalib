@@ -1,10 +1,10 @@
 // What a chip names, asked once for the whole app (docs/dev/chips.md
 // § Resolving). Every surface that draws chips — a document, a grid
 // cell — asks here: questions drawn in the same pass go out as one
-// request, answers are kept, and a change a person makes forgets the
-// keys it touched and tells every surface to draw them again.
+// request, answers are kept, and a change a person makes drops the keys
+// it touched from the cache and tells every surface to draw them again.
 //
-// A key is forgotten rather than updated in place: the answer after an
+// A key is dropped rather than updated in place: the answer after an
 // edit is whatever the server says next, and an answer to a question
 // asked before the edit is dropped when it lands. An answer that moves
 // on its own, like a step's status, is revalidated instead: asked again
@@ -20,7 +20,7 @@ export class Resolver<V> {
   private readonly inflight = new Map<string, Promise<void>>();
   /// Keys revalidated while their question was out: asked again when it lands.
   private readonly owed = new Set<string>();
-  /// Bumped by `forget`: an answer for an older generation is stale.
+  /// Bumped by `dropAnswers`: an answer for an older generation is stale.
   private readonly generation = new Map<string, number>();
   private readonly listeners = new Set<Listener>();
   private next: { keys: string[]; done: Promise<void> } | null = null;
@@ -56,7 +56,7 @@ export class Resolver<V> {
 
   /** Drop what is known about `keys` and tell every surface; the next
    *  draw asks again. Call it after any edit that changes an answer. */
-  forget(keys: Iterable<string>): void {
+  dropAnswers(keys: Iterable<string>): void {
     const dropped = new Set<string>();
     for (const key of keys) {
       this.known.delete(key);

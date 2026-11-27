@@ -114,9 +114,9 @@ pub async fn build_state(
     );
 
     // Before the loop, so its first read is of the current shape, and
-    // before the watcher, whose first act opens the loop's record: the
-    // moves carry the record's rows only from a record that was there
-    // before this server started.
+    // before the watcher, whose first act opens the loop's store,
+    // `system/supervisor.sqlite`: the moves carry its rows over only when
+    // the file was there before this server started.
     let data_root = (*root).clone();
     let bin_override = binary_dir.clone();
     tokio::task::spawn_blocking(move || {
@@ -131,7 +131,7 @@ pub async fn build_state(
     crate::config_upgrade::move_case_folders(&root).await;
 
     // Everything the UI shows that changes. One watcher per
-    // process, replacing the timers every UI surface used to keep — see
+    // process, rather than a timer per UI surface — see
     // `crate::watch`. Started before the loop so a sync that begins
     // during startup is already being reported on.
     let (root_tx, _) = tokio::sync::broadcast::channel(64);
@@ -151,7 +151,7 @@ pub async fn build_state(
     // Made here, before the runner starts and before any handler reads
     // them: two processes making one of these files at once can leave
     // it unreadable.
-    if let Err(e) = sync.mailbox().await {
+    if let Err(e) = sync.supervisor_store().await {
         tracing::error!("supervisor: cannot open the request store: {e:#}");
     }
     if let Err(e) = datalib_runs::prepare_store(&root).await {
@@ -162,7 +162,7 @@ pub async fn build_state(
         pipeline: crate::binaries::resolve_pipeline_bin(),
         binary_dir: binary_dir.clone(),
         now,
-        announce: Some(root_tx.clone()),
+        stream: Some(root_tx.clone()),
         nudge: Some(nudge.clone()),
     }));
 

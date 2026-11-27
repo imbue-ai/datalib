@@ -40,8 +40,8 @@ fn wait_for_token_file(root: &Path) -> String {
 }
 
 /// Everything the server wrote to stderr, up to its death. The token file
-/// is written after the moment the URL was once printed, so a server that
-/// has written it has already said whatever it was going to.
+/// is written after the point where a server would print the URL, so a
+/// server that has written it has already said whatever it was going to.
 fn stderr_of(mut child: Child) -> String {
     child.kill().expect("kill");
     let mut text = String::new();

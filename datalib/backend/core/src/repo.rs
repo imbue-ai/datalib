@@ -1,5 +1,5 @@
-//! [`AppRepo`] — the seam to the stores this server owns: disk usage
-//! and remote media.
+//! [`AppRepo`] — the trait the server reads and writes the stores it
+//! owns through: disk usage and remote media.
 
 use std::sync::Arc;
 

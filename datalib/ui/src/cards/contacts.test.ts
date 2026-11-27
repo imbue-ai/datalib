@@ -458,9 +458,9 @@ describe("an edit to a link", () => {
   }
   afterEach(() => vi.unstubAllGlobals());
 
-  /** Linking riker@ forgot only riker@, so a card drawn from wriker@ kept
-   *  the contact's old list of handles until a live update came, seconds
-   *  later. */
+  /** Linking riker@ dropped only riker@ from the cache, so a card drawn
+   *  from wriker@ kept the contact's old list of handles until a live
+   *  update came, seconds later. */
   it("forgets every handle of the contact it joins or leaves", async () => {
     const riker = contact("datalib_contacts", "Will Riker", [
       ["email:wriker@enterprise.test", null],

@@ -11,7 +11,8 @@
 //! The `npx -y <pkg>@<v>` fallback is a supply-chain hole — only the
 //! top-level version is pinned, ~170 transitive packages float, and
 //! their install scripts run — so it is off unless [`ALLOW_NPX_ENV`] is
-//! set, and it announces itself on stderr when it fires.
+//! set, and it prints a warning to stderr the first time it runs each
+//! package.
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;

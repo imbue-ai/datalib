@@ -1,5 +1,6 @@
-//! `NormalizedPhoto`: a photo or video as one source describes it — a
-//! Lightroom catalog's image, later an Apple Photos asset. Only the shape:
+//! `NormalizedPhoto`: a photo or video as one source describes it. Only
+//! `lightroom_render` fills it: `apple_photos` downloads but has no render
+//! crate (its `INGEST.md` §"What render would need"). Only the shape:
 //! a render crate fills it from raw rows, the render store keeps it with
 //! the photo's document, and the `photos` applet reads nothing else
 //! (`docs/dev/grid_rows.md` § "`image`, `latitude`, `longitude`").

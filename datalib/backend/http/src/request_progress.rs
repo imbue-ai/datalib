@@ -13,8 +13,8 @@ use serde::Serialize;
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 use crate::{
-    internal, live_progress, mailbox, supervisor, AppState, DagStepProgress, DagStepRun, Refusal,
-    RequestView,
+    internal, live_progress, supervisor, supervisor_store, AppState, DagStepProgress, DagStepRun,
+    Refusal, RequestView,
 };
 
 /// Where a step stands for one request.
@@ -23,7 +23,7 @@ use crate::{
 #[strum(serialize_all = "snake_case")]
 pub enum RequestStepPhase {
     /// It has work left for the request and is not running: waiting its
-    /// turn, or the loop has not taken the request on yet.
+    /// turn, or the loop has not started serving the request yet.
     Pending,
     Running,
     /// Nothing left for the request: it ran, failed, was up to date, or
@@ -48,7 +48,8 @@ pub struct RequestStep {
     pub state: Option<&'static str>,
     pub state_detail: Option<String>,
     /// What a `waiting` step waits for (`WaitKind`): `upstream`, `reader`,
-    /// `lock`, `disk_space` or `config`; null in any other state.
+    /// `lock`, `disk_space`, `config` or `prepare`; null in any other
+    /// state.
     pub waiting_for: Option<&'static str>,
     /// Its newest run. A step done without running for this request keeps
     /// an older one.
@@ -66,10 +67,10 @@ pub struct RequestProgress {
     pub steps: Vec<RequestStep>,
 }
 
-/// A step's record names the open requests it has work left in, and the
-/// loop closes a request only after saving a record in which no step
-/// names it. So until one does, the loop has not taken it on; once one
-/// does, a step that does not is done with it. In the moment between
+/// A step's row in the loop's `steps` table names the open requests it
+/// has work left in, and the loop closes a request only after saving rows
+/// in which no step names it. So until one does, the loop has not started
+/// serving it; once one does, a step that does not is done with it. In the moment between
 /// that last save and the close, every step reads pending, never done
 /// too early.
 pub fn phase(request: &RequestRow, record: &Record, step: Option<&StepRecord>) -> RequestStepPhase {
@@ -87,7 +88,7 @@ pub fn phase(request: &RequestRow, record: &Record, step: Option<&StepRecord>) -
 
 /// The roots, then every step of `graph` downstream of them in
 /// topological order. A root the config no longer names is still listed:
-/// the loop may be holding the request for a config that has it.
+/// the request may be waiting for a config that has it.
 fn scope(graph: &datalib_dag::Graph, roots: &[String]) -> Vec<(String, bool)> {
     let known: Vec<usize> = roots
         .iter()
@@ -112,7 +113,7 @@ pub async fn get(
     State(s): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<RequestProgress>, Refusal> {
-    let store = mailbox(&s).await?;
+    let store = supervisor_store(&s).await?;
     let Some(request) = store.request(&id).await.map_err(internal)? else {
         return Err((StatusCode::NOT_FOUND, format!("no request {id}")));
     };
@@ -195,7 +196,7 @@ mod tests {
     }
 
     /// Running for another request is not running for this one, and a
-    /// request no step names yet has not been taken on.
+    /// request no step names yet is one the loop has not started serving.
     #[test]
     fn nothing_reads_done_before_the_loop_takes_the_request_on() {
         let r = request(None);

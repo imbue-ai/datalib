@@ -8,7 +8,7 @@ import {
   actOnRowByUuid,
   cardOf,
   expandGroup,
-  gridSettled,
+  untilGridLoaded,
   nameCell,
   SEARCH_ROWS,
   searchMenuItem,
@@ -90,7 +90,7 @@ test("a source's problems open in the grid, its filter in the search bar", async
   // otherwise open for renaming.
   await expect(nameCell(page, key).locator("input")).toHaveCount(0);
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const rows = await held(page);
   expect(rows.map((r) => r.problem_uuid).sort()).toEqual(theirs.map((p) => p.problem_uuid).sort());
 });
@@ -124,9 +124,9 @@ test("a severity cell's right-click keeps only its severity", async ({ page, req
   // it redrew there.
   await red(page, `group:${source}`).first().dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
   await page.setViewportSize({ width: 1280, height: 480 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
 
   const target = theirs[0];
   await actOnRowByUuid(
@@ -140,7 +140,7 @@ test("a severity cell's right-click keeps only its severity", async ({ page, req
     "data-query",
     `${query} severity:${target.severity}`,
   );
-  await gridSettled(page);
+  await untilGridLoaded(page);
   const kept = await held(page);
   expect(kept.length).toBe(theirs.filter((p) => p.severity === target.severity).length);
   expect(new Set(kept.map((r) => r.severity))).toEqual(new Set([target.severity]));
@@ -160,7 +160,7 @@ test("a Document chip names its document and opens it beside the grid", async ({
   await page.goto("/data_sources");
   await red(page, `group:${source}`).first().dblclick();
   await page.locator(SEARCH_ROWS).first().waitFor({ timeout: 15_000 });
-  await gridSettled(page);
+  await untilGridLoaded(page);
 
   await actOnRowByUuid(
     page,

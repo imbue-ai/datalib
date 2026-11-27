@@ -498,7 +498,7 @@ pub fn full_ts(t: &IsoOffsetTimestamp) -> String {
 ///
 /// Deliberately absolute rather than relative ("Today at 11:02"): the
 /// markdown is written once and read for years, so a word that means
-/// "the day this file was rendered" would be a lie by the next
+/// "the day this document was rendered" would be a lie by the next
 /// morning. The full instant stays one hover away — see
 /// [`display_ts_from_unix_millis`], which is what the renderer puts in
 /// the `title` attribute.
@@ -546,11 +546,11 @@ fn ordinal_suffix(day: u32) -> &'static str {
     }
 }
 
-/// ISO 8601 but not RFC 3339, so it slips past producers and gets
-/// rejected at `GridRow::build`, silently dropping the row's
-/// `.grid_rows.json`. This normalizes it; already-valid values pass
-/// through **verbatim** so callers that persist them don't churn
-/// historical strings.
+/// A record stamp in ISO 8601's basic form (no separators, such as
+/// Fastmail's vCard REV), which is not RFC 3339, rewritten as RFC 3339:
+/// `GridRow::build` refuses a stamp that is not, and the row loses it.
+/// Already-valid values pass through **verbatim** so callers that
+/// persist them don't churn historical strings.
 pub fn coerce_record_stamp(s: &str) -> Option<String> {
     let s = s.trim();
     if s.is_empty() {

@@ -183,7 +183,7 @@ fallback, which serves the main app instead.
    the two `loadscript` variants are reached only from inside the vendored
    scripts, on dataset-declared connectors, which our host page does not
    use). But they are one call away, and a future dataset — or a
-   refresh of the snapshot — could wake them. Fetching at runtime also
+   refresh of the snapshot — could call them. Fetching at runtime also
    quietly defeats the point of pinning: you would get whatever
    dactal.org serves *today*, with no SRI and no version pin.
 

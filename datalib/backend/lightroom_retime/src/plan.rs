@@ -212,8 +212,9 @@ mod tests {
     }
 
     /// E03 and V01 on test_catalog_2: only the offset changes, so
-    /// `expected` still matches after the first run, which used to write
-    /// it all again, and record a first time equal to the new one.
+    /// `expected` still matches after the first run. A second run must
+    /// not write it all again, nor record a first time equal to the new
+    /// one.
     #[test]
     fn an_edit_that_keeps_the_clock_is_done_after_one_run() {
         let mut e = edit("2024-08-01T21:00:00+02:00");

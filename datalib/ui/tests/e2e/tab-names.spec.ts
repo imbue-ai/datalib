@@ -2,7 +2,7 @@
 // requests say which card made them.
 
 import { test, expect, type Page } from "@playwright/test";
-import { GRID, PINNED, SEARCH_SETTLE, tabLabels, runSearch } from "./grid-helpers";
+import { GRID, PINNED, SEARCH_TIMEOUT, tabLabels, runSearch } from "./grid-helpers";
 
 // The tab GRID opens, after the pinned ones.
 const gridTab = (page: Page) => tabLabels(page).nth(PINNED.length);
@@ -12,7 +12,7 @@ async function search(page: Page, q: string) {
   const card = page.locator(".ct-main");
   await runSearch(card.page(), q);
   await expect(card.locator(".grid-wrap")).toHaveAttribute("data-shown-query", q, {
-    timeout: SEARCH_SETTLE,
+    timeout: SEARCH_TIMEOUT,
   });
 }
 

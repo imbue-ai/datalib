@@ -127,9 +127,9 @@ fn gcm_tag(aes: &Aes256, h: &[u8; 16], j0: &[u8; 16], aad: &[u8], ciphertext: &[
 }
 
 fn update_padded(ghash: &mut GHash, data: &[u8]) {
-    // `as_chunks` returns exactly the (whole blocks, remainder) split
-    // this used to compute by hand off `data.len() / 16`. Rust 1.98's
-    // clippy asks for it over `chunks_exact` with a constant size.
+    // `as_chunks` returns the (whole blocks, remainder) split of
+    // `data` into 16-byte blocks. Clippy asks for it over
+    // `chunks_exact` with a constant size.
     let (blocks, rem) = data.as_chunks::<16>();
     for chunk in blocks {
         ghash.update(&[(*chunk).into()]);

@@ -1,12 +1,12 @@
 // The page's one live connection to the server.
 //
-// Every consumer used to open an `EventSource` of its own. The toolbar's sync indicator is always mounted, the open
-// view has one, and each `sourceDagView` card adds another — so three
-// or four connections to the same origin, each holding a socket open
-// forever. Browsers allow six per origin over HTTP/1.1, and an SSE
-// connection never returns one. The app was two DAG cards away from
-// starving its own `fetch` calls with no symptom but hanging requests.
-// Here there is one connection however many subscribers there are.
+// There is one connection however many subscribers there are. The
+// toolbar's sync indicator is always mounted, the open view has one, and
+// each `sourceDagView` card adds another, so an `EventSource` each would
+// be three or four connections to the same origin, each holding a socket
+// open forever. Browsers allow six per origin over HTTP/1.1, and an SSE
+// connection never returns one: two more DAG cards would starve the
+// page's own `fetch` calls with no symptom but hanging requests.
 
 import type { LiveTable } from "./generated/enums";
 import { noteAnswer, sessionEnded } from "./session";
@@ -260,7 +260,7 @@ function connect() {
       // With no stream open, the resync waits for the one that opens.
       if (!source) return;
       // Back in the foreground. Whatever the stream did while we were
-      // away, one reconcile settles it — and the watchdog starts again
+      // away, one resync refetches it — and the watchdog starts again
       // from now rather than from whenever the last frame arrived.
       armWatchdog();
       fanOut((h) => h.resync?.());

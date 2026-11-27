@@ -33,10 +33,12 @@ pub const DATALIB_ID_NS: Uuid = Uuid::from_bytes([
 /// **These values are frozen.** Each one is hashed into every id that
 /// provider has ever minted, so changing one re-keys every
 /// `grid_rows.uuid`, `markdown_uuid` and `data-section-uuid` it
-/// produced, and orphans every link handed out naming them. The only supported way to change one is to bump that
-/// provider's `RENDER_VERSION` in the same commit, which makes the
-/// next run discard its rendered tree and re-render from the raw
-/// store — see `datalib_step::render`.
+/// produced, and orphans every link handed out naming them. The only
+/// supported way to change one is to bump that provider's
+/// `RENDER_VERSION` in the same commit: the next render of each of that
+/// provider's sources then renders every document again from the raw
+/// store and deletes the ones it did not produce, so the old ids go out
+/// of the index as deletions (`datalib_step::render`, `RenderPlan`).
 ///
 /// One entry per provider that renders anything, spelled as its
 /// `grid_rows.provider` tag; [`IdNamespace::Datalib`] is the one entry
@@ -131,9 +133,9 @@ pub const MAX_STAMP_MS: i64 = (1 << 48) - 1;
 /// the record belongs to, when the record names one: a Slack `team_id`,
 /// a JMAP `account_id` — a value that is on every row the provider
 /// writes, never one that is sometimes there, and never a secret, since
-/// it is stored in `grid_rows.upstream_account` in the clear. `at` is the stamp in the id's
-/// leading bits, and the one rule about it is that **it is the row's
-/// `created_at` or nothing**: the fixture's round-trip check reads the
+/// it is stored in `grid_rows.upstream_account` in the clear. `at` is
+/// the stamp in the id's leading bits, and the one rule about it is
+/// that **it is the row's `created_at` or nothing**: the fixture's round-trip check reads the
 /// stamp back out of the uuid and compares it to `created_at_utc`, so
 /// a stamp that is not the row's own fails there. A record with no
 /// stamp, and a document whose stamp is derived from its items (a
@@ -250,9 +252,8 @@ impl Minter {
 /// columns, not something the id does.
 ///
 /// Components are joined with `\x1f` (ASCII unit separator), which cannot
-/// appear in any upstream id we ingest. Joining with `:` or `-` — as most of
-/// the recipes this replaced did — makes `("a:b", "c")` and `("a", "b:c")`
-/// hash identically.
+/// appear in any upstream id we ingest. Joining with `:` or `-` would make
+/// `("a:b", "c")` and `("a", "b:c")` hash identically.
 ///
 /// `at` is the record's own `created_at` in unix milliseconds, at the
 /// precision the row stores it, or `None` — see [`Identity`] for the rule.
@@ -779,9 +780,8 @@ mod tests {
             fwd,
             edge_id("md-b", Some("d1"), "md-a", Some("s1"), Some("x"))
         );
-        // An absent anchor is distinct from an empty one only insofar
-        // as they render the same; document that they intentionally do
-        // NOT differ, so nobody relies on the difference.
+        // An absent anchor or label and an empty one mint the same id,
+        // on purpose: nothing may rely on telling them apart.
         assert_eq!(
             edge_id("md-a", None, "md-b", None, None),
             edge_id("md-a", Some(""), "md-b", Some(""), Some("")),

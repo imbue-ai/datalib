@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the datalib dev UI pointed at the checked-in TNG fixtures.
+# Launch the Datalib dev UI pointed at the checked-in TNG fixtures.
 #
 # Materializes a one-shot data root in a tmpdir via the shared
 # `//tests/fixtures:materialize_tng_root` script — the same script the

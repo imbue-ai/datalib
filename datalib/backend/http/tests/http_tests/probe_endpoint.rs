@@ -1,5 +1,5 @@
 //! `POST /api/probe` for a type a package offers: the package's own probe
-//! command answers, with the wizard's params in `DATALIB_DAG_PARAMS`.
+//! command runs, with the wizard's params in `DATALIB_DAG_PARAMS`.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;

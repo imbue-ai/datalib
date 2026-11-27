@@ -32,7 +32,7 @@ export type Box = { top: number; left: number; width: number; height: number };
 /// clear of each edge: moved rather than cut off, and only as tall as the
 /// window when it is taller — past that, it scrolls. The grid flips a
 /// menu above or below its row but never moves or shrinks it, so a long
-/// menu on a low row in a short window ran off the top.
+/// menu on a low row in a short window would run off the top.
 export function fitInView(
   box: Box,
   view: { width: number; height: number },
