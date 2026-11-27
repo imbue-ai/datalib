@@ -105,9 +105,7 @@ class RunStoreEndToEnd(unittest.TestCase):
         con = sqlite3.connect(f"file:{self.store}?mode=ro", uri=True)
         try:
             runs = con.execute("SELECT run_id FROM runs").fetchall()
-            mine = (
-                "SELECT invocation_id FROM invocation_requests WHERE request_id = ?"
-            )
+            mine = "SELECT invocation_id FROM invocation_requests WHERE request_id = ?"
             steps = {
                 r[0]: r
                 for r in con.execute(
@@ -141,7 +139,17 @@ class RunStoreEndToEnd(unittest.TestCase):
             ["fake/raw", "fake/rendered_md"],
             "each step the sync ran is an invocation filed under its request",
         )
-        for step, (_, _, state, attempt, msg, now, started, finished, _) in steps.items():
+        for step, (
+            _,
+            _,
+            state,
+            attempt,
+            msg,
+            now,
+            started,
+            finished,
+            _,
+        ) in steps.items():
             with self.subTest(step=step):
                 self.assertEqual(now, NOW, "the pinned now is the one handed")
                 # Stamps are kept in UTC with microseconds.
