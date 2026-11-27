@@ -240,7 +240,7 @@ async fn delete_fingerprints_under(cache: &FingerprintCache, root: &Path) -> Res
     let root = canonical_root(root);
     let cached = cache.load_under(&root).await?;
     let keys: Vec<String> = cached.paths().map(|rel| abs_key(&root, rel)).collect();
-    cache.forget(&keys).await?;
+    cache.delete_paths(&keys).await?;
     Ok(())
 }
 

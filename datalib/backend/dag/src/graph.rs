@@ -55,7 +55,7 @@ impl Graph {
     /// rest are fan-ins whose patterns match nothing yet; they run only
     /// when out of date, and are here so that a fan-in whose last input
     /// went still runs once over nothing.
-    pub fn fringe_ids(&self) -> Vec<&str> {
+    pub fn ids_without_inputs(&self) -> Vec<&str> {
         self.steps
             .iter()
             .filter(|s| s.inputs.is_empty())
@@ -408,16 +408,16 @@ mod tests {
     /// The steps with no declared input are what a sync of everything
     /// starts from: their real input is outside the graph.
     #[test]
-    fn fringe_is_the_inputless_steps() {
+    fn ids_without_inputs_lists_the_inputless_steps() {
         let g = Graph::build(vec![
             spec("slack/raw", &[]),
             spec("slack/rendered_md", &["slack/raw"]),
             spec("pdfs/raw", &[]),
         ])
         .unwrap();
-        let mut fringe = g.fringe_ids();
-        fringe.sort();
-        assert_eq!(fringe, vec!["pdfs/raw", "slack/raw"]);
+        let mut ids = g.ids_without_inputs();
+        ids.sort();
+        assert_eq!(ids, vec!["pdfs/raw", "slack/raw"]);
     }
 
     /// The message has to point somewhere useful: the shape it catches
@@ -468,6 +468,6 @@ mod tests {
         ])
         .unwrap();
         assert!(g.deps[idx_in(&g, "work-slack/render_markdown")].is_empty());
-        assert_eq!(g.fringe_ids().len(), 2);
+        assert_eq!(g.ids_without_inputs().len(), 2);
     }
 }

@@ -314,7 +314,7 @@ pub async fn read_changed<T: BulkUpsertable, R: BulkUpsertable>(
     batch.write(&mut tx, &bar).await?;
     for (tree, changes) in &changes {
         for rel in changes.gone() {
-            file_checkpoint::forget_file(&mut tx, &tree.scope, rel).await?;
+            file_checkpoint::delete_file_stamp(&mut tx, &tree.scope, rel).await?;
         }
     }
     tx.commit()

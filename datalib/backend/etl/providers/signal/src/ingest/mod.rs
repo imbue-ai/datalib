@@ -464,7 +464,7 @@ async fn read_snapshot(
             .into_iter()
             .filter(|id| !marked.contains(id.as_str()))
             .collect();
-        read_marks::forget(&mut tx, &gone).await?;
+        read_marks::delete(&mut tx, &gone).await?;
     }
     tx.commit().await.context("commit snapshot tx")?;
     // Attachment bulk-flush: one CAS-pool tx (`put_many`) + one

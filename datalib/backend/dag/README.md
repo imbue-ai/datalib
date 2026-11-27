@@ -918,7 +918,7 @@ root run the newer one.
 A run must record a state for *every* step in scope (including ones that
 were skipped or blocked and never "ran"), a `finished_at_utc` that tells
 a completed run from a crashed one, and per-step timings. The loop keeps
-a copy of the second set of tables in memory (`record::Record`) and
+a copy of the second set of tables in memory (`record::LoopState`) and
 saves only what changed since
 its last save (`record::changes`), after every tick and every event, not
 only on terminal states; a Manage row's Status is `steps.state`, read
@@ -948,5 +948,5 @@ serving it. A step stopped with its request reads Stopping until its
 process has exited. `POST /api/requests`
 opens one request per group its roots belong to, so each source's sync
 has a Stop of its own, and answers only once some step's `requests`
-column names each new request or it has closed (`Store::taken_on`), so the rows read
+column names each new request or it has closed (`Store::serving_started`), so the rows read
 after a Sync already show them.

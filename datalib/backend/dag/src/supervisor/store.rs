@@ -1047,7 +1047,7 @@ mod tests {
             for _ in 0..2 {
                 let store = Store::open(root.path()).await.unwrap();
                 assert_eq!(columns(&store, "steps").await, want);
-                let record = store.load_record().await.unwrap();
+                let record = store.load_state().await.unwrap();
                 assert!(record.steps["a/ingest"].succeeded, "{record:?}");
                 assert_eq!(
                     store

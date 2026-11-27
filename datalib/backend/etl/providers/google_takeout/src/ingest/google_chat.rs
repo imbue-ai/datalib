@@ -285,7 +285,7 @@ pub async fn ingest(
     }
     summary.files_removed = gone.len();
     for rel in &gone {
-        file_checkpoint::forget_file(&mut tx, SCOPE, rel).await?;
+        file_checkpoint::delete_file_stamp(&mut tx, SCOPE, rel).await?;
     }
     tx.commit().await.context("commit google_chat tx")?;
     found.skipped("google_chat", skipped);
