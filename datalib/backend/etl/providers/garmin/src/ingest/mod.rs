@@ -74,8 +74,9 @@ pub const WEIGHT_CHUNK_DAYS: i64 = 90;
 pub const ACTIVITY_PAGE: usize = 100;
 /// `start`/`limit` page of the workout and goal listings.
 pub const ITEM_PAGE: usize = 100;
-/// Pages of a listing before the walk is declared runaway — and, since
-/// it never reached a short page, not an enumeration.
+/// The most pages one listing walk requests. A walk still on full pages
+/// after this many stops, and since it never reached a short page, the
+/// listing is not an enumeration.
 const MAX_LISTING_PAGES: usize = 2000;
 
 /// The whole-account listings, in the order they are walked. A paged

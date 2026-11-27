@@ -196,7 +196,7 @@ const HELD_COLUMNS: &[(&str, &str)] = &[
 
 /// Each held column's values go to its table's sidecar as they are,
 /// and the column goes. A day's `fetched_on` is not the date the day
-/// settled, which is what the sidecar holds from now on; a day fetched
+/// settled, which is what the sidecar holds; a day fetched
 /// on the day it settled matches and is not fetched again, one fetched
 /// later is fetched once more. The rung cannot do better: the settle
 /// date depends on `refresh_days`, which is in the config, not the

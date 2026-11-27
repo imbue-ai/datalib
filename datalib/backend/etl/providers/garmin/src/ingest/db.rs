@@ -200,9 +200,9 @@ impl RawDb {
 
     /// Mend the file edges an earlier build wrote: it keyed every file of
     /// a batch under one ref, so each edge of the batch got the last
-    /// file's hash, and a hash several records' edges share is the mark it
-    /// left. Those edges lose the hash and hold nothing, which is what
-    /// makes the walks fetch them again.
+    /// file's hash, so a hash several records' edges share is how such an
+    /// edge is found. Those edges lose the hash and hold nothing, which
+    /// is what makes the walks fetch them again.
     ///
     /// Once per table, recorded under [`REPAIRED_PREFIX`], and only while
     /// the walk that would refetch it is on: two activities may share a

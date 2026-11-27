@@ -41,7 +41,8 @@ rust_test(
 )
 
 # Ingest the TNG fixture through playback, then render: the page, its
-# plot and its grid rows, and the HEAD-unchanged skip on a second pass.
+# plot and its grid rows, and the skip on a second render of an
+# unchanged HEAD.
 rust_test(
     name = "garmin_render_e2e",
     size = "medium",
