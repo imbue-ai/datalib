@@ -21,12 +21,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-# Pinned so the run's clock and id are predictable: `datalib-pipeline` uses
-# `--now` verbatim as the start time and `--run-id` verbatim as the run
-# id, which is what lets a reader tell whether the store's newest run
-# is the one it is looking at.
+# Pinned so the sync's clock and id are predictable: `datalib-pipeline`
+# hands `--now` verbatim to every invocation as `DATALIB_DAG_NOW`, and
+# gives its request the id `--request-id` names, which is what lets a
+# reader find the invocations the sync started.
 NOW = "2369-04-15T00:00:00+00:00"
-RUN_ID = "0193c7e0-0000-7000-8000-000000000001"
+REQUEST_ID = "0193c7e0-0000-7000-8000-000000000001"
 
 # A step that reports progress both ways a step can — the sugar (a total
 # up front, then increments) and a metric with a label — logs a line on
@@ -41,7 +41,9 @@ echo '{"event":"metric","step":"me","name":"rows_upserted_total","labels":{"tabl
 echo 'a plain line on stderr' >&2
 echo 'a plain line on stdout'
 echo '{"timestamp":"2369-04-15T00:00:01Z","level":"WARN","target":"fake::fetch","threadName":"main","fields":{"message":"slow","attempts":3}}' >&2
-test "$DATALIB_DAG_RUN_ID" = "%(run_id)s" || { echo "run id not passed: $DATALIB_DAG_RUN_ID" >&2; exit 1; }
+test -n "$DATALIB_DAG_INVOCATION_ID" || { echo "no invocation id" >&2; exit 1; }
+test "$DATALIB_DAG_RUN_ID" = "$DATALIB_DAG_INVOCATION_ID" || { echo "the old name carries another id: $DATALIB_DAG_RUN_ID" >&2; exit 1; }
+test "$DATALIB_DAG_NOW" = "%(now)s" || { echo "now not passed: $DATALIB_DAG_NOW" >&2; exit 1; }
 test "$DATALIB_DAG_ATTEMPT" = "1" || { echo "attempt not passed: $DATALIB_DAG_ATTEMPT" >&2; exit 1; }
 mkdir -p "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP"
 echo hi > "$DATALIB_DAG_DATA_ROOT/$DATALIB_DAG_STEP/x.txt"
@@ -69,7 +71,7 @@ class RunStoreEndToEnd(unittest.TestCase):
         self.root = Path(tempfile.mkdtemp())
 
         script = self.root / "step.sh"
-        script.write_text(STEP_SH.replace("%(run_id)s", RUN_ID))
+        script.write_text(STEP_SH.replace("%(now)s", NOW))
         (self.root / "config.toml").write_text(CONFIG.format(script=script))
 
         proc = subprocess.run(
@@ -79,8 +81,8 @@ class RunStoreEndToEnd(unittest.TestCase):
                 str(self.root),
                 "--now",
                 NOW,
-                "--run-id",
-                RUN_ID,
+                "--request-id",
+                REQUEST_ID,
             ],
             capture_output=True,
             text=True,
@@ -102,49 +104,49 @@ class RunStoreEndToEnd(unittest.TestCase):
 
         con = sqlite3.connect(f"file:{self.store}?mode=ro", uri=True)
         try:
-            runs = con.execute(
-                "SELECT run_id, started_at_utc, finished_at_utc, tz_offset FROM runs"
-            ).fetchall()
+            runs = con.execute("SELECT run_id FROM runs").fetchall()
+            mine = (
+                "SELECT invocation_id FROM invocation_requests WHERE request_id = ?"
+            )
             steps = {
                 r[0]: r
                 for r in con.execute(
-                    "SELECT step, run_id, state, attempt, msg FROM step_runs"
+                    "SELECT step, invocation_id, state, attempt, msg, now, "
+                    "started_at_utc, finished_at_utc, tz_offset FROM invocations "
+                    f"WHERE invocation_id IN ({mine})",
+                    (REQUEST_ID,),
                 )
             }
             metrics = {
                 (r[0], r[1], r[2]): r[3]
                 for r in con.execute(
-                    "SELECT step, name, labels, value FROM metrics WHERE run_id = ?",
-                    (RUN_ID,),
+                    "SELECT step, name, labels, value FROM invocation_metrics "
+                    f"WHERE invocation_id IN ({mine})",
+                    (REQUEST_ID,),
                 )
             }
             log = con.execute(
                 "SELECT step, attempt, stream, level, thread, ts_utc, msg, fields, tz_offset "
-                "FROM log WHERE run_id = ? ORDER BY seq",
-                (RUN_ID,),
+                f"FROM log WHERE invocation_id IN ({mine}) ORDER BY seq",
+                (REQUEST_ID,),
             ).fetchall()
             version = con.execute("PRAGMA user_version").fetchone()[0]
         finally:
             con.close()
 
-        # Stamps are kept in UTC with microseconds, the offset they were
-        # written in beside them; `--now` was given in UTC, so its
-        # offset column says so.
-        self.assertEqual(
-            [(r[0], r[1], r[3]) for r in runs],
-            [(RUN_ID, "2369-04-15T00:00:00.000000+00:00", "+00:00")],
-        )
-        self.assertIsNotNone(runs[0][2], "a finished run has a finish time")
-        self.assertTrue(runs[0][2].endswith("+00:00"), runs[0][2])
+        self.assertEqual(runs, [], "this build records no runs, only invocations")
         self.assertGreater(version, 0, "the store names its schema version")
         self.assertEqual(
             sorted(steps),
             ["fake/raw", "fake/rendered_md"],
-            "every step in the plan gets a row",
+            "each step the sync ran is an invocation filed under its request",
         )
-        for step, (_, run_id, state, attempt, msg) in steps.items():
+        for step, (_, _, state, attempt, msg, now, started, finished, _) in steps.items():
             with self.subTest(step=step):
-                self.assertEqual(run_id, RUN_ID)
+                self.assertEqual(now, NOW, "the pinned now is the one handed")
+                # Stamps are kept in UTC with microseconds.
+                self.assertTrue(started.endswith("+00:00"), started)
+                self.assertIsNotNone(finished, "an ended invocation has an end")
                 self.assertEqual(state, "succeeded")
                 self.assertEqual(attempt, 1)
                 self.assertEqual(msg, "conversations.list")

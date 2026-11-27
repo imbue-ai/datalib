@@ -3,31 +3,41 @@
 //! hold.
 
 use datalib_runs::{
-    log_after, log_query, log_values, processes, runs, snapshot, versions, LogCursor, LogQuery,
-    LogRow, MetricRow, Process, ProcessLogWriter, ProcessRow, Retention, RunKind, RunStart,
-    RunWriter, StepRunRow, StorePart,
+    log_after, log_query, log_values, processes, requests_of_steps, snapshot, snapshot_of,
+    versions, InvocationMetricRow, InvocationRow, LogCursor, LogQuery, LogRow, LoopWriter, Process,
+    ProcessLogWriter, ProcessRow, Retention, StorePart,
 };
 use datalib_sql::{test_sql, test_sql_id, Sql};
 
+use crate::request::{now_utc, Request};
+
 const T0: &str = "2026-08-31T10:00:00+01:00";
 
-fn start(root: &std::path::Path, run_id: &str) -> RunWriter {
-    RunWriter::start(root, run_id, run_id, None, Retention::default()).expect("start the store")
+/// Wide enough that neither limit reaches a test's dated rows.
+const KEEP: Retention = Retention {
+    max_runs: 100,
+    max_age_days: 36500,
+    process_log_days: 36500,
+    process_log_lines: 200_000,
+};
+
+fn start(root: &std::path::Path, id: &str) -> Request {
+    Request::start(root, id)
 }
 
-fn at(step: &str, state: &str, msg: &str) -> StepRunRow {
-    StepRunRow {
+fn at(step: &str, state: &str, msg: &str) -> InvocationRow {
+    InvocationRow {
         step: step.into(),
         state: state.into(),
         attempt: 1,
         msg: Some(msg.into()),
-        updated_at_utc: T0.into(),
+        updated_at_utc: now_utc(),
         ..Default::default()
     }
 }
 
-fn metric(step: &str, name: &str, value: i64) -> MetricRow {
-    MetricRow {
+fn metric(step: &str, name: &str, value: i64) -> InvocationMetricRow {
+    InvocationMetricRow {
         step: step.into(),
         name: name.into(),
         labels: String::new(),
@@ -48,57 +58,52 @@ fn line(step: &str, level: &str, msg: &str) -> LogRow {
 }
 
 /// Dropping the writer flushes and joins, so everything published is on
-/// disk by the time the run reports itself finished.
+/// disk once it is gone: the invocation, its numbers and its lines, under
+/// the request it served.
 #[tokio::test]
 async fn what_is_published_is_readable() {
     let td = tempfile::tempdir().unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         w.step(at("slack/raw", "running", "conversations.list"));
-        w.step(at("slack/rendered_md", "pending", "waiting"));
         w.metric(metric("slack/raw", "rows_upserted_total", 3));
         w.log(line("slack/raw", "info", "hello"));
     }
 
-    let snap = snapshot(td.path()).await.unwrap();
-    assert_eq!(snap.run_id.as_deref(), Some("run-1"));
+    let snap = snapshot_of(td.path(), Some("r-1")).await.unwrap();
+    assert_eq!(snap.run_id.as_deref(), Some("r-1"));
+    assert!(!snap.old_run);
     assert!(
-        snap.finished_at_utc.is_some(),
-        "a dropped writer closes the run"
-    );
-    assert!(
-        snap.finished_at_utc.as_deref().unwrap().ends_with("+00:00"),
+        snap.started_at_utc.as_deref().unwrap().ends_with("+00:00"),
         "stamps are stored in UTC: {:?}",
-        snap.finished_at_utc
+        snap.started_at_utc
     );
-    assert_eq!(
-        snap.steps
-            .iter()
-            .map(|r| r.step.as_str())
-            .collect::<Vec<_>>(),
-        ["slack/raw"],
-        "a step that never started goes with the run: {snap:?}"
-    );
-    let fetch = snap.steps.iter().find(|r| r.step == "slack/raw").unwrap();
+    assert_eq!(snap.finished_at_utc, None, "its one invocation still runs");
+    assert_eq!(snap.steps.len(), 1, "{snap:?}");
+    let fetch = &snap.steps[0];
+    assert_eq!(fetch.step, "slack/raw");
+    assert_eq!(fetch.invocation_id.as_deref(), Some("r-1/slack/raw"));
     assert_eq!(fetch.state, "running");
     assert_eq!(fetch.msg.as_deref(), Some("conversations.list"));
     assert_eq!(snap.metrics.len(), 1);
     assert_eq!(snap.metrics[0].value, 3);
+    assert_eq!(snapshot(td.path()).await.unwrap().steps, snap.steps);
 
-    let log = log_after(td.path(), "run-1", None, 0, 100).await.unwrap();
+    let log = log_after(td.path(), "r-1", None, 0, 100).await.unwrap();
     assert_eq!(log.len(), 1);
     assert_eq!(log[0].msg, "hello");
+    assert_eq!(log[0].invocation_id.as_deref(), Some("r-1/slack/raw"));
     assert!(log[0].seq > 0, "the store assigns the sequence number");
 }
 
-/// Only the newest tick per step and per metric survives, which is what
-/// makes a chatty download cost one row-write per flush rather than
+/// Only the newest tick per invocation and per metric survives, which is
+/// what makes a chatty download cost one row-write per flush rather than
 /// thousands. Log lines are the exception: every one is kept, in order.
 #[tokio::test]
 async fn ticks_coalesce_but_log_lines_do_not() {
     let td = tempfile::tempdir().unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         for i in 0..500 {
             w.step(at("slack/raw", "running", &format!("tick {i}")));
             w.metric(metric("slack/raw", "done_total", i));
@@ -111,7 +116,7 @@ async fn ticks_coalesce_but_log_lines_do_not() {
     assert_eq!(snap.metrics.len(), 1);
     assert_eq!(snap.metrics[0].value, 499);
 
-    let log = log_after(td.path(), "run-1", Some("slack/raw"), 0, 1000)
+    let log = log_after(td.path(), "r-1", Some("slack/raw"), 0, 1000)
         .await
         .unwrap();
     assert_eq!(log.len(), 500);
@@ -124,25 +129,25 @@ async fn ticks_coalesce_but_log_lines_do_not() {
 }
 
 /// `latest_metric` answers "what did each step last count?" across
-/// runs: the newest run that reported the series wins per step and
-/// label, an older run's value never shadows it, and a step that never
-/// reported is absent rather than zero.
+/// invocations: the newest invocation that reported the series wins per
+/// step and label, an older one's value never shadows it, and a step that
+/// never reported is absent rather than zero.
 #[tokio::test]
 async fn latest_metric_is_the_newest_report_per_step_and_label() {
     let td = tempfile::tempdir().unwrap();
-    let labelled = |step: &str, labels: &str, value: i64| MetricRow {
+    let labelled = |step: &str, labels: &str, value: i64| InvocationMetricRow {
         labels: labels.into(),
         ..metric(step, "problems", value)
     };
     {
-        let w = start(td.path(), "run-1");
+        let w = Request::dated(td.path(), "r-1", "2026-09-01T00:00:00.000000+00:00", KEEP);
         w.metric(labelled("slack/render_markdown", "severity=error", 4));
         w.metric(labelled("slack/render_markdown", "severity=warning", 9));
         w.metric(labelled("mail/render_markdown", "severity=error", 1));
     }
-    // A later run: slack re-counted, mail did not run.
+    // A later request: slack re-counted, mail did not run.
     {
-        let w = start(td.path(), "run-2");
+        let w = Request::dated(td.path(), "r-2", "2026-09-02T00:00:00.000000+00:00", KEEP);
         w.metric(labelled("slack/render_markdown", "severity=error", 0));
         w.metric(labelled("slack/render_markdown", "severity=warning", 2));
     }
@@ -153,20 +158,20 @@ async fn latest_metric_is_the_newest_report_per_step_and_label() {
         latest
             .iter()
             .find(|m| m.step == step && m.labels == labels)
-            .map(|m| (m.value, m.run_id.clone()))
+            .map(|m| (m.value, m.reported_in.id().to_string()))
     };
     assert_eq!(
         find("slack/render_markdown", "severity=error"),
-        Some((0, "run-2".into()))
+        Some((0, "r-2/slack/render_markdown".into()))
     );
     assert_eq!(
         find("slack/render_markdown", "severity=warning"),
-        Some((2, "run-2".into()))
+        Some((2, "r-2/slack/render_markdown".into()))
     );
     assert_eq!(
         find("mail/render_markdown", "severity=error"),
-        Some((1, "run-1".into())),
-        "a step the newer run skipped keeps its last count"
+        Some((1, "r-1/mail/render_markdown".into())),
+        "a step the newer request did not run keeps its last count"
     );
     assert_eq!(find("mail/render_markdown", "severity=warning"), None);
     assert!(datalib_runs::latest_metric(td.path(), "nothing")
@@ -175,23 +180,23 @@ async fn latest_metric_is_the_newest_report_per_step_and_label() {
         .is_empty());
 }
 
-/// `metric_history` is what a sparkline over several runs draws: every
+/// `metric_history` is what a sparkline over several syncs draws: every
 /// sample inside the window, oldest first, and the one value the series
 /// held when the window opened — without which a series that last moved
 /// before it would draw nothing.
 #[tokio::test]
 async fn metric_history_is_the_window_and_the_value_it_opened_at() {
     let td = tempfile::tempdir().unwrap();
-    let at = |stamp: &str, step: &str, value: i64| MetricRow {
+    let at = |stamp: &str, step: &str, value: i64| InvocationMetricRow {
         updated_at_utc: stamp.into(),
         ..metric(step, "items", value)
     };
-    for (run, stamp, value) in [
-        ("run-1", "2026-09-01T00:00:00.000000+00:00", 10),
-        ("run-2", "2026-09-02T00:00:00.000000+00:00", 20),
-        ("run-3", "2026-09-03T00:00:00.000000+00:00", 30),
+    for (request, stamp, value) in [
+        ("r-1", "2026-09-01T00:00:00.000000+00:00", 10),
+        ("r-2", "2026-09-02T00:00:00.000000+00:00", 20),
+        ("r-3", "2026-09-03T00:00:00.000000+00:00", 30),
     ] {
-        let w = start(td.path(), run);
+        let w = Request::dated(td.path(), request, stamp, KEEP);
         w.metric(at(stamp, "slack/render_markdown", value));
         w.metric(at(stamp, "mail/render_markdown", value * 100));
     }
@@ -222,14 +227,14 @@ async fn metric_history_is_the_window_and_the_value_it_opened_at() {
 async fn log_after_resumes_from_a_sequence_number() {
     let td = tempfile::tempdir().unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         for i in 0..10 {
             w.log(line("a", "info", &format!("line {i}")));
         }
     }
-    let first = log_after(td.path(), "run-1", None, 0, 4).await.unwrap();
+    let first = log_after(td.path(), "r-1", None, 0, 4).await.unwrap();
     assert_eq!(first.len(), 4);
-    let rest = log_after(td.path(), "run-1", None, first[3].seq, 100)
+    let rest = log_after(td.path(), "r-1", None, first[3].seq, 100)
         .await
         .unwrap();
     assert_eq!(rest.len(), 6);
@@ -242,12 +247,7 @@ async fn log_after_resumes_from_a_sequence_number() {
 #[tokio::test]
 async fn the_newest_lines_come_first_and_pages_read_back_from_them() {
     let td = tempfile::tempdir().unwrap();
-    let keep = Retention {
-        max_runs: 100,
-        max_age_days: 36500,
-        ..Retention::default()
-    };
-    let w = RunWriter::start(td.path(), "run-1", "run-1", None, keep).unwrap();
+    let w = Request::dated(td.path(), "r-1", &now_utc(), KEEP);
     for msg in ["one", "two", "three", "four", "five"] {
         w.log(line("a", "info", msg));
     }
@@ -278,11 +278,11 @@ async fn the_newest_lines_come_first_and_pages_read_back_from_them() {
     assert!(nothing.is_empty());
 }
 
-/// One step's lines across runs come back in run order with the run each
-/// line belongs to, the same `seq` cursor tails them, and a `-run:` term
-/// drops one run's lines.
+/// One step's lines across requests come back in order with the
+/// invocation each line belongs to, the same `seq` cursor tails them, and
+/// a `-run:` term drops one request's lines.
 #[tokio::test]
-async fn log_query_spans_runs_and_reads_terms() {
+async fn log_query_spans_requests_and_reads_terms() {
     let step_log_after =
         |root: &std::path::Path, step: &'static str, after_seq: i64, limit: i64| {
             let root = root.to_path_buf();
@@ -300,31 +300,26 @@ async fn log_query_spans_runs_and_reads_terms() {
             }
         };
     let td = tempfile::tempdir().unwrap();
-    let keep = Retention {
-        max_runs: 100,
-        max_age_days: 36500,
-        ..Retention::default()
-    };
-    for (run, msg) in [("run-1", "first"), ("run-2", "second")] {
-        let w = RunWriter::start(td.path(), run, run, None, keep).unwrap();
+    for (request, msg) in [("r-1", "first"), ("r-2", "second")] {
+        let w = Request::dated(td.path(), request, &now_utc(), KEEP);
         w.log(line("a", "info", msg));
         w.log(line("b", "info", "other step"));
     }
     let a = step_log_after(td.path(), "a", 0, 100).await;
     assert_eq!(
         a.iter()
-            .map(|l| (l.run_id.as_deref().unwrap(), l.msg.as_str()))
+            .map(|l| (l.invocation_id.as_deref().unwrap(), l.msg.as_str()))
             .collect::<Vec<_>>(),
-        [("run-1", "first"), ("run-2", "second")],
+        [("r-1/a", "first"), ("r-2/a", "second")],
     );
     let tail = step_log_after(td.path(), "a", a[0].seq, 100).await;
     assert_eq!(tail.len(), 1);
-    assert_eq!(tail[0].run_id.as_deref(), Some("run-2"));
+    assert_eq!(tail[0].invocation_id.as_deref(), Some("r-2/a"));
 
     let not_first = log_query(
         td.path(),
         &LogQuery {
-            q: "step:a -run:run-1 sec",
+            q: "step:a -run:r-1 sec",
             cursor: LogCursor::After(0),
             limit: 100,
         },
@@ -352,7 +347,7 @@ async fn log_query_spans_runs_and_reads_terms() {
 async fn a_key_suggests_its_values_most_lines_first() {
     let td = tempfile::tempdir().unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         w.log(line("slack/ingest", "info", "a"));
         w.log(line("slack/ingest", "warn", "b"));
         w.log(line("slack/render_markdown", "info", "c"));
@@ -386,14 +381,14 @@ async fn a_key_suggests_its_values_most_lines_first() {
 }
 
 /// A terminal state latches. A progress tick that was already in flight
-/// when the step finished must not resurrect it as running — which is
+/// when the invocation ended must not resurrect it as running — which is
 /// exactly what a table showing "running" forever after a sync ended
 /// would look like.
 #[tokio::test]
-async fn a_finished_step_is_not_resurrected_by_a_late_tick() {
+async fn a_finished_invocation_is_not_resurrected_by_a_late_tick() {
     let td = tempfile::tempdir().unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         w.step(at("slack/raw", "succeeded", "done"));
         w.step(at("slack/raw", "running", "a straggler"));
     }
@@ -402,79 +397,75 @@ async fn a_finished_step_is_not_resurrected_by_a_late_tick() {
     assert_eq!(snap.steps[0].msg.as_deref(), Some("done"));
 }
 
-/// Runs accumulate rather than replacing each other — that is what makes
-/// last week's log readable — and a reader asking for "the run" gets the
-/// newest.
+/// Requests accumulate rather than replacing each other — that is what
+/// makes last week's log readable — and the snapshot with no id is each
+/// step's newest invocation, whichever request it served.
 #[tokio::test]
-async fn runs_accumulate_and_the_snapshot_is_the_newest() {
+async fn invocations_accumulate_and_the_snapshot_is_each_steps_newest() {
     let td = tempfile::tempdir().unwrap();
-    // Dated runs, so the order is the test's and not the clock's; the
-    // window is widened so retention stays out of this test.
-    let keep = Retention {
-        max_runs: 100,
-        max_age_days: 36500,
-        ..Retention::default()
-    };
     {
-        let id = "2026-01-01T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
+        let w = Request::dated(td.path(), "r-1", "2026-01-01T00:00:00.000000+00:00", KEEP);
         w.step(at("gone/raw", "succeeded", "old"));
-        w.log(line("gone/raw", "info", "from run 1"));
+        w.step(at("slack/raw", "succeeded", "old"));
+        w.log(line("gone/raw", "info", "from request 1"));
     }
     {
-        let id = "2026-01-02T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
+        let w = Request::dated(td.path(), "r-2", "2026-01-02T00:00:00.000000+00:00", KEEP);
         w.step(at("slack/raw", "running", "new"));
     }
     let snap = snapshot(td.path()).await.unwrap();
-    assert_eq!(snap.run_id.as_deref(), Some("2026-01-02T00:00:00+00:00"));
-    assert_eq!(snap.steps.len(), 1);
-    assert_eq!(snap.steps[0].step, "slack/raw");
+    assert_eq!(snap.run_id, None);
+    let newest: Vec<(&str, Option<&str>)> = snap
+        .steps
+        .iter()
+        .map(|s| (s.step.as_str(), s.invocation_id.as_deref()))
+        .collect();
+    assert_eq!(
+        newest,
+        [
+            ("gone/raw", Some("r-1/gone/raw")),
+            ("slack/raw", Some("r-2/slack/raw"))
+        ]
+    );
+    let second = snapshot_of(td.path(), Some("r-2")).await.unwrap();
+    assert_eq!(second.steps.len(), 1);
+    assert_eq!(second.steps[0].step, "slack/raw");
 
-    let old = log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10)
-        .await
-        .unwrap();
-    assert_eq!(old.len(), 1, "the earlier run's log is still there");
+    let old = log_after(td.path(), "r-1", None, 0, 10).await.unwrap();
+    assert_eq!(old.len(), 1, "the earlier request's log is still there");
 }
 
-/// A reader can ask for a run by id, list the runs a step took part in,
-/// and read the warn/error count per step — what the Manage screen's
-/// history and its E column are made of.
+/// A reader can list the requests a step's invocations served, read one
+/// by id, and read the warn/error count per step — what the Manage
+/// screen's history and its E column are made of.
 #[tokio::test]
-async fn runs_can_be_listed_by_step_and_read_by_id() {
-    use datalib_runs::snapshot_of;
+async fn requests_can_be_listed_by_step_and_read_by_id() {
     let td = tempfile::tempdir().unwrap();
-    let keep = Retention {
-        max_runs: 100,
-        max_age_days: 36500,
-        ..Retention::default()
-    };
     {
-        let id = "2026-01-01T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
+        let w = Request::dated(td.path(), "r-1", "2026-01-01T00:00:00.000000+00:00", KEEP);
         w.step(at("a", "succeeded", "ok"));
         w.log(line("a", "warn", "hmm"));
         w.log(line("a", "error", "no"));
         w.log(line("a", "info", "fine"));
     }
     {
-        let id = "2026-01-02T00:00:00+00:00";
-        let w = RunWriter::start(td.path(), id, id, None, keep).unwrap();
+        let w = Request::dated(td.path(), "r-2", "2026-01-02T00:00:00.000000+00:00", KEEP);
         w.step(at("b", "succeeded", "ok"));
     }
-    let all = runs(td.path(), None, 10).await.unwrap();
+    let ids = |v: Vec<(String, String)>| v.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
     assert_eq!(
-        all.iter().map(|r| r.run_id.as_str()).collect::<Vec<_>>(),
-        ["2026-01-02T00:00:00+00:00", "2026-01-01T00:00:00+00:00"],
+        ids(requests_of_steps(td.path(), None, 10).await.unwrap()),
+        ["r-2", "r-1"],
         "newest first"
     );
-    let with_a = runs(td.path(), Some("a"), 10).await.unwrap();
-    assert_eq!(with_a.len(), 1);
-    assert_eq!(with_a[0].run_id, "2026-01-01T00:00:00+00:00");
+    assert_eq!(
+        ids(requests_of_steps(td.path(), Some(&["a".to_string()]), 10)
+            .await
+            .unwrap()),
+        ["r-1"]
+    );
 
-    let first = snapshot_of(td.path(), Some("2026-01-01T00:00:00+00:00"))
-        .await
-        .unwrap();
+    let first = snapshot_of(td.path(), Some("r-1")).await.unwrap();
     assert_eq!(first.steps[0].step, "a");
     assert_eq!(first.errors.get("a"), Some(&2), "warn + error, not info");
     assert!(snapshot_of(td.path(), Some("nope"))
@@ -484,189 +475,118 @@ async fn runs_can_be_listed_by_step_and_read_by_id() {
         .is_none());
 }
 
-/// Retention by count: the newest `max_runs` survive, including the run
-/// being started, and everything filed under a pruned run goes with it.
+/// The requests each writer's open keeps: retention runs as a writer
+/// opens, so a test opens one more after writing.
+fn apply_retention(root: &std::path::Path, retention: Retention) {
+    drop(LoopWriter::start(root, None, retention).unwrap());
+}
+
+/// Retention by count: the invocations of the newest `max_runs` requests
+/// survive, and everything filed under a pruned invocation goes with it.
 #[tokio::test]
-async fn retention_keeps_the_newest_runs_and_sweeps_their_rows() {
+async fn retention_keeps_the_newest_requests_and_sweeps_their_rows() {
     let td = tempfile::tempdir().unwrap();
     let keep_two = Retention {
         max_runs: 2,
-        max_age_days: 3650,
-        ..Retention::default()
+        ..KEEP
     };
     for day in 1..=4 {
-        let id = format!("2026-01-0{day}T00:00:00+00:00");
-        let w = RunWriter::start(td.path(), &id, &id, None, keep_two).unwrap();
+        let id = format!("2026-01-0{day}T00:00:00.000000+00:00");
+        let w = Request::dated(td.path(), &id, &id, keep_two);
         w.step(at("a", "succeeded", "ok"));
         w.log(line("a", "info", &id));
         w.metric(metric("a", "done_total", day));
     }
-    assert!(
-        log_after(td.path(), "2026-01-01T00:00:00+00:00", None, 0, 10)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(
-        log_after(td.path(), "2026-01-02T00:00:00+00:00", None, 0, 10)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert_eq!(
-        log_after(td.path(), "2026-01-03T00:00:00+00:00", None, 0, 10)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    assert_eq!(
-        log_after(td.path(), "2026-01-04T00:00:00+00:00", None, 0, 10)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let snap = snapshot(td.path()).await.unwrap();
-    assert_eq!(snap.run_id.as_deref(), Some("2026-01-04T00:00:00+00:00"));
+    apply_retention(td.path(), keep_two);
+    for (day, lines) in [(1, 0), (2, 0), (3, 1), (4, 1)] {
+        let id = format!("2026-01-0{day}T00:00:00.000000+00:00");
+        assert_eq!(
+            log_after(td.path(), &id, None, 0, 10).await.unwrap().len(),
+            lines,
+            "{id}"
+        );
+    }
     let pool = datalib_runs::open_or_create(&datalib_runs::runs_path(td.path()))
         .await
         .unwrap();
-    for table in ["processes", "step_runs", "log", "metrics", "metric_samples"] {
+    for table in [
+        "invocations",
+        "invocation_requests",
+        "log",
+        "invocation_metrics",
+        "invocation_metric_samples",
+    ] {
         // Safe: `table` is one of the five literals above.
-        let runs: Vec<String> = Sql::dynamic(
+        let kept: Vec<String> = Sql::dynamic(
             test_sql_id!(),
-            format!("SELECT DISTINCT run_id FROM {table} WHERE run_id IS NOT NULL ORDER BY run_id"),
+            format!(
+                "SELECT DISTINCT invocation_id FROM {table} WHERE invocation_id IS NOT NULL \
+                 ORDER BY invocation_id"
+            ),
         )
         .query_scalar()
         .fetch_all(&pool)
         .await
         .unwrap();
-        assert!(!runs.is_empty(), "{table} holds the kept runs' rows");
+        assert!(!kept.is_empty(), "{table} holds the kept invocations' rows");
         assert!(
-            runs.iter().all(|r| r.as_str() >= "2026-01-03"),
-            "{table} still files rows under a pruned run: {runs:?}"
+            kept.iter().all(|r| r.as_str() >= "2026-01-03"),
+            "{table} still files rows under a pruned invocation: {kept:?}"
         );
     }
     pool.close().await;
 }
 
-/// Under a pinned clock every run is stamped alike. Retention still keeps
-/// exactly `max_runs`, the run being begun among them.
+/// Requests whose invocations share a stamp, as a test's or a fixture's
+/// do: retention still keeps exactly `max_runs` of them.
 #[tokio::test]
-async fn retention_keeps_the_run_being_begun_when_runs_share_a_stamp() {
+async fn retention_keeps_max_runs_requests_when_they_share_a_stamp() {
     let td = tempfile::tempdir().unwrap();
     let keep_two = Retention {
         max_runs: 2,
-        max_age_days: 3650,
-        ..Retention::default()
+        ..KEEP
     };
-    let stamp = "2026-01-01T00:00:00+00:00";
-    for id in ["run-c", "run-b", "run-a"] {
-        let w = RunWriter::start(td.path(), id, stamp, None, keep_two).unwrap();
-        w.log(line("a", "info", id));
+    let stamp = "2026-01-01T00:00:00.000000+00:00";
+    for id in ["r-c", "r-b", "r-a"] {
+        let w = Request::dated(td.path(), id, stamp, keep_two);
+        w.step(at("a", "succeeded", id));
     }
-    assert_eq!(
-        log_after(td.path(), "run-a", None, 0, 10)
-            .await
-            .unwrap()
-            .len(),
-        1
-    );
-    let kept = runs(td.path(), None, 10).await.unwrap();
+    apply_retention(td.path(), keep_two);
+    let kept = requests_of_steps(td.path(), None, 10).await.unwrap();
     assert_eq!(kept.len(), 2, "{kept:?}");
-    assert!(kept.iter().any(|r| r.run_id == "run-a"), "{kept:?}");
 }
 
-/// Retention by age: a run older than the window goes even when the
-/// count would have kept it.
+/// Retention by age: an invocation older than the window goes even when
+/// the count would have kept it; one still running stays.
 #[tokio::test]
-async fn retention_drops_runs_older_than_the_window() {
+async fn retention_drops_invocations_older_than_the_window() {
     let td = tempfile::tempdir().unwrap();
     let a_day = Retention {
-        max_runs: 100,
         max_age_days: 1,
-        ..Retention::default()
+        ..KEEP
     };
     {
-        let w =
-            RunWriter::start(td.path(), "old", "2000-01-01T00:00:00+00:00", None, a_day).unwrap();
+        let w = Request::dated(td.path(), "old", "2000-01-01T00:00:00.000000+00:00", a_day);
+        w.step(at("a", "succeeded", "ancient"));
         w.log(line("a", "info", "ancient"));
+        w.step(at("b", "running", "still going"));
     }
-    let now = datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339();
     {
-        let _w = RunWriter::start(td.path(), "new", &now, None, a_day).unwrap();
+        let w = Request::dated(td.path(), "new", &now_utc(), a_day);
+        w.step(at("a", "succeeded", "today"));
     }
+    apply_retention(td.path(), a_day);
     assert!(log_after(td.path(), "old", None, 0, 10)
         .await
         .unwrap()
         .is_empty());
-    assert_eq!(
-        snapshot(td.path()).await.unwrap().run_id.as_deref(),
-        Some("new")
-    );
-}
-
-/// Age is measured from the run being begun, not the wall clock. A
-/// runner pinned with `--now` stamps every run with that clock; under
-/// the wall clock a root a year "old" would lose run 1 the moment run 2
-/// began, five minutes later by its own reckoning.
-#[tokio::test]
-async fn retention_ages_runs_against_the_newest_run_not_the_wall_clock() {
-    let td = tempfile::tempdir().unwrap();
-    let a_month = Retention {
-        max_runs: 100,
-        max_age_days: 30,
-        ..Retention::default()
-    };
-    let a_year_ago =
-        datalib_time::IsoOffsetTimestamp::now_local().bump_micros(-365 * 86_400 * 1_000_000);
-    let first = a_year_ago.to_rfc3339();
-    let five_minutes_on = a_year_ago.bump_micros(5 * 60 * 1_000_000).to_rfc3339();
-    {
-        let w = RunWriter::start(td.path(), "first", &first, None, a_month).unwrap();
-        w.log(line("a", "info", "pinned, a year back"));
-    }
-    {
-        let _w = RunWriter::start(td.path(), "second", &five_minutes_on, None, a_month).unwrap();
-    }
-    assert_eq!(
-        log_after(td.path(), "first", None, 0, 10)
-            .await
-            .unwrap()
-            .len(),
-        1,
-        "run 1 is five minutes older than run 2, not a year older than today"
-    );
-    assert_eq!(
-        snapshot(td.path()).await.unwrap().run_id.as_deref(),
-        Some("second")
-    );
-}
-
-/// A run begun under a pinned `--now` ends on that clock. The demo's
-/// bake, pinned to 2369, recorded its run as ending in the present, so
-/// it read as finishing three centuries before it began.
-#[tokio::test]
-async fn a_run_under_a_pinned_clock_ends_after_it_began() {
-    let td = tempfile::tempdir().unwrap();
-    let pinned = "2369-04-15T00:00:00+00:00";
-    drop(RunWriter::start(td.path(), "pinned", pinned, None, Retention::default()).unwrap());
-
-    let run = runs(td.path(), None, 10).await.unwrap().remove(0);
-    let finished = run
-        .finished_at_utc
-        .expect("a dropped writer closes the run");
-    assert!(
-        finished.as_str() >= run.started_at_utc.as_str() && finished.starts_with("2369-04-15T00:0"),
-        "began {}, ended {finished}",
-        run.started_at_utc
-    );
-    let runner = processes(td.path(), Some("pinned"), None, 10)
+    let left: Vec<String> = datalib_runs::invocations_of(td.path(), "old")
         .await
         .unwrap()
-        .remove(0);
-    assert_eq!(runner.finished_at_utc.as_deref(), Some(finished.as_str()));
+        .into_iter()
+        .map(|i| i.invocation_id)
+        .collect();
+    assert_eq!(left, ["old/b"], "a running invocation is never pruned");
 }
 
 /// Reading a root that has never synced is not an error — a fresh data
@@ -682,7 +602,7 @@ async fn a_root_with_no_store_reads_empty() {
 }
 
 /// A file that will not open is replaced rather than fatal: nothing in it
-/// is load-bearing, and a run that refused to start over its own log
+/// is load-bearing, and a sync that refused to start over its own log
 /// would be the wrong trade.
 #[tokio::test]
 async fn a_corrupt_store_is_replaced() {
@@ -691,11 +611,11 @@ async fn a_corrupt_store_is_replaced() {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, b"this is not a database, sqlite or otherwise").unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         w.log(line("a", "info", "after the reset"));
     }
     assert_eq!(
-        log_after(td.path(), "run-1", None, 0, 10)
+        log_after(td.path(), "r-1", None, 0, 10)
             .await
             .unwrap()
             .len(),
@@ -715,7 +635,7 @@ fn a_store_that_will_not_open_starts_no_writer() {
         .to_path_buf();
     std::fs::create_dir_all(dir.parent().unwrap()).unwrap();
     std::fs::write(&dir, b"a file where the store's directory goes").unwrap();
-    assert!(RunWriter::start(td.path(), "run-1", "run-1", None, Retention::default()).is_none());
+    assert!(LoopWriter::start(td.path(), None, Retention::default()).is_none());
     assert!(
         ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).is_none()
     );
@@ -728,7 +648,7 @@ fn a_store_that_will_not_open_starts_no_writer() {
 async fn a_store_from_another_schema_version_is_replaced() {
     let td = tempfile::tempdir().unwrap();
     {
-        let w = start(td.path(), "run-1");
+        let w = start(td.path(), "r-1");
         w.log(line("a", "info", "from before"));
     }
     let path = datalib_runs::runs_path(td.path());
@@ -740,15 +660,15 @@ async fn a_store_from_another_schema_version_is_replaced() {
         .unwrap();
     pool.close().await;
     {
-        let w = start(td.path(), "run-2");
+        let w = start(td.path(), "r-2");
         w.log(line("a", "info", "after"));
     }
-    assert!(log_after(td.path(), "run-1", None, 0, 10)
+    assert!(log_after(td.path(), "r-1", None, 0, 10)
         .await
         .unwrap()
         .is_empty());
     assert_eq!(
-        log_after(td.path(), "run-2", None, 0, 10)
+        log_after(td.path(), "r-2", None, 0, 10)
             .await
             .unwrap()
             .len(),
@@ -779,20 +699,157 @@ async fn a_store_from_another_schema_version_is_replaced() {
     assert_eq!(msgs, ["from before"]);
 }
 
-/// A store from the version before is upgraded in place, not remade:
-/// its runs and their lines are still there, nothing is set aside, and
-/// its processes take the columns this version added. Without the rung
-/// the old run's line was gone and a `runs.bak_` copy sat beside it.
+/// Turns a store made by this build into one in version 15's shape: no
+/// invocation tables, no `invocation_id` columns, and their indexes gone.
+const BACK_TO_15: &str = "DROP INDEX log_by_invocation; \
+     DROP INDEX processes_by_invocation; \
+     ALTER TABLE log DROP COLUMN invocation_id; \
+     ALTER TABLE processes DROP COLUMN invocation_id; \
+     DROP TABLE invocations; \
+     DROP TABLE invocation_requests; \
+     DROP TABLE invocation_metrics; \
+     DROP TABLE invocation_metric_samples; \
+     PRAGMA user_version = 15";
+
+/// One run of an older build, as that build left it: the run, its two
+/// steps, its runner and a step's attempt, a line each, and a metric and
+/// its sample.
+const AN_OLD_RUN: &str = "INSERT INTO runs (run_id, started_at_utc, finished_at_utc, tz_offset, \
+       kind, reason) VALUES ('old-1', '2026-11-01T10:00:00.000000+00:00', \
+       '2026-11-01T10:05:00.000000+00:00', '+00:00', 'sync', 'a sync asked for by ui: a'); \
+     INSERT INTO step_runs (run_id, step, state, attempt, started_at_utc, finished_at_utc, error, \
+       msg, updated_at_utc, tz_offset) VALUES \
+       ('old-1', 'a', 'succeeded', 1, '2026-11-01T10:00:01.000000+00:00', \
+        '2026-11-01T10:04:00.000000+00:00', NULL, 'done', '2026-11-01T10:04:00.000000+00:00', \
+        '+00:00'), \
+       ('old-1', 'b', 'failed', 2, '2026-11-01T10:00:02.000000+00:00', \
+        '2026-11-01T10:05:00.000000+00:00', 'boom', NULL, '2026-11-01T10:05:00.000000+00:00', \
+        '+00:00'); \
+     INSERT INTO processes (process_id, process, run_id, step, attempt, started_at_utc, \
+       tz_offset) VALUES ('old-dag', 'dag', 'old-1', NULL, NULL, \
+       '2026-11-01T10:00:00.000000+00:00', '+00:00'), ('old-b', 'step', 'old-1', 'b', 2, \
+       '2026-11-01T10:00:02.000000+00:00', '+00:00'); \
+     INSERT INTO log (run_id, process_id, step, attempt, ts_utc, tz_offset, level, msg) VALUES \
+       ('old-1', 'old-b', 'b', 2, '2026-11-01T10:04:30.000000+00:00', '+00:00', 'error', \
+        'boom'); \
+     INSERT INTO metrics (run_id, step, name, labels, value, updated_at_utc, tz_offset) VALUES \
+       ('old-1', 'a', 'problems', 'severity=error', 7, '2026-11-01T10:04:00.000000+00:00', \
+        '+00:00'), \
+       ('old-1', 'b', 'problems', 'severity=error', 3, '2026-11-01T10:05:00.000000+00:00', \
+        '+00:00'); \
+     INSERT INTO metric_samples (run_id, step, name, labels, ts_utc, tz_offset, value) VALUES \
+       ('old-1', 'a', 'problems', 'severity=error', '2026-11-01T10:04:00.000000+00:00', \
+        '+00:00', 7)";
+
+/// A store from before invocations climbs to this build's shape in place,
+/// and what its runs recorded stays readable as it was written: the run
+/// in the old runs' list, its steps by its id, its lines by `run:` and by
+/// the run's log, and its metric — until an invocation counts the same
+/// series, whose value is then the newer.
+#[tokio::test]
+async fn an_old_runs_rows_stay_readable_after_the_climb_to_invocations() {
+    let td = tempfile::tempdir().unwrap();
+    datalib_runs::prepare_store(td.path()).await.unwrap();
+    let path = datalib_runs::runs_path(td.path());
+    let pool = datalib_runs::open_or_create(&path).await.unwrap();
+    Sql::dynamic(test_sql_id!(), BACK_TO_15)
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
+    Sql::dynamic(test_sql_id!(), AN_OLD_RUN)
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+
+    {
+        let w = Request::dated(td.path(), "r-new", &now_utc(), KEEP);
+        w.metric(InvocationMetricRow {
+            labels: "severity=error".into(),
+            ..metric("a", "problems", 1)
+        });
+    }
+
+    let old = datalib_runs::runs(td.path(), None, 10).await.unwrap();
+    assert_eq!(old.len(), 1, "{old:?}");
+    assert_eq!(old[0].run_id, "old-1");
+    assert_eq!(old[0].kind.as_deref(), Some("sync"));
+    assert_eq!(old[0].reason.as_deref(), Some("a sync asked for by ui: a"));
+
+    let snap = snapshot_of(td.path(), Some("old-1")).await.unwrap();
+    assert!(snap.old_run);
+    assert_eq!(snap.run_id.as_deref(), Some("old-1"));
+    let steps: Vec<(&str, &str, i64)> = snap
+        .steps
+        .iter()
+        .map(|s| (s.step.as_str(), s.state.as_str(), s.attempt))
+        .collect();
+    assert_eq!(steps, [("a", "succeeded", 1), ("b", "failed", 2)]);
+    assert_eq!(snap.errors.get("b"), Some(&1));
+    assert_eq!(
+        datalib_runs::step_samples(td.path(), "old-1", "a")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let log = log_after(td.path(), "old-1", None, 0, 10).await.unwrap();
+    assert_eq!(
+        log.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
+        ["boom"]
+    );
+    let by_term = log_query(
+        td.path(),
+        &LogQuery {
+            q: "run:old-1",
+            cursor: LogCursor::After(0),
+            limit: 10,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(by_term.len(), 1);
+    assert_eq!(by_term[0].run_id.as_deref(), Some("old-1"));
+    assert_eq!(
+        processes(td.path(), Some("old-1"), None, 10)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let latest = datalib_runs::latest_metric(td.path(), "problems")
+        .await
+        .unwrap();
+    let of = |step: &str| {
+        latest
+            .iter()
+            .find(|m| m.step == step)
+            .map(|m| (m.value, m.reported_in.to_string()))
+    };
+    assert_eq!(of("a"), Some((1, "invocation r-new/a".to_string())));
+    assert_eq!(of("b"), Some((3, "run old-1".to_string())));
+}
+
+/// A store from version 10 is upgraded in place, not remade: its runs and
+/// their lines are still there, nothing is set aside, and its processes
+/// take the columns later versions added. Without the rungs the old run's
+/// line was gone and a `runs.bak_` copy sat beside it.
 #[tokio::test]
 async fn a_store_from_version_10_is_upgraded_in_place() {
     let td = tempfile::tempdir().unwrap();
-    {
-        let w = start(td.path(), "run-1");
-        w.log(line("a", "info", "from before"));
-    }
+    datalib_runs::prepare_store(td.path()).await.unwrap();
     let path = datalib_runs::runs_path(td.path());
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    // Version 10's shape is this one without what 11 through 15 added.
+    Sql::dynamic(test_sql_id!(), BACK_TO_15)
+        .raw()
+        .execute(&pool)
+        .await
+        .unwrap();
+    // Version 10's shape is 15's without what 11 through 15 added.
     test_sql!(
         "DROP INDEX metric_samples_by_name; \
          DROP INDEX metrics_by_name; \
@@ -802,6 +859,13 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
          ALTER TABLE processes DROP COLUMN applet; \
          ALTER TABLE runs DROP COLUMN kind; \
          ALTER TABLE runs DROP COLUMN reason; \
+         INSERT INTO runs (run_id, started_at_utc, tz_offset) \
+           VALUES ('run-1', '2026-11-01T10:00:00.000000+00:00', '+00:00'); \
+         INSERT INTO processes (process_id, process, run_id, started_at_utc, tz_offset) \
+           VALUES ('dag-1', 'dag', 'run-1', '2026-11-01T10:00:00.000000+00:00', '+00:00'); \
+         INSERT INTO log (run_id, process_id, step, attempt, ts_utc, level, msg) \
+           VALUES ('run-1', 'dag-1', 'a', 1, '2026-11-01T10:00:01.000000+00:00', 'info', \
+           'from before'); \
          PRAGMA user_version = 10"
     )
     .raw()
@@ -851,63 +915,20 @@ async fn a_store_from_version_10_is_upgraded_in_place() {
         .count();
     assert_eq!(set_aside, 0, "nothing was set aside");
     let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    let index: i64 = test_sql!("SELECT count(*) FROM sqlite_master WHERE type = 'index' \
-         AND name IN ('processes_by_run', 'runs_by_start', 'metrics_by_name', 'metric_samples_by_name')").query_scalar()
+    let index: i64 = test_sql!(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'index' \
+         AND name IN ('processes_by_run', 'runs_by_start', 'metrics_by_name', \
+           'metric_samples_by_name', 'log_by_invocation', 'invocations_by_step')"
+    )
+    .query_scalar()
     .fetch_one(&pool)
     .await
     .unwrap();
     pool.close().await;
     assert_eq!(
-        index, 4,
+        index, 6,
         "the climb adds the indexes retention and the metric reads name"
     );
-}
-
-/// Guards the migration that read like a sync: a run says what it is for
-/// and why, and a run an older build recorded keeps its lines and says
-/// nothing rather than something made up.
-#[tokio::test]
-async fn a_run_says_why_it_started_and_an_older_one_says_nothing() {
-    let td = tempfile::tempdir().unwrap();
-    {
-        let _old = start(td.path(), "2026-01-01T00:00:00+00:00");
-    }
-    let path = datalib_runs::runs_path(td.path());
-    let pool = datalib_runs::open_or_create(&path).await.unwrap();
-    test_sql!(
-        "ALTER TABLE runs DROP COLUMN kind; \
-         ALTER TABLE runs DROP COLUMN reason; \
-         PRAGMA user_version = 11"
-    )
-    .raw()
-    .execute(&pool)
-    .await
-    .unwrap();
-    pool.close().await;
-    {
-        let _new = RunWriter::start_because(
-            td.path(),
-            "2026-01-02T00:00:00+00:00",
-            "2026-01-02T00:00:00+00:00",
-            None,
-            Retention::default(),
-            Some(RunStart {
-                kind: RunKind::Migrate,
-                reason: "the first launch of a build".into(),
-            }),
-        )
-        .expect("the upgraded store opens");
-    }
-
-    let runs = datalib_runs::runs(td.path(), None, 10).await.unwrap();
-    assert_eq!(runs.len(), 2, "{runs:#?}");
-    assert_eq!(runs[0].kind.as_deref(), Some("migrate"));
-    assert_eq!(
-        runs[0].reason.as_deref(),
-        Some("the first launch of a build")
-    );
-    assert_eq!(runs[1].kind, None);
-    assert_eq!(runs[1].reason, None);
 }
 
 /// A process another one reports is written again as its peak rises and
@@ -945,19 +966,19 @@ async fn a_process_keeps_its_peak_when_its_last_row_names_none() {
     assert_eq!(stored.signal, Some(9));
 }
 
-/// A chart over the run needs its ends. The writer samples a series
+/// A chart over an invocation needs its ends. The writer samples a series
 /// when its value changed and the floor between samples has passed, and
-/// always once more at the end — so a series that moved twice inside the
-/// floor still leaves its first and last values. The snapshot says when
-/// each step last logged.
+/// once more when the invocation ends or the writer closes — so a series
+/// that moved twice inside the floor still leaves its first and last
+/// values. The snapshot says when each step last logged.
 #[tokio::test]
 async fn a_series_keeps_its_first_and_last_values_and_the_snapshot_its_last_log_time() {
     let td = tempfile::tempdir().unwrap();
     let now = datalib_time::IsoOffsetTimestamp::now_local();
     let recent = |secs_ago: i64| now.bump_micros(-secs_ago * 1_000_000).to_utc_and_offset().0;
     {
-        let w = start(td.path(), "run-1");
-        w.metric(MetricRow {
+        let w = start(td.path(), "r-1");
+        w.metric(InvocationMetricRow {
             updated_at_utc: recent(30),
             ..metric("a", "rows", 1)
         });
@@ -966,9 +987,9 @@ async fn a_series_keeps_its_first_and_last_values_and_the_snapshot_its_last_log_
         // published, or the two coalesce in the writer's batch and the
         // series gets one sample.
         w.flush().await;
-        // Inside the sample floor: the second value is the run's last,
-        // which the final flush samples.
-        w.metric(MetricRow {
+        // Inside the sample floor: the second value is the last, which
+        // the invocation's end samples.
+        w.metric(InvocationMetricRow {
             updated_at_utc: recent(20),
             ..metric("a", "rows", 7)
         });
@@ -976,17 +997,19 @@ async fn a_series_keeps_its_first_and_last_values_and_the_snapshot_its_last_log_
             ts_utc: "2026-09-14T10:00:03.500000+00:00".into(),
             ..line("a", "info", "second")
         });
+        w.step(at("a", "succeeded", "done"));
+        w.flush().await;
+        let samples = datalib_runs::step_samples(td.path(), "r-1", "a")
+            .await
+            .unwrap();
+        let values: Vec<i64> = samples.iter().map(|s| s.value).collect();
+        assert_eq!(
+            values,
+            [1, 7],
+            "the end, not the writer's close: {samples:?}"
+        );
     }
     let snap = snapshot(td.path()).await.unwrap();
-    let samples = datalib_runs::step_samples(td.path(), "run-1", "a")
-        .await
-        .unwrap();
-    let values: Vec<(String, i64)> = samples.iter().map(|s| (s.name.clone(), s.value)).collect();
-    assert_eq!(
-        values,
-        vec![("rows".to_string(), 1), ("rows".to_string(), 7)],
-        "{samples:?}"
-    );
     assert_eq!(
         snap.last_log_at.get("a").map(String::as_str),
         Some("2026-09-14T10:00:03.500000+00:00")
@@ -999,12 +1022,12 @@ async fn a_series_keeps_its_first_and_last_values_and_the_snapshot_its_last_log_
 #[tokio::test]
 async fn a_reader_sees_progress_while_the_writer_is_running() {
     let td = tempfile::tempdir().unwrap();
-    let w = start(td.path(), "run-1");
+    let w = start(td.path(), "r-1");
 
     let mut seen = std::collections::BTreeSet::new();
     for i in 0..40 {
         w.metric(metric("slack/raw", "done_total", i));
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        w.flush().await;
         for m in snapshot(td.path()).await.unwrap().metrics {
             seen.insert(m.value);
         }
@@ -1012,7 +1035,7 @@ async fn a_reader_sees_progress_while_the_writer_is_running() {
     drop(w);
     assert!(
         seen.len() > 1,
-        "a reader polling during a run must see progress move, saw {seen:?}"
+        "a reader polling during a sync must see progress move, saw {seen:?}"
     );
 }
 
@@ -1043,7 +1066,7 @@ async fn a_flushed_line_is_readable_at_once() {
         .unwrap();
         assert_eq!(all.last().map(|l| l.msg.as_str()), Some(msg));
     }
-    let w = start(td.path(), "run-1");
+    let w = start(td.path(), "r-1");
     w.metric(metric("a", "rows", 3));
     w.flush().await;
     let snap = snapshot(td.path()).await.unwrap();
@@ -1053,19 +1076,18 @@ async fn a_flushed_line_is_readable_at_once() {
     );
 }
 
-/// The server's lines share the table with the runs': no `run_id`, the
-/// process that wrote them, and the same tail cursor. Both writers hold
-/// the file at once, which on plain SQLite is ordinary.
+/// The server's lines share the table with the invocations': about no
+/// invocation, from the process that wrote them, on the same tail cursor.
+/// Both writers hold the file at once, which on plain SQLite is ordinary,
+/// and retention of invocations leaves the server's lines alone.
 #[tokio::test]
-async fn a_process_log_sits_beside_the_runs_and_survives_them() {
+async fn a_process_log_sits_beside_the_invocations_and_survives_them() {
     let td = tempfile::tempdir().unwrap();
     // The rows below are stamped on a fixed date; only `max_runs` is
     // under test, so neither age limit may reach them.
     let keep = Retention {
         max_runs: 1,
-        max_age_days: 36500,
-        process_log_days: 36500,
-        ..Retention::default()
+        ..KEEP
     };
     let server =
         ProcessLogWriter::start(td.path(), Process::Http, Some("ae2d52f0".into()), keep).unwrap();
@@ -1076,27 +1098,29 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         msg: "ready".into(),
         ..Default::default()
     });
-    // The line has to be in the file before the runs' are, or `seq`
-    // does not read in the order things happened.
+    // The line has to be in the file before the invocations' are, or
+    // `seq` does not read in the order things happened.
     server.flush().await;
     {
-        let w =
-            RunWriter::start(td.path(), "run-1", "2026-09-15T10:00:01+00:00", None, keep).unwrap();
-        w.log(line("a", "warn", "from the run"));
+        let w = Request::dated(td.path(), "r-1", "2026-09-15T10:00:01.000000+00:00", keep);
+        w.step(at("a", "succeeded", ""));
+        w.log(line("a", "warn", "from request 1"));
     }
-    // A second run under `max_runs: 1` sweeps run-1's rows; the
-    // server's must stay, since they belong to no run.
-    {
-        let w = RunWriter::start(
+    // A second request under `max_runs: 1` sweeps r-1's rows at the next
+    // open; the server's must stay, since they belong to no invocation.
+    let runner = {
+        let w = Request::with(
             td.path(),
-            "run-2",
-            "2026-09-15T10:00:02+00:00",
+            "r-2",
+            "2026-09-15T10:00:02.000000+00:00",
             Some("f2068bc9".into()),
             keep,
-        )
-        .unwrap();
-        w.log(line("a", "info", "from run 2"));
-    }
+        );
+        w.step(at("a", "succeeded", ""));
+        w.log(line("a", "info", "from request 2"));
+        w.w.process_id().to_string()
+    };
+    apply_retention(td.path(), keep);
     server.log(LogRow {
         ts_utc: "2026-09-15T10:00:03.000000+00:00".into(),
         level: "warn".into(),
@@ -1117,13 +1141,13 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     .unwrap();
     // Every line reads as its process says: which program wrote it and
     // from which commit — the server's for the server's lines, the
-    // runner's for a run's.
+    // runner's for what it filed under an invocation.
     let seen: Vec<String> = all
         .iter()
         .map(|l| {
             format!(
                 "{} {} {} {}",
-                l.run_id.as_deref().unwrap_or("-"),
+                l.invocation_id.as_deref().unwrap_or("-"),
                 l.process.as_deref().unwrap_or("-"),
                 l.msg,
                 l.git_hash.as_deref().unwrap_or("-"),
@@ -1134,22 +1158,20 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
         seen,
         [
             "- http ready ae2d52f0",
-            "run-2 dag from run 2 f2068bc9",
+            "r-2/a dag from request 2 f2068bc9",
             "- http still here ae2d52f0",
         ]
     );
-    // The server's two lines came from one launch; the run's from the
-    // runner's, a process of that run.
     let ids: Vec<&str> = all.iter().map(|l| l.process_id.as_str()).collect();
     assert_eq!(ids[0], ids[2]);
-    assert_ne!(ids[0], ids[1]);
+    assert_eq!(ids[1], runner);
     let runner = processes(td.path(), None, None, 10)
         .await
         .unwrap()
         .into_iter()
-        .find(|p| p.process_id == ids[1])
+        .find(|p| p.process_id == runner)
         .unwrap();
-    assert_eq!(runner.run_id.as_deref(), Some("run-2"));
+    assert_eq!((runner.run_id, runner.invocation_id), (None, None));
     assert!(
         runner.finished_at_utc.is_some(),
         "the writer closing is the process ending"
@@ -1166,7 +1188,7 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     .await
     .unwrap();
     assert_eq!(servers_only.len(), 2);
-    assert!(servers_only.iter().all(|l| l.run_id.is_none()));
+    assert!(servers_only.iter().all(|l| l.invocation_id.is_none()));
 
     // `min_level:` is this level and above, across every writer.
     let loud = log_query(
@@ -1197,12 +1219,12 @@ async fn a_process_log_sits_beside_the_runs_and_survives_them() {
     .unwrap();
     assert_eq!(
         one_build.iter().map(|l| l.msg.as_str()).collect::<Vec<_>>(),
-        ["from run 2"]
+        ["from request 2"]
     );
 }
 
-/// A line outside any run has its own age limit, shorter than a run's,
-/// and both writers apply it when they open.
+/// A line about no invocation has its own age limit, shorter than an
+/// invocation's, and both writers apply it when they open.
 #[tokio::test]
 async fn old_process_lines_age_out_when_a_writer_opens() {
     let td = tempfile::tempdir().unwrap();
@@ -1229,9 +1251,7 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
             ..Default::default()
         });
     }
-    {
-        let _w = RunWriter::start(td.path(), "run-1", &recent(1), None, keep).unwrap();
-    }
+    apply_retention(td.path(), keep);
     let all = log_query(
         td.path(),
         &LogQuery {
@@ -1248,8 +1268,8 @@ async fn old_process_lines_age_out_when_a_writer_opens() {
     );
 }
 
-/// A process row goes when nothing names it any more — no run, no line
-/// — and it is past the process-log age; never before, since the
+/// A process row goes when nothing names it any more — no invocation, no
+/// line — and it is past the process-log age; never before, since the
 /// process may still be alive and about to write.
 #[tokio::test]
 async fn a_process_is_pruned_only_once_nothing_names_it() {
@@ -1339,10 +1359,11 @@ async fn process_lines_past_the_cap_go_oldest_first() {
     );
 }
 
-/// The two retention passes over the lines outside any run read every one
-/// they keep, so each open of a root with many warned of a heavy statement.
+/// The two retention passes over the lines about no invocation read every
+/// one they keep, so each open of a root with many warned of a heavy
+/// statement.
 #[tokio::test]
-async fn retention_of_the_lines_outside_a_run_is_marked_as_walking_by_design() {
+async fn retention_of_the_lines_about_no_invocation_is_marked_as_walking_by_design() {
     let td = tempfile::tempdir().unwrap();
     let recording = datalib_sql_work::record_under(td.path());
     drop(ProcessLogWriter::start(td.path(), Process::Http, None, Retention::default()).unwrap());
@@ -1354,7 +1375,7 @@ async fn retention_of_the_lines_outside_a_run_is_marked_as_walking_by_design() {
             datalib_sql::tag::after_name(sql)
                 .trim_start()
                 .starts_with("DELETE FROM log")
-                && sql.contains("run_id IS NULL")
+                && sql.contains("invocation_id IS NULL")
         })
         .collect();
     assert_eq!(prunes.len(), 2, "{prunes:#?}");
@@ -1364,8 +1385,8 @@ async fn retention_of_the_lines_outside_a_run_is_marked_as_walking_by_design() {
 }
 
 /// Every write counts itself under the part of the store it touched,
-/// and a run's log lines count apart from the server's — that is what
-/// lets a watcher wake the Manage screen for one and not the other.
+/// and an invocation's log lines count apart from the server's — that is
+/// what lets a watcher wake the Manage screen for one and not the other.
 #[tokio::test]
 async fn each_part_of_the_store_counts_its_own_writes() {
     let td = tempfile::tempdir().unwrap();
@@ -1374,9 +1395,8 @@ async fn each_part_of_the_store_counts_its_own_writes() {
         "no store, no versions"
     );
 
-    let run_id = "run-1";
     {
-        let w = start(td.path(), run_id);
+        let w = start(td.path(), "r-1");
         w.step(at("a", "running", ""));
         w.log(LogRow {
             step: Some("a".into()),
@@ -1387,15 +1407,14 @@ async fn each_part_of_the_store_counts_its_own_writes() {
         w.metric(metric("a", "rows", 1));
     }
     let after_run = versions(td.path()).await.unwrap();
-    for part in [
-        StorePart::Runs,
-        StorePart::StepRuns,
+    let parts = [
+        StorePart::Invocations,
         StorePart::Metrics,
-        StorePart::RunLog,
-        StorePart::Processes,
-    ] {
+        StorePart::InvocationLog,
+    ];
+    for part in parts.iter().chain([&StorePart::Processes]) {
         assert!(
-            after_run.get(&part).is_some_and(|v| *v > 0),
+            after_run.get(part).is_some_and(|v| *v > 0),
             "{part:?}: {after_run:?}"
         );
     }
@@ -1414,12 +1433,7 @@ async fn each_part_of_the_store_counts_its_own_writes() {
     assert!(after_server
         .get(&StorePart::ProcessLog)
         .is_some_and(|v| *v > 0));
-    for part in [
-        StorePart::Runs,
-        StorePart::StepRuns,
-        StorePart::Metrics,
-        StorePart::RunLog,
-    ] {
+    for part in parts {
         assert_eq!(
             after_server.get(&part),
             after_run.get(&part),
@@ -1428,14 +1442,14 @@ async fn each_part_of_the_store_counts_its_own_writes() {
     }
 }
 
-/// A step's progress message is written about once a second while it
-/// runs. The log panel's process picker refetches on `processes`, so a
+/// An invocation's progress message is written about once a second while
+/// it runs. The log panel's process picker refetches on `processes`, so a
 /// progress tick must leave that part alone and a new attempt must move
 /// it.
 #[tokio::test]
-async fn a_progress_tick_moves_the_steps_and_not_the_processes() {
+async fn a_progress_tick_moves_the_invocations_and_not_the_processes() {
     let td = tempfile::tempdir().unwrap();
-    let w = start(td.path(), "run-1");
+    let w = start(td.path(), "r-1");
     let attempt = |n: i64| ProcessRow {
         process_id: format!("step-a-{n}"),
         process: Process::Step.as_str().into(),
@@ -1452,7 +1466,7 @@ async fn a_progress_tick_moves_the_steps_and_not_the_processes() {
     w.step(at("a", "running", "loaded 5/10"));
     w.flush().await;
     let ticked = versions(td.path()).await.unwrap();
-    assert!(ticked[&StorePart::StepRuns] > before[&StorePart::StepRuns]);
+    assert!(ticked[&StorePart::Invocations] > before[&StorePart::Invocations]);
     assert_eq!(
         ticked.get(&StorePart::Processes),
         before.get(&StorePart::Processes),

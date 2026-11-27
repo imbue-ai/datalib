@@ -2,7 +2,7 @@
 //! published to the store always reach it?
 //!
 //! Two processes write this file on purpose — the runner writes its
-//! runs, `datalib-http` writes its own log — and this test checks that
+//! invocations, `datalib-http` writes its own log — and this test checks that
 //! doing so is safe. Four writers is
 //! more than a data root ever really has, so a green run here is a
 //! bound rather than a coincidence.
@@ -40,7 +40,7 @@ const WRITERS: &[(&str, &str)] = &[
     ("server", "http-c"),
 ];
 
-const RUN_ID: &str = "run-two-process";
+const REQUEST_ID: &str = "request-two-process";
 
 /// Lines each writer is asked for.
 const PUBLISHED: u64 = ROUNDS * PER_ROUND;
@@ -113,9 +113,11 @@ fn four_writers(t: &Scratch) {
         "every writer records the process it wrote under"
     );
     assert_eq!(
-        t.count(test_sql!("SELECT COUNT(*) FROM runs")),
+        t.count(test_sql!(
+            "SELECT COUNT(*) FROM invocation_requests WHERE request_id = 'request-two-process'"
+        )),
         1,
-        "the one run is recorded once"
+        "the runner's one invocation is filed under its request once"
     );
     assert!(
         seen_while_writing > 0,
@@ -175,8 +177,8 @@ impl Scratch {
                 role,
                 "--root",
                 &self.path("root"),
-                "--run-id",
-                RUN_ID,
+                "--request",
+                REQUEST_ID,
                 "--tag",
                 tag,
                 "--rounds",

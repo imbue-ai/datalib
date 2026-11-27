@@ -1,207 +1,120 @@
-//! Closing the run of a runner that was killed. A runner that
-//! exits closes its own run; one that was SIGKILLed ran no code to do it
-//! with, and something that outlived it has to.
+//! Closing the invocations of a loop that was killed. A loop closes each
+//! invocation it sees end; one that was SIGKILLed ran no code to do it
+//! with, and the next process to take the lock has to.
 
-use datalib_runs::{
-    close_abandoned_run, open_or_create, runs, runs_path, snapshot_of, Retention, RunWriter,
-    StepRunRow,
-};
-use datalib_sql::test_sql;
+use datalib_runs::{close_abandoned_invocations, invocations_of, InvocationRow, Retention};
 
-const T0: &str = "2026-08-31T10:00:00+01:00";
-/// Whatever the caller calls a step that never reported. This crate does
-/// not enumerate the scheduler's vocabulary, so the tests do not either.
+use crate::request::Request;
+
+/// Whatever the caller calls an invocation nobody saw end. This crate
+/// does not enumerate the scheduler's vocabulary, so the tests do not
+/// either.
 const STOPPED: &str = "stopped";
 
-fn at(step: &str, state: &str) -> StepRunRow {
-    StepRunRow {
+fn at(step: &str, state: &str) -> InvocationRow {
+    InvocationRow {
         step: step.into(),
         state: state.into(),
         attempt: 1,
-        updated_at_utc: T0.into(),
+        updated_at_utc: crate::request::now_utc(),
         ..Default::default()
     }
 }
 
-/// A run left mid-flight: two steps still live, one already done, and
-/// the run never closed.
-///
-/// The writer is used for the rows and then the run is re-opened by
-/// hand, because dropping a `RunWriter` closes its run — which is the
-/// whole point of it, and exactly what a SIGKILLed runner never gets to
-/// do. Closing it also deletes the pending step, so that row is put back
-/// by hand too. Reaching into the table is how the test reproduces a
-/// killed runner without a second process to kill.
-async fn abandoned(root: &std::path::Path, run_id: &str) {
-    let writer =
-        RunWriter::start(root, run_id, run_id, None, Retention::default()).expect("start the run");
-    writer.step(at("a/ingest", "running"));
-    writer.step(at("b/ingest", "pending"));
-    writer.step(at("c/ingest", "succeeded"));
-    drop(writer);
-
-    let pool = open_or_create(&runs_path(root)).await.expect("open");
-    test_sql!("UPDATE runs SET finished_at_utc = NULL WHERE run_id = ?")
-        .query()
-        .bind(run_id)
-        .execute(&pool)
-        .await
-        .expect("re-open the run");
-    test_sql!(
-        "INSERT INTO step_runs (run_id, step, state, attempt, updated_at_utc) \
-         VALUES (?, 'b/ingest', 'pending', 1, ?)"
-    )
-    .query()
-    .bind(run_id)
-    .bind(T0)
-    .execute(&pool)
-    .await
-    .expect("put back the step that never started");
-    pool.close().await;
+/// A loop killed mid-request: two invocations still live, one done.
+/// Dropping the writer leaves the live ones as they are, as a killed
+/// loop does.
+fn abandoned(root: &std::path::Path, started: &str) {
+    let w = Request::dated(root, "r1", started, Retention::default());
+    w.step(at("a/ingest", "running"));
+    w.step(at("b/ingest", "pending"));
+    w.step(at("c/ingest", "succeeded"));
 }
 
-async fn finished_at(root: &std::path::Path, run_id: &str) -> Option<String> {
-    runs(root, None, 10)
+async fn of(root: &std::path::Path, step: &str) -> InvocationRow {
+    invocations_of(root, "r1")
         .await
         .unwrap()
         .into_iter()
-        .find(|r| r.run_id == run_id)
-        .expect("the run exists")
-        .finished_at_utc
+        .find(|i| i.step == step)
+        .unwrap_or_else(|| panic!("no {step}"))
 }
 
-/// An open run is closed, and every step that was still live takes the
-/// state the caller named, with the reason on it — a pending one too,
-/// which a run that ended normally would have deleted: nothing wrote how
-/// it ended, so it may have been about to run. A step that had already
-/// reported is left exactly as it was.
+/// Every invocation still live takes the state the caller named, with
+/// the reason on it, so a person can tell one that stopped itself from
+/// one the next loop gave up on. One that had already ended is left
+/// exactly as it was.
 #[tokio::test]
-async fn it_closes_the_run_and_the_steps_that_never_reported() {
+async fn it_closes_the_invocations_that_never_ended() {
     let td = tempfile::tempdir().unwrap();
-    abandoned(td.path(), "r1").await;
-    assert_eq!(
-        finished_at(td.path(), "r1").await,
-        None,
-        "open to begin with"
-    );
+    abandoned(td.path(), &crate::request::now_utc());
+    assert_eq!(of(td.path(), "a/ingest").await.finished_at_utc, None);
 
-    let closed = close_abandoned_run(td.path(), "r1", STOPPED, "the server closed it")
+    let closed = close_abandoned_invocations(td.path(), STOPPED, "the next loop closed it")
         .await
         .expect("close");
-    assert!(closed.run_was_open);
-    assert_eq!(
-        closed.steps_closed, 2,
-        "the running one and the pending one"
-    );
+    assert_eq!(closed, 2, "the running one and the pending one");
 
-    assert!(finished_at(td.path(), "r1").await.is_some());
-    let snapshot = snapshot_of(td.path(), Some("r1")).await.unwrap();
-    let state = |step: &str| {
-        snapshot
-            .steps
-            .iter()
-            .find(|s| s.step == step)
-            .unwrap_or_else(|| panic!("no {step}"))
-            .clone()
-    };
-    assert_eq!(state("a/ingest").state, STOPPED);
-    assert_eq!(state("b/ingest").state, STOPPED);
+    for step in ["a/ingest", "b/ingest"] {
+        let i = of(td.path(), step).await;
+        assert_eq!(i.state, STOPPED, "{step}");
+        assert_eq!(i.error.as_deref(), Some("the next loop closed it"));
+        assert!(i.finished_at_utc.is_some(), "{step}");
+    }
     assert_eq!(
-        state("a/ingest").error.as_deref(),
-        Some("the server closed it"),
-        "a step the server gave up on says so, so it reads differently \
-         from one that stopped itself"
-    );
-    assert!(state("a/ingest").finished_at_utc.is_some());
-    assert_eq!(
-        state("c/ingest").state,
+        of(td.path(), "c/ingest").await.state,
         "succeeded",
-        "a step that reported is not rewritten"
+        "an invocation that ended is not rewritten"
     );
 }
 
-/// Calling it twice is calling it once. The server calls it for every
-/// job it finishes, so the second call is the common case, not an
-/// edge one — and it must not restamp a run with a later time.
+/// Calling it twice is calling it once: the second call finds nothing
+/// live, and moves no stamp and no reason the first one set.
 #[tokio::test]
-async fn closing_a_closed_run_changes_nothing() {
+async fn closing_twice_changes_nothing_the_second_time() {
     let td = tempfile::tempdir().unwrap();
-    abandoned(td.path(), "r1").await;
+    abandoned(td.path(), &crate::request::now_utc());
+    assert_eq!(
+        close_abandoned_invocations(td.path(), STOPPED, "first")
+            .await
+            .unwrap(),
+        2
+    );
+    let stamp = of(td.path(), "a/ingest").await.finished_at_utc;
+    assert_eq!(
+        close_abandoned_invocations(td.path(), STOPPED, "second")
+            .await
+            .unwrap(),
+        0
+    );
+    let a = of(td.path(), "a/ingest").await;
+    assert_eq!(a.finished_at_utc, stamp);
+    assert_eq!(a.error.as_deref(), Some("first"));
+}
 
-    let first = close_abandoned_run(td.path(), "r1", STOPPED, "first")
+/// A root with no store at all is nothing to do rather than an error:
+/// every process that takes the lock asks, a fresh root's first included.
+#[tokio::test]
+async fn a_root_with_no_store_is_not_an_error() {
+    let td = tempfile::tempdir().unwrap();
+    assert_eq!(
+        close_abandoned_invocations(td.path(), STOPPED, "why")
+            .await
+            .expect("a missing store is fine"),
+        0
+    );
+}
+
+/// An invocation stamped ahead of the wall clock is closed no earlier
+/// than it began, though the wall clock says it is earlier.
+#[tokio::test]
+async fn an_invocation_is_not_closed_before_it_began() {
+    let td = tempfile::tempdir().unwrap();
+    let ahead = "2369-04-15T00:00:00.000000+00:00";
+    abandoned(td.path(), ahead);
+    close_abandoned_invocations(td.path(), STOPPED, "gone")
         .await
         .expect("close");
-    assert!(first.changed_anything());
-    let stamp = finished_at(td.path(), "r1").await.expect("closed");
-
-    let second = close_abandoned_run(td.path(), "r1", STOPPED, "second")
-        .await
-        .expect("close again");
-    assert!(!second.changed_anything(), "{second:?}");
-    assert_eq!(
-        finished_at(td.path(), "r1").await,
-        Some(stamp),
-        "the second call must not move the stamp the first one set"
-    );
-    let snapshot = snapshot_of(td.path(), Some("r1")).await.unwrap();
-    let first_reason = snapshot
-        .steps
-        .iter()
-        .find(|s| s.step == "a/ingest")
-        .unwrap()
-        .error
-        .clone();
-    assert_eq!(
-        first_reason.as_deref(),
-        Some("first"),
-        "the reason recorded is the one that actually closed it"
-    );
-}
-
-/// A run that no longer exists, and a root with no store at all, are
-/// both nothing to do rather than an error — the server calls this on
-/// every job it finishes, including ones that never reached a run.
-#[tokio::test]
-async fn a_run_that_is_not_there_is_not_an_error() {
-    let td = tempfile::tempdir().unwrap();
-    let empty = close_abandoned_run(td.path(), "nope", STOPPED, "why")
-        .await
-        .expect("a missing store is fine");
-    assert!(!empty.changed_anything());
-
-    abandoned(td.path(), "r1").await;
-    let unknown = close_abandoned_run(td.path(), "r2", STOPPED, "why")
-        .await
-        .expect("an unknown run is fine");
-    assert!(!unknown.changed_anything());
-    assert_eq!(
-        finished_at(td.path(), "r1").await,
-        None,
-        "and it leaves the run that does exist alone"
-    );
-}
-
-/// A run begun under a pinned `--now` ahead of the wall clock is closed
-/// no earlier than it began, though the wall clock says it is earlier.
-#[tokio::test]
-async fn a_pinned_run_is_not_closed_before_it_began() {
-    let td = tempfile::tempdir().unwrap();
-    let pinned = "2369-04-15T00:00:00+00:00";
-    drop(RunWriter::start(td.path(), "r1", pinned, None, Retention::default()).unwrap());
-    let pool = open_or_create(&runs_path(td.path())).await.expect("open");
-    test_sql!("UPDATE runs SET finished_at_utc = NULL WHERE run_id = 'r1'")
-        .query()
-        .execute(&pool)
-        .await
-        .expect("re-open the run");
-    pool.close().await;
-
-    close_abandoned_run(td.path(), "r1", STOPPED, "gone")
-        .await
-        .expect("close");
-    let run = runs(td.path(), None, 10).await.unwrap().remove(0);
-    assert_eq!(
-        run.finished_at_utc.as_deref(),
-        Some(run.started_at_utc.as_str())
-    );
+    let a = of(td.path(), "a/ingest").await;
+    assert_eq!(a.finished_at_utc.as_deref(), Some(ahead));
 }

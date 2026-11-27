@@ -23,7 +23,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use datalib_runs::store::now_split;
-use datalib_runs::{LogRow, MetricRow, Process, ProcessLogWriter, Retention, RunWriter};
+use datalib_runs::{
+    InvocationMetricRow, InvocationRow, LogRow, LoopWriter, Process, ProcessLogWriter, Retention,
+};
 
 fn main() {
     let mut argv = std::env::args().skip(1);
@@ -64,23 +66,33 @@ fn capture_warnings(path: PathBuf) {
         .init();
 }
 
-/// The runner's writer: a run with metrics as well as lines. Returns
-/// how many lines it published and the process it published them under.
+/// The runner's writer: one invocation for `--request`, with metrics as
+/// well as lines. Returns how many lines it published and the process it
+/// published them under.
 fn as_run(args: &Args) -> (u64, String) {
-    let writer = RunWriter::start(
-        &args.path("root"),
-        args.str("run-id"),
-        &now_split().0,
-        None,
-        Retention::default(),
-    )
-    .expect("start the run writer");
+    let writer = LoopWriter::start(&args.path("root"), None, Retention::default())
+        .expect("start the loop's writer");
     let process_id = writer.process_id().to_string();
+    let invocation = format!("{}/{STEP}", args.str("request"));
+    let started = now_split().0;
+    writer.invocation(InvocationRow {
+        invocation_id: invocation.clone(),
+        step: STEP.into(),
+        state: "running".into(),
+        started_at_utc: started.clone(),
+        updated_at_utc: started,
+        ..Default::default()
+    });
+    writer.served(&invocation, &[args.str("request").to_string()]);
     let written = pound(args, |n| {
-        writer.log(line(args.str("tag"), n));
+        writer.log(LogRow {
+            invocation_id: Some(invocation.clone()),
+            ..line(args.str("tag"), n)
+        });
         // Published per line and coalesced per flush, so the metric
         // and sample writes contend too.
-        writer.metric(MetricRow {
+        writer.metric(InvocationMetricRow {
+            invocation_id: invocation.clone(),
             step: STEP.into(),
             name: "lines_written".into(),
             value: n as i64,
@@ -92,7 +104,7 @@ fn as_run(args: &Args) -> (u64, String) {
     (written, process_id)
 }
 
-/// A server's writer: lines under no run at all.
+/// A server's writer: lines about no invocation at all.
 fn as_server(args: &Args) -> (u64, String) {
     let writer = ProcessLogWriter::start(
         &args.path("root"),

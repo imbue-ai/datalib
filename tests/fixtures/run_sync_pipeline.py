@@ -952,9 +952,10 @@ def _latest_problem_counts(
     con = sqlite3.connect(f"file:{store}?mode=ro", uri=True)
     try:
         rows = con.execute(
-            "SELECT m.step, m.labels, m.value FROM metrics m "
-            "JOIN runs r ON r.run_id = m.run_id WHERE m.name = 'problems' "
-            "ORDER BY m.step, m.labels, r.started_at_utc DESC, r.rowid DESC"
+            "SELECT m.step, m.labels, m.value FROM invocation_metrics m "
+            "LEFT JOIN invocations i USING (invocation_id) WHERE m.name = 'problems' "
+            "ORDER BY m.step, m.labels, "
+            "COALESCE(i.started_at_utc, m.updated_at_utc) DESC, m.invocation_id DESC"
         ).fetchall()
     finally:
         con.close()
