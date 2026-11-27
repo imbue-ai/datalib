@@ -163,7 +163,7 @@ mod tests {
     /// went under the pause and rose back a little stays paused, and a
     /// disk that never went under is not paused anywhere above the pause.
     #[test]
-    fn held_steps_wait_for_the_resume_line_and_free_ones_for_the_pause() {
+    fn paused_steps_wait_for_the_resume_line_and_others_for_the_pause() {
         let floor = DiskFloor::default();
         assert!(
             !floor.holds(false, 12 * GB),

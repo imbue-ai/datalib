@@ -250,8 +250,8 @@ impl Runner {
         let turned_off = store.turned_off().await?;
         let mut out = Vec::new();
         for step in steps {
-            let answer = match self.invoke_once(graph, step, Verb::Prepare).await {
-                Ok((i, outcome)) => match record_answer(graph, i, &outcome, &store).await {
+            let result = match self.invoke_once(graph, step, Verb::Prepare).await {
+                Ok((i, outcome)) => match save_verb_outcome(graph, i, &outcome, &store).await {
                     Ok(()) => Ok(outcome.needs_rerun),
                     Err(e) => Err(PrepareError::Failed(format!("{e:#}"))),
                 },
@@ -268,12 +268,12 @@ impl Runner {
             let refused_before = turned_off
                 .get(step)
                 .is_some_and(|by| by.starts_with(REFUSED_PREPARE));
-            if refused_before && !matches!(answer, Err(PrepareError::Refused(_))) {
+            if refused_before && !matches!(result, Err(PrepareError::Refused(_))) {
                 store.turn_on(step).await?;
             }
             out.push(Prepared {
                 step: step.clone(),
-                answer,
+                result,
             });
         }
         store.close().await;
@@ -292,15 +292,15 @@ impl Runner {
         let mut out = Vec::new();
         let steps = crate::supervisor::wipe::compact_targets(graph, &[], how);
         for step in steps.iter().map(|&i| &graph.steps[i].id) {
-            let answer = match self.invoke_once(graph, step, how.verb()).await {
-                Ok((i, outcome)) => record_answer(graph, i, &outcome, &store)
+            let result = match self.invoke_once(graph, step, how.verb()).await {
+                Ok((i, outcome)) => save_verb_outcome(graph, i, &outcome, &store)
                     .await
                     .map_err(|e| format!("{e:#}")),
                 Err(e) => Err(e.to_string()),
             };
             out.push(Shrunk {
                 step: step.clone(),
-                answer,
+                result,
             });
         }
         store.close().await;
@@ -461,7 +461,7 @@ pub const REFUSED_PREPARE: &str = "the runner, because the step refused --prepar
 /// version is recorded at it, so what reads it is stale; one that reports
 /// `needs_rerun` is marked so, and the tick treats it as due until it next
 /// succeeds. Everything else the store says of the step stands.
-async fn record_answer(
+async fn save_verb_outcome(
     graph: &Graph,
     i: usize,
     outcome: &StepOutcome,
@@ -469,7 +469,7 @@ async fn record_answer(
 ) -> Result<()> {
     let saved = store.load_record().await.context("load the record")?;
     let mut state = saved.clone();
-    apply_answer(graph, i, outcome, &mut state)?;
+    apply_verb_outcome(graph, i, outcome, &mut state)?;
     if state == saved {
         return Ok(());
     }
@@ -479,9 +479,9 @@ async fn record_answer(
         .context("save the record")
 }
 
-/// [`record_answer`] on a [`Record`] the caller holds in memory: the
+/// [`save_verb_outcome`] on a [`Record`] the caller holds in memory: the
 /// loop's own.
-pub(crate) fn apply_answer(
+pub(crate) fn apply_verb_outcome(
     graph: &Graph,
     i: usize,
     outcome: &StepOutcome,
@@ -501,13 +501,14 @@ pub(crate) fn apply_answer(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
     pub step: StepId,
-    pub answer: std::result::Result<bool, PrepareError>,
+    pub result: std::result::Result<bool, PrepareError>,
 }
 
 /// Why a step's `--prepare` did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareError {
-    /// What it wrote is a newer program's; it stays blocked.
+    /// What it wrote is a newer program's; the step is turned off until a
+    /// later `--prepare` does not refuse.
     Refused(String),
     Failed(String),
 }
@@ -517,7 +518,7 @@ pub enum PrepareError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shrunk {
     pub step: StepId,
-    pub answer: std::result::Result<(), String>,
+    pub result: std::result::Result<(), String>,
 }
 
 /// Terminal state of one step in one run.
@@ -1455,7 +1456,7 @@ mod tests {
     /// unified_grid_and_search_index` that means no row reaches the grid
     /// until the download is over.
     #[tokio::test]
-    async fn an_early_pass_that_produced_output_dispatches_its_own_consumers() {
+    async fn an_early_invocation_that_produced_output_dispatches_its_own_consumers() {
         let root = tempfile::tempdir().unwrap();
         let sink_passes = Arc::new(AtomicU32::new(0));
         // How many times the sink had run by the time the producer
@@ -1777,7 +1778,7 @@ mod tests {
     /// rather than hangs -- and record how many invocations it had made
     /// when they finished.
     #[tokio::test]
-    async fn a_seal_arriving_mid_pass_gets_one_more_pass_after_it() {
+    async fn a_seal_arriving_mid_invocation_gets_one_more_invocation_after_it() {
         use std::sync::atomic::AtomicBool;
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
@@ -1926,7 +1927,7 @@ mod tests {
     /// from everything sealed during the first invocation straight to
     /// empty.
     #[tokio::test]
-    async fn seals_landing_mid_pass_collapse_into_one_follow_up_pass() {
+    async fn seals_arriving_mid_invocation_collapse_into_one_follow_up_invocation() {
         use std::sync::atomic::AtomicBool;
         const SEALS_EACH: u32 = 5;
         const ROWS_EACH: u64 = 10;
@@ -2152,7 +2153,7 @@ mod tests {
     /// those slots would never run — losing the whole point of the
     /// feature in exactly the case it exists for.
     #[tokio::test]
-    async fn a_streaming_pass_runs_even_when_every_ordinary_slot_is_busy() {
+    async fn a_streaming_consumer_runs_even_when_every_ordinary_slot_is_busy() {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
 
@@ -2708,7 +2709,7 @@ mod tests {
     /// The fixture pipeline caught it two runs in six. This one is
     /// deterministic: the interleaving is forced, not raced.
     #[tokio::test]
-    async fn a_pass_may_not_claim_a_producer_that_finished_after_it_started() {
+    async fn an_invocation_may_not_claim_a_producer_that_finished_after_it_started() {
         let root = tempfile::tempdir().unwrap();
         // Set when the consumer's first invocation begins; `late` waits for
         // it, so the consumer is guaranteed to be running when `late`
@@ -2844,7 +2845,7 @@ mod tests {
     /// last invocation meets the existing staleness predicate and is
     /// *skipped* when nothing moved after the last checkpoint. Streaming is the same rules, earlier.
     #[tokio::test]
-    async fn the_final_pass_is_skipped_when_the_last_checkpoint_saw_everything() {
+    async fn the_final_invocation_is_skipped_when_the_last_checkpoint_saw_everything() {
         let root = tempfile::tempdir().unwrap();
         let passes = Arc::new(AtomicU32::new(0));
 

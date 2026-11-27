@@ -336,7 +336,7 @@ impl RunStoreSink {
     /// A process of a streaming consumer that failed, at error level, as
     /// the runner's line about the step: which process, and why — the
     /// error carries the exit status and the end of the process's stderr.
-    fn log_failed_pass(
+    fn log_failed_process(
         &self,
         step: &StepId,
         error: Option<&str>,
@@ -520,7 +520,7 @@ impl EventSink for RunStoreSink {
             } => {
                 self.say_slow_statements(step);
                 if *status == RunState::Failed {
-                    self.log_failed_pass(step, error.as_deref(), *exit_code, *signal);
+                    self.log_failed_process(step, error.as_deref(), *exit_code, *signal);
                 }
                 let finished_at_utc = now().0;
                 let mut ended = None;
@@ -955,7 +955,7 @@ mod tests {
     /// running until its last process. Without `PassEnd` every process
     /// but the last would be left open, its exit code lost.
     #[tokio::test]
-    async fn a_streaming_pass_closes_its_process_and_leaves_the_step_running() {
+    async fn a_streaming_consumers_process_ends_and_leaves_the_step_running() {
         let start = || Event::StepStart {
             step: "unified_grid_and_search_index/grid".into(),
             attempt: 1,
@@ -996,7 +996,7 @@ mod tests {
     /// reports the last process, and a clean finish writes no line. The
     /// failed process is its own error line, naming which one and why.
     #[tokio::test]
-    async fn a_failed_pass_is_an_error_line_though_the_next_one_succeeds() {
+    async fn a_failed_process_is_an_error_line_though_the_next_one_succeeds() {
         let start = || Event::StepStart {
             step: "evals/score".into(),
             attempt: 1,

@@ -1811,7 +1811,7 @@ mod tests {
     /// store, so the next run runs it again with nothing marked as
     /// changed.
     #[tokio::test]
-    async fn a_reset_invokes_a_step_that_takes_it_and_forgets_its_success() {
+    async fn a_reset_invokes_a_step_that_takes_it_and_clears_its_success() {
         let root = tempfile::tempdir().unwrap();
         let mut spec = StepSpec::new(
             "src/raw",
@@ -1892,9 +1892,9 @@ mod tests {
     /// which the store keeps and the rerun offer names until the step
     /// next succeeds.
     #[tokio::test]
-    async fn a_prepare_records_each_steps_answer_and_keeps_its_success() {
+    async fn a_prepare_records_what_each_step_reports_and_keeps_its_success() {
         let root = tempfile::tempdir().unwrap();
-        let answering = |id: &'static str, answer: &'static str| {
+        let reporting = |id: &'static str, answer: &'static str| {
             let mut spec = StepSpec::new(
                 id,
                 sh(&format!(
@@ -1914,11 +1914,11 @@ mod tests {
             spec
         };
         let g = Graph::build(vec![
-            answering(
+            reporting(
                 "raw/ingest",
                 r#"{"event":"outcome","outputs":[{"path":"raw/ingest","version":"v2"}]}"#,
             ),
-            answering(
+            reporting(
                 "doc/render",
                 r#"{"event":"outcome","needs_rerun":true,"outputs":[]}"#,
             ),
@@ -1929,9 +1929,9 @@ mod tests {
         let before = crate::supervisor::record::recorded(root.path()).await;
 
         let asked: Vec<String> = vec!["raw/ingest".into(), "doc/render".into()];
-        let answers = r.prepare(&g, &asked).await.unwrap();
+        let reports = r.prepare(&g, &asked).await.unwrap();
         assert_eq!(
-            answers.iter().map(|m| m.answer.clone()).collect::<Vec<_>>(),
+            reports.iter().map(|m| m.result.clone()).collect::<Vec<_>>(),
             [Ok(false), Ok(true)]
         );
         for id in ["raw/ingest", "doc/render"] {
@@ -1990,17 +1990,17 @@ mod tests {
         let asked: Vec<String> = vec!["a/out".into(), "b/out".into()];
 
         std::fs::write(root.path().join("refuse"), "").unwrap();
-        let answers = r.prepare(&g, &asked).await.unwrap();
+        let reports = r.prepare(&g, &asked).await.unwrap();
         assert!(
-            matches!(&answers[0].answer, Err(PrepareError::Refused(why)) if why.contains("newer build")),
-            "{answers:?}"
+            matches!(&reports[0].result, Err(PrepareError::Refused(why)) if why.contains("newer build")),
+            "{reports:?}"
         );
         let off = store.turned_off().await.unwrap();
         assert!(off["a/out"].starts_with(REFUSED_PREPARE), "{off:?}");
 
         std::fs::remove_file(root.path().join("refuse")).unwrap();
-        let answers = r.prepare(&g, &asked).await.unwrap();
-        assert_eq!(answers[0].answer, Ok(false), "{answers:?}");
+        let reports = r.prepare(&g, &asked).await.unwrap();
+        assert_eq!(reports[0].result, Ok(false), "{reports:?}");
         let off = store.turned_off().await.unwrap();
         assert!(!off.contains_key("a/out"), "turned back on: {off:?}");
         assert_eq!(

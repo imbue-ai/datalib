@@ -72,7 +72,7 @@ fn line_of<'a>(stdout: &'a str, step: &str) -> &'a str {
 /// again. The run changed its output; the line said `changed: 0`, which
 /// is what the last process alone did.
 #[test]
-fn a_step_whose_first_pass_changed_its_output_reads_changed() {
+fn a_step_whose_first_invocation_changed_its_output_reads_changed() {
     let td = root_with_two_passes(REPORTS_C1, REPORTS_C1);
     let (code, stdout) = sync(td.path());
     assert_eq!(code, Some(0), "{stdout}");
@@ -83,7 +83,7 @@ fn a_step_whose_first_pass_changed_its_output_reads_changed() {
 /// A first process that failed, then a second that succeeded: the line
 /// was a plain success, with nothing to say a process had failed.
 #[test]
-fn a_failed_pass_that_ran_again_is_on_the_steps_line() {
+fn a_failed_invocation_that_ran_again_is_on_the_steps_line() {
     let td = root_with_two_passes("echo boom >&2; exit 1", REPORTS_C1);
     let (code, stdout) = sync(td.path());
     assert_eq!(code, Some(0), "{stdout}");
