@@ -135,7 +135,15 @@ beverly = a.make(
 )
 # Wesley's number, linked to his mother by mistake and taken off.
 a.contacts("POST", "/unlink", {"handle": "tel:+12025550142", "contact_id": beverly})
-# A shared address belongs to a group contact: the ship's status mail.
+# Robert and Marie Picard share the vineyard's address: each has it.
+robert = a.make("Robert Picard", ["email:vineyard@labarre.earth"])
+marie = a.make("Marie Picard", ["email:marie@labarre.earth"])
+a.contacts(
+    "POST",
+    "/link",
+    {"handle": "email:vineyard@labarre.earth", "contact_id": marie, "held": "share"},
+)
+# A group contact: the ship's status mail.
 ship = a.make("Enterprise systems", ["email:lcars@enterprise.starfleet"], kind="group")
 
 # An agent proposes; Picard confirms some, turns one down, leaves one.
