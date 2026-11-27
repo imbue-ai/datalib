@@ -63,7 +63,7 @@ impl Sweeps {
         .bind(self.scope(key))
         .execute(db)
         .await
-        .with_context(|| format!("forget the sweep marker {key}"))?;
+        .with_context(|| format!("delete the sweep marker {key}"))?;
         Ok(())
     }
 }

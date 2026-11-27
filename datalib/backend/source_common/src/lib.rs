@@ -153,7 +153,7 @@ impl LatchkeySettings {
     }
 }
 
-/// The slim per-source envelope for the **render** wave. Render's only
+/// The slim per-source envelope for the **render** step. Render's only
 /// shared tunables are where the raw store lives ([`Self::raw_path`])
 /// and — for file-tree-backed sources like perseus that render straight
 /// from a staged tree — [`Self::input_path`]. Download-side knobs

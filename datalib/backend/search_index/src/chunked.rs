@@ -175,7 +175,7 @@ impl InferenceCache {
             .await?;
             tx.commit()
                 .await
-                .context("commit the forgotten documents")?;
+                .context("commit the deleted documents")?;
         }
         Ok(())
     }

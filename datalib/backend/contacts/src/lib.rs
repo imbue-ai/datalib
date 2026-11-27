@@ -1617,7 +1617,7 @@ pub(crate) async fn link_in(
     .bind(contact_id)
     .execute(&mut *tx)
     .await
-    .context("forget a turned-down link")?;
+    .context("delete a turned-down link")?;
     Ok(Some(what))
 }
 

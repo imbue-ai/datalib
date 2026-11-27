@@ -246,7 +246,7 @@ impl RawDb {
         .bind(labels_scope(book))
         .execute(&mut **tx)
         .await
-        .context("forget the sync token")?;
+        .context("delete the sync token")?;
         Ok(())
     }
 
