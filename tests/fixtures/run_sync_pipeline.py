@@ -873,7 +873,7 @@ def _copy_library_inputs(workspace: Path, inputs: dict[str, Path]) -> None:
 
 
 # The diff group each source gets, by the source's id — the delta
-# between its first ingest and its second (`docs/dev/plans/completed/diff_renderer.md`).
+# between its first ingest and its second (`docs/dev/config_model.md`).
 DIFF_GROUPS = {"tng_contacts": "tng_contacts-diff", "slack": "slack-diff"}
 
 

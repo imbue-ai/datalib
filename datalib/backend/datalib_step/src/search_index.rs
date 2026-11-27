@@ -1,4 +1,4 @@
-//! The search index (docs/dev/plans/completed/search_index_from_ram.md): what the
+//! The search index (datalib/backend/search_index/README.md): what the
 //! `unified_grid_and_search_index` step's keyword pass and sweep, and
 //! each source's `embed`, do with it. The keyword pass needs no model.
 //! An `embed` cuts each document the keyword index holds into chunks and

@@ -460,7 +460,8 @@ py_test(
     ],
 )
 
-# The provider contract (one_mode.md, "Layer 2"): for every render
+# The provider contract (data_architecture_parse_and_render.md,
+# "Incremental equals cold"): for every render
 # provider and every table of its raw store, mutate the table, render
 # incrementally and cold, and compare. Same pipeline, same args and
 # data as `ingested_tng_test`; a separate target so its runtime — two

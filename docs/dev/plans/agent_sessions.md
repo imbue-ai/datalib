@@ -1,15 +1,16 @@
 # Agent sessions: Claude Code, Cowork, Codex, Gemini CLI
 
-*Investigation (2026-09-16); the `claude_code` source's local method is
-built (same day — `datalib/backend/etl/providers/claude_code/INGEST.md`
-is the reference) and the `codex` source's local method is built
-(2026-09-22 — `datalib/backend/etl/providers/codex/INGEST.md`); the
-rest is not. §"Cowork" was re-measured 2026-11-16, and the `claude`
-source's `api` method reads Cowork tasks run in the cloud since
-(`datalib/backend/etl/providers/claude/INGEST.md` §"Cowork tasks").* What it would take to
+*Investigation (2026-09-16), checked against the tree on 2026-11-27.
+Built: the `claude_code` source's `local` method
+(`datalib/backend/etl/providers/claude_code/INGEST.md`), the `codex`
+source's `local` method (`…/codex/INGEST.md`), the `chatgpt` source's
+`export` method (`…/chatgpt/INGEST.md`), and Cowork tasks run in the
+cloud, read by the `claude` source's `api` method (`…/claude/INGEST.md`
+§"Cowork tasks"). Not built: Claude Code `cloud`, Codex `cloud`, Cowork
+run on the computer, and Gemini CLI.* What it would take to
 mirror the transcripts of the coding and desktop agents — Claude Code
 (local and cloud), Claude Cowork, OpenAI's Codex (local and cloud), the
-ChatGPT bulk export the `chatgpt` source still lacks, and Google's
+ChatGPT bulk export, and Google's
 Gemini CLI — into Datalib. Everything marked *measured* was checked on
 one mac on that date; everything marked *from source* was read out of
 the vendor's own client rather than guessed; the rest is marked as
@@ -19,25 +20,24 @@ unverified.
 
 | source | method | reach | how it is read | auth | status of the route |
 |---|---|---|---|---|---|
-| Claude Code | `local` | files | `~/.claude/projects/<cwd-slug>/<session>.jsonl` | none | *measured*: 282 sessions, 630 MB on this machine |
+| Claude Code | `local` | files | `~/.claude/projects/<cwd-slug>/<session>.jsonl` | none | **built**; *measured*: 282 sessions, 630 MB on this machine |
 | Claude Code | `cloud` | origin | `api.anthropic.com/v1/code/sessions` + `…/{id}/teleport-events` | Claude Code's own OAuth token (keychain) | *from source* (the `claude` binary); undocumented; **not yet probed** |
 | Cowork run on the computer | `local` | files | `…/Application Support/Claude/local-agent-mode-sessions/…/*.jsonl` | none | documented by Anthropic; none on this machine to measure. No new task on Pro/Max runs here since 2026-10-06 |
 | Cowork run in the cloud | `api` | origin | a claude.ai conversation, or `claude.ai/v1/code/sessions?tags=cowork-remote` and each task's `/events` | the `claude-ai` session the `claude` source holds | **built** in the `claude` source's `api` method; see §"Cowork" |
 | Any of the above, Enterprise only | — | origin | Compliance API `/v1/compliance/apps/sessions/{local,remote}` | Compliance Access Key | documented and stable, but Enterprise plans only |
-| ChatGPT | `export` | files | `conversations.json` from the data-export zip | none | shape already parsed by the `api` method's renderer |
+| ChatGPT | `export` | files | `conversations.json` from the data-export zip | none | **built** (#1328), beside or instead of the `api` method |
 | Codex CLI | `local` | files | `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` + `state_5.sqlite` | none | **built** (rollouts, both format generations; the SQLite is not read yet) |
 | Codex cloud | `cloud` | origin | `chatgpt.com/backend-api/wham/tasks/list`, `…/wham/tasks/{id}` | the ChatGPT bearer the `chatgpt` source already holds | *from source* (`openai/codex`); undocumented |
 | Gemini web | takeout | files | `My Activity/Gemini Apps/MyActivity.html` | none | **already built** (`google_takeout`) |
 | Gemini CLI | `local` | files | `~/.gemini/tmp/<project-hash>/chats/session-*.json` | none | *measured*: 22 sessions here |
 | Gemini web | `api` | origin | cookie-authenticated `batchexecute` RPCs | `__Secure-1PSID` cookies | reverse-engineered, cookies now expire in hours; not recommended |
 
-Recommended order: Claude Code `local` first (largest corpus, no
-credentials, and its parser is the one every other Claude surface
-reuses), then the ChatGPT `export` method (an afternoon), then Codex
-`local` + `cloud`, then Claude Code `cloud` once the probe below is
-done, then Gemini CLI. Cowork `local` is nearly free after Claude Code
-`local`. A Cowork task run in the cloud is already a claude.ai
-conversation (§"Cowork").
+The order first recommended was Claude Code `local`, the ChatGPT
+`export` method, Codex `local` and `cloud`, Claude Code `cloud` once the
+probe below is done, then Gemini CLI. The first three are built, and
+Cowork tasks run in the cloud with them. Left, in that order: Codex
+`cloud`, Claude Code `cloud`, Gemini CLI, and Cowork `local` once there
+is a local task to measure.
 
 ## What every one of these has in common
 
@@ -222,79 +222,39 @@ Cowork in the cloud" switch is on by default; on Enterprise it is off
 by default. Since the same releases a task has no tab of its own: chat
 and Cowork share one home screen and one Recents list.
 
-**A task run in the cloud is a claude.ai conversation** (*measured*
-2026-11-16 on one test task in a Max org, started from the desktop
-app with a local folder picked):
+**A task run in the cloud: built.** The `claude` source's `api` method
+reads both ways claude.ai stores one, a conversation (named by its
+`workspace_session_id`) or a session only, listed with
+`GET claude.ai/v1/code/sessions?tags=cowork-remote` (#1779, #1785,
+#1954). `claude/INGEST.md` §"Cowork tasks" is the reference for the
+routes, the headers, the tables and the dedupe; what decides which way
+a task is stored is still not known. Measured 2026-11-16 and written
+down nowhere else:
 
-- `GET /api/organizations/{org}/chat_conversations` — the unpaginated
-  listing the `claude` source already walks — names it like any chat.
-  It carries one field a chat does not, `workspace_session_id`, a
-  `cse_…` id; its detail says `workspace_upgraded: true`. 3 of the
-  account's 72 conversations had one, the oldest from 2026-10-06.
-- The detail the `claude` source already fetches
-  (`?tree=True&rendering_mode=messages&render_all_tools=true&consistency=strong`)
-  holds the turn: the person's message, and an assistant message
-  whose blocks are `thinking`, `text`, `tool_use` and `tool_result`.
-- The full session log is `GET claude.ai/v1/code/sessions/{id}` and
-  `…/{id}/events?limit=500&sort_order=asc`, sent with the claude.ai
-  cookie and three headers: `anthropic-version: 2023-06-01`,
-  `anthropic-beta: ccr-byoc-2025-07-29` and `x-organization-uuid`. The
-  session says `environment_kind: "ccs"`, tags `product:cowork-remote`,
-  and `client_metadata.remote_cowork.userSelectedFolders`. Each event
-  wraps (`event_id`, `sequence_num`, `created_at`, …) a `payload` in
-  Claude Code's stream-json shape: `system:init`, `user`, `assistant`
-  (with `uuid`, `session_id`, `message.content`), `control_request`,
-  `control_response`, `result:success`. The session's own id is
-  `cse_…`; the desktop app keeps it as `session_…` with the same
-  suffix, and both spellings open it and its events. claude.ai shows a
-  task at `claude.ai/cowork/cse_…`.
-- `GET /v1/code/sessions` (paged by `next_cursor`) does **not** list
-  it: it listed 149 sessions, all `bridge` (the desktop app's Code tab
-  under Remote Control) or `anthropic_cloud`, under every filter tried
-  (`exclude_tags=-`, `include_archived=true`, `tags=cowork-remote`).
-- On the computer the task left one file,
+- A conversation that is a task also says `workspace_upgraded: true`
+  in its detail; 3 of one account's 72 conversations had a
+  `workspace_session_id`, the oldest from 2026-10-06.
+- The session says `environment_kind: "ccs"`, tags
+  `product:cowork-remote`, and keeps the folders picked in
+  `client_metadata.remote_cowork.userSelectedFolders`. Each event wraps
+  (`event_id`, `sequence_num`, `created_at`, …) a `payload` in Claude
+  Code's stream-json shape: `system:init`, `user`, `assistant` (with
+  `uuid`, `session_id`, `message.content`), `control_request`,
+  `control_response`, `result:success`. That is close to the local
+  JSONL the `claude_code` renderer reads but not the same lines (no
+  `parentUuid`, `cwd` or `version` per record).
+- `GET /v1/code/sessions` did not list the task that had become a
+  conversation: it listed 149 sessions, all `bridge` (the desktop app's
+  Code tab under Remote Control) or `anthropic_cloud`, under every
+  filter tried (`exclude_tags=-`, `include_archived=true`,
+  `tags=cowork-remote`).
+- On the computer a cloud task left one file,
   `local-agent-mode-sessions/<account>/<org>/remote-session-spaces.json`
   (`{"entries": [{"sessionId", "folders": [...]}]}`), mapping the
-  session to the folder it was given. No transcript was written. The
-  file the task made landed in that folder; the VM's disk images under
+  session to the folder it was given, and no transcript. The file the
+  task made landed in that folder; the VM's disk images under
   `vm_bundles/claudevm.bundle/` were written during the run and were
   not opened.
-
-**Not every cloud task becomes a conversation.** Two more tasks the
-same day, both started in claude.ai in a browser with no folder — one
-in a Team org, one in the same Max org — are sessions only: the
-`ccs` session is there with the same `cowork-remote` tags and its
-turns in `/events`, but no conversation in either org's
-`chat_conversations` names it (the Team org's had no
-`workspace_session_id` at all). The plain `GET /v1/code/sessions`
-does not list them; `?tags=cowork-remote` (or `?exclude_tags=-`)
-does. The tasks that did become conversations — one from the desktop
-app with a folder, one from a browser with two pictures attached — are
-in none of those listings. A third browser task, in the Team org with
-a picture pasted in, stayed a session. So neither the org, the surface
-nor a picture decides it, and what does is not known, from five
-tasks.
-
-So a reader takes the union of two listings per org, both behind the
-`claude-ai` session the `claude` source already holds:
-
-- `GET /v1/code/sessions?tags=cowork-remote`, paged by `next_cursor`:
-  the tasks that are sessions only. The `claude` source reads these
-  (`cowork_sessions`, `cowork_events`).
-- The `workspace_session_id` of each conversation in
-  `chat_conversations`: the tasks that became conversations. The
-  `claude` source's `api` method should already mirror these as chats
-  (**not verified by a run**; check that the render draws a
-  `tool_use`/`tool_result` pair in an assistant message), and their
-  `/events` answer too, so a Cowork reader that also reads them must
-  decide which of the two copies a person sees.
-
-Each id's log is `…/{id}/events?sort_order=asc`, paged by its
-`next_cursor` passed back as `cursor` (checked on one log three events
-a page). The payloads are
-Claude Code's stream-json, close to the local JSONL the `claude_code`
-renderer reads but not the same lines (no `parentUuid`, `cwd` or
-`version` per record).
 
 **A task run on the computer** is documented by Anthropic at
 `~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/`:
@@ -319,19 +279,10 @@ the desktop home; neither is examined.
 
 ## OpenAI
 
-### ChatGPT `export` — the cheap one
+### ChatGPT `export` — built
 
-The `chatgpt` type has only an `api` method. The data-export zip
-(Settings → Data controls → Export) is `conversations.json` (or
-`conversations-000.json, …` when large), plus `user.json`,
-`message_feedback.json`, `shared_conversations.json`, `chat.html`, and
-the attachment files. Each conversation is the same `mapping` tree
-(parent/child nodes, one per edit or regenerate) the `api` method gets
-from `/backend-api/conversation/{id}`, so the renderer needs nothing
-new; the ingest is a file walk into the same raw store. Copy the
-`claude` source's `export` pattern including its prune-to-snapshot
-rule and its one-way-door hazard (INGEST.md there, §"The hazard").
-Attachment files in the zip go to the CAS.
+Built in #1328, with an export beside the API in #1359 and #1380 and
+the wizard in #1392; `chatgpt/INGEST.md` is the reference.
 
 ### Codex CLI `local` — *measured*
 
@@ -412,9 +363,7 @@ published schema. Skip.
 
 ## Decided (2026-09-16): three types over one engine
 
-Local ingestion for all three is being built, Claude Code first
-(**built**), Codex second (**built**, 2026-09-22), Gemini CLI next. The
-type question was settled against the `email` precedent
+The type question was settled against the `email` precedent
 (`docs/dev/email_download_modes.md` §1–2): transports share a type only
 when the same thing ingested two ways **dedupes** — `email_id` is the
 `Message-ID` in every mode. A Claude Code session, a Codex session and a
@@ -427,30 +376,24 @@ machinery, on the `sqlite_mirror` / `timeseries_render` precedent:
   sets, each with its own raw schema (we store what the tool wrote),
   `SourceType` and `Provider` variants, Manage-screen row and wizard
   entry. The local method is `[steps.params.sessions]` with a `path`
-  that defaults to the tool's standard store, so the table can be
-  empty the way `[steps.params.gmail]` is. A `cloud` table joins
+  that defaults to the tool's standard store. A `cloud` table joins
   `claude_code` and `codex` later, sharing each type's store and
-  renderer, exactly as `claude`'s `api` and `export` do.
-- one shared ingest engine for JSONL session trees. Claude Code's
-  ingest turned out to be `fsscan` + `file_checkpoint` + a parser
-  (`ingest/mod.rs` is ~200 lines, and a changed file is simply
-  re-read whole — doltlite's content addressing makes the unchanged
-  rows free, so the byte-offset cursor was not needed). Codex's is the
-  same ~200 lines with a different parser and two scan roots; the
-  shape has now repeated and the engine is there to pull out, though
-  what it would save is the `RawDb` boilerplate and the scan loop,
-  not the parsers. Gemini CLI — whole-file JSON — uses the same hash
-  cursor either way.
-- one shared render crate over a normalized turn model: `tool_use` /
-  `tool_result` runs folded into chat-common's `<details>`, one `h2`
-  per human turn, subagent transcripts as separate documents joined by
-  an edge.
+  renderer, exactly as `claude`'s `api` and `export` do. `claude_code`
+  and `codex` are built; `gemini_cli` is not.
+- **Built (#802):** one shared ingest engine for JSONL session trees
+  (`datalib/backend/etl/agent_sessions/`) and one shared render crate
+  (`etl/agent_sessions_render/`), which `claude_code` and `codex` both
+  use. A changed file is re-read whole; doltlite's content addressing
+  makes the unchanged rows free, so the byte-offset cursor sketched
+  above was never needed. Gemini CLI, whole-file JSON, would use the
+  same changed-file check.
 
 Still open: the tool-result size above which a body goes to the CAS
-rather than the payload; and Cowork desktop, which is the Claude Code
-JSONL under a second root and could be a second `claude_code` group
-today, but names a product a person recognizes — decide when there is a
-local Cowork session to measure.
+rather than the payload (the render already cuts a long one at
+`max_tool_result_bytes`, `claude_code/INGEST.md`); and Cowork desktop,
+which is the Claude Code JSONL under a second root and could be a
+second `claude_code` group today, but names a product a person
+recognizes — decide when there is a local Cowork session to measure.
 
 ## Sources
 

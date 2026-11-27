@@ -1,7 +1,8 @@
 # Google Docs, Sheets and Slides as a source, with their history
 
-**Status: proposal (2026-10-21), with phases 1 and 2 built, and phase 4
-built for Docs.** The `google_drive`
+**Status: proposal (2026-10-21). Checked against the tree on 2026-11-27:
+phases 1, 2 and 7 are built, and phase 4 is built for Docs; phases 3, 5
+and 6, and phase 4 for Sheets and Slides, are not.** The `google_drive`
 provider mirrors a Google account's Docs, Sheets and Slides into a raw
 store. The store keeps Google's own native representation of each file at
 every version a run saw, plus the comments and the revision list, and
@@ -261,26 +262,18 @@ cross-check at most.
 3. **Delta listing.** Drive's `changes` API, with its `startPageToken`,
    in place of the full listing each run. The full listing is 1 request
    per 1,000 files, so this matters only for a large Drive.
-4. **A markdown render.** Built for Docs
-   ([`google_drive_render/TRANSLATE.md`](../../../datalib/backend/etl/providers/google_drive_render/TRANSLATE.md));
-   Sheets and Slides are still to do. As first planned: the first render, because it is what the rest
-   of Datalib reads. A `google_drive_render` crate and a
-   `render_markdown` step would make each file one document, from its
-   newest capture's native JSON:
-   - *Docs:* headings, lists, tables and images as markdown;
-   - *Sheets:* each sheet as a table;
-   - *Slides:* each slide's text.
-
-   Its comment threads would be sections of their own, with the
-   `m-{uuid}` wrappers feedback anchors to. That puts the files in the
-   grid and in search like any other source. Deferred for now: phase 1 is
-   the backup.
+4. **A markdown render.** Built for Docs in #1295, with folders by name
+   in #1919
+   ([`google_drive_render/TRANSLATE.md`](../../../datalib/backend/etl/providers/google_drive_render/TRANSLATE.md)).
+   Still to do: *Sheets*, each sheet as a table, and *Slides*, each
+   slide's text, as documents of their own beside the Docs.
 5. **ODF from the native JSON**, Sheets first (above), then the
    ODF-with-versions export step built on it.
 6. **A republish command**, export upload first, Sheets replay second.
-7. **The wizard.** One catalog entry has one `credentialService`, and
-   this source needs four. Either latchkey grows one service covering all
-   four scopes, or the catalog learns several.
+7. **Built: the wizard** (#1308). The one catalog entry signs in to all
+   four services: `credentialService` names `google-drive` and
+   `credentialAlso` the other three
+   (`datalib/ui/src/config/catalog.ts`).
 
 Not planned: other Drive files (PDFs, images, uploaded Office files).
 Their bytes are a plain `alt=media` download with a real

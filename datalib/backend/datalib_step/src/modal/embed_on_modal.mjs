@@ -1,5 +1,5 @@
 // Embeds prompts on Modal's GPUs for `datalib-step`'s `embed` step
-// (docs/dev/plans/embed_on_modal.md § "How the step drives Modal"). Run by
+// (docs/dev/embed_on_modal.md § "How the step drives Modal"). Run by
 // the step on the bundled Node with `--input-type=module --eval`.
 //
 // Reads `{"hash","prompt"}` lines on stdin and cuts them into slices; runs
@@ -16,8 +16,8 @@
 //
 // A slice goes in and its vectors come out as files in the Sandbox, never
 // through the Sandbox's stdin and stdout: on a GPU Sandbox, stdout lost most
-// of a large answer and still ended cleanly (docs/dev/plans/embed_on_modal.md
-// § "Measured on Modal"). So the Sandbox idles, the slice is written to it,
+// of a large answer and still ended cleanly (docs/dev/embed_on_modal.md
+// § "How the step drives Modal"). So the Sandbox idles, the slice is written to it,
 // `embed-prompts` runs with its stdin and stdout on files, and the answer is
 // read once it has exited. Whatever comes back is checked line by line
 // against what was sent, and what is missing is sent again once.

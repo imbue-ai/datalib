@@ -118,9 +118,19 @@ under `params.diff` (`from` and `to`, both required, and
 `max_documents`, the most documents a side may render before the step
 fails, default 1000); the rest of `params` is the source type's render
 config. It may also carry an `embed`, like a source. The fan-ins read
-it like any render step.
-[`plans/completed/diff_renderer.md`](plans/completed/diff_renderer.md)
-has the design; `configs/dag_example.toml` has one.
+it like any render step. How the step computes it is
+[parse and render § "Rendering the delta itself"](data_architecture_parse_and_render.md#rendering-the-delta-itself);
+`configs/dag_example.toml` has one.
+
+A diff is asked for, never standing. The pair is fixed in the step's
+params, so a later run, after the source syncs again, renders the same
+comparison; what it shows changes only when someone changes the pair.
+There is no default pair, and no diff whose `from` follows the source as
+it syncs, since a diff that appears unasked is noise in the sources
+list. And a diff group's type is `diff`, not its source's: a group with
+a source's `type` is a source, and every rule written for sources (the
+wizard, the Manage row's "Download", the connection section) would then
+need an exception for a group that mirrors nothing.
 
 A diff group's tree is worth nothing kept: both commits stay in the
 source's store, so comparing them again rebuilds it. Removing a diff
@@ -185,7 +195,7 @@ package's programs by its path under the data root, in its `command`;
   GPUs, and a run that owes fewer embeds them here; `0` sends every run.
   `datalib-pipeline check` refuses anything else. What leaves and what guards it:
   `docs/dev/security_posture.md` § "What leaves the machine for Modal";
-  how the step does it: `docs/dev/plans/embed_on_modal.md`. What every
+  how the step does it: [`embed_on_modal.md`](embed_on_modal.md). What every
   such step shares is in `[env]`: `DATALIB_STEP_MODAL_MAX_SANDBOXES`,
   how many Modal Sandboxes one step runs at once (100 when omitted). A step spreads what it owes over that many, at least
   256 chunks each.

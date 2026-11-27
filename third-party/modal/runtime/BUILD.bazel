@@ -8,7 +8,7 @@ exports_files(["package.json"])
 # runs. `scripts/stage_runtime.sh` copies it into the runtime beside
 # latchkey, where `datalib-step embed` runs it on the bundled Node to embed
 # a source on the person's own Modal account
-# (docs/dev/plans/embed_on_modal.md).
+# (docs/dev/embed_on_modal.md).
 npm_link_all_packages(name = "node_modules")
 
 # The whole package store, as for latchkey: `modal` resolves its
