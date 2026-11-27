@@ -1,7 +1,7 @@
 //! A step that has printed its outcome has nothing left to do, but its
 //! exit still runs the runtime's teardown, and on CI that teardown has
 //! stalled until the caller's deadline with nothing said about where
-//! (`render_contract_test`, Sep 2026). The watchdog makes a stalled exit
+//! (`render_contract_test`). The watchdog makes a stalled exit
 //! describe its threads, then ends it: the outcome already stands.
 
 use std::io::Write;

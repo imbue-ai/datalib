@@ -32,7 +32,7 @@ pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
     out.into_iter().collect()
 }
 
-/// Put the embedding model in place, sha256-verified, and answer its
+/// Put the embedding model in place, sha256-verified, and return its
 /// directory. A no-op once it is.
 fn provision_embed_model(
     root: &Path,
@@ -153,7 +153,7 @@ pub async fn run_embed(
 }
 
 /// Documents left for the next pass, as a metric the Manage row shows: a
-/// document dropped from this pass leaves a trail.
+/// document dropped from this pass is counted rather than lost unseen.
 fn report_unsettled(progress: &Progress, group: &str, unsettled: usize) {
     progress.metric(
         "search_index_unsettled",
@@ -163,7 +163,7 @@ fn report_unsettled(progress: &Progress, group: &str, unsettled: usize) {
 }
 
 /// A per-source step's version is what it read: the step compares hashes
-/// itself, so the runner only has to know when to ask again. Run by
+/// itself, so the runner only has to know when to run it again. Run by
 /// hand, with nothing from the runner, it claims nothing, and a runner,
 /// if any, takes every success as new.
 fn claim_reads(env: &StepEnv) -> Vec<OutputClaim> {

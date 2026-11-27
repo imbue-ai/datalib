@@ -197,7 +197,8 @@ async fn keyword_pass(
                 .collect()
         }
     };
-    // Forgotten first, so a pass cut short is never taken for a finished one.
+    // The commit the last pass read is cleared first, so a pass cut short
+    // is never taken for a finished one.
     index.set_read_at(group, None).await?;
     let indexed = index.indexed(group).await?;
     let mut current: BTreeMap<String, String> = BTreeMap::new();
@@ -346,11 +347,11 @@ async fn embed_with<E: EmbedPrompt>(
 
 /// Cuts into chunks, and files, every document of `group` the keyword
 /// index holds (`indexed`, `markdown_uuid → content_hash`) that was not
-/// cut from the rendering it holds, and forgets the ones it no longer
-/// holds once its keyword pass has `finished`: a pass cut short, over an
-/// index emptied for a new shape, has not put back what it will, and
-/// forgetting those would cost their vectors at the next sweep. `cutter`
-/// is called only when a document is owed.
+/// cut from the rendering it holds, and deletes the filed chunks of the
+/// ones it no longer holds once its keyword pass has `finished`: a pass
+/// cut short, over an index emptied for a new shape, has not put back
+/// what it will, and deleting those would cost their vectors at the next
+/// sweep. `cutter` is called only when a document is owed.
 #[allow(clippy::too_many_arguments)]
 async fn cut_owed(
     cache: &InferenceCache,
@@ -792,9 +793,9 @@ async fn embed_batch<E: EmbedPrompt>(
 }
 
 /// The `unified_grid_and_search_index` step's sweep, after its keyword
-/// passes: the cache forgets the chunks of every source it does not
-/// search, then keeps only the vectors a filed chunk names. Answers how
-/// many vectors went. Touches nothing that does not exist yet.
+/// passes: deletes the filed chunks of every source it does not search,
+/// then every vector no filed chunk names. Returns how many vectors went.
+/// Touches nothing that does not exist yet.
 pub(crate) async fn sweep(root: &Path, searched: &[String]) -> Result<u64> {
     let cache_path = layout::inference_cache_db(root);
     if !cache_path.exists() {
@@ -1030,7 +1031,7 @@ mod tests {
 
     /// A source added to the config but not yet rendered has no render
     /// store on disk. Its keyword pass indexes nothing and fails nothing;
-    /// it once failed the whole index step, which held every `embed`.
+    /// it once failed the whole index step, so no `embed` could start.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_source_with_no_render_store_yet_indexes_nothing() {
         let td = tempfile::tempdir().unwrap();
@@ -1151,7 +1152,7 @@ mod tests {
 
     /// A keyword pass cut short, as after the index was emptied for a new
     /// shape, has not put every document back: the embed keeps the chunks
-    /// of the ones it lacks, so the sweep keeps their vectors, and forgets
+    /// of the ones it lacks, so the sweep keeps their vectors, and deletes
     /// them only once a pass has finished without them.
     #[tokio::test(flavor = "multi_thread")]
     async fn an_unfinished_keyword_pass_forgets_no_ones_chunks() {

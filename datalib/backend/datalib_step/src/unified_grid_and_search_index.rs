@@ -56,8 +56,9 @@ impl Params {
 }
 
 /// The inputs whose render store this step indexes: not a source's
-/// time-series or occurrences step, which an older config names here for
-/// their problems, which a reader now finds in their own stores.
+/// time-series or occurrences step, which a config an older build wrote
+/// names here for their problems; a reader finds those in the steps' own
+/// stores.
 fn render_inputs(inputs: &[String]) -> Vec<String> {
     inputs
         .iter()

@@ -35,8 +35,8 @@ pub struct PlannedSource {
 }
 
 /// A planned source's processors, which are of a different type per
-/// phase: download and render no longer share a trait, because they no
-/// longer share a run context.
+/// phase: download and render share no trait, because they share no run
+/// context.
 pub enum Wave {
     Ingest(Vec<Box<dyn DataProcessor>>),
     /// A download whose params say `common.download = false`: nothing to

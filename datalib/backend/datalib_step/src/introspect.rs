@@ -339,10 +339,10 @@ fn report_body(source_id: &str, subjects: &[Subject], now: &str) -> String {
         "{}# {group} — storage\n\nMeasured {measured}.\n\n",
         report_front(source_id, now).draw()
     );
-    // One table, not one wrapped `<div>` per measurement. A source with
-    // a dozen stores and tables used to render a dozen bordered cards
-    // stacked down the page to say twelve short facts; the same facts
-    // fit in a dozen rows. The anchor moves onto a span inside the Id
+    // One table, not one wrapped `<div>` per measurement: a source with
+    // a dozen stores and tables says twelve short facts, which fit in a
+    // dozen rows, where a bordered card each would stack a dozen cards
+    // down the page. The anchor moves onto a span inside the Id
     // cell — the frontend keys selection off `[data-section-uuid]`
     // wherever it sits, and a row is what a reader wants to land on.
     out.push_str("| Kind | Step | What | Size | Count | Id |\n|---|---|---|---|---|---|\n");
@@ -422,8 +422,8 @@ pub fn plan(source_id: &str, subjects: Vec<Subject>, now: &str) -> Result<Option
                 .created_at(Some(now.to_string()))
                 .modified_at(Some(now.to_string()))
                 // No `account`: this row measures a source, it belongs
-                // to no upstream login, and the group id it used to
-                // carry here polluted every `account:` filter. Which
+                // to no upstream login, and a group id here would show up
+                // in every `account:` filter. Which
                 // source it measures is `markdowns.source_id`, as for
                 // every row.
                 .conversation_name(Some(format!("{source_id} storage")))
