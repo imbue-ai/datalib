@@ -157,6 +157,13 @@ const LADDER: &[datalib_store_meta::Migration] = &[
             })
         },
     },
+    // A table of its own, which the DDL makes: the rung only marks the
+    // shape, so a build that would not write it refuses the store.
+    datalib_store_meta::Migration {
+        version: 9,
+        name: "a request records how each step it reached ended for it",
+        apply: |_| Box::pin(async { Ok(()) }),
+    },
 ];
 
 /// `steps` as rung 6 makes it, the shape rung 8 starts from.

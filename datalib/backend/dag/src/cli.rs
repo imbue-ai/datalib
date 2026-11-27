@@ -138,8 +138,9 @@ pub enum Verb {
     /// config entry did not load, 130 stopped. Ctrl-C asks this request to
     /// stop; a second Ctrl-C exits at once. stderr is an NDJSON event
     /// stream (run_plan, then invocation_start, step_start, progress_*,
-    /// log, hint, invocation_end and step_finish per step, then one
-    /// run_summary); stdout gets one line per step at the end.
+    /// log, hint and invocation_end per invocation, and request_end as
+    /// each request closes); stdout gets one line per step at the end:
+    /// the step, how it ended for this sync, and what else there is to say.
     Sync {
         /// The data root, or its config.toml.
         root: PathBuf,

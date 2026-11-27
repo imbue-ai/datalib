@@ -385,7 +385,9 @@ pub(crate) async fn run_subprocess(
                         }
                         // The runner's own word on what it started and how
                         // it ended; a step cannot say it.
-                        Event::InvocationStart { .. } | Event::InvocationEnd { .. } => continue,
+                        Event::InvocationStart { .. }
+                        | Event::InvocationEnd { .. }
+                        | Event::RequestEnd { .. } => continue,
                         // A capability is only ever claimed: an event that
                         // carries just a `version` leaves streaming as it was.
                         Event::Capabilities {
@@ -680,32 +682,6 @@ fn retag(ev: Event, id: &str) -> Event {
     let id = id.to_string();
     match ev {
         Event::StepStart { attempt, .. } => Event::StepStart { step: id, attempt },
-        Event::StepFinish {
-            status,
-            error,
-            exit_code,
-            signal,
-            ..
-        } => Event::StepFinish {
-            step: id,
-            status,
-            error,
-            exit_code,
-            signal,
-        },
-        Event::PassEnd {
-            status,
-            error,
-            exit_code,
-            signal,
-            ..
-        } => Event::PassEnd {
-            step: id,
-            status,
-            error,
-            exit_code,
-            signal,
-        },
         Event::Checkpoint { version, rows, .. } => Event::Checkpoint {
             step: id,
             version,
@@ -755,7 +731,7 @@ fn retag(ev: Event, id: &str) -> Event {
         },
         Event::Hint { msg, .. } => Event::Hint { step: id, msg },
         // through unmodified rather than inventing a policy.
-        ev @ (Event::RunSummary { .. }
+        ev @ (Event::RequestEnd { .. }
         | Event::RunPlan { .. }
         | Event::InvocationStart { .. }
         | Event::InvocationEnd { .. }) => ev,
@@ -851,7 +827,8 @@ mod tests {
 
     use super::*;
     use crate::graph::Graph;
-    use crate::scheduler::{Runner, StepStatus};
+    use crate::run_state::RunState;
+    use crate::scheduler::Runner;
     use crate::step::{StepRun, StepSpec, Verb};
 
     #[derive(Default)]
@@ -1098,12 +1075,43 @@ mod tests {
             .unwrap();
 
         assert_eq!(count(), 1, "only the first source ever started");
-        let cancelled = StepStatus::Failed {
-            kind: FailureKind::Cancelled,
-        };
-        for id in ["a/raw", "b/raw", "a/rendered"] {
-            assert_eq!(rep.step(id).status, cancelled, "{id}: {rep:#?}");
+        // The request stays open, for whoever runs the loop next.
+        assert!(rep.steps.is_empty(), "{rep:#?}");
+        let first = ["a/raw", "b/raw"]
+            .into_iter()
+            .find(|id| started.join(&id[..1]).exists())
+            .unwrap();
+        assert_eq!(
+            last_outcome(root.path(), first).await.as_deref(),
+            Some("stopped")
+        );
+        for id in ["a/raw", "b/raw", "a/rendered"]
+            .into_iter()
+            .filter(|&id| id != first)
+        {
+            assert_eq!(last_outcome(root.path(), id).await, None, "{id} never ran");
         }
+    }
+
+    /// How the loop's record says `step` last ended; `None` for one that
+    /// never ran.
+    async fn last_outcome(root: &std::path::Path, step: &str) -> Option<String> {
+        let record = crate::supervisor::record::saved_state(root).await;
+        Some(
+            record
+                .steps
+                .get(step)?
+                .last_invocation
+                .as_ref()?
+                .status
+                .clone(),
+        )
+    }
+
+    /// The version the loop's record keeps for what `step` writes.
+    async fn recorded_version(root: &std::path::Path, step: &str) -> String {
+        let record = crate::supervisor::record::saved_state(root).await;
+        record.steps[step].version.clone().expect("a version")
     }
 
     /// A stopped step that ignores its SIGINT is killed once the grace is
@@ -1146,17 +1154,15 @@ mod tests {
         .await;
         let child = grandchild().unwrap();
         stop.send(true).unwrap();
-        let rep = tokio::time::timeout(std::time::Duration::from_secs(20), round)
+        tokio::time::timeout(std::time::Duration::from_secs(20), round)
             .await
             .expect("the kill ended the round")
             .unwrap()
             .unwrap();
 
         assert_eq!(
-            rep.step("g/deaf").status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
+            last_outcome(root.path(), "g/deaf").await.as_deref(),
+            Some("stopped")
         );
         until("the step's child to go with it", || !alive(child)).await;
     }
@@ -1200,17 +1206,15 @@ mod tests {
         .await;
         let child = grandchild().unwrap();
         stop.send(true).unwrap();
-        let rep = tokio::time::timeout(std::time::Duration::from_secs(20), round)
+        tokio::time::timeout(std::time::Duration::from_secs(20), round)
             .await
             .expect("the round waited on the step's leftover child")
             .unwrap()
             .unwrap();
 
         assert_eq!(
-            rep.step("g/leaver").status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
+            last_outcome(root.path(), "g/leaver").await.as_deref(),
+            Some("stopped")
         );
         until("the leftover child to be killed", || !alive(child)).await;
     }
@@ -1243,7 +1247,7 @@ mod tests {
             reads,
             BTreeMap::from([(
                 "src/raw".to_string(),
-                rep.step("src/raw").outputs[0].1.clone()
+                recorded_version(root.path(), "src/raw").await
             )])
         );
         assert!(reads["src/raw"].ends_with(":v7"), "{reads:?}");
@@ -1313,7 +1317,7 @@ mod tests {
             rep.all_ok(),
             "a versionless row must not fail the step: {rep:#?}"
         );
-        let version = &rep.step("legacy/raw").outputs[0].1;
+        let version = recorded_version(root.path(), "legacy/raw").await;
         assert!(version.contains(":run-"), "{version}");
 
         let warned = rec.0.lock().unwrap().iter().any(|e| {
@@ -1433,9 +1437,9 @@ mod tests {
         let r = Runner::new(root.path());
         let first = r.run(&g).await.unwrap();
         assert!(first.all_ok(), "{first:#?}");
-        assert!(first.step("src/raw").outputs[0].2, "{first:#?}");
+        assert!(first.step("src/raw").changed, "{first:#?}");
         let second = r.run(&g).await.unwrap();
-        assert!(!second.step("src/raw").outputs[0].2, "{second:#?}");
+        assert!(!second.step("src/raw").changed, "{second:#?}");
     }
 
     /// A seal a child prints on stdout reaches the event stream once.
@@ -1613,11 +1617,8 @@ mod tests {
         // The reported version was trusted verbatim.
         // The recorded version is the step's fingerprint plus what it
         // reported, so a change to the step itself reaches consumers.
-        assert!(
-            rep.step("shell/raw").outputs[0].1.ends_with(":v1"),
-            "{}",
-            rep.step("shell/raw").outputs[0].1
-        );
+        let version = recorded_version(root.path(), "shell/raw").await;
+        assert!(version.ends_with(":v1"), "{version}");
 
         let events = rec.0.lock().unwrap();
         // Progress event forwarded and re-tagged from "me" to the real id.
@@ -2145,10 +2146,8 @@ mod tests {
         let rep = Runner::new(root.path()).run(&g).await.unwrap();
         let step = rep.step("gmail/ingest");
         assert_eq!(
-            step.status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
+            (step.outcome, step.failure),
+            (RunState::Stopped, Some(FailureKind::Cancelled))
         );
         assert_eq!(
             step.error.as_deref(),
@@ -2201,10 +2200,8 @@ mod tests {
         let rep = r.run(&g).await.unwrap();
         let step = rep.step("bad/raw");
         assert_eq!(
-            step.status,
-            StepStatus::Failed {
-                kind: FailureKind::RateLimited
-            }
+            (step.outcome, step.failure),
+            (RunState::Failed, Some(FailureKind::RateLimited))
         );
         assert_eq!(step.attempts, 2);
         assert!(

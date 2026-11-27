@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::run_state::RunState;
-use crate::step::{FailureKind, StepId, StepSpec};
+use crate::step::{StepId, StepSpec};
 
 /// One event on the stream. `step` tags every event so a single
 /// multiplexed stream (the orchestrator's view) stays attributable.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
-    /// First event of a run: every step, in topological order. Lets
+    /// The loop took work on with none open: every step, in topological
+    /// order, and every step a config edit adds while it is busy. Lets
     /// a consumer render the full task board (with pending cells)
     /// before anything has started.
     RunPlan {
@@ -60,32 +61,6 @@ pub enum Event {
     StepStart {
         step: StepId,
         attempt: u32,
-    },
-    /// One process of a streaming consumer ended, and this is how, but the
-    /// step is not over: its last process is still to come, so its state
-    /// stays where it was. A process that failed says so here, so the run
-    /// store keeps the failure even when the next process succeeds.
-    PassEnd {
-        step: StepId,
-        status: RunState,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_code: Option<i32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        signal: Option<i32>,
-    },
-    /// Terminal state for the step this run.
-    StepFinish {
-        step: StepId,
-        status: RunState,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-        /// How the attempt's process ended, when it was one.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        exit_code: Option<i32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        signal: Option<i32>,
     },
     /// What this step's *sink* can do, reported once as it starts.
     ///
@@ -195,12 +170,14 @@ pub enum Event {
         step: StepId,
         msg: String,
     },
-    /// One terminal event per run, emitted by the scheduler after
-    /// every step has a status: the whole run report, machine
-    /// readable. This replaces the old `sync_summary_*.json` file —
-    /// callers that want a persisted record tee the stream.
-    RunSummary {
-        steps: Vec<StepSummary>,
+    /// The loop closed a request: how it ended, and how each step it
+    /// reached ended for it, as its `request_steps` rows say.
+    RequestEnd {
+        request: String,
+        outcome: crate::supervisor::store::RequestOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failed_step: Option<StepId>,
+        steps: Vec<crate::supervisor::record::RequestStep>,
     },
 }
 
@@ -221,36 +198,6 @@ impl PlannedStep {
             group: spec.group.clone(),
         }
     }
-}
-
-/// Per-step entry in [`Event::RunSummary`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StepSummary {
-    pub step: StepId,
-    pub status: RunState,
-    /// Set when `status` is [`RunState::Failed`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure: Option<FailureKind>,
-    /// Invocations this run (0 when skipped/blocked).
-    pub attempts: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    /// Processes of this step that failed and were started again because
-    /// what the step reads moved; `status` is the last process's.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    pub failed_passes: u32,
-    pub outputs: Vec<OutputSummary>,
-}
-
-fn is_zero(n: &u32) -> bool {
-    *n == 0
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputSummary {
-    pub path: String,
-    pub version: String,
-    pub changed: bool,
 }
 
 /// The vocabularies the run store keeps, named once, in the schema crate.

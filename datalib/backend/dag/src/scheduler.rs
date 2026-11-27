@@ -381,13 +381,6 @@ impl Runner {
                 signal: exit.and_then(|x| x.signal),
                 attempts: 1,
             });
-            sink.emit(&Event::StepFinish {
-                step: spec.id.clone(),
-                status,
-                error: error.clone(),
-                exit_code: exit.and_then(|x| x.code),
-                signal: exit.and_then(|x| x.signal),
-            });
             match result {
                 Ok(o) => Ok(o),
                 Err(e) if e.kind == FailureKind::Incompatible => {
@@ -458,148 +451,80 @@ pub enum PrepareError {
     Failed(String),
 }
 
-/// Terminal state of one step in one run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StepStatus {
-    /// Ran to completion. `changed` = number of outputs whose version
-    /// moved relative to the previous run.
-    Succeeded {
-        changed: usize,
-    },
-    /// Wanted, but up to date: same inputs, same fingerprint as at its
-    /// last success. Checked, and current.
-    SkippedUpToDate,
-    /// An upstream step failed (or was itself blocked); not invoked.
-    Blocked {
-        on: String,
-    },
-    Failed {
-        kind: FailureKind,
-    },
-}
-
-impl StepStatus {
-    /// This status with its payload dropped — the part every reader
-    /// outside the scheduler gets, and the only part that is written
-    /// down. [`RunState`] owns the spelling.
-    pub fn state(&self) -> RunState {
-        match self {
-            StepStatus::Succeeded { .. } => RunState::Succeeded,
-            StepStatus::SkippedUpToDate => RunState::SkippedUpToDate,
-            StepStatus::Blocked { .. } => RunState::Blocked,
-            // A cancel is the one failure kind that is not a failure:
-            // the person asked for it, and the step did as asked.
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled,
-            } => RunState::Stopped,
-            StepStatus::Failed { .. } => RunState::Failed,
-        }
-    }
-    pub fn is_ok(&self) -> bool {
-        self.state().is_ok()
-    }
-}
-
+/// How one invocation's process ended, as the loop records it.
 #[derive(Debug, Clone)]
-pub struct StepReport {
-    pub id: String,
-    pub status: StepStatus,
-    /// Invocations this run (0 when skipped/blocked).
-    pub attempts: u32,
+pub(crate) struct Ended {
+    pub outcome: RunState,
+    pub failure: Option<FailureKind>,
     pub error: Option<String>,
-    /// Processes that failed and were started again; `status` is the last
-    /// one's.
-    pub failed_passes: u32,
-    /// (artifact path, version now, changed this run)
-    pub outputs: Vec<(String, String, bool)>,
+    pub exit: Option<crate::step::Exit>,
+    pub attempts: u32,
 }
 
-impl StepReport {
-    /// The step's line in `datalib-pipeline`'s report on stdout.
-    pub fn line(&self) -> String {
-        let error = self
-            .error
-            .as_deref()
-            .map(|e| format!("  ({e})"))
-            .unwrap_or_default();
-        let failed = match self.failed_passes {
-            0 => String::new(),
-            1 => "  (1 pass failed and was run again; its error is in the step's log)".into(),
-            n => format!(
-                "  ({n} passes failed and were run again; their errors are in the step's log)"
-            ),
-        };
-        format!("{:<32} {:?}{error}{failed}", self.id, self.status)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct RunReport {
-    /// One entry per step a request reached, in topological order.
-    pub steps: Vec<StepReport>,
-}
-
-impl RunReport {
-    pub fn step(&self, id: &str) -> &StepReport {
-        self.steps
-            .iter()
-            .find(|s| s.id == id)
-            .unwrap_or_else(|| panic!("no step {id:?} in report"))
-    }
-    pub fn all_ok(&self) -> bool {
-        self.steps.iter().all(|s| s.status.is_ok())
-    }
-}
-
-impl Runner {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn finish(
-        &self,
-        graph: &Graph,
-        state: &mut LoopState,
-        status: &mut Option<StepStatus>,
-        i: usize,
-        st: StepStatus,
-        error: Option<String>,
+impl Ended {
+    pub fn failed(
+        kind: FailureKind,
+        error: String,
         exit: Option<crate::step::Exit>,
         attempts: u32,
-        reached: Option<Vec<String>>,
-    ) {
-        let id = &graph.steps[i].id;
-        self.sink.emit(&Event::StepFinish {
-            step: id.clone(),
-            status: st.state(),
-            error: error.clone(),
-            exit_code: exit.and_then(|e| e.code),
-            signal: exit.and_then(|e| e.signal),
-        });
-        let stamp = now_stamp();
-        {
-            let entry = state.steps.entry(id.clone()).or_default();
-            let last = entry.last_invocation.get_or_insert_with(|| LastInvocation {
-                started_at: stamp.clone(),
-                ..Default::default()
-            });
-            // An outcome no invocation of its own came to (found up to
-            // date, or blocked) keeps the last invocation's id, which is
-            // where the step's log is, and names the requests that
-            // reached it.
-            if let Some(reached) = reached {
-                last.requests = reached;
-            }
-            last.finished_at = Some(stamp.clone());
-            last.status = st.state().as_str().to_string();
-            last.attempts = attempts;
-            last.error = error;
-            last.failure = match &st {
-                StepStatus::Failed { kind } => Some(*kind),
-                _ => None,
-            };
-            if matches!(st.state(), RunState::Succeeded | RunState::SkippedUpToDate) {
-                entry.last_success_at = Some(stamp);
-            }
+    ) -> Ended {
+        Ended {
+            // A cancel is the one failure kind that is not a failure: the
+            // person asked for it, and the step did as asked.
+            outcome: match kind {
+                FailureKind::Cancelled => RunState::Stopped,
+                _ => RunState::Failed,
+            },
+            failure: Some(kind),
+            error: Some(error),
+            exit,
+            attempts,
         }
-        *status = Some(st);
+    }
+}
+
+/// A step's invocation ended: its record says how, at once, whether or not
+/// it runs again on its producer's next seal.
+pub(crate) fn record_end(state: &mut LoopState, id: &StepId, e: &Ended) {
+    let stamp = now_stamp();
+    let entry = state.steps.entry(id.clone()).or_default();
+    let last = entry.last_invocation.get_or_insert_with(|| LastInvocation {
+        started_at: stamp.clone(),
+        ..Default::default()
+    });
+    last.finished_at = Some(stamp.clone());
+    last.status = e.outcome.as_str().to_string();
+    last.attempts = e.attempts;
+    last.error = e.error.clone();
+    last.failure = e.failure;
+    if e.outcome == RunState::Succeeded {
+        entry.last_success_at = Some(stamp);
+    }
+}
+
+/// A request reached a step and ran nothing of it: it was up to date, or
+/// blocked. Its record keeps its last invocation's id, which is where the
+/// step's log is, and names the requests that reached it.
+pub(crate) fn record_unrun(
+    state: &mut LoopState,
+    id: &StepId,
+    outcome: RunState,
+    requests: Vec<String>,
+) {
+    let stamp = now_stamp();
+    let entry = state.steps.entry(id.clone()).or_default();
+    let last = entry.last_invocation.get_or_insert_with(|| LastInvocation {
+        started_at: stamp.clone(),
+        ..Default::default()
+    });
+    last.requests = requests;
+    last.finished_at = Some(stamp.clone());
+    last.status = outcome.as_str().to_string();
+    last.attempts = 0;
+    last.error = None;
+    last.failure = None;
+    if outcome == RunState::SkippedUpToDate {
+        entry.last_success_at = Some(stamp);
     }
 }
 
@@ -628,30 +553,6 @@ pub(crate) fn mark_running(
         error: None,
         failure: None,
     });
-}
-
-pub(crate) fn step_summary(r: &StepReport) -> crate::events::StepSummary {
-    let failure = match &r.status {
-        StepStatus::Failed { kind } => Some(*kind),
-        _ => None,
-    };
-    crate::events::StepSummary {
-        step: r.id.clone(),
-        status: r.status.state(),
-        failure,
-        attempts: r.attempts,
-        error: r.error.clone(),
-        failed_passes: r.failed_passes,
-        outputs: r
-            .outputs
-            .iter()
-            .map(|(path, version, changed)| crate::events::OutputSummary {
-                path: path.clone(),
-                version: version.clone(),
-                changed: *changed,
-            })
-            .collect(),
-    }
 }
 
 /// The version a step reported for the tree it writes, with its
@@ -907,16 +808,12 @@ mod tests {
     struct Subset<'a>(Runner, &'a [&'a str]);
 
     impl Subset<'_> {
-        async fn run(&self, graph: &Graph) -> Result<RunReport> {
+        async fn run(&self, graph: &Graph) -> Result<Report> {
             self.0.run_roots(graph, self.1).await
         }
     }
 
-    impl RunReport {
-        fn is_absent(&self, id: &str) -> bool {
-            self.steps.iter().all(|s| s.id != id)
-        }
-    }
+    use crate::supervisor::round::Report;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
 
@@ -1285,7 +1182,7 @@ mod tests {
         let mut r = runner(root.path());
         r.sink = rec.clone();
         let report = r.run(&graph).await.unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
 
         let queued: Vec<i64> = rec
             .0
@@ -1351,7 +1248,7 @@ mod tests {
         r.sink = rec.clone();
         let report = r.run(&graph).await.unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         // Three checkpoints each dispatched an invocation. The fourth is
         // the last one, which runs because the producer's real output
         // version ("final") differs from the last checkpoint's.
@@ -1443,7 +1340,7 @@ mod tests {
         .unwrap();
 
         let report = runner(root.path()).run(&graph).await.unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert!(
             sink_passes_at_producer_end.load(Ordering::SeqCst) >= 2,
             "the last step ran {} time(s) before the first finished; \
@@ -1453,20 +1350,20 @@ mod tests {
     }
 
     /// A chain of three, the last step two hops from a producer still
-    /// running. Its early invocation must end with a `PassEnd`, not a
-    /// `StepFinish`: the middle step is waiting on the next seal, so a
-    /// step upstream of the last one is still running or waiting.
-    /// Finishing it would show the index Succeeded under a render and a
-    /// download that both still read Running.
+    /// running. Once its early invocation ends, its row must read waiting:
+    /// the middle step is waiting on the next seal, so a step upstream of
+    /// the last one is still running or waiting. Reading it done would
+    /// show the index up to date under a render and a download that both
+    /// still read Running.
     #[tokio::test]
     async fn the_end_of_a_chain_stays_running_while_its_first_step_runs() {
         let root = tempfile::tempdir().unwrap();
         let rec = Arc::new(Recorder::default());
         let sink_passes = Arc::new(AtomicU32::new(0));
-        let finished_early = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished_early = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let ended = |events: &[Event]| {
             events.iter().any(|e| {
-                matches!(e, Event::PassEnd { step, .. } | Event::StepFinish { step, .. }
+                matches!(e, Event::InvocationEnd { step, .. }
                     if step == "unified_grid_and_search_index/grid")
             })
         };
@@ -1484,7 +1381,7 @@ mod tests {
                         std::fs::create_dir_all(&dir).unwrap();
                         std::fs::write(dir.join("data.txt"), "batch0").unwrap();
                         // Bounded, so a regression fails rather than hangs.
-                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                        let deadline = std::time::Instant::now() + Duration::from_secs(10);
                         let sink_ran = || {
                             let events = rec.0.lock().unwrap();
                             sink_passes.load(Ordering::SeqCst) >= 1 && ended(events.as_slice())
@@ -1493,14 +1390,20 @@ mod tests {
                             ctx.checkpoint("v0");
                             tokio::time::sleep(Duration::from_millis(2)).await;
                         }
-                        let finished = {
-                            let events = rec.0.lock().unwrap();
-                            events.iter().any(|e| {
-                                matches!(e, Event::StepFinish { step, .. }
-                                    if step == "unified_grid_and_search_index/grid")
-                            })
+                        let waits = || async {
+                            let record =
+                                crate::supervisor::record::saved_state(&ctx.data_root).await;
+                            record
+                                .steps
+                                .get("unified_grid_and_search_index/grid")
+                                .is_some_and(|s| {
+                                    s.state == Some(crate::supervisor::tick::StateKind::Waiting)
+                                })
                         };
-                        finished_early.store(finished, Ordering::SeqCst);
+                        while !waits().await && std::time::Instant::now() < deadline {
+                            tokio::time::sleep(Duration::from_millis(2)).await;
+                        }
+                        finished_early.store(!waits().await, Ordering::SeqCst);
                         std::fs::write(dir.join("data.txt"), "final").unwrap();
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
                         Ok(StepOutcome {
@@ -1530,7 +1433,7 @@ mod tests {
         let mut r = runner(root.path());
         r.sink = rec.clone();
         let report = r.run(&graph).await.unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert!(
             ended(rec.0.lock().unwrap().as_slice()),
             "the last step never ran while the first was running"
@@ -1587,7 +1490,7 @@ mod tests {
         r.sink = rec.clone();
         let report = r.run(&graph).await.unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert_eq!(
             passes.load(Ordering::SeqCst),
             1,
@@ -1672,7 +1575,7 @@ mod tests {
         let graph = Graph::build(vec![chatty("slack"), chatty("email"), consumer]).unwrap();
         let report = runner(root.path()).run(&graph).await.unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert_eq!(
             max_seen.load(Ordering::SeqCst),
             1,
@@ -1815,7 +1718,7 @@ mod tests {
             .await
             .expect("the run must terminate")
             .unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         let trace: Vec<String> = rec
             .0
             .lock()
@@ -1823,7 +1726,7 @@ mod tests {
             .iter()
             .filter_map(|e| match e {
                 Event::StepStart { step, .. } => Some(format!("start {step}")),
-                Event::StepFinish { step, .. } => Some(format!("finish {step}")),
+                Event::InvocationEnd { step, .. } => Some(format!("end {step}")),
                 Event::Checkpoint { step, version, .. } => Some(format!("seal {step} {version}")),
                 _ => None,
             })
@@ -1982,7 +1885,7 @@ mod tests {
             .await
             .expect("the run must terminate")
             .unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert_eq!(
             max_seen.load(Ordering::SeqCst),
             1,
@@ -2122,7 +2025,7 @@ mod tests {
             .expect("a streaming pass competing for ordinary slots would deadlock here")
             .unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert!(
             passes.load(Ordering::SeqCst) >= 2,
             "the consumer must have run early, while all four slots were held"
@@ -2214,7 +2117,7 @@ mod tests {
             .expect("the fan-in must not deadlock when both producers finish together")
             .unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert_eq!(
             max_seen.load(Ordering::SeqCst),
             1,
@@ -2230,9 +2133,9 @@ mod tests {
         let idx = report
             .steps
             .iter()
-            .find(|s| s.id == "unified_grid_and_search_index/grid")
+            .find(|s| s.step == "unified_grid_and_search_index/grid")
             .unwrap();
-        assert!(idx.status.is_ok(), "{:?}", idx.status);
+        assert!(idx.outcome.is_ok(), "{:?}", idx.outcome);
         // And the invocation that followed the first one read *both* finals:
         // the second producer's finish arrived while the fan-in was busy
         // with the first's, and not starting at once is not the same as
@@ -2352,7 +2255,7 @@ mod tests {
             .expect("the fan-in never ran, so the slow producer never returned")
             .unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert!(
             ran_early.load(std::sync::atomic::Ordering::SeqCst),
             "the fan-in waited for every producer: a source that finished early \
@@ -2388,38 +2291,43 @@ mod tests {
         spec
     }
 
-    /// A source's own steps finish while another source is still running,
-    /// and the fan-in that reads them all finishes last. The search steps had
+    /// Whether the loop's saved record says `step` is done for now: up to
+    /// date, its last outcome `outcome`, and serving no request.
+    async fn recorded_done(root: &std::path::Path, step: &str, outcome: &str) -> bool {
+        let record = crate::supervisor::record::saved_state(root).await;
+        record.steps.get(step).is_some_and(|s| {
+            s.state == Some(crate::supervisor::tick::StateKind::Fresh)
+                && s.requests.is_empty()
+                && s.last_invocation
+                    .as_ref()
+                    .is_some_and(|l| l.status == outcome)
+        })
+    }
+
+    /// A source's own steps are done while another source is still running,
+    /// and the fan-in that reads them all runs last. The search steps had
     /// a fan-in upstream of them, and every source's search steps read
     /// Running until the slowest source in the sync was done.
     #[tokio::test]
     async fn a_sources_steps_finish_before_a_slower_source_and_the_fan_in_after() {
         let root = tempfile::tempdir().unwrap();
         let rec = Arc::new(Recorder::default());
-        let finished = |rec: &Recorder, id: &str| {
-            rec.0
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|e| matches!(e, Event::StepFinish { step, .. } if step == id))
-        };
         let saw_fast_finish = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let slow = {
-            let (rec, saw) = (rec.clone(), saw_fast_finish.clone());
+            let saw = saw_fast_finish.clone();
             StepSpec::new(
                 "slow/render",
                 StepRun::in_process(move |ctx: StepCtx| {
-                    let (rec, saw) = (rec.clone(), saw.clone());
+                    let saw = saw.clone();
                     async move {
                         // Bounded, so a regression fails rather than hangs.
-                        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                        while !finished(&rec, "fast/keyword")
-                            && std::time::Instant::now() < deadline
-                        {
+                        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                        let done = || recorded_done(&ctx.data_root, "fast/keyword", "succeeded");
+                        while !done().await && std::time::Instant::now() < deadline {
                             tokio::time::sleep(Duration::from_millis(2)).await;
                         }
-                        saw.store(finished(&rec, "fast/keyword"), Ordering::SeqCst);
+                        saw.store(done().await, Ordering::SeqCst);
                         let dir = ctx.path_str(&ctx.step_id);
                         std::fs::create_dir_all(&dir).unwrap();
                         let pat = crate::ArtifactPath::parse(&ctx.step_id).unwrap();
@@ -2449,7 +2357,7 @@ mod tests {
         let mut r = runner(root.path());
         r.sink = rec.clone();
         let report = r.run(&graph).await.unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert!(
             saw_fast_finish.load(Ordering::SeqCst),
             "fast/keyword had not finished when the slow source did: a source's own \
@@ -2461,7 +2369,7 @@ mod tests {
             .unwrap()
             .iter()
             .filter_map(|e| match e {
-                Event::StepFinish { step, .. } => Some(step.clone()),
+                Event::InvocationEnd { step, .. } => Some(step.clone()),
                 _ => None,
             })
             .collect();
@@ -2479,32 +2387,26 @@ mod tests {
     #[tokio::test]
     async fn a_skipped_step_reports_before_a_slower_source_finishes() {
         let root = tempfile::tempdir().unwrap();
-        let rec = Arc::new(Recorder::default());
-        let skipped = |rec: &Recorder, id: &str| {
-            rec.0.lock().unwrap().iter().any(|e| {
-                matches!(e, Event::StepFinish { step, status, .. }
-                    if step == id && *status == RunState::SkippedUpToDate)
-            })
-        };
         let saw_skip = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let second_run = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
         let slow = {
-            let (rec, saw, second) = (rec.clone(), saw_skip.clone(), second_run.clone());
+            let (saw, second) = (saw_skip.clone(), second_run.clone());
             StepSpec::new(
                 "slow/render",
                 StepRun::in_process(move |ctx: StepCtx| {
-                    let (rec, saw, second) = (rec.clone(), saw.clone(), second.clone());
+                    let (saw, second) = (saw.clone(), second.clone());
                     async move {
                         if second.load(Ordering::SeqCst) {
                             // Bounded, so a regression fails rather than hangs.
-                            let deadline = std::time::Instant::now() + Duration::from_secs(2);
-                            while !skipped(&rec, "fast/keyword")
-                                && std::time::Instant::now() < deadline
-                            {
+                            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+                            let skipped = || {
+                                recorded_done(&ctx.data_root, "fast/keyword", "skipped_up_to_date")
+                            };
+                            while !skipped().await && std::time::Instant::now() < deadline {
                                 tokio::time::sleep(Duration::from_millis(2)).await;
                             }
-                            saw.store(skipped(&rec, "fast/keyword"), Ordering::SeqCst);
+                            saw.store(skipped().await, Ordering::SeqCst);
                         }
                         let dir = ctx.path_str(&ctx.step_id);
                         std::fs::create_dir_all(&dir).unwrap();
@@ -2528,16 +2430,15 @@ mod tests {
         .unwrap();
 
         let first = runner(root.path()).run(&graph).await.unwrap();
-        assert!(first.steps.iter().all(|s| s.status.is_ok()), "{first:#?}");
+        assert!(first.all_ok(), "{first:#?}");
 
         second_run.store(true, Ordering::SeqCst);
-        let mut r = runner(root.path());
-        r.sink = rec.clone();
+        let r = runner(root.path());
         let report = r.run(&graph).await.unwrap();
         assert!(
             matches!(
-                report.step("fast/keyword").status,
-                StepStatus::SkippedUpToDate
+                report.step("fast/keyword").outcome,
+                RunState::SkippedUpToDate
             ),
             "{report:#?}"
         );
@@ -2596,12 +2497,12 @@ mod tests {
         };
 
         let r1 = runner(root.path()).run(&build()).await.unwrap();
-        assert!(r1.steps.iter().all(|s| s.status.is_ok()), "{r1:#?}");
+        assert!(r1.all_ok(), "{r1:#?}");
         let after_first = passes.load(Ordering::SeqCst);
         assert!(after_first >= 1, "the fan-in never ran on the first run");
 
         let r2 = runner(root.path()).run(&build()).await.unwrap();
-        assert!(r2.steps.iter().all(|s| s.status.is_ok()), "{r2:#?}");
+        assert!(r2.all_ok(), "{r2:#?}");
         assert_eq!(
             passes.load(Ordering::SeqCst),
             after_first,
@@ -2611,12 +2512,12 @@ mod tests {
         let idx = r2
             .steps
             .iter()
-            .find(|s| s.id == "unified_grid_and_search_index/grid")
+            .find(|s| s.step == "unified_grid_and_search_index/grid")
             .unwrap();
         assert!(
-            matches!(idx.status, StepStatus::SkippedUpToDate),
+            matches!(idx.outcome, RunState::SkippedUpToDate),
             "expected the fan-in to be skipped up-to-date, got {:?}",
-            idx.status
+            idx.outcome
         );
     }
 
@@ -2753,7 +2654,7 @@ mod tests {
             .await
             .expect("deadlock")
             .unwrap();
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
 
         let passes = saw_late.lock().unwrap().clone();
         assert!(
@@ -2814,7 +2715,7 @@ mod tests {
         .unwrap();
         let report = runner(root.path()).run(&graph).await.unwrap();
 
-        assert!(report.steps.iter().all(|s| s.status.is_ok()), "{report:#?}");
+        assert!(report.all_ok(), "{report:#?}");
         assert_eq!(
             passes.load(Ordering::SeqCst),
             1,
@@ -2823,12 +2724,12 @@ mod tests {
         let consumer = report
             .steps
             .iter()
-            .find(|s| s.id == "unified_grid_and_search_index/grid")
+            .find(|s| s.step == "unified_grid_and_search_index/grid")
             .unwrap();
         assert!(
-            matches!(consumer.status, StepStatus::Succeeded { .. }),
+            matches!(consumer.outcome, RunState::Succeeded),
             "its one pass is its outcome, got {:?}",
-            consumer.status
+            consumer.outcome
         );
     }
 
@@ -2849,9 +2750,9 @@ mod tests {
         ] {
             assert_eq!(fx.run_count(id), 1, "{id} should have run once");
             assert!(
-                matches!(rep1.step(id).status, StepStatus::Succeeded { .. }),
+                matches!(rep1.step(id).outcome, RunState::Succeeded),
                 "{id}: {:?}",
-                rep1.step(id).status
+                rep1.step(id).outcome
             );
         }
         let idx = fx
@@ -2878,12 +2779,12 @@ mod tests {
             "index must skip"
         );
         assert_eq!(
-            rep2.step("slack/rendered_md").status,
-            StepStatus::SkippedUpToDate
+            rep2.step("slack/rendered_md").outcome,
+            RunState::SkippedUpToDate
         );
         assert_eq!(
-            rep2.step("unified_grid_and_search_index/grid").status,
-            StepStatus::SkippedUpToDate
+            rep2.step("unified_grid_and_search_index/grid").outcome,
+            RunState::SkippedUpToDate
         );
     }
 
@@ -3455,8 +3356,8 @@ mod tests {
         let rep1 = runner(fx.root.path()).run(&broken).await.unwrap();
         assert!(!rep1.all_ok());
         assert!(matches!(
-            rep1.step("email/rendered_md").status,
-            StepStatus::Failed { .. }
+            rep1.step("email/rendered_md").outcome,
+            RunState::Failed
         ));
 
         // Run 2: sync slack only. The email chain is untouched — no
@@ -3526,10 +3427,7 @@ mod tests {
 
         // Run 1 (full): email's download writes and then fails.
         let rep1 = runner(fx.root.path()).run(&broken).await.unwrap();
-        assert!(matches!(
-            rep1.step("email/raw").status,
-            StepStatus::Failed { .. }
-        ));
+        assert!(matches!(rep1.step("email/raw").outcome, RunState::Failed));
         let store = fx.root.path().join("email/raw/data.txt");
         assert!(
             store.exists(),
@@ -3618,8 +3516,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rep2.step("slack/rendered_md").status,
-            StepStatus::SkippedUpToDate
+            rep2.step("slack/rendered_md").outcome,
+            RunState::SkippedUpToDate
         );
         assert_eq!(runs.load(Ordering::SeqCst), 1, "idempotent re-run");
 
@@ -3631,12 +3529,9 @@ mod tests {
             .unwrap();
         assert!(rep3.all_ok(), "{rep3:#?}");
         assert!(
-            matches!(
-                rep3.step("slack/rendered_md").status,
-                StepStatus::Succeeded { .. }
-            ),
+            matches!(rep3.step("slack/rendered_md").outcome, RunState::Succeeded),
             "a config change must re-run the step: {:?}",
-            rep3.step("slack/rendered_md").status
+            rep3.step("slack/rendered_md").outcome
         );
         assert_eq!(runs.load(Ordering::SeqCst), 2);
         assert_eq!(
@@ -3693,18 +3588,16 @@ mod tests {
         let rep = runner(fx.root.path()).run(&g2).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
         // The download re-polled and found nothing new...
-        assert!(
-            matches!(
-                rep.step("slack/raw").status,
-                StepStatus::Succeeded { changed: 0 }
-            ),
-            "{:?}",
-            rep.step("slack/raw").status
+        let raw = rep.step("slack/raw");
+        assert_eq!(
+            (raw.outcome, raw.changed),
+            (RunState::Succeeded, false),
+            "{raw:?}"
         );
         // ...the existing render is up to date...
         assert_eq!(
-            rep.step("slack/rendered_md").status,
-            StepStatus::SkippedUpToDate
+            rep.step("slack/rendered_md").outcome,
+            RunState::SkippedUpToDate
         );
         // ...and the new step still runs.
         assert_eq!(audit_runs.load(Ordering::SeqCst), 1);
@@ -3799,24 +3692,23 @@ mod tests {
 
         let rep = runner(fx.root.path()).run(&g).await.unwrap();
         assert!(!rep.all_ok());
+        let md = rep.step("slack/rendered_md");
         assert_eq!(
-            rep.step("slack/rendered_md").status,
-            StepStatus::Failed {
-                kind: FailureKind::Data
-            }
+            (md.outcome, md.failure),
+            (RunState::Failed, Some(FailureKind::Data))
         );
         // Data errors don't retry.
         assert_eq!(rep.step("slack/rendered_md").attempts, 1);
         // The sibling chain still ran to completion...
         assert!(matches!(
-            rep.step("email/rendered_md").status,
-            StepStatus::Succeeded { .. }
+            rep.step("email/rendered_md").outcome,
+            RunState::Succeeded
         ));
         // ...and so did the fan-in, over what email committed.
         assert!(
             matches!(
-                rep.step("unified_grid_and_search_index/grid").status,
-                StepStatus::Succeeded { .. }
+                rep.step("unified_grid_and_search_index/grid").outcome,
+                RunState::Succeeded
             ),
             "{rep:#?}"
         );
@@ -3859,14 +3751,14 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         stop.send(true).unwrap();
-        let rep = round.await.unwrap().unwrap();
+        round.await.unwrap().unwrap();
 
-        assert_eq!(runs.load(Ordering::SeqCst), 1, "{rep:#?}");
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+        let record = crate::supervisor::record::saved_state(root.path()).await;
+        let last = record.steps["src/raw"].last_invocation.clone().unwrap();
         assert_eq!(
-            rep.step("src/raw").status,
-            StepStatus::Failed {
-                kind: FailureKind::Cancelled
-            }
+            (last.status.as_str(), last.failure),
+            ("stopped", Some(FailureKind::Cancelled))
         );
     }
 
@@ -3937,21 +3829,17 @@ mod tests {
 
         let r = runner(root.path());
         let rep1 = r.run(&g).await.unwrap();
+        let raw = rep1.step("src/raw");
         assert_eq!(
-            rep1.step("src/raw").status,
-            StepStatus::Failed {
-                kind: FailureKind::Auth
-            }
+            (raw.outcome, raw.failure),
+            (RunState::Failed, Some(FailureKind::Auth))
         );
         // Auth doesn't retry.
         assert_eq!(rep1.step("src/raw").attempts, 1);
         // What the failed download committed, it reported, so the
         // render reads it (dag/README.md §"Versions: reported by the step").
         assert!(
-            matches!(
-                rep1.step("src/rendered_md").status,
-                StepStatus::Succeeded { .. }
-            ),
+            matches!(rep1.step("src/rendered_md").outcome, RunState::Succeeded),
             "{rep1:#?}"
         );
         assert_eq!(
@@ -3992,10 +3880,18 @@ mod tests {
             e,
             Event::ProgressInc { step, .. } if step == "slack/raw"
         )));
-        let finishes = events
+        let ends = events
             .iter()
-            .filter(|e| matches!(e, Event::StepFinish { .. }))
+            .filter(|e| matches!(e, Event::InvocationEnd { .. }))
             .count();
-        assert_eq!(finishes, 5);
+        assert_eq!(ends, 5);
+        let closed: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                Event::RequestEnd { steps, .. } => Some(steps.len()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(closed, [5], "one request, with a row for every step");
     }
 }

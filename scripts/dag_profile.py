@@ -11,7 +11,7 @@ feed it here:
 Two questions, both of which are painful to answer by reading the raw stream:
 
 1. **Where did the time go?** Per-step wall clock from `step_start` to
-   `step_finish`, sorted slowest first, with each step's share of the run.
+   `invocation_end`, sorted slowest first, with each step's share of the run.
 
 2. **Did anything stall?** The longest silences — spans where a step emitted
    nothing. A step doing work emits progress; a step sitting at zero CPU on a
@@ -120,7 +120,7 @@ def main(argv: list[str]) -> int:
             continue
         if e["event"] == "step_start":
             started[step] = ts
-        elif e["event"] == "step_finish":
+        elif e["event"] == "invocation_end":
             t0 = started.pop(step, None)
             if t0 is not None:
                 spans.append(((ts - t0).total_seconds(), step, e.get("status", "?")))

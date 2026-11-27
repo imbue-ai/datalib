@@ -77,6 +77,33 @@ fn a_second_sync_joins_the_running_loop_and_runs_beside_the_first() {
     assert_eq!(code, 0, "the first invocation: {stderr}");
 }
 
+/// Each sync's report on stdout is its own request's: the one following
+/// another's loop prints its step too, and neither prints the other's.
+/// The report was the loop's busy period, so the following sync printed
+/// nothing and the first printed both.
+#[test]
+fn each_sync_reports_the_steps_its_own_request_reached() {
+    let td = root_with_two_sources();
+    let root = td.path();
+    let first = sync(root, "a/src");
+    wait_for("a to start", || root.join("a/src/started").exists());
+    let second = sync(root, "b/src");
+    wait_for("b to start while a still runs", || {
+        root.join("b/src/started").exists()
+    });
+    std::fs::write(root.join("go"), "").unwrap();
+
+    let steps_of = |child: Child| -> Vec<String> {
+        let out = child.wait_with_output().expect("wait");
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(|l| l.split_whitespace().take(2).collect::<Vec<_>>().join(" "))
+            .collect()
+    };
+    assert_eq!(steps_of(second), ["b/src succeeded,"]);
+    assert_eq!(steps_of(first), ["a/src succeeded,"]);
+}
+
 #[test]
 fn stopping_the_second_sync_stops_its_request_and_leaves_the_first_alone() {
     let td = root_with_two_sources();

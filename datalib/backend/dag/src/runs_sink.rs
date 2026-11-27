@@ -648,14 +648,10 @@ impl EventSink for RunStoreSink {
                 }
             }
             // Nothing else to record: whether a sink streams is about what
-            // the step *can* do; the plan, a pass's end, a step's finish
-            // and the summary are about the loop's busy period, which the
-            // store does not keep, and an invocation's end says the rest.
-            Event::Capabilities { .. }
-            | Event::RunPlan { .. }
-            | Event::PassEnd { .. }
-            | Event::StepFinish { .. }
-            | Event::RunSummary { .. } => {}
+            // the step *can* do; the plan is about the loop taking work on,
+            // which the store does not keep, and a request's end is in
+            // `system/supervisor.sqlite`.
+            Event::Capabilities { .. } | Event::RunPlan { .. } | Event::RequestEnd { .. } => {}
         }
     }
 }

@@ -269,8 +269,8 @@ async fn a_failed_step_is_not_retried_for_its_request_after_a_config_edit() {
 }
 
 /// A step the config drops between two of its processes, while what it
-/// reads is still being written, is finished there and then under the
-/// graph it ran in: its run log closes, and the edit waits for nothing.
+/// reads is still being written, waits for nothing any more: its row
+/// stops reading waiting, and the edit waits for nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_step_dropped_between_invocations_finishes_when_the_config_drops_it() {
     let mut h = Harness::new(&[source("a"), reads("c", &["a"])]).await;
@@ -285,9 +285,9 @@ async fn a_step_dropped_between_invocations_finishes_when_the_config_drops_it() 
     h.edit_config(&[source("a"), source("b")]);
     let other = h.sync(&["b"]).await;
     h.started("b").await;
-    h.wait("c's run to be finished", |s| match s {
-        Seen::Event(Event::StepFinish { step, .. }) if step == "c" => Some(()),
-        _ => None,
+    h.until("c to wait for nothing", |s| {
+        let c = s.record.steps.get("c")?;
+        (c.state.is_none() && c.last_invocation.as_ref()?.status == "succeeded").then_some(())
     })
     .await;
     h.run("b", "ok v1").await;

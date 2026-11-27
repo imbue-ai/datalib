@@ -145,7 +145,7 @@ class TngLibraryTest(unittest.TestCase):
     def test_the_first_sync_runs_every_step(self) -> None:
         steps = {s["id"] for s in self.config["steps"]}
         self.assertEqual(sorted(steps), sorted(self.first), "a step did not run")
-        failed = {s: o for s, o in self.first.items() if not o.startswith("Succeeded")}
+        failed = {s: o for s, o in self.first.items() if not o.startswith("succeeded")}
         self.assertEqual(failed, {}, "a step of the first sync did not succeed")
 
     def test_a_kept_source_keeps_its_store_as_it_was(self) -> None:
@@ -167,8 +167,10 @@ class TngLibraryTest(unittest.TestCase):
         redone = {
             step: outcome
             for step, outcome in self.second.items()
-            if outcome != "SkippedUpToDate"
-            and not (step.endswith("/ingest") and outcome == "Succeeded { changed: 0 }")
+            if outcome != "skipped_up_to_date"
+            and not (
+                step.endswith("/ingest") and outcome == "succeeded, output unchanged"
+            )
         }
         self.assertTrue(self.second, "the second sync named no steps")
         self.assertEqual(redone, {}, "the second sync redid work")

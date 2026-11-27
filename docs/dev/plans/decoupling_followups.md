@@ -10,8 +10,9 @@ other type's is still `datalib-step probe`), item 8 (applets and probes
 get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
 crate of its own is decided, not done) and item 9 (the lint checks are
 in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
-in section 10, steps 1 to 4 are done (#2033, #2034, #2036, #2038,
-#2040, and invocations for step 4); steps 5 and 6 are not.
+in section 10, steps 1 to 5 are done (#2033, #2034, #2036, #2038,
+#2040, invocations for step 4 and one vocabulary for step 5); step 6
+is not.
 
 ## The end state
 
@@ -522,9 +523,23 @@ Each step ships alone, and the harness stays green throughout.
    an older commit's ` run=<id>`. The app's "run" is a request (or a
    job) with its invocations; `GET /api/runs` lists requests, jobs and
    old runs.
-5. **One state vocabulary per question.** Drop `RunReport`,
-   `StepStatus`, `LastWanted`, `PassEnd`/`StepFinish`,
-   `failed_passes` and `RunKind::Migrate`.
+5. **One state vocabulary per question. (done)** What a step is doing
+   now is the tick's `StateKind` (with `WaitKind`); how it ended is a
+   `RunState` word, for an invocation and for a request; whether it is
+   up to date is `fresh`, `stale` or `idle` among the `StateKind`s.
+   `RunReport`, `StepReport`, `StepStatus`, `LastWanted`, the
+   `PassEnd` and `StepFinish` events, the `RunSummary` event and the
+   busy period's report are gone. A step's `steps` row records how each
+   invocation ended as it ends, rather than once its producers settle.
+   A request closes with a row for each step it reached in the record's
+   new `request_steps` table (ladder rung 9) and a `request_end` event,
+   and `datalib-pipeline sync` prints those rows, so a sync that follows
+   another process's loop prints its report too. Kept: the metric name
+   `failed_passes`, which older builds' rows hold and the Manage screen
+   reads, now reported by every invocation as it ends (the invocations
+   that failed before it for its requests); and `RunKind::Migrate`,
+   since nothing writes it but an older build's `runs` rows hold the
+   word and the run picker shows it.
 6. **Retries in the tick.**
 
 The step protocol (#1894) already made verbs something a program
