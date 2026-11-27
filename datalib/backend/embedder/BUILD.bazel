@@ -66,7 +66,7 @@ rust_test(
     deps = ["@datalib_crates//:tempfile"],
 )
 
-# The embedding behaviour datalib depends on (README.md), one test per
+# The embedding behaviour Datalib depends on (README.md), one test per
 # fact. Run it after every llama.cpp or model bump; a fact that moved fails
 # by name.
 rust_test(

@@ -1,4 +1,4 @@
-//! The platforms a package may ship a build for: the ones datalib itself
+//! The platforms a package may ship a build for: the ones Datalib itself
 //! is released for (`.github/workflows/release.yml`), plus `any` for a
 //! build that runs everywhere, such as a script.
 
@@ -13,7 +13,7 @@ pub const TARGETS: &[&str] = &[
 /// The build a manifest may offer for every platform.
 pub const ANY: &str = "any";
 
-/// The target triple this binary was built for. A platform datalib is
+/// The target triple this binary was built for. A platform Datalib is
 /// not released for still gets its triple, so a package's `any` build
 /// works there.
 pub fn this_target() -> &'static str {

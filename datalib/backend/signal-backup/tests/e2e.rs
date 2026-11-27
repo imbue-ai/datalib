@@ -1,8 +1,8 @@
 //! End-to-end test against a real Signal backup. Skipped silently if
 //! `SIGNAL_BACKUP_AEP` or `SIGNAL_BACKUP_SNAPSHOT` aren't in the env,
 //! so `bazel test //...` stays green for everyone. Under Bazel this
-//! test is also `tags = ["manual"]` to belt-and-suspenders avoid
-//! incidental runs without the env wired in.
+//! test is also `tags = ["manual"]`, so that `//...` does not run it
+//! without the env set.
 
 // Tests print diagnostics to stderr for the manual `bazel test
 // --test_output=streamed` flow; the workspace's library-level lint

@@ -1,4 +1,4 @@
-//! The embedding behaviour datalib depends on, one test per fact, in the
+//! The embedding behaviour Datalib depends on, one test per fact, in the
 //! order `datalib/backend/embedder/README.md` states them. A llama.cpp or
 //! model bump that moves a fact fails here by name: fix the fact in the
 //! README, then the test, then whatever leaned on it. How ours agrees with

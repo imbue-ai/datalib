@@ -81,7 +81,7 @@ pub fn note_recorded<'a>(rows: impl IntoIterator<Item = &'a ProblemRow>) {
 }
 
 /// Logs what [`note_recorded`] has counted since the last call, and
-/// forgets it.
+/// resets the counts to zero.
 pub fn log_recorded() {
     let lines = RECORDED.lock().unwrap_or_else(|e| e.into_inner()).take();
     for (k, c) in lines {

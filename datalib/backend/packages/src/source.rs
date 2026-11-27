@@ -115,8 +115,8 @@ mod tests {
         assert!(joined("/w.tar.gz").is_err());
     }
 
-    /// What climbs or leaves once parsed is refused, not only what is
-    /// spelled `..`; and a published manifest cannot name a file here
+    /// A path that leaves the manifest's directory once parsed is
+    /// refused, not only one spelled `..`; and a published manifest cannot name a file here
     /// or send the build over http.
     #[test]
     fn an_artifact_cannot_leave_the_manifests_directory_or_https() {

@@ -218,8 +218,8 @@ fn stamp_path(path: &Path) -> PathBuf {
 /// `None` when either cannot be read — an mtime the platform will not
 /// give, or one before 1970. Nothing is then trusted and nothing is
 /// stamped, so the bytes are hashed. Reporting such a file as mtime
-/// zero, which this used to do, meant a second unreadable mtime at the
-/// same size matched the stamp and the bytes went unchecked.
+/// zero would let a second unreadable mtime at the same size match the
+/// stamp, and the bytes would go unchecked.
 fn file_identity(path: &Path) -> Option<(u64, u128)> {
     let meta = fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
@@ -342,10 +342,9 @@ mod tests {
         assert!(!verified(&path, HELLO_SHA).unwrap());
     }
 
-    /// Sub-second granularity is the point: the stamp recorded whole
-    /// seconds until now, so bytes replaced inside the same second as
-    /// the stamped mtime, at the same size, were trusted without being
-    /// hashed. The mtime here is set to a whole second so that adding a
+    /// Sub-second granularity is the point: a stamp of whole seconds
+    /// would trust bytes replaced inside the same second as the stamped
+    /// mtime, at the same size, without hashing them. The mtime here is set to a whole second so that adding a
     /// millisecond cannot cross into the next one and pass for the wrong
     /// reason.
     #[test]
@@ -372,8 +371,8 @@ mod tests {
     }
 
     /// An mtime that will not read is not an identity, so nothing is
-    /// stamped and every call hashes. Recording it as zero, as this used
-    /// to, let a second such file at the same size match the stamp.
+    /// stamped and every call hashes. Recording it as zero would let a
+    /// second such file at the same size match the stamp.
     #[test]
     fn a_file_with_no_readable_mtime_is_never_trusted_from_a_stamp() {
         let dir = tempfile::tempdir().unwrap();

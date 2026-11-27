@@ -275,8 +275,8 @@ const PARTIAL_SUFFIX: &str = ".partial";
 /// A partial file beside `dest` that no other fetch writes:
 /// `<dest name>.<random>.partial`. Two processes fetching one `dest` at
 /// once (parallel tests sharing one model cache) each need their own; a
-/// shared name let the second's create truncate the first's, and the
-/// slower rename then found nothing to move.
+/// shared name would let the second's create truncate the first's, and
+/// the slower rename would then find nothing to move.
 fn partial_file(dest: &Path) -> Result<tempfile::NamedTempFile> {
     let dir = match dest.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
