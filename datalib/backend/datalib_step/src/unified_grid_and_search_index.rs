@@ -56,8 +56,9 @@ impl Params {
 }
 
 /// The inputs whose render store this step indexes: not a source's
-/// time-series or occurrences step, which an older config names here for
-/// their problems, which a reader now finds in their own stores.
+/// time-series or occurrences step, which a config an older build wrote
+/// names here for their problems; a reader finds those in the steps' own
+/// stores.
 fn render_inputs(inputs: &[String]) -> Vec<String> {
     inputs
         .iter()
@@ -155,14 +156,14 @@ pub async fn run(
         progress.metric(
             "search_index_unsettled",
             &[("source", source.as_str())],
-            done.unsettled as i64,
+            done.left_for_next_pass as i64,
         );
         if done != crate::search_index::Done::default() {
             tracing::info!(
                 source = %source,
                 put = done.put,
                 removed = done.removed,
-                unsettled = done.unsettled,
+                unsettled = done.left_for_next_pass,
                 "the source's keywords are done"
             );
         }

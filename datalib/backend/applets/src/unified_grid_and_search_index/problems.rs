@@ -1,5 +1,7 @@
-//! `GET /problems?q=…`: the index's `problems` table as a typed table
-//! the viewer draws — every error and warning a step recorded about a
+//! `GET /problems?q=…`: every step's `problems` rows, each read where its
+//! step keeps them and gathered into one table for the read
+//! (`DoltRepo::pinned_problems`), as a typed table the viewer draws —
+//! every error and warning a step recorded about a
 //! record, with the document it belongs to as a link. The Manage
 //! screen's errors/warnings cell opens this, filtered to one source. It
 //! reads the way `/search` does: a page at a time, in any order, and
@@ -624,9 +626,9 @@ mod tests {
     use datalib_problems::{Problem, Reason, Scope, Stage};
 
     use datalib_sql::{test_sql_id, Sql};
-    /// Problems committed to the root's grid index. The step copies a
-    /// source's problems in from its render store; this writes the rows
-    /// that copy would.
+    /// Problems committed to the grid index's own `problems` table: the
+    /// `unified_grid_and_search_index` step's store, which the reader
+    /// gathers with every other step's (`datalib_step_problems::of_steps`).
     async fn index_problems(root: &std::path::Path, problems: &[ProblemRow]) {
         use datalib_table::BulkUpsertable;
 

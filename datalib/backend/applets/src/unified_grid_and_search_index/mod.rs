@@ -144,9 +144,9 @@ pub fn search_once(root: PathBuf, p: SearchParams) -> Result<SearchResponse> {
 /// Nothing warms the model for a one-off search, so one that embeds its
 /// text waits for it here, however long a first download takes, rather
 /// than at the embedder's deadline. The tests open this way too, so they
-/// cannot drift from what the applet does: before this they built the
-/// gate themselves and left it `Idle`, which made their *first search*
-/// the thing that verified a 300 MB model inside `EMBED_DEADLINE`.
+/// cannot drift from what the applet does: a test that built the gate
+/// itself and left it `Idle` would make its *first search* the thing that
+/// verified a 300 MB model inside `EMBED_DEADLINE`.
 async fn open_with_models_verified(root: PathBuf) -> Result<Index> {
     let models = models::ModelGate::new(&root);
     let gate = models.clone();
@@ -229,7 +229,7 @@ pub fn serve(port: u16) -> Result<()> {
         tracing::info!(address = %bound, "listening");
         // There was nothing to write first, so binding is all this one
         // owes before the gateway may look.
-        crate::announce_port(bound.port());
+        crate::print_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
 }
@@ -1001,8 +1001,9 @@ struct Ranked {
 /// The ranking of a free-text search, narrowed to its structured terms:
 /// the list every sort and group of it is cut from, so it is ranked once
 /// per search and commit rather than once per group.
-/// With the commit it was read at, and whether it may be kept: one read
-/// from terms written for another commit may be a pass out.
+/// With the commit it was read at, and whether it may be cached: a
+/// ranking one of whose parts failed is not, so the next search ranks
+/// again.
 async fn ranked(
     s: &Index,
     q: &str,
@@ -1358,9 +1359,10 @@ async fn grid_sources(s: &Index) -> Result<Arc<Vec<String>>, SearchFailure> {
 
 /// What a ranking reads: the sources the grid holds.
 ///
-/// The search index can hold a source the grid does not: one turned off keeps
-/// its collection, so its embeddings survive, while the grid leaves out a
-/// render store it can no longer read. A hit there has no row to show, yet
+/// The search index can hold a source the grid does not: one turned off
+/// keeps its documents and chunks there, so its embeddings survive, while
+/// the grid leaves out a render store it can no longer read (one in
+/// another shape after an upgrade). A hit there has no row to show, yet
 /// it would take a place in the ranking's cut and its vectors would be held
 /// and scored.
 async fn search_scope(s: &Index) -> Result<Arc<Vec<String>>, SearchFailure> {

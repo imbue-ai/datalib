@@ -418,7 +418,8 @@ pub(crate) fn report(progress: &Progress, usage: &Usage, options: &Options) {
     }
 }
 
-/// Asks the driver to stop: it ends the Sandboxes it started and exits.
+/// Sends SIGTERM to the driver, which ends the Sandboxes it started and
+/// exits.
 pub(crate) fn interrupt(child: &tokio::process::Child) {
     if let Some(pid) = child.id().and_then(|p| i32::try_from(p).ok()) {
         // SAFETY: a pid this process spawned and has not reaped.

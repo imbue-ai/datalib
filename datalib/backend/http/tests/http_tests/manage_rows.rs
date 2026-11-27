@@ -1,6 +1,6 @@
 //! `GET /api/manage/rows` assembles the Manage screen's tree: one row
 //! per entry in the config file, with status read off the loop's
-//! record.
+//! `steps` table.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -349,9 +349,9 @@ async fn a_fresh_root_is_a_tree_of_never_run_rows() {
     assert_eq!(index["name"]["icon"], "search");
 }
 
-/// A finished run: the step rows read the record, and the group reads
-/// its last step — the failed render — with the child named in the
-/// detail, and "last synced" from its ingest step.
+/// A finished run: the step rows read the loop's `steps` table, and the
+/// group reads its last step — the failed render — with the child named in
+/// the detail, and "last synced" from its ingest step.
 #[tokio::test]
 async fn a_finished_run_reaches_the_rows() {
     let tmp = tempfile::tempdir().unwrap();
@@ -689,9 +689,9 @@ async fn problem_counts_are_the_index_rows_less_the_muted_ones() {
     mutes.close().await;
 }
 
-/// A pass that failed and was run again is not a problem row, so it is
-/// grey and apart from the yellow number, where a double-click could
-/// list nothing for it.
+/// A streaming process that failed and was started again is not a problem
+/// row, so it is grey and apart from the yellow number, where a
+/// double-click could list nothing for it.
 #[tokio::test]
 async fn a_failed_pass_is_grey_and_not_a_warning() {
     let tmp = tempfile::tempdir().unwrap();
@@ -928,8 +928,8 @@ async fn rows_of_at(root: &Path, uri: &str) -> serde_json::Value {
 }
 
 /// An entry the loader drops still has a row — it is still in the
-/// file — and its status says so, outranking whatever the record
-/// remembers. The group it is under is not dropped with it.
+/// file — and its status says so, outranking whatever the loop's store
+/// says of it. The group it is under is not dropped with it.
 /// A source that renders nothing has no rows at all, so its Browse is
 /// disabled and says so, rather than opening an empty grid onto a
 /// source that looks broken.

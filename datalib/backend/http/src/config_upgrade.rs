@@ -6,9 +6,9 @@
 //! The text they replaced is kept as `config.toml.bak`.
 //!
 //! At boot only, [`move_index_dir`] then brings the index's tree and the
-//! loop's record of its steps over to the current name,
+//! loop's rows for its steps over to the current name,
 //! [`move_index_step_dir`] does the same for the index step's own tree
-//! and record, and [`move_case_folders`] moves each folder the config now
+//! and rows, and [`move_case_folders`] moves each folder the config now
 //! names in lower case to that spelling, before anything opens them.
 
 use std::path::{Path, PathBuf};

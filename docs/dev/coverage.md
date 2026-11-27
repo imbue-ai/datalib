@@ -83,7 +83,7 @@ reached **677 first-party source files**, including:
   - the `datalib-pipeline` orchestrator and `datalib-step` step binary
     themselves
 
-That last point is the trick: `datalib_dag` and `datalib_step` are
+That last point is the hard part: `datalib_dag` and `datalib_step` are
 `rust_binary` targets the python script spawns as subprocesses.
 Naively, `bazelisk coverage` can't see into a subprocess. The setup
 below makes it work.
@@ -122,7 +122,7 @@ the profraws and exports them against the *test* binary. A test that
 only spawns helpers links none of our code, so that binary has no
 coverage mapping, the export says "no coverage data found", and
 `coverage.dat` comes out empty. Without split post-processing the
-profraws lived in the sandbox and were gone by then.
+profraws live in the sandbox and are gone by then.
 
 ### Six things had to be true
 
@@ -182,7 +182,8 @@ profraws lived in the sandbox and were gone by then.
    `--test_env=DATALIB_CHILD_ENV=LLVM_PROFILE_FILE,DATALIB_CHILD_ENV,…`,
    which adds the variable to the list, beside the two `.bazelrc`
    names there for every test. Check a run you did not make
-   through the wrapper by looking at a provider's download `processor.rs`.
+   through the wrapper by looking at a provider's download `processor.rs`
+in the report.
 
 ### Why `data` and not `deps`?
 
@@ -247,7 +248,7 @@ the UI's own code is not measured.
     instrumentation profile data: function hash is not a valid
     integer`. The wrapper resolves one directory per label for that
     reason.
-  - **`bazelisk build` between coverage and export is a footgun.**
+  - **`bazelisk build` between coverage and export breaks the export.**
     After `bazelisk coverage`, the `bazel-bin/.../<binary>` symlink
     points at the *instrumented* artifact. A subsequent plain
     `bazelisk build <binary>` (no coverage flag) rebuilds the same

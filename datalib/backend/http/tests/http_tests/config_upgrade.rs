@@ -2,7 +2,7 @@
 //! an earlier name, a step written as `group` + `function` — is
 //! rewritten by the server itself, at boot, on a hand edit and on a save,
 //! with the old text kept as `config.toml.bak`; at boot the index's tree
-//! and the loop's record of it follow.
+//! and the loop's rows for its steps follow.
 
 use datalib_http::ApiToken;
 use std::path::Path;
@@ -207,9 +207,8 @@ inputs = ["*/embed"]
 
 /// A root from before the index step's rename keeps its grid index: the
 /// config names the new step, the step's tree is moved rather than
-/// rebuilt, and the loop's record follows it, so the step a person
-/// turned off stays off and the embed's record of what it read names the
-/// new id.
+/// rebuilt, and the loop's rows follow it, so the step a person turned
+/// off stays off and the embed's row of what it read names the new id.
 #[tokio::test]
 async fn boot_moves_the_index_steps_tree_to_its_new_name() {
     let tmp = tempfile::tempdir().unwrap();

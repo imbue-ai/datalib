@@ -196,8 +196,8 @@ impl Reader {
 
     /// Whether any of `source_id`'s documents was drawn by another
     /// version of the drawing or the chunking than this build's: what the
-    /// launch's migrate pass asks, since a new version alone moves nothing
-    /// the keyword pass reads.
+    /// index step's `--prepare` run checks at each start, since a new
+    /// version alone moves nothing the keyword pass reads.
     pub async fn drawn_by_another_version(&self, source_id: &str) -> Result<bool> {
         let other: Option<i64> = sql!(
             "search_index.read.find_doc_of_other_version",

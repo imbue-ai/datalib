@@ -1,6 +1,6 @@
 //! A search's text embedded in this process, by the model and prompt the
-//! search index's vectors were made with (`datalib_embedder`), rather than
-//! before. The model loads at the first search by meaning and stays loaded.
+//! search index's vectors were made with (`datalib_embedder`). The model
+//! loads at the first search by meaning and stays loaded.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

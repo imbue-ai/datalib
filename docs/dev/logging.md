@@ -16,7 +16,7 @@ writes it for the life of the server. The tables:
 |---|---|
 | `processes` | a process that took part (below) |
 | `runs` | a run of the runner: what it is for (`kind`: a sync, the prepare pass at a start, or giving back disk) and why it started (`reason`, also the run's first line). Empty for a run an older build recorded |
-| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing settled them, so any might have been about to run |
+| `step_runs` | a step in a run: state, attempt, error, message. While a run is live every step of the config is here, `pending` until reached; when it ends, the ones no request reached go, so a closed run holds the steps it ran. A run whose runner died keeps them, as `stopped`: nothing removed them at its end, so any might have been about to run |
 | `log` | a line |
 | `metrics`, `metric_samples` | a step's numbers — the newest value, and a sparse time series |
 | `store_changes` | a part of the store a reader can depend on (`runs`, `step_runs`, `metrics`, `processes`, a run's lines, the server's lines), with a counter each write bumps |
@@ -28,7 +28,7 @@ page's `at`), else the moment the writer saw it.
 
 **Two writers share the file through SQLite's own locking.** A writer
 that cannot take the lock waits ten seconds and is handed an error; a
-batch that failed that way wrote nothing, so the writer offers it once
+batch that failed that way wrote nothing, so the writer tries it once
 more, and if it gives up it logs how many lines went with it. Deciding
 what to do with the file at open is exclusive between processes
 (`runs.sqlite.open-lock`), and a store that has to be remade is emptied
@@ -46,8 +46,8 @@ SQLite folds them into the main file, so copy the store with
 **A reader reads the store in this build's shape, or fails.** Every
 reader opens it through `open_reader`, which answers nothing for a root
 whose store no process has made yet and refuses one whose
-`_datalib_meta` records another shape; the next writer's open climbs
-it or empties it. A reader's SQL error is the route's error, never an
+`_datalib_meta` records another shape; the next writer's open runs
+its migrations up to this build's shape, or empties it. A reader's SQL error is the route's error, never an
 empty answer.
 
 SQLite's file locking is not dependable on a network or file-syncing
@@ -61,7 +61,10 @@ Retention is `[run_history]` in `config.toml`
 — the server's and the pages'. `disk_usage_days` is for the disk
 samples in `system/disk_stats.sqlite`, not this store.
 
-The store is not load-bearing. A store from an older schema version is
+Nothing the loop decides reads this store: which steps are due and
+what each last succeeded with are in `system/supervisor.sqlite`. So
+losing it loses the logs, metrics and run history the app shows, and
+nothing else. A store from an older schema version is
 upgraded in place, keeping its rows. One that will not open, or is at a
 version this build has no upgrade from (a newer build's, say), is
 emptied and remade; the old file is first copied to
@@ -81,7 +84,7 @@ and the commit it was built from — what a line's `filename` and
 | `process` | what | who records it | ends when |
 |---|---|---|---|
 | `dag` | a run of the runner; or a `datalib-pipeline serve`, for the lines it writes outside any run | itself | it records nothing; the run row closes, or the serve stops |
-| `step` | one attempt of one step — or one pass of a streaming consumer, which is spawned once per producer checkpoint; every pass is its own process, all under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
+| `step` | one attempt of one step — or one process of a streaming consumer, which is spawned once per producer checkpoint, every one under `attempt 1` | the runner, at spawn and at `wait(2)` | `exit_code` or `signal` |
 | `http` | a launch of the server, and what its applets said | itself | it cannot see its own end |
 | `applet` | one start of one applet, its config id in `applet`; it writes no lines, which stay the server's | the server, at spawn and when it stops or reaps it | `exit_code` or `signal` |
 | `ui` | one load of the app in one browser tab | the server, on the page's behalf | the page says so on `pagehide` |
@@ -125,7 +128,7 @@ has none. A page has the server's.
 | you are writing | do this | it becomes |
 |---|---|---|
 | Rust in the runner or the server | `tracing::info!(target: "…", key = value, "the sentence")` | a row with `target`, `msg`, and the keys as a JSON object in `fields`; `filename` / `line_number` added |
-| the runner, about a step — a checkpoint sealed, a pass that failed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
+| the runner, about a step — a checkpoint sealed, a consumer's process that failed, why it ended, a hint | nothing — the runner writes these itself | `target:datalib_dag::runner` under the step, with the runner as author |
 | Rust in `datalib-step`'s steps | the same `tracing` call | a JSON envelope on the step's stderr, which the runner unwraps into the same columns; the line's own timestamp wins |
 | Rust in an applet (`datalib-applet`) | the same `tracing` call | a JSON envelope on the applet's stderr, which the gateway logs again as the server's line at the envelope's level: `target:datalib_http::applets`, with `applet` naming it and the applet's own target and fields in `applet_target` and `applet_fields`. The row's `filename` / `line_number` are the gateway's; the applet's are inside `applet_fields` ([`applets.md`](applets.md)) |
 | a custom step, any language | print a line on stderr (or a non-event line on stdout) | an `info` row with `stream` set; the last lines before a non-zero exit also become the step's error |
@@ -268,10 +271,10 @@ sqlite3 -readonly <root>/system/runs/runs.sqlite \
     ORDER BY value DESC LIMIT 20"
 ```
 
-**A migration says so from its start.** A step asked to migrate first
+**A migration says so from its start.** A step run to migrate its store first
 says `migrate: updating the raw store for this build; nothing is
 downloaded`, as a line and as its status. Each rung then says, before
-it runs, where the climb starts and ends and how big the store is —
+it runs, which version the migrations start and end at and how big the store is —
 `migrating the store (13.0 GB) from version 7 to 9, now version 8:
 <its name>` — and `migrated`, with its `ms`, after. A rung written as
 several statements says `migrating: statement 3 of 4: <what it does>`
@@ -411,7 +414,8 @@ config; it says nothing about which program the step runs.
   and **`datalib_disk_low`**: the data root's disk and the config's
   `[disk_space]` floor
   ([`dag/README.md`](../../datalib/backend/dag/README.md#when-the-disk-runs-low));
-  `datalib_disk_low` is 1 while the steps are held.
+  `datalib_disk_low` is 1 while the disk is under the floor and the
+  loop starts no step.
 - **`datalib_sql_runs_total`**, **`datalib_sql_rows_total`**,
   **`datalib_sql_rows_scanned_total`**, **`datalib_sql_microseconds_total`**
   and **`datalib_sql_loop_rows_scanned_total`**, labelled `process`
@@ -450,13 +454,13 @@ For anyone adding a line, an event or an endpoint:
 - **One request or one record is `debug`.** A line per page, thread or
   batch is hundreds at `info` on a real sync. Say what it came to, once,
   at the end.
-- **Say a standing fact once.** What is still true on the next pass is a
+- **Say a standing fact once.** What is still true on the next run is a
   `problems` row, which a person sees as long as it holds; the log says
   when it became true.
 - **Say what happened, not who is saying it.** The `target` column
   already names the module: `"opening the store"`, not
   `"doltlite_raw::open: opening {store}"`. A fan-in that runs once per
-  producer checkpoint says one line per pass about what it found, and
+  producer checkpoint says one line per process about what it found, and
   its per-source lines are `debug` unless that source moved.
 - **A stamp you mint is UTC + offset**, never a bare local time
   (`IsoOffsetTimestamp::now_local().to_utc_and_offset()` in Rust,
@@ -475,7 +479,7 @@ For anyone adding a line, an event or an endpoint:
   `fields.chain`. At 5, and again at 50, 500 and so on, it writes a
   `warn` with target `http.loop` naming the endpoint and the page:
   search `target:http.loop` to find one.
-- **A card off screen is not told.** A card that subscribes with
+- **A card off screen gets no frames.** A card that subscribes with
   `subscribeLive(handlers, { onScreen: el })` has its frames held while
   `el` is off screen and delivered, once each, when it is back. Every
   card that refetches on a frame passes its root element.

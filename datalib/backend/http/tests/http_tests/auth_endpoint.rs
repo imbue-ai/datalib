@@ -566,7 +566,7 @@ async fn a_link_from_another_site_opens_a_page_and_reaches_no_route() {
     }
 }
 
-/// Proxy mode is gone: a header claiming the owner sent the request
+/// There is no proxy mode: a header claiming the owner sent the request
 /// stands in for nothing, behind a proxy or not.
 #[tokio::test]
 async fn an_identity_header_is_no_credential() {
