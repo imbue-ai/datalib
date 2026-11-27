@@ -25,7 +25,7 @@ pub struct Filing {
     /// as [`ContactsReader::handles`] reads them: what `from:contact:`
     /// finds.
     pub reach: BTreeMap<String, BTreeSet<String>>,
-    /// Every handle on a contact.
+    /// Every handle on a contact, suggestions left out.
     pub held: BTreeSet<String>,
     /// The handles a person or an agent said are not real (`REAL` out).
     pub not_real: BTreeSet<String>,
@@ -65,7 +65,8 @@ impl ContactsReader {
     /// it was merged into and of any merged into it, one person either
     /// way; and each member's when it is a group, a member that is a group
     /// included. Each contact is read once, however they loop. Stopped
-    /// handles count: they still name the person in what they sent.
+    /// handles count: they still name the person in what they sent. One
+    /// an agent suggested and nobody said Yes to does not.
     /// `None` for a contact the store does not have.
     pub async fn handles(&self, contact_id: &str) -> Result<Option<BTreeSet<String>>> {
         let pool = self.reader.pool();
@@ -90,7 +91,8 @@ impl ContactsReader {
             }
             let own: Vec<String> = sql!(
                 "contacts_app.read.list_handles_of_contact",
-                "SELECT handle FROM handles WHERE contact_id = ?"
+                "SELECT handle FROM handles INDEXED BY handles_by_contact \
+                  WHERE contact_id = ? AND (linked_how = 'manual' OR reviewed_at_utc IS NOT NULL)"
             )
             .query_scalar()
             .bind(&id)
@@ -146,7 +148,8 @@ impl ContactsReader {
         }
         let held: Vec<String> = sql!(
             "contacts_app.read.list_held_handles",
-            "SELECT DISTINCT handle FROM handles"
+            "SELECT DISTINCT handle FROM handles \
+              WHERE linked_how = 'manual' OR reviewed_at_utc IS NOT NULL"
         )
         .query_scalar()
         .fetch_all(pool)

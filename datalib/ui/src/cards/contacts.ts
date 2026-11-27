@@ -666,13 +666,14 @@ export async function deleteContact(contactId: string): Promise<void> {
   contactsById.revalidate();
 }
 
-// ── Reviewing what agents proposed ────────────────────────────────────
-// A subject is a handle or `contact:<id>`; `contactsReview.ts` has the rules.
+// ── Yes and No to what agents suggested ─────────────────────────────────
+// A subject is a handle or `contact:<id>`; `suggestions.ts` says what each is.
 
 /** Agree with every link and label an agent proposed for each subject. */
 export async function confirmReview(subjects: string[]): Promise<number> {
   const r = await post<{ confirmed: number }>("/review/confirm", { subjects });
   people.revalidate();
+  contactsById.revalidate();
   return r.confirmed;
 }
 

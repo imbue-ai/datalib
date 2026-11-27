@@ -188,16 +188,20 @@ may send a batch again over your own rows nobody has reviewed yet.
 
 ## 4. Hand it to the person
 
-Nothing you sent is final. Tell them it is waiting: **Contacts**, in the
-sidebar, opens the contacts card (so does **Browse** on the contacts row
-of the Manage screen), and its *Review* switch shows every row with something proposed or labelled, the
-least sure first. Until they look, your links already draw on chips, so
-say so.
+Nothing you sent is final, and none of it shows as theirs until they say
+so: a contact you made is not in their list, your links leave chips grey,
+and `contact:` searches leave them out. Tell them it is waiting:
+**Contacts**, in the sidebar, opens the contacts card (so does **Browse**
+on the contacts row of the Manage screen), and a banner above the list
+opens your suggestions, the least sure first, each with *Yes* and *No*;
+the person's page shows those about them too. `suggestions` answers what
+they see.
 
-They can confirm, reject, or answer a label themselves. Rejecting takes
-your links into `not_linked` and turns your labels around, and a contact
-of yours left holding nothing goes with them. All of it comes back to you
-in `review/items` and `not_linked`.
+*Yes* makes it theirs. *No* takes your links into `not_linked` and turns
+your labels around, and a contact of yours left holding nothing goes with
+them. If they add a handle you suggested for someone else to another
+contact, your suggestion loses it the same way. All of it comes back to
+you in `review/items` and `not_linked`.
 
 ## Saying who the person is
 
