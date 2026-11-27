@@ -17,8 +17,8 @@ use crate::labels::{normalize_label, person_label, plan_agent_label, Held, Label
 use crate::schema::labels::LabelRow;
 use crate::schema::not_linked::NotLinkedRow;
 use crate::{
-    contact_subject, holders, insert_contact, insert_handle, plan_link, DecidedHow, LinkPlan,
-    Maker, Store, WhenHeld,
+    contact_subject, holders, insert_contact, insert_handle, plan_link, DecidedHow, HandleFrom,
+    LinkPlan, Maker, Store, WhenHeld,
 };
 use datalib_sql::sql;
 
@@ -228,7 +228,7 @@ async fn awaiting_labels(
 /// Unlink `handle` from `contact_id` inside `tx` and write down that it
 /// is not theirs. Returns whether it was linked to them.
 pub(crate) async fn unlink_in(
-    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    tx: &mut sqlx::SqliteConnection,
     handle: &str,
     contact_id: &str,
     now: &str,
@@ -243,7 +243,7 @@ pub(crate) async fn unlink_in(
     .query()
     .bind(handle)
     .bind(contact_id)
-    .fetch_optional(&mut **tx)
+    .fetch_optional(&mut *tx)
     .await
     .context("read the link to undo")?
     else {
@@ -276,7 +276,7 @@ pub(crate) async fn unlink_in(
     .bind(&row.decided_at_utc)
     .bind(&row.tz_offset)
     .bind(row.contact_rejected)
-    .execute(&mut **tx)
+    .execute(&mut *tx)
     .await
     .context("write down a turned-down link")?;
     sql!(
@@ -286,7 +286,7 @@ pub(crate) async fn unlink_in(
     .query()
     .bind(handle)
     .bind(contact_id)
-    .execute(&mut **tx)
+    .execute(&mut *tx)
     .await
     .context("unlink a handle")?;
     Ok(true)
@@ -702,7 +702,16 @@ impl Store {
             for (h, plan) in plans {
                 match plan {
                     AgentLink::Insert => {
-                        insert_handle(&mut tx, h, &contact_id, by, &now, &tz).await?;
+                        insert_handle(
+                            &mut tx,
+                            h,
+                            &contact_id,
+                            by,
+                            &HandleFrom::default(),
+                            &now,
+                            &tz,
+                        )
+                        .await?;
                         out.linked += 1;
                     }
                     AgentLink::Already => {}
@@ -1364,7 +1373,10 @@ mod tests {
         store.propose(&lore_to_data(&data, &lore)).await.unwrap();
         assert!(store.unlink(&lore, &data).await.unwrap());
         assert_eq!(store.turned_down().await.unwrap().len(), 1);
-        store.link(&lore, &data, WhenHeld::Refuse).await.unwrap();
+        store
+            .link(&lore, &data, WhenHeld::Refuse, &HandleFrom::default())
+            .await
+            .unwrap();
         assert!(store.turned_down().await.unwrap().is_empty());
         assert!(store.unlink(&lore, &data).await.unwrap());
         let down = store.turned_down().await.unwrap();

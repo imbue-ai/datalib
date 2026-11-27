@@ -6,6 +6,9 @@
 //! § "Merging a branch"; why a store wants drafts is
 //! docs/dev/plans/contact_editing.md.
 
+use std::future::Future;
+use std::pin::Pin;
+
 use anyhow::{bail, Context, Result};
 use sqlx::pool::PoolConnection;
 use sqlx::{Sqlite, SqliteConnection, SqlitePool};
@@ -148,12 +151,27 @@ impl Drop for OnDraft {
     }
 }
 
+/// What a save does on the writer's branch once the draft is merged in
+/// and before the one commit, so it lands in that commit: work that has
+/// to see the merged rows. An error saves nothing and keeps the draft.
+pub type Finish = Box<
+    dyn for<'c> FnOnce(
+            &'c mut SqliteConnection,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'c>>
+        + Send,
+>;
+
 /// Merge `branch` into the writer's branch as one commit with `message`,
 /// publish it, and delete the branch. Where the draft and the writer
 /// both changed a cell, the draft's value is kept, and every other
-/// change on either side survives. `None` when the draft changed
-/// nothing; the branch goes either way.
-pub async fn save(pool: &SqlitePool, branch: &str, message: &str) -> Result<Option<String>> {
+/// change on either side survives. `finish` runs between the merge and
+/// the commit. `None` when nothing changed; the branch goes either way.
+pub async fn save(
+    pool: &SqlitePool,
+    branch: &str,
+    message: &str,
+    finish: Finish,
+) -> Result<Option<String>> {
     let mut on = OnDraft::enter(pool, branch).await?;
     let committed = commit_quietly(on.conn(), "draft").await;
     on.leave().await?;
@@ -163,8 +181,14 @@ pub async fn save(pool: &SqlitePool, branch: &str, message: &str) -> Result<Opti
         .acquire()
         .await
         .context("take the store's connection")?;
-    let saved =
-        merge_draft_wins(&mut conn, &doltlite_raw::store_label(pool), branch, message).await;
+    let saved = merge_draft_wins(
+        &mut conn,
+        &doltlite_raw::store_label(pool),
+        branch,
+        message,
+        finish,
+    )
+    .await;
     if saved.is_err() {
         // Best effort: a failure before the commit leaves the merge's
         // transaction open, and the next statement must not land in it.
@@ -217,6 +241,7 @@ async fn merge_draft_wins(
     store: &str,
     branch: &str,
     message: &str,
+    finish: Finish,
 ) -> Result<Option<String>> {
     sql!("etl.draft.begin_save", "BEGIN")
         .query()
@@ -239,6 +264,7 @@ async fn merge_draft_wins(
         Err(e) if e.to_string().contains("conflict") => draft_wins(conn).await?,
         Err(e) => return Err(anyhow::Error::new(e).context(format!("merge the draft {branch}"))),
     }
+    finish(&mut *conn).await?;
     let saved = doltlite_raw::commit_on(conn, store, message, None).await?;
     // `dolt_commit` leaves the transaction open, committed or not.
     sql!("etl.draft.commit_save", "COMMIT")
@@ -379,6 +405,10 @@ mod tests {
         }
     }
 
+    fn nothing() -> Finish {
+        Box::new(|_| Box::pin(async { Ok(()) }))
+    }
+
     async fn on_draft(pool: &SqlitePool, sql: &[&str]) {
         let mut on = OnDraft::enter(pool, "draft/r").await.unwrap();
         for s in sql {
@@ -464,7 +494,9 @@ mod tests {
             &["UPDATE people SET name = 'Will Riker' WHERE id = 'r'"],
         )
         .await;
-        let saved = save(&f.pool, "draft/r", "saved Riker").await.unwrap();
+        let saved = save(&f.pool, "draft/r", "saved Riker", nothing())
+            .await
+            .unwrap();
 
         let (hash, message, parents) = head(&f.pool).await;
         assert_eq!(saved, Some(hash.clone()));
@@ -472,6 +504,44 @@ mod tests {
         assert_eq!(main_head(&f.pool).await, hash, "published");
         assert_eq!(people(&f.pool).await[0], row("r", "Will Riker", "x"));
         assert!(!exists(&f.pool, "draft/r").await.unwrap());
+    }
+
+    /// What `finish` writes sees the merged draft and lands in the save's
+    /// one commit; a `finish` that fails saves nothing and keeps the draft.
+    #[tokio::test]
+    async fn a_save_finishes_in_its_own_commit_or_saves_nothing() {
+        let f = store().await;
+        cut(&f.pool, "draft/r").await.unwrap();
+        on_draft(
+            &f.pool,
+            &["UPDATE people SET name = 'Will Riker' WHERE id = 'r'"],
+        )
+        .await;
+        let refuse: Finish = Box::new(|_| Box::pin(async { bail!("not now") }));
+        assert!(save(&f.pool, "draft/r", "refused", refuse).await.is_err());
+        assert_eq!(people(&f.pool).await[0], row("r", "Riker", "x"));
+        assert!(
+            exists(&f.pool, "draft/r").await.unwrap(),
+            "the draft is kept"
+        );
+
+        let note: Finish = Box::new(|conn| {
+            Box::pin(async move {
+                test_sql!("UPDATE people SET note = name WHERE id = 'r'")
+                    .query()
+                    .execute(conn)
+                    .await?;
+                Ok(())
+            })
+        });
+        let saved = save(&f.pool, "draft/r", "saved Riker", note).await.unwrap();
+        let (hash, message, _) = head(&f.pool).await;
+        assert_eq!((saved, message.as_str()), (Some(hash), "saved Riker"));
+        assert_eq!(
+            people(&f.pool).await[0],
+            row("r", "Will Riker", "Will Riker"),
+            "finish read the merged name"
+        );
     }
 
     /// Guards the save against leaving its transaction open on the store's
@@ -486,7 +556,9 @@ mod tests {
             let f = store().await;
             cut(&f.pool, "draft/r").await.unwrap();
             on_draft(&f.pool, edits).await;
-            save(&f.pool, "draft/r", "saved Riker").await.unwrap();
+            save(&f.pool, "draft/r", "saved Riker", nothing())
+                .await
+                .unwrap();
             let rollback = test_sql!("ROLLBACK").query().execute(&f.pool).await;
             assert!(
                 rollback.is_err_and(|e| e.to_string().contains("no transaction is active")),
@@ -511,7 +583,9 @@ mod tests {
             "UPDATE people SET name = 'Number One', note = 'first officer' WHERE id = 'r'",
         )
         .await;
-        save(&f.pool, "draft/r", "saved Riker").await.unwrap();
+        save(&f.pool, "draft/r", "saved Riker", nothing())
+            .await
+            .unwrap();
 
         assert_eq!(
             people(&f.pool).await,
@@ -545,7 +619,9 @@ mod tests {
             "UPDATE people SET note = 'security' WHERE id = 'w'",
         )
         .await;
-        save(&f.pool, "draft/r", "saved Riker").await.unwrap();
+        save(&f.pool, "draft/r", "saved Riker", nothing())
+            .await
+            .unwrap();
 
         assert_eq!(
             people(&f.pool).await,
@@ -569,7 +645,7 @@ mod tests {
         .await;
         sealed(&f.pool, "UPDATE people SET note = 'kept?' WHERE id = 'r'").await;
         sealed(&f.pool, "DELETE FROM people WHERE id = 'w'").await;
-        save(&f.pool, "draft/r", "saved").await.unwrap();
+        save(&f.pool, "draft/r", "saved", nothing()).await.unwrap();
 
         assert_eq!(people(&f.pool).await, [row("w", "Lt Worf", "y")]);
     }
@@ -588,7 +664,7 @@ mod tests {
             "UPDATE members SET photo = x'bb' WHERE group_id = 'away'",
         )
         .await;
-        save(&f.pool, "draft/r", "saved").await.unwrap();
+        save(&f.pool, "draft/r", "saved", nothing()).await.unwrap();
 
         let photos: Vec<(String, Vec<u8>)> =
             test_sql!("SELECT member_id, photo FROM members ORDER BY member_id")
@@ -607,7 +683,10 @@ mod tests {
         let f = store().await;
         let before = head(&f.pool).await;
         cut(&f.pool, "draft/r").await.unwrap();
-        assert_eq!(save(&f.pool, "draft/r", "saved").await.unwrap(), None);
+        assert_eq!(
+            save(&f.pool, "draft/r", "saved", nothing()).await.unwrap(),
+            None
+        );
         assert_eq!(head(&f.pool).await, before);
         assert!(!exists(&f.pool, "draft/r").await.unwrap());
         sealed(&f.pool, "UPDATE people SET note = 'z' WHERE id = 'w'").await;

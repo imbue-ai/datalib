@@ -116,9 +116,11 @@ export async function addContactPages(pages: string[]): Promise<AddedPeople> {
 }
 
 export function newPerson(answer: PageAnswer): NewPerson {
-  const handles = recordHandles(answer.contact, answer.fullNumbers);
+  const sure = recordHandles(answer.contact, answer.fullNumbers).filter((h) => h.sure);
+  const card = { source_id: answer.contact.source_id, key: answer.contact.key };
   return {
     name: answer.contact.names[0] ?? "",
-    handles: handles.filter((h) => h.sure).map((h) => h.handle),
+    handles: sure.map((h) => h.handle),
+    said: Object.fromEntries(sure.map((h) => [h.handle, { label: h.label, copied_from: card }])),
   };
 }
