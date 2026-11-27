@@ -1,8 +1,9 @@
 //! Agents propose, a person decides: links and contacts an agent made,
 //! the links a person turned down, and the labels on people and senders
-//! (clusters, and how much each matters; the label rules are `labels.rs`). An agent's word waits for a
-//! person to confirm it; a person's stands, and no agent may change it. `docs/dev/contacts.md` §"Agents
-//! propose, a person decides".
+//! (clusters, and how much each matters; the label rules are
+//! `labels.rs`). An agent's word waits for a person to confirm it; a
+//! person's stands, and no agent may change it. `docs/dev/contacts.md`
+//! §"Agents propose, a person decides".
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -65,7 +66,7 @@ pub struct ProposedHandle {
 }
 
 /// A label an agent says applies, or, for a close call a person should
-/// settle, says does not (`applies: false`).
+/// decide, says does not (`applies: false`).
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProposedLabel {
     pub label: String,
@@ -171,7 +172,7 @@ fn plan_agent_link(holders: &[String], turned_down: bool, target: &str) -> Agent
 }
 
 /// A person's word on one label inside `tx`: in, out, or (`None`)
-/// unknown again, which forgets the row. Returns whether anything
+/// unknown again, which deletes the row. Returns whether anything
 /// changed.
 async fn person_says(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
@@ -865,7 +866,7 @@ impl Store {
     }
 
     /// A person's word on `label` for `subject`: in (`Some(true)`), out
-    /// (`Some(false)`), or unknown again (`None`, which forgets the row,
+    /// (`Some(false)`), or unknown again (`None`, which deletes the row,
     /// an agent's included). Returns whether anything changed.
     pub async fn set_label(
         &self,
@@ -1308,7 +1309,7 @@ mod tests {
     }
 
     /// In, out and unknown: a person can say a label does not apply
-    /// before any agent asks, and can forget a label altogether.
+    /// before any agent asks, and can delete a label's row altogether.
     #[tokio::test]
     async fn a_label_is_in_out_or_unknown() {
         let dir = tempfile::tempdir().unwrap();
@@ -1360,7 +1361,7 @@ mod tests {
     }
 
     /// Taking a handle off a contact is written down, whoever put it
-    /// there; the person putting it back takes the record back.
+    /// there; the person linking it again deletes its `not_linked` row.
     #[tokio::test]
     async fn unlinking_writes_it_down_until_a_person_relinks_it() {
         let dir = tempfile::tempdir().unwrap();

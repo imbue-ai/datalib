@@ -28,7 +28,8 @@ Both go through this crate, in this order:
    curated store it does not know, so a new one cannot go unchecked.
 2. **`open_as_owners`** opens each the way its one writer does at
    launch: the contacts applet's `Store::open`, the index applet's open
-   of the mutes. That climbs each migration ladder, as an upgrade would.
+   of the mutes. That runs each store's migrations up to this build's
+   shape, as an upgrade would.
 3. **`assert_every_table_has_a_row`**: a table with no row cannot show
    a missing rung, because an open rebuilds an empty table whatever
    shape it is in. `MAY_BE_EMPTY` names the one exception and why.

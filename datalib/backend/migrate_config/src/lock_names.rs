@@ -1,8 +1,8 @@
 //! The locks from before search had an index of its own. `qmd_embed`, the
 //! one every `embed` holds, is `embedder`. `qmd_keyword` is gone: only
 //! the index step (`unified_grid_and_search_index`) held it once it alone
-//! wrote the grid index's file, and a step never runs beside itself. A step's `locks` that named `qmd_embed`
-//! name `embedder`; one that named `qmd_keyword` drops it, and a step left
+//! wrote the grid index's file, and a step never runs beside itself. A
+//! step's `locks` that named `qmd_embed` name `embedder`; one that named `qmd_keyword` drops it, and a step left
 //! holding nothing loses the key and holds its default lock again. A
 //! `[[locks]]` entry that resized `qmd_embed` resizes `embedder`, and one
 //! that declared `qmd_keyword` goes, with its comments.

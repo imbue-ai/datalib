@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The step program datalib ships.
+/// The step program Datalib ships.
 pub const STEP_PROGRAM: &str = "datalib-step";
 
 /// Whether a program word, as written, is `datalib-step`.
