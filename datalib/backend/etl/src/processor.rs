@@ -1,5 +1,5 @@
-//! The download processor and its run context — Program A's uniform
-//! pipeline unit for the fetch side. The render side's counterpart is
+//! The download processor and its run context: the one shape every
+//! source's download step takes. The render side's counterpart is
 //! `datalib_etl_render::processor`.
 
 use std::path::Path;

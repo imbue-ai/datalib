@@ -390,9 +390,10 @@ async fn double_open(args: &Args) -> Result<Value> {
     }))
 }
 
-/// Seed and commit, then open a SQL transaction, insert into it, announce
-/// readiness and wait to be killed. With `--commit` the transaction is
-/// committed at the SQL level first, so the rows sit in the working set —
+/// Seed and commit, then open a SQL transaction, insert into it, write
+/// the `ready-out` file and wait to be killed. With `--commit` the
+/// transaction is committed at the SQL level first, so the rows sit in
+/// the working set —
 /// uncommitted to doltlite — when the kill lands. With `--dolt-commit` as
 /// well, they are then `dolt_commit`ted on the writer's branch and never
 /// published: the state between `commit_run`'s two halves. Never returns
@@ -505,9 +506,9 @@ async fn probe(args: &Args) -> Result<Value> {
 /// What `unified_grid_and_search_index` does to the index on every pass, one step at a time:
 /// seed and commit, then inside one SQL transaction delete every row and
 /// load a different number back, then `COMMIT`, then `dolt_commit`. Each
-/// step waits for a go-file from the test and announces itself with an
-/// out-file, so a reader in another process can be sampled between any
-/// two of them. The report is what the writer itself saw at each step.
+/// step waits for a go-file from the test and then writes an out-file,
+/// so a reader in another process can be sampled between any two of
+/// them. The report is what the writer itself saw at each step.
 async fn hold(args: &Args) -> Result<Value> {
     let db = args.path("db")?;
     let pool = doltlite_raw::open(&db, &[TABLE_DDL])

@@ -1,6 +1,6 @@
-//! Shared helpers for doltlite-backed data sources — the "easy button" that
-//! lets every such source follow one storage-ownership pattern under the
-//! [`crate::processor`] model.
+//! Shared helpers for doltlite-backed data sources, through which every
+//! such source follows one rule for who opens, seals and closes its stores
+//! under the [`crate::processor`] model.
 
 use std::sync::Arc;
 
@@ -47,9 +47,9 @@ struct SealState {
     /// before the edge rows naming its blobs are written.
     cas_pool: Option<SqlitePool>,
     checkpointer: std::sync::Mutex<crate::checkpointer::Checkpointer>,
-    /// Where a seal is announced. `Progress` is the channel that already
-    /// crosses from `etl` out to whatever is driving the step, so a
-    /// checkpoint rides it rather than growing a second one.
+    /// Where a seal's commit is reported. `Progress` is the channel that
+    /// already crosses from `etl` out to whatever is driving the step, so
+    /// a checkpoint is reported on it rather than on a second one.
     progress: crate::progress::Progress,
     stop: crate::stop::StopFlag,
     /// The running download's problems, written ahead of each seal so a
@@ -624,7 +624,7 @@ mod tests {
         );
     }
 
-    /// The version announced has to be the commit the seal just made —
+    /// The version reported has to be the commit the seal just made —
     /// that string is what a consumer pins to.
     #[tokio::test]
     async fn a_seal_announces_the_commit_it_made() {

@@ -90,19 +90,20 @@ impl std::fmt::Debug for Progress {
 struct NoopSink;
 impl ProgressSink for NoopSink {}
 
-/// One bar for a whole run, whose announced total only grows, but for
+/// One bar for a whole run, whose reported total only grows, but for
 /// work the run itself decides not to do ([`RunBar::forgo`]).
 ///
 /// A step cannot have two independent progress bars: the runner sums
 /// every increment into one `done` and keeps only the last total, so a
-/// second bar announcing its own size pins the Manage screen's
+/// second bar reporting its own size pins the Manage screen's
 /// "N queued" at zero. `datalib/backend/dag/README.md` § "One bar per
 /// step" has the whole rule. What is still on it when the step ends is
-/// what the step owes, so a tick announced is a tick done or owed.
+/// what the step owes, so a tick added to the total is a tick done or
+/// owed.
 ///
 /// Shared and interior-mutable so it passes by reference the way
-/// [`Progress`] does. A phase that fans out ticks from its tasks and
-/// announces from the one that plans them.
+/// [`Progress`] does. A phase can tick from each of its tasks and raise
+/// the total from the one that plans them.
 #[derive(Clone)]
 pub struct RunBar {
     bar: Progress,
@@ -113,7 +114,7 @@ pub struct RunBar {
 impl RunBar {
     /// `fixed` is work the run already knows the size of, so the bar
     /// reads as something other than 0/0 before the first response.
-    /// Zero announces nothing: an unknown total is not a total of zero,
+    /// Zero sets no total: an unknown total is not a total of zero,
     /// which would read as finished.
     pub fn new(progress: &Progress, fixed: u64) -> Self {
         if fixed > 0 {
@@ -134,13 +135,13 @@ impl RunBar {
         }
     }
 
-    /// What has been announced so far, so a phase can raise the total to
+    /// The total reported so far, so a phase can raise the total to
     /// "everything before me, plus my own size".
     pub fn announced(&self) -> u64 {
         self.announced.load(Ordering::SeqCst)
     }
 
-    /// Take back `n` ticks announced for work this run will not do and
+    /// Take back `n` ticks of the total for work this run will not do and
     /// does not owe: what a cap in the config leaves out, what upstream
     /// refuses to show, what the store turned out to hold already. Left on
     /// the bar, they would read as owed once the step ends.
@@ -443,7 +444,7 @@ mod tests {
     }
 
     /// What is left on a run's bar when its step ends is what the step
-    /// owes, so work the run takes back comes off the total it announced.
+    /// owes, so work the run takes back comes off the total it reported.
     #[test]
     fn work_forgone_comes_off_the_announced_total() {
         let sink = Arc::new(RecordingSink::default());

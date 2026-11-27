@@ -7,7 +7,7 @@ content-line grammar iCalendar and vCard share (`content_line.rs`:
 unfolding, quoted parameters, TEXT unescaping, splitting a structured
 value on its unescaped `;`). The render side's shared code is `render/`.
 A source that reads local files also takes `files/` (`datalib_etl_files`),
-which asks the disk what changed; one that reaches a web service takes
+which learns what changed on disk; one that reaches a web service takes
 `web/` (`datalib_etl_web`): every request through `latchkey curl`, HTTP
 playback, DAV, and the "listed minus held" bookkeeping.
 
@@ -16,6 +16,15 @@ Provider-specific code does **not** belong here. A provider crate lives in
 
 The rules below are the ones you cannot recover by reading the code, and
 which break things quietly when ignored.
+
+Three words are used throughout in a narrow sense:
+
+- **Seal**: `commit_run` commits what a writer wrote on its own branch,
+  `datalib_writer`, then moves `main` to that commit, which is the
+  moment readers see it (§"A writer works on its own branch and
+  publishes when it seals").
+- **Ladder** and **rung**: a store's ordered list of migrations, and one
+  migration on it (§"The migration ladder").
 
 ## Raw stores: the primary key is the upstream id
 
@@ -363,7 +372,7 @@ seal, as uncommitted rows that outlive the connection (`draft.rs`).
 `OnDraft` moves the writer's one connection onto the draft and back;
 dropped without leaving, it closes the connection rather than return
 one to the pool still on a draft. `save` commits the draft, squashes
-it into the writer's branch with `--no-commit`, settles every conflict
+it into the writer's branch with `--no-commit`, resolves every conflict
 cell by cell with the draft's value winning wherever the draft changed
 it, seals with the caller's message, and deletes the branch. The
 doltlite facts it rests on are in `docs/dev/doltlite.md` § "Merging a
@@ -399,7 +408,7 @@ schema is that commit's, and "a reader must not write" is the engine's
 rule (`attempt to write a readonly database`). It never creates the file
 and takes no lock. It hands back a `Reader`, or `None` when the store
 has nothing readable committed, which the caller must decide about (a
-consumer does nothing that pass) rather than fall through to the
+consumer does nothing in that run) rather than fall through to the
 working set. **A commit holding no table counts as nothing committed.**
 That is the shape an owner's `open` leaves behind between creating the
 file and its first commit, and under streaming a consumer opens there
@@ -571,10 +580,11 @@ made, and its test fails until one is added. The app stores' rungs
 itself rather than through `open_migrating`.
 
 **The shared ladder.** A table every store holds rather than one an
-owner declares — `problems`, in every raw and render store — climbs
-the framework's ladder, `doltlite_raw::SHARED_LADDER`, counted by
-`_datalib_meta.shared_schema_version`. Every store `doltlite_raw` opens
-climbs it, before its owner's ladder, each rung committed as
+owner declares — `problems`, in every raw and render store — is
+migrated by the framework's ladder, `doltlite_raw::SHARED_LADDER`,
+counted by `_datalib_meta.shared_schema_version`. Every store
+`doltlite_raw` opens runs that ladder's rungs from the version it
+records to the top, before its owner's ladder, each rung committed as
 `migrate shared v<n>: <name>`. A rung checks the shape it changes,
 since a store may not hold the table; a new store is created at the
 top. Its first rung renamed `problems.last_seen_at_utc` to
@@ -587,10 +597,11 @@ table itself and fills it from what the store already holds (contacts'
 the store-wide cursors, but not a per-row one like an address book's
 sync-token, and the table would stay empty until upstream changed.
 
-The two-pass order is load-bearing. An index over a column introduced by
-a later schema change cannot be created against an older store, so a
-single pass fails with `no such column` before the column it needs is
-added — leaving every older store unopenable.
+Applying every table's plan before any index (`open`'s order, above)
+is load-bearing. An index over a column introduced by a later schema
+change cannot be created against an older store, so creating tables
+and indexes in one pass fails with `no such column` before the column
+it needs is added — leaving every older store unopenable.
 
 A cursor is only valid under the schema that set it. A recreated or
 newly created table is empty, and a cursor that says "read through
@@ -797,9 +808,9 @@ own edge table, `(id, <owning>, <ref>, blake3)`, with `#[derive(CasEdgeRow)]`
 ([`macros/README.md`](macros/README.md)).
 
 **The CAS names bytes itself.** `BlobCas::put_many` takes bytes and the
-caller's own id for them (`CasInsert`), hashes each, and answers each id
-with the key its bytes went in under; an edge takes its hash from that
-answer. No caller hands the CAS a key, so no key can name other bytes. A
+caller's own id for them (`CasInsert`), hashes each, and returns, for each id,
+the key its bytes went in under; an edge takes its hash from that
+return value. No caller hands the CAS a key, so no key can name other bytes. A
 hash a caller already had (a scan's, a stored edge's) only decides what
 to skip reading, never what read bytes are called.
 

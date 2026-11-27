@@ -83,7 +83,7 @@ pub async fn write(tx: &mut Transaction<'_, Sqlite>, rows: &[ReadMarkRow]) -> Re
         .context("write read_marks")
 }
 
-/// Forget the marks on `ids`: what they were on is gone, or upstream no
+/// Delete the marks on `ids`: what they were on is gone, or upstream no
 /// longer says.
 pub async fn forget(tx: &mut Transaction<'_, Sqlite>, ids: &[String]) -> Result<()> {
     if ids.is_empty() {

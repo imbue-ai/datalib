@@ -7,10 +7,11 @@
 //! collector sweeps exactly that: see `docs/dev/data_architecture_ingestion.md`
 //! §"Error handling" for the rule and what each kind covers.
 //!
-//! Adding a row needs no coverage, so a streaming download's rows ride
-//! each seal ([`collecting_sealed`]) and a consumer reading a checkpoint
-//! sees them. Only the sweep of listing and phase rows waits for the end,
-//! because only then is it known that every one of them ran.
+//! Adding a row needs no coverage, so a streaming download's rows are
+//! written ahead of each seal ([`collecting_sealed`]) and a consumer
+//! reading a checkpoint sees them. Only the sweep of listing and phase
+//! rows waits for the end, because only then is it known that every one
+//! of them ran.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;

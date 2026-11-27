@@ -1,7 +1,7 @@
 //! When a producer should seal what it has written so far.
 //!
-//! A step used to commit once, at the end. Committing in chunks lets a
-//! consumer start on the early part while the rest is still arriving, and
+//! Committing in chunks, rather than once at the end, lets a consumer
+//! start on the early part while the rest is still arriving, and
 //! makes a killed run keep what it had. This decides *when*; the commit
 //! itself belongs to whoever owns the store.
 //!

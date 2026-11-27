@@ -275,7 +275,7 @@ async fn merge_draft_wins(
     Ok(saved)
 }
 
-/// Settle every conflict of the merge in progress cell by cell, the
+/// Resolve every conflict of the merge in progress cell by cell, the
 /// draft's value winning wherever the draft changed it. Not
 /// `dolt_conflicts_resolve('--theirs')`, which takes the draft's whole
 /// row and loses the writer's change to its other cells.
@@ -312,8 +312,8 @@ async fn draft_wins(conn: &mut SqliteConnection) -> Result<()> {
     Ok(())
 }
 
-/// The statements that settle `table`'s conflicts, the draft winning:
-/// a row the draft deleted goes, a row the writer deleted and the draft
+/// The statements that resolve `table`'s conflicts, the draft winning:
+/// a row the draft deleted is deleted, a row the writer deleted and the draft
 /// changed comes back as the draft has it, and in a row both kept each
 /// cell the draft changed takes the draft's value. `columns` is every
 /// column, with whether it is part of the key.
