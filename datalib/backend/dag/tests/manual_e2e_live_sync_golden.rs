@@ -608,21 +608,16 @@ fn manual_e2e_live_sync_golden() {
             .is_file(),
         "backend index DB must live at unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite"
     );
-    // Only the genuinely-derived index dirs are tagged as rebuildable cache so
-    // `--exclude-caches` backups skip them (the per-group `render_markdown/` tags
-    // are checked implicitly via the manifest — CACHEDIR.TAG is skipped in the
-    // walk below). `system/` must NOT be tagged — job logs are operational
-    // history, not rebuildable from raw.
-    assert!(
-        data_root
-            .join("unified_grid_and_search_index/CACHEDIR.TAG")
-            .is_file(),
-        "unified_grid_and_search_index/ must carry a CACHEDIR.TAG marking the index tree as derived cache"
-    );
-    assert!(
-        !data_root.join("system/CACHEDIR.TAG").exists(),
-        "system/ (operational history) must NOT be tagged as cache"
-    );
+    // A backup tool that skips cache directories would leave a library
+    // that no sync makes whole (`docs/user/backing_up.md`), so nothing in
+    // one is marked as a cache, and a tag an earlier bake left is removed.
+    let tags: Vec<_> = WalkDir::new(&data_root)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name() == "CACHEDIR.TAG")
+        .map(|e| e.path().display().to_string())
+        .collect();
+    assert!(tags.is_empty(), "the library marks caches: {tags:?}");
 
     // Snapshot each group's stores, mirroring the on-disk per-group layout:
     // `ingest/`, `render_markdown/`, a time-series source's
@@ -1675,12 +1670,11 @@ fn snapshot_tree(root: &Path, top: &str, manifest: &mut Vec<String>) {
         }
         // Doltlite's `-lock` sidecars and our own per-file `.lock`s
         // (etl README § "Connection pools") are ephemeral and
-        // content-free; `CACHEDIR.TAG` is a backup hint asserted
-        // separately. None belongs in a golden.
+        // content-free. None belongs in a golden.
         if entry
             .file_name()
             .to_str()
-            .is_some_and(|n| n.ends_with("-lock") || n.ends_with(".lock") || n == "CACHEDIR.TAG")
+            .is_some_and(|n| n.ends_with("-lock") || n.ends_with(".lock"))
         {
             continue;
         }

@@ -46,7 +46,7 @@ its vectors to the one cache in
 │   └── blobs.sqlite                #   attachment bytes by blake3 (plain SQLite)
 ├── <group>/render_markdown/        # per-source render store
 │   └── indexed_markdown.doltlite_db  #   its documents, rows, edges + render problems
-├── unified_grid_and_search_index/                  # derived; carries a CACHEDIR.TAG
+├── unified_grid_and_search_index/                  # derived; a sync rebuilds it
 │   ├── unified_grid_and_search_index/db.sqlite  # the grid_rows SQL index, each row's search terms and the search index (plain SQLite) — query this
 │   └── search_index/inference_cache.sqlite  # each chunk's vector, by its prompt's hash
 ├── datalib_curated/                # what a person curates, one directory per app; nothing rebuilds it

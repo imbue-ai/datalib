@@ -148,10 +148,6 @@ pub async fn run(
             "{errors} error(s) and {warnings} warning(s) rendering this source"
         ));
     }
-    // The whole tree re-renders from the raw store, so cache-aware
-    // backups (`restic --exclude-caches` etc.) may skip it. No-op until
-    // the first render materializes the dir.
-    datalib_core::layout::mark_derived_cache(&rendered_root);
     Ok(claims(&env.step, &report))
 }
 
