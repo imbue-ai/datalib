@@ -1,5 +1,6 @@
-//! Row shape returned by `db::grid_rows`. Rendered markdown is write-only output;
-//! search runs against the `grid_rows` projection in Dolt.
+//! The row shape a search returns, built from `grid_rows` by
+//! `dolt_repo::search_row_from`. Rendered markdown is never parsed back:
+//! a search reads the grid index's `grid_rows` table, which is plain SQLite.
 
 use serde::Serialize;
 
