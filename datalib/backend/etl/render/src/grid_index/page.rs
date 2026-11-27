@@ -22,11 +22,11 @@ use super::{
 /// A document named twice is written twice, the later over the earlier.
 /// Returns how many grid rows the page holds.
 pub(super) async fn apply_page(write_lock: &WriteLock, page: &[RenderedMarkdown]) -> Result<usize> {
-    let settled: Vec<_> = page.iter().map(crate::names::settled).collect();
+    let cleaned: Vec<_> = page.iter().map(crate::names::cleaned).collect();
     let mut rows = 0;
     let mut run: Vec<&RenderedMarkdown> = Vec::new();
     let mut in_run: HashSet<&str> = HashSet::new();
-    for md in settled.iter().map(|md| &**md) {
+    for md in cleaned.iter().map(|md| &**md) {
         if !in_run.insert(md.markdown_uuid.as_str()) {
             rows += apply_run(write_lock, &run).await?;
             run.clear();

@@ -26,28 +26,28 @@ use crate::html::{is_bidi_control, without_bidi_controls};
 /// `md` as it is stored. Borrowed when nothing needed changing, which is
 /// nearly always, so a document's sections are copied only when it
 /// changes.
-pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
+pub(crate) fn cleaned(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
     let mut changed = false;
     let mut rows = md.rows.clone();
     for row in &mut rows {
-        changed |= settle_row(row);
+        changed |= clean_row(row);
     }
     let mut edges = md.edges.clone();
     for edge in &mut edges {
-        changed |= settle_edge(edge);
+        changed |= clean_edge(edge);
     }
     let mut contacts = md.contacts.clone();
     for contact in &mut contacts {
-        changed |= settle_contact(contact);
+        changed |= clean_contact(contact);
     }
     let mut photos = md.photos.clone();
     for photo in &mut photos {
-        changed |= settle_photo(photo);
+        changed |= clean_photo(photo);
     }
     let mut data_nodes = md.data_nodes.clone();
     for node in &mut data_nodes {
-        changed |= settle_node(node);
-        changed |= settle_node_key(node, &rows);
+        changed |= clean_node(node);
+        changed |= fill_node_sort_key(node, &rows);
     }
     if !changed {
         return Cow::Borrowed(md);
@@ -74,7 +74,7 @@ pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
 
 /// A container's kind and name are read by a person; the rest are ids,
 /// keys and stamps.
-fn settle_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
+fn clean_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
     let mut changed = strip(&mut node.kind);
     if let Some(name) = node.name.as_mut() {
         changed |= strip(name);
@@ -82,7 +82,7 @@ fn settle_node(node: &mut datalib_schema::data_nodes::DataNodeRow) -> bool {
     changed
 }
 
-fn settle_node_key(node: &mut datalib_schema::data_nodes::DataNodeRow, rows: &[GridRow]) -> bool {
+fn fill_node_sort_key(node: &mut datalib_schema::data_nodes::DataNodeRow, rows: &[GridRow]) -> bool {
     if !node.sort_key.is_empty() {
         return false;
     }
@@ -96,9 +96,9 @@ fn settle_node_key(node: &mut datalib_schema::data_nodes::DataNodeRow, rows: &[G
 }
 
 /// A string column not named here is an id, a path, a stamp or a body;
-/// `every_grid_row_string_is_settled_or_kept` lists those, and fails on
+/// `every_grid_row_string_is_cleaned_or_kept` lists those, and fails on
 /// a new column that is in neither list.
-fn settle_row(row: &mut GridRow) -> bool {
+fn clean_row(row: &mut GridRow) -> bool {
     let mut changed = false;
     for s in [&mut row.kind, &mut row.source_label] {
         changed |= strip(s);
@@ -117,12 +117,12 @@ fn settle_row(row: &mut GridRow) -> bool {
     for s in names.into_iter().flatten() {
         changed |= strip(s);
     }
-    changed | settle_supplied_terms(row)
+    changed | clean_supplied_terms(row)
 }
 
 /// A supplied term is searched for and, for a conversation with no
 /// title, drawn as its Subject; a handle holds no control to lose.
-fn settle_supplied_terms(row: &mut GridRow) -> bool {
+fn clean_supplied_terms(row: &mut GridRow) -> bool {
     let Ok(terms) = row.supplied_terms() else {
         return false;
     };
@@ -137,11 +137,11 @@ fn settle_supplied_terms(row: &mut GridRow) -> bool {
     true
 }
 
-fn settle_edge(edge: &mut EdgeRow) -> bool {
+fn clean_edge(edge: &mut EdgeRow) -> bool {
     edge.label.as_mut().is_some_and(strip)
 }
 
-fn settle_contact(contact: &mut NormalizedContact) -> bool {
+fn clean_contact(contact: &mut NormalizedContact) -> bool {
     let before = contact.names.clone();
     let mut names: Vec<String> = Vec::with_capacity(contact.names.len());
     for mut name in std::mem::take(&mut contact.names) {
@@ -163,7 +163,7 @@ fn settle_contact(contact: &mut NormalizedContact) -> bool {
 
 /// The caption is prose and keeps its controls; the paths in `original`
 /// and `pictures` find the file and stay as the source wrote them.
-fn settle_photo(photo: &mut NormalizedPhoto) -> bool {
+fn clean_photo(photo: &mut NormalizedPhoto) -> bool {
     let mut changed = strip(&mut photo.file_name);
     let place = &mut photo.place;
     let labels = [
@@ -284,8 +284,8 @@ mod tests {
             DataNodeRow::new("md-1", "row-1", "src", "Chat"),
             DataNodeRow::new("md-1", "channel", "src", "Channel"),
         ];
-        let settled = settled(&d);
-        let keys: Vec<&str> = settled
+        let cleaned_doc = cleaned(&d);
+        let keys: Vec<&str> = cleaned_doc
             .data_nodes
             .iter()
             .map(|n| n.sort_key.as_str())
@@ -294,7 +294,7 @@ mod tests {
 
         d.data_nodes =
             vec![DataNodeRow::new("md-1", "row-1", "src", "Chat").sort_key(Some("0007".into()))];
-        assert!(matches!(super::settled(&d), Cow::Borrowed(_)));
+        assert!(matches!(super::cleaned(&d), Cow::Borrowed(_)));
     }
 
     fn photo() -> NormalizedPhoto {
@@ -394,7 +394,7 @@ mod tests {
     /// A storage report and a diff group's documents are written straight
     /// to the store, never through `emit_doc`, and kept their controls.
     #[test]
-    fn a_document_written_straight_to_the_store_is_settled_too() {
+    fn a_document_written_straight_to_the_store_is_cleaned_too() {
         let r = row().author(format!("Pic{RLO}ard")).build().unwrap();
         let got = stored(doc(r));
         assert_eq!(got.rows[0].author.as_deref(), Some("Picard"));
@@ -514,17 +514,17 @@ mod tests {
     }
 
     #[test]
-    fn a_document_with_nothing_to_settle_is_not_copied() {
+    fn a_document_with_nothing_to_clean_is_not_copied() {
         let d = doc(row().author("Picard".to_string()).build().unwrap());
-        assert!(matches!(settled(&d), Cow::Borrowed(_)));
+        assert!(matches!(cleaned(&d), Cow::Borrowed(_)));
     }
 
     /// Every string column of `GridRow` is either cleaned or listed here
     /// as one a person does not read as a name: an id, a path, a stamp,
     /// a body. A column added to `GridRow` fails this until it is put in
-    /// `settle_row` or here.
+    /// `clean_row` or here.
     #[test]
-    fn every_grid_row_string_is_settled_or_kept() {
+    fn every_grid_row_string_is_cleaned_or_kept() {
         const KEPT: &[&str] = &[
             "uuid",
             "provider",
@@ -569,11 +569,11 @@ mod tests {
                 continue; // not a string column
             };
             strings.push(column.clone());
-            let was_settled = settle_row(&mut r);
+            let was_cleaned = clean_row(&mut r);
             let kept = KEPT.contains(&column.as_str());
             assert!(
-                was_settled != kept,
-                "GridRow.{column}: settle it in `settle_row` if a person reads it \
+                was_cleaned != kept,
+                "GridRow.{column}: clean it in `clean_row` if a person reads it \
                  as a name or a label, or add it to KEPT if it is an id, a path, \
                  a stamp or a body"
             );
