@@ -156,7 +156,7 @@ impl InferenceCache {
 
     /// Deletes the chunks filed for these documents, and their rows in
     /// `search_chunked`.
-    pub async fn forget_chunked(&self, markdown_uuids: &[String]) -> Result<()> {
+    pub async fn delete_chunked(&self, markdown_uuids: &[String]) -> Result<()> {
         for batch in markdown_uuids.chunks(BATCH) {
             let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
             let uuids = serde_json::to_string(batch)?;
@@ -192,7 +192,7 @@ impl InferenceCache {
         .bind(serde_json::to_string(sources)?)
         .fetch_all(&self.pool)
         .await?;
-        self.forget_chunked(&gone).await?;
+        self.delete_chunked(&gone).await?;
         Ok(gone.len())
     }
 

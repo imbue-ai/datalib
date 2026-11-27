@@ -366,7 +366,7 @@ async fn cut_owed(
     let mut done = Done::default();
     let owed = datalib_search_index::owed(indexed, &cache.chunked(group).await?);
     if finished {
-        cache.forget_chunked(&owed.remove).await?;
+        cache.delete_chunked(&owed.remove).await?;
         done.removed = owed.remove.len();
     } else if !owed.remove.is_empty() {
         tracing::info!(
