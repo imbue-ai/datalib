@@ -1,4 +1,5 @@
-//! Program-A `DataProcessor`s for the yolink source (download + render).
+//! The download `DataProcessor` for the yolink source; the render one is
+//! in `datalib_etl_yolink_render`.
 //! The source owns its raw store (open/commit/checkpoint); the orchestrator
 //! only drives `run`.
 

@@ -489,7 +489,7 @@ mod tests {
         pool.close().await;
 
         // First render — cold start (no cursor). Both chats should
-        // render, and the pass hands back the commit it consumed.
+        // render, and the render hands back the commit it consumed.
         let (docs1, _, first_cursor) = render_capture(&raw_dir, None).await;
         assert_eq!(
             docs1.len(),
@@ -795,7 +795,7 @@ mod tests {
     }
 
     /// Rendered markdown uuids, the chat JIDs reported gone, and the
-    /// commit the pass consumed.
+    /// commit the render consumed.
     async fn render_capture(
         raw_dir: &Path,
         cursor: Option<&str>,

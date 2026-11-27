@@ -67,7 +67,7 @@ async fn seed(pool: &SqlitePool, rows: &[(&str, &str, i64, f64)], devices: &[(&s
 
 /// Parse at `pin` (HEAD when `None`) and render, the way `processor.rs`
 /// does once the driver has found the page stale. Returns the emitted
-/// documents and the commit the pass consumed — what the render step
+/// documents and the commit the render consumed — what the render step
 /// would record as the cursor.
 fn render_once(raw_path: &Path, pin: Option<&str>) -> (Vec<RenderedMarkdown>, Option<String>) {
     let mut emitted = Vec::new();
@@ -178,10 +178,10 @@ async fn renders_a_page_with_one_plot_per_quantity_then_skips_until_data_lands()
     // Counts yes; the doltlite HEAD hash and the per-commit hashes and
     // wall-clock dates no. `test seed` is this test's own commit message,
     // so it appears in the page only if the commit log is being rendered.
-    // That log is stamped from the wall clock, which made this one file
-    // the reason a rendered tree was never byte-identical to its previous
-    // self — and so re-ran the fixture's ~90s CPU-only embed on CI for
-    // changes that altered nothing the embedder reads. See
+    // That log is stamped from the wall clock, so rendering it would make
+    // the rendered tree differ from its previous self on every run, and
+    // re-run the fixture's ~90s CPU-only embed on CI for changes that
+    // alter nothing the embedder reads. See
     // `render_store_section` and `tests/fixtures/tar_rendered.py`.
     assert!(
         !md.contains("test seed"),
