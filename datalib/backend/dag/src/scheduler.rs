@@ -153,42 +153,6 @@ impl Runner {
 }
 
 impl Runner {
-    /// Empty what the named steps wrote and clear what the loop's store
-    /// says they last read and did, so the next run does their work from
-    /// the start. A step whose program takes `--reset` is invoked once
-    /// with it appended, and what that empties is the step's to say; any
-    /// other has its tree deleted (`step_protocol.md` § Verbs).
-    /// Nothing else runs: the caller holds the runner lock, which is what
-    /// makes emptying a store safe.
-    pub async fn reset(&self, graph: &Graph, steps: &[StepId]) -> Result<()> {
-        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let result = self.reset_each(graph, steps, &store).await;
-        store.close().await;
-        result
-    }
-
-    async fn reset_each(
-        &self,
-        graph: &Graph,
-        steps: &[StepId],
-        store: &crate::supervisor::store::Store,
-    ) -> Result<()> {
-        for step in steps {
-            let (_, version) = self.reset_one(graph, step).await?;
-            let saved = store.load_record().await.context("load the record")?;
-            let mut state = saved.clone();
-            state.steps.insert(
-                step.clone(),
-                crate::supervisor::wipe::emptied(saved.steps.get(step), version),
-            );
-            store
-                .save_record(&saved, &state)
-                .await
-                .context("save the record")?;
-        }
-        Ok(())
-    }
-
     /// `step` reset: invoked once with `--reset` when its program takes
     /// the verb, else its tree deleted. Its index, and the version its
     /// emptied tree is at. Emptied, not gone: what reads it sees a new
@@ -221,90 +185,6 @@ impl Runner {
             fresh_version(fingerprint, &format!("reset-{}", uuid::Uuid::now_v7()))
         });
         Ok((i, version))
-    }
-
-    /// Every step a pass will invoke with a verb, sent as a `RunPlan` so
-    /// the run store writes each as pending before the first is invoked,
-    /// and a reader can say how many are left. A step the pass never
-    /// reaches leaves no row when the run ends.
-    pub fn plan(&self, graph: &Graph, steps: &[StepId]) {
-        let planned = steps
-            .iter()
-            .filter_map(|s| graph.by_id.get(s))
-            .map(|&i| crate::events::PlannedStep::of(&graph.steps[i]))
-            .collect();
-        self.sink.emit(&Event::RunPlan { steps: planned });
-    }
-
-    /// Run each named step's command once with `--prepare` appended, so
-    /// it makes what it wrote usable by its program, fetching nothing
-    /// (`step_protocol.md` § Verbs). What a step can bring to its
-    /// program's shape in place it does, and reports its new version; for
-    /// what it cannot it reports `needs_rerun`, which the loop's store
-    /// keeps until the step next succeeds; what a newer program wrote it refuses
-    /// ([`FailureKind::Incompatible`]), and the step is turned off, by
-    /// [`REFUSED_PREPARE`], until a later prepare pass finds it willing.
-    /// One that fails otherwise is reported and the rest go on.
-    pub async fn prepare(&self, graph: &Graph, steps: &[StepId]) -> Result<Vec<Prepared>> {
-        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let turned_off = store.turned_off().await?;
-        let mut out = Vec::new();
-        for step in steps {
-            let result = match self.invoke_once(graph, step, Verb::Prepare).await {
-                Ok((i, outcome)) => match save_verb_outcome(graph, i, &outcome, &store).await {
-                    Ok(()) => Ok(outcome.needs_rerun),
-                    Err(e) => Err(PrepareError::Failed(format!("{e:#}"))),
-                },
-                Err(InvokeError::Refused(why)) => {
-                    store
-                        .turn_off(step, &format!("{REFUSED_PREPARE}: {why}"))
-                        .await?;
-                    Err(PrepareError::Refused(why))
-                }
-                Err(InvokeError::Failed(e) | InvokeError::NotStarted(e)) => {
-                    Err(PrepareError::Failed(e))
-                }
-            };
-            let refused_before = turned_off
-                .get(step)
-                .is_some_and(|by| by.starts_with(REFUSED_PREPARE));
-            if refused_before && !matches!(result, Err(PrepareError::Refused(_))) {
-                store.turn_on(step).await?;
-            }
-            out.push(Prepared {
-                step: step.clone(),
-                result,
-            });
-        }
-        store.close().await;
-        Ok(out)
-    }
-
-    /// Run every step that takes the verbs once with `how`'s flag
-    /// appended, so it gives back disk its store holds and does nothing
-    /// else (`step_protocol.md` § Compact and collect). A step that
-    /// reports a version is recorded at it, which for a fold or a
-    /// collection that kept the content is the version it had. One that
-    /// fails is reported and the rest go on. The caller holds the runner
-    /// lock: nothing may read a store while it is rewritten.
-    pub async fn shrink(&self, graph: &Graph, how: Shrink) -> Result<Vec<Shrunk>> {
-        let store = crate::supervisor::store::Store::open(&self.data_root).await?;
-        let mut out = Vec::new();
-        let steps = crate::supervisor::wipe::compact_targets(graph, &[], how);
-        for step in steps.iter().map(|&i| &graph.steps[i].id) {
-            let result = match self.invoke_once(graph, step, how.verb()).await {
-                Ok((i, outcome)) => save_verb_outcome(graph, i, &outcome, &store)
-                    .await
-                    .map_err(|e| format!("{e:#}")),
-                Err(e) => Err(e.to_string()),
-            };
-            out.push(Shrunk {
-                step: step.clone(),
-                result,
-            });
-        }
-        store.close().await;
-        Ok(out)
     }
 
     /// `step` invoked once with `how`'s flag: the version it reports, and
@@ -456,31 +336,12 @@ impl std::fmt::Display for InvokeError {
 /// back on.
 pub const REFUSED_PREPARE: &str = "the runner, because the step refused --prepare";
 
-/// Saves what a step reported when run with a verb appended into the
-/// loop's store (`system/supervisor.sqlite`). A step that reports a new
-/// version is recorded at it, so what reads it is stale; one that reports
-/// `needs_rerun` is marked so, and the tick treats it as due until it next
-/// succeeds. Everything else the store says of the step stands.
-async fn save_verb_outcome(
-    graph: &Graph,
-    i: usize,
-    outcome: &StepOutcome,
-    store: &crate::supervisor::store::Store,
-) -> Result<()> {
-    let saved = store.load_record().await.context("load the record")?;
-    let mut state = saved.clone();
-    apply_verb_outcome(graph, i, outcome, &mut state)?;
-    if state == saved {
-        return Ok(());
-    }
-    store
-        .save_record(&saved, &state)
-        .await
-        .context("save the record")
-}
-
-/// [`save_verb_outcome`] on a [`Record`] the caller holds in memory: the
-/// loop's own.
+/// Applies what a step reported when run with a verb appended to the
+/// loop's in-memory copy of `system/supervisor.sqlite`. A step that
+/// reports a new version is recorded at it, so what reads it is stale; one
+/// that reports `needs_rerun` is marked so, and the tick treats it as due
+/// until it next succeeds. Everything else the store says of the step
+/// stands.
 pub(crate) fn apply_verb_outcome(
     graph: &Graph,
     i: usize,
@@ -496,14 +357,6 @@ pub(crate) fn apply_verb_outcome(
     Ok(())
 }
 
-/// What one step's `--prepare` run reported: whether it needs to run
-/// again, or why that run did not succeed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Prepared {
-    pub step: StepId,
-    pub result: std::result::Result<bool, PrepareError>,
-}
-
 /// Why a step's `--prepare` did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrepareError {
@@ -511,14 +364,6 @@ pub enum PrepareError {
     /// later `--prepare` does not refuse.
     Refused(String),
     Failed(String),
-}
-
-/// What one step's `--compact` or `--collect` run reported, or why it
-/// did not succeed.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Shrunk {
-    pub step: StepId,
-    pub result: std::result::Result<(), String>,
 }
 
 /// Terminal state of one step in one run.

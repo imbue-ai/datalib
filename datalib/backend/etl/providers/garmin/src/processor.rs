@@ -1,4 +1,4 @@
-//! The ingest wave for the `garmin` source.
+//! The `DataProcessor` the `garmin` source's ingest step runs.
 
 use std::path::PathBuf;
 

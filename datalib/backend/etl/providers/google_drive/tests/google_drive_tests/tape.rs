@@ -1,6 +1,5 @@
 //! A TNG account's Drive, as playback fixtures. The envelopes and field
-//! names are the ones a live account returned on 2026-10-21; the values
-//! are made up.
+//! names are the ones a live account returned; the values are made up.
 //!
 //! - a Doc the account owns, with two revisions, a comment thread (one
 //!   reply) and a deleted comment, one inline image, and an ODT export;

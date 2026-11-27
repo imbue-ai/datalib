@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `chatgpt` source: the live API
+//! The `DataProcessor`s of the `chatgpt` source: the live API
 //! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
@@ -19,9 +19,10 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave, in order: the export, then the API walk. Alone, the
-/// export is the account, pruned to; beside `api` it fills in only what
-/// the store has never held, and the API run decides the rest.
+/// The ingest step's processors, in order: the export, then the API
+/// walk. Alone, the export is the account, pruned to; beside `api` it
+/// fills in only what the store has never held, and the API run decides
+/// the rest.
 pub fn plan_ingest(ctx: PlanContext, config: ChatgptConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     let raw_path = config.common.raw_path().to_path_buf();
@@ -75,7 +76,7 @@ impl DataProcessor for ChatgptIngest {
     /// enumeration it just walked. Between checkpoints the store is therefore the previous
     /// snapshot plus whatever this run has fetched — a superset, never a
     /// gap — so a consumer reading one sees stale rows at worst, and the
-    /// prune's deletions reach it through the same diff on the next pass.
+    /// prune's deletions reach it through the same diff on its next run.
     /// The one shape that would break that, a truncate before the refill,
     /// never happens inside a run: a reset is its own committed step.
     fn streams_output(&self) -> bool {

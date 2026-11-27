@@ -3,7 +3,7 @@
 The `claude` source has **two ingest methods**, one table each on the
 ingest step's params, sharing one renderer:
 
-| method table               | ingest wave                              | needs credentials |
+| method table               | what the ingest step does                | needs credentials |
 |----------------------------|--------------------------------------------|-------------------|
 | `[steps.params.api]`       | walks the live `claude.ai` API             | yes               |
 | `[steps.params.export]`    | reads an unpacked bulk export off its `path` | no              |
@@ -124,7 +124,7 @@ request the stop refused. What it did not reach is still owed.
 
 ## Projects
 
-Claude Projects ride the same source type, the same credentials and the
+Claude Projects use the same source type, the same credentials and the
 same raw store as conversations. `api.projects` (default **on**) turns
 the walk on and off; `api.project_uuids` narrows it to a named set
 (bare UUIDs or paste-able `https://claude.ai/project/<uuid>` URLs) — the
@@ -175,7 +175,7 @@ listing is the same on every replay of it.
 
 A reset (`datalib-pipeline reset`) empties `sync_scope_state` with the
 rest, so the next sync sweeps every project again;
-`tests/claude_tests/reset_and_resync.rs` pins that the rows come back identical.
+`tests/claude_tests/reset_and_resync.rs` checks that the rows come back identical.
 
 **Project deletions are not mirrored.** A project or knowledge document
 removed upstream keeps its row (and keeps rendering): the project walk
@@ -411,8 +411,8 @@ of both with it.
 A conversation whose every fetch failed is an id-only stub — no
 payload, so no org. When every walked org listed, a stub no listing
 names is pruned too, problem and all; otherwise stubs wait for a run in
-which they all did. An org with no chat lists nothing, so it holds no
-stub back.
+which they all did. An org with no chat is not walked, so it does not
+stop stubs from being pruned.
 
 With `when_deleted_upstream = "keep_local_copy"` none of these deletions
 happen: a conversation, project, document or user deleted on claude.ai
@@ -471,10 +471,10 @@ the export is the only writer. It is destructive once the API has added
 conversations the export predates: re-running the export ingest over
 that store would delete exactly the rows the API just fetched.
 
-So the bootstrap is a one-way door — ingest the export, then
+So the bootstrap goes one way only: ingest the export, then
 replace the ingest step's `export` table with `api` and don't run the
 export ingest against that store again. (The step refuses a config
-naming both, which is what keeps the door one-way.)
+naming both, so one config cannot run the two against one store.)
 
 Making it a supported configuration means teaching the export prune
 whose rows it owns. The API prune already does: it leaves NULL-`org_uuid`
@@ -496,7 +496,7 @@ still mirrored.
 
 ## Rate limits
 
-Every request goes through the shared `latchkey_curl` chokepoint, which
+Every request goes through the shared `latchkey_curl` function, which
 retries a `429` or `502`–`504`, honoring `Retry-After`, within the
 source's `download_params` give-up bounds. When it gives up, the
 request fails as `ClaudeError::RateLimited` and the run does no more

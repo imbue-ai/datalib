@@ -111,7 +111,7 @@ impl Account {
             .len()
     }
 
-    fn forget(&self, req: &HttpRequest) {
+    fn delete_recorded_response(&self, req: &HttpRequest) {
         let path = self
             .playback
             .join(HttpService::Chatgpt.as_str())
@@ -242,7 +242,7 @@ async fn a_failed_listing_page_keeps_the_pages_before_it_and_prunes_nothing() {
     let first = acct.run(&[]).await.unwrap();
     assert_eq!(first.fetched, 101);
 
-    acct.forget(&listing_page(100));
+    acct.delete_recorded_response(&listing_page(100));
     let (s, gave_up) = acct.run_noting(&[]).await;
     let s = s.expect("the first page listed");
     assert_eq!(gave_up, None, "what was listed was all fetched");
@@ -283,7 +283,7 @@ async fn a_rate_limited_listing_ends_the_step_incomplete() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_first_listing_page_that_fails_with_nothing_stored_fails_the_step() {
     let acct = Account::new(&[conversation("c-a", 1.0)]);
-    acct.forget(&listing_page(0));
+    acct.delete_recorded_response(&listing_page(0));
     let err = acct.run(&[]).await.expect_err("nothing to fall back on");
     assert!(format!("{err:#}").contains("list conversations"), "{err:#}");
 }
@@ -595,8 +595,8 @@ async fn the_newest_conversations_are_fetched_again_every_run() {
     assert_eq!(acct.run_with(|_| {}).await.fetched, 3);
     assert_eq!(acct.run_with(|_| {}).await.fetched, 0);
 
-    acct.forget(&conversation_request("c-b"));
-    acct.forget(&conversation_request("c-c"));
+    acct.delete_recorded_response(&conversation_request("c-b"));
+    acct.delete_recorded_response(&conversation_request("c-c"));
     let s = acct
         .run_with(|o| o.refetch_newest_conversations = Some(1))
         .await;

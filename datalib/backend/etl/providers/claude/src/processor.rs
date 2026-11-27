@@ -1,4 +1,4 @@
-//! Program-A `DataProcessor`s for the `claude` source: the live API
+//! The `DataProcessor`s for the `claude` source: the live API
 //! walk and the export ingest, writing one raw store.
 
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: `api` walks claude.ai, `export` ingests an unpacked
+/// The ingest step: `api` walks claude.ai, `export` ingests an unpacked
 /// bulk export from its `path`. `validate` has already refused both.
 pub fn plan_ingest(ctx: PlanContext, config: ClaudeConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;

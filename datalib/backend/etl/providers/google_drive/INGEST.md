@@ -33,8 +33,9 @@ file says how many were left out.
 A refusal from one service (latchkey has no sign-in for it, the token
 lacks a scope, or the API is off for the OAuth project) ends that kind
 only. The others still run, and the refused kind is a `phase:` problem
-naming the service to sign in to again. Each kind therefore drains on
-its own, and the kinds drain side by side.
+naming the service to sign in to again. Each kind's owed files are
+therefore fetched by an `owed::drain` loop of their own, and the kinds'
+loops run at the same time.
 
 ## What one run does
 
@@ -101,8 +102,8 @@ its own, and the kinds drain side by side.
    Each part's bytes go into the CAS as soon as they arrive, and the
    capture keeps only their hashes (`Captures::stash`). A file's images
    can run to hundreds of MB (one Doc's came to 334 MB in 122 images).
-   Held until the capture was written, they took a download of four such
-   Docs to 1.3 GB.
+   Kept in memory until the capture was written, they took a download of
+   four such Docs to 1.3 GB.
 
    A capture's rows are written whole, in one transaction, or not at
    all. If any request fails, the file stays owed with the error on its
@@ -125,8 +126,8 @@ its own, and the kinds drain side by side.
      fetched plain so the credential never follows it to another host
      (`api::get_revision_export`). A `Location` that is not https on
      `googleusercontent.com` fails the export rather than being fetched.
-     A download past the 1 GiB cap is kept like a `404`: an edge with no
-     bytes and a warning, not asked for again.
+     A download past the 1 GiB cap is kept as an edge with no bytes and
+     a warning, and not asked for again.
 
    A `404` means Drive no longer has that revision's content: the edge
    is kept with no bytes and a warning, and not asked for again. A

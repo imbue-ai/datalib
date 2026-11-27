@@ -71,9 +71,8 @@ fn build_page_titles(pages: &[Value]) -> HashMap<String, String> {
 /// A comment's author name.
 ///
 /// Notion resolves this for us: every comment carries
-/// `display_name.resolved_name`. Falling back to a truncated user id
-/// is what the previous implementation did for *every* comment,
-/// because the name lookup it relied on was never populated.
+/// `display_name.resolved_name`. A comment without one shows its
+/// author's id prefix.
 fn comment_author(c: &Value) -> Option<String> {
     let name = c
         .get("display_name")
@@ -539,9 +538,8 @@ mod tests {
         })
     }
 
-    /// A comment now carries its owning page id, so grouping needs no
-    /// block walk. This is what let ~250 lines of block-tree traversal
-    /// go, and with it the linearity regression test that guarded it.
+    /// A comment carries its owning page id, so grouping needs no block
+    /// walk.
     #[test]
     fn comments_group_into_threads_by_their_recorded_page() {
         let parsed = ParsedNotion {
@@ -550,8 +548,20 @@ mod tests {
                 .into_iter()
                 .collect(),
             comments: vec![
-                comment("c2", "p1", "d1", "Cathy Zhao", "2026-01-02T00:00:00.000Z"),
-                comment("c1", "p1", "d1", "Cathy Zhao", "2026-01-01T00:00:00.000Z"),
+                comment(
+                    "c2",
+                    "p1",
+                    "d1",
+                    "Beverly Crusher",
+                    "2026-01-02T00:00:00.000Z",
+                ),
+                comment(
+                    "c1",
+                    "p1",
+                    "d1",
+                    "Beverly Crusher",
+                    "2026-01-01T00:00:00.000Z",
+                ),
             ],
             ..Default::default()
         };
@@ -626,15 +636,15 @@ mod tests {
     }
 
     /// A page object carries only `created_by.id`, so a page author
-    /// needs the `users` table. Before that table existed every Notion
-    /// page in the grid showed a truncated uuid as its author.
+    /// needs the `users` table. Without it every Notion page in the grid
+    /// shows a truncated uuid as its author.
     #[test]
     fn page_authors_use_the_resolved_user_name() {
         let mut p = page("p1", "Handbook");
         p["created_by"] = json!({"object": "user", "id": "47b71049-b1e7-4fc2-9d1e-4528dd803a62"});
         let names: HashMap<String, String> = [(
             "47b71049-b1e7-4fc2-9d1e-4528dd803a62".to_string(),
-            "Nayana Bannur".to_string(),
+            "Deanna Troi".to_string(),
         )]
         .into_iter()
         .collect();
@@ -644,10 +654,7 @@ mod tests {
             ..Default::default()
         };
         let docs = gather_documents(&parsed, "notion").unwrap();
-        assert_eq!(
-            docs.pages[0].rows[0].author.as_deref(),
-            Some("Nayana Bannur")
-        );
+        assert_eq!(docs.pages[0].rows[0].author.as_deref(), Some("Deanna Troi"));
     }
 
     /// An unresolved id still has to render something, and must not
@@ -694,13 +701,19 @@ mod tests {
     }
 
     /// Notion resolves comment authors for us via
-    /// `display_name.resolved_name`. The previous implementation
-    /// threaded a name map that was never populated, so every author
-    /// rendered as a truncated uuid.
+    /// `display_name.resolved_name`. The regression this guards: a name
+    /// map that was never filled, so every author rendered as a
+    /// truncated uuid.
     #[test]
     fn comment_authors_use_the_name_notion_resolved() {
-        let c = comment("c1", "p1", "d1", "Cathy Zhao", "2026-01-01T00:00:00.000Z");
-        assert_eq!(comment_author(&c).as_deref(), Some("Cathy Zhao"));
+        let c = comment(
+            "c1",
+            "p1",
+            "d1",
+            "Beverly Crusher",
+            "2026-01-01T00:00:00.000Z",
+        );
+        assert_eq!(comment_author(&c).as_deref(), Some("Beverly Crusher"));
         let mut anon = c.clone();
         anon["display_name"] = json!({"type": "user"});
         assert_eq!(comment_author(&anon).as_deref(), Some("47b71049"));

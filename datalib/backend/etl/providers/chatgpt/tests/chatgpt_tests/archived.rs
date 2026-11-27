@@ -1,6 +1,7 @@
 //! chatgpt.com's conversation listing leaves archived conversations out,
-//! and a complete walk deletes what it does not name. So archiving a
-//! chat deleted it from the mirror. The walk lists the archived ones too.
+//! and a complete walk deletes what it does not name, so archiving a
+//! chat would delete it from the mirror. The walk lists the archived
+//! ones too.
 
 use std::fs;
 use std::path::{Path, PathBuf};
