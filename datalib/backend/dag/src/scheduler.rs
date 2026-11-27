@@ -21,7 +21,7 @@ use crate::step::{
     StopSignal, Verb,
 };
 use crate::subprocess::Shrink;
-use crate::supervisor::record::{LastRun, Record};
+use crate::supervisor::record::{LastRun, LoopState};
 
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
@@ -346,7 +346,7 @@ pub(crate) fn apply_verb_outcome(
     graph: &Graph,
     i: usize,
     outcome: &StepOutcome,
-    state: &mut crate::supervisor::record::Record,
+    state: &mut crate::supervisor::record::LoopState,
 ) -> Result<()> {
     let version = reported_version(&graph.steps[i], &graph.fingerprints[i], &outcome.outputs)?;
     let entry = state.steps.entry(graph.steps[i].id.clone()).or_default();
@@ -464,7 +464,7 @@ impl Runner {
     pub(crate) fn finish(
         &self,
         graph: &Graph,
-        state: &mut Record,
+        state: &mut LoopState,
         status: &mut Option<StepStatus>,
         i: usize,
         st: StepStatus,
@@ -523,7 +523,7 @@ pub(crate) fn now_stamp() -> String {
 /// Set a step's `last_run` to a new, unfinished one when the scheduler
 /// dispatches it, so a
 /// reader can tell "running" from "not reached yet".
-pub(crate) fn mark_running(state: &mut Record, id: &StepId, stamp: &str) {
+pub(crate) fn mark_running(state: &mut LoopState, id: &StepId, stamp: &str) {
     if let Some(run) = state.current_run.as_mut() {
         run.states
             .insert(id.clone(), RunState::Running.as_str().to_string());
@@ -2158,7 +2158,7 @@ mod tests {
         // the second producer's finish arrived while the fan-in was busy
         // with the first's, and not starting at once is not the same as
         // dropping it.
-        let st = crate::supervisor::record::recorded(root.path()).await;
+        let st = crate::supervisor::record::saved_state(root.path()).await;
         let read = &st.steps["unified_grid_and_search_index/grid"].reads;
         for producer in ["slack/rendered_md", "email/rendered_md"] {
             assert!(
@@ -2828,7 +2828,7 @@ mod tests {
         ]));
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let run = st.current_run.expect("a run leaves a record");
         assert_eq!(run.run_id, "run-abc");
         assert_eq!(run.started_at, pinned);
@@ -2848,7 +2848,7 @@ mod tests {
             )]));
             assert!(r.run(&g).await.unwrap().all_ok());
             ids.push(
-                crate::supervisor::record::recorded(fx.root.path())
+                crate::supervisor::record::saved_state(fx.root.path())
                     .await
                     .current_run
                     .unwrap()
@@ -2866,7 +2866,7 @@ mod tests {
         let r = runner(fx.root.path());
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let run = st.current_run.expect("a run leaves a record");
         assert!(run.finished_at.is_some(), "a completed run is closed");
         let every: Vec<&str> = g.steps.iter().map(|s| s.id.as_str()).collect();
@@ -2889,7 +2889,7 @@ mod tests {
         // a terminal state like any other — the loop's store says so
         // rather than leaving last run's state in place.
         assert!(r.run(&g).await.unwrap().all_ok());
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let run = st.current_run.expect("second run recorded");
         assert_eq!(
             run.states["slack/rendered_md"], "skipped_up_to_date",
@@ -2936,7 +2936,7 @@ mod tests {
         .unwrap();
         let _ = runner(fx.root.path()).run(&g).await.unwrap();
 
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let run = st.current_run.unwrap();
         assert_eq!(run.states["email/rendered_md"], "failed");
         assert_eq!(run.states["unified_grid_and_search_index/grid"], "blocked");
@@ -2999,7 +2999,7 @@ mod tests {
         let rep = r.run(&g).await.unwrap();
         assert!(!rep.all_ok(), "a stopped run is not a clean one");
 
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let run = st.current_run.unwrap();
         assert_eq!(run.states["email/rendered_md"], "stopped");
         assert_eq!(run.states["unified_grid_and_search_index/grid"], "blocked");
@@ -3011,7 +3011,7 @@ mod tests {
         // completes.
         let rep = r.run(&g).await.unwrap();
         assert!(rep.all_ok(), "{rep:#?}");
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         assert_eq!(
             st.steps["email/rendered_md"]
                 .last_run
@@ -3057,7 +3057,7 @@ mod tests {
         .unwrap();
         let r = runner(fx.root.path());
         r.run(&g).await.unwrap();
-        let mut st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let mut st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let good = st.steps.get_mut("email/rendered_md").unwrap();
         let succeeded_at = good.last_run.as_ref().unwrap().finished_at.clone();
         assert!(succeeded_at.is_some());
@@ -3073,7 +3073,7 @@ mod tests {
         // skip as up to date.
         *fx.email_content.lock().unwrap() = "email v2".to_string();
         r.run(&g).await.unwrap();
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let after = &st.steps["email/rendered_md"];
         assert_eq!(after.last_run.as_ref().unwrap().status, "failed");
         assert_eq!(after.last_success_at, succeeded_at);
@@ -3195,7 +3195,7 @@ mod tests {
         // now is what a poller would see for as long as the step runs.
         let seen = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
-                let st = crate::supervisor::record::recorded(root.path()).await;
+                let st = crate::supervisor::record::saved_state(root.path()).await;
                 if let Some(cur) = st
                     .current_run
                     .as_ref()
@@ -3236,7 +3236,7 @@ mod tests {
         let r = runner(fx.root.path());
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let before = crate::supervisor::record::recorded(fx.root.path())
+        let before = crate::supervisor::record::saved_state(fx.root.path())
             .await
             .steps["email/raw"]
             .last_run
@@ -3249,7 +3249,7 @@ mod tests {
         let rep = r2.run(&g).await.unwrap();
         assert!(rep.is_absent("email/raw"), "email/raw is in no request");
 
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         let after = st.steps["email/raw"]
             .last_run
             .as_ref()
@@ -3282,7 +3282,7 @@ mod tests {
         let r = Subset(runner(fx.root.path()), &["slack/raw"]);
         assert!(r.run(&g).await.unwrap().all_ok());
 
-        let st = crate::supervisor::record::recorded(fx.root.path()).await;
+        let st = crate::supervisor::record::saved_state(fx.root.path()).await;
         assert!(
             st.steps
                 .get("email/raw")

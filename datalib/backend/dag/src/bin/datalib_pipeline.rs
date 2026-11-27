@@ -476,7 +476,7 @@ async fn say_how_the_prepare_pass_went(store: &Store) -> Result<()> {
                 }
             }
         }
-        for (step, rec) in store.load_record().await?.steps {
+        for (step, rec) in store.load_state().await?.steps {
             if rec.needs_rerun {
                 eprintln!(
                     "datalib-pipeline: {step} needs to run again before it is up to date; sync it"

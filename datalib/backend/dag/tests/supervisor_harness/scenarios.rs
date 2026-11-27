@@ -840,7 +840,7 @@ async fn a_burst_of_seals_costs_a_running_fan_in_exactly_one_more_invocation_on_
     h.finish().await;
 }
 
-/// The requests a step's `Record` entry says it still has work in.
+/// The requests a step's `LoopState` entry says it still has work in.
 fn served(s: &State, step: &str) -> Vec<String> {
     s.record
         .steps
