@@ -882,7 +882,7 @@ impl Supervisor {
                         .map_or_else(|e| format!("wait failed: {e}"), |s| s.to_string());
                     let peak_rss_bytes = self
                         .memory
-                        .forget(id, waited.ok())
+                        .mark_ended(id, waited.ok())
                         .map(|r| r.peak_rss_bytes);
                     tracing::error!(
                         applet = %id,
@@ -914,7 +914,10 @@ impl Supervisor {
                 // Reap: `kill` only signals, and an unwaited child stays
                 // a zombie until its parent exits.
                 let waited = r.child.wait().ok();
-                let peak_rss_bytes = self.memory.forget(&id, waited).map(|r| r.peak_rss_bytes);
+                let peak_rss_bytes = self
+                    .memory
+                    .mark_ended(&id, waited)
+                    .map(|r| r.peak_rss_bytes);
                 tracing::info!(applet = %id, peak_rss_bytes, "stopped the applet");
             }
         }

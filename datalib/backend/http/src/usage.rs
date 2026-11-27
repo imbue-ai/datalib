@@ -536,7 +536,7 @@ fn disk_usage_days_of(config_path: &Path) -> u32 {
         .disk_usage_days
 }
 
-async fn forget_old_samples(repo: &DynAppRepo, root: &Path) {
+async fn delete_old_samples(repo: &DynAppRepo, root: &Path) {
     let days = disk_usage_days_of(&datalib_dag::config::root_config_path(root));
     let cutoff = retention_cutoff(&datalib_time::IsoOffsetTimestamp::now_local(), days);
     match repo.forget_disk_stats_before(&cutoff).await {
@@ -560,7 +560,7 @@ pub async fn run(
     events: crate::watch::RootTx,
     sync: crate::supervisor::SyncControl,
 ) {
-    forget_old_samples(&repo, &root).await;
+    delete_old_samples(&repo, &root).await;
     match repo.recent_disk_usage(SEED_ROWS).await {
         Ok(rows) => monitor.seed(rows).await,
         Err(e) => tracing::warn!("usage: could not read the recorded history: {e}"),
@@ -593,7 +593,7 @@ pub async fn run(
             last_walk = Instant::now();
         }
         if was_running && !running {
-            forget_old_samples(&repo, &root).await;
+            delete_old_samples(&repo, &root).await;
         }
         was_running = running;
     }

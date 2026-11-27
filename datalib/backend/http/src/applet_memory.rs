@@ -114,7 +114,7 @@ impl AppletMemory {
     /// Records how the applet ended, and returns its last reading for the
     /// line that says it is gone. `status` is `None` where the server never
     /// learned it.
-    pub fn forget(&self, id: &str, status: Option<ExitStatus>) -> Option<Reading> {
+    pub fn mark_ended(&self, id: &str, status: Option<ExitStatus>) -> Option<Reading> {
         let gone = self.lock().remove(id)?;
         let finished_at_utc = datalib_runs::store::now_split().0;
         write(&self.store, ended(gone.row, finished_at_utc, status));
@@ -260,7 +260,7 @@ mod tests {
         }
         child.kill().unwrap();
         let status = child.wait().unwrap();
-        memory.forget("search", Some(status));
+        memory.mark_ended("search", Some(status));
 
         let ended = row().await.expect("the applet's row");
         assert_eq!(ended.applet.as_deref(), Some("search"));
