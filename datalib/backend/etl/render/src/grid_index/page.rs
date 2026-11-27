@@ -1,8 +1,8 @@
 //! Writing a page of documents into a store that holds documents, a render
 //! store or the grid index: every check over the whole page first, then
 //! each table's rows in a few statements rather than one a row. The page is
-//! written as if its documents were written one after another, in order,
-//! which is what `apply_one` (a page of one) did before pages.
+//! written as if its documents were written one after another, in order;
+//! `apply_one` writes a page of one.
 
 use std::collections::{HashMap, HashSet};
 
@@ -151,7 +151,7 @@ async fn apply_run(write_lock: &WriteLock, run: &[&RenderedMarkdown]) -> Result<
 
 /// Each document's rows: only the rows it no longer has are deleted, the
 /// rest are written where they differ, and one that did not change is not
-/// written at all. A uuid another document holds is settled by who wrote
+/// written at all. A uuid another document holds is decided by who wrote
 /// that document: one an earlier run wrote means the row moved (a message
 /// re-bucketed into another period, a chat whose document id is minted
 /// from a name that changed), and this document takes it over; one this
@@ -200,7 +200,7 @@ async fn put_grid_rows(
 }
 
 /// Writes `rows`, each where it differs from what the index holds, and
-/// settles a uuid another document holds by who wrote that document (see
+/// decides a uuid another document holds by who wrote that document (see
 /// [`put_grid_rows`]). The uuids in `rows` are distinct.
 pub(super) async fn write_grid_rows(
     conn: &mut SqliteConnection,

@@ -1,13 +1,13 @@
-//! `nodes`, one row per data node, settled from what the documents say of
+//! `nodes`, one row per data node, written from what the documents say of
 //! each (`data_nodes`); and a grid row for every data node that has none
 //! of its own: a channel, a label, a project, most places. A node that is
 //! also a document's row (a thread, a chat) already has one and is left to
 //! that document. The rest are written here, so every node of the tree can
 //! be found, linked and listed like any row. Such a row belongs to no
 //! document (`markdown_uuid` is null). A node, and a row written for one,
-//! go when the last document that carries the node does.
+//! are deleted when the last document that carries the node is.
 //!
-//! Only the nodes a pass touched are settled ([`super::WriteLock`] keeps
+//! Only the nodes a pass touched are rewritten ([`super::WriteLock`] keeps
 //! them): a node whose accounts changed, or whose grid row moved between
 //! documents, which is what [`SETTLE`] chooses by.
 
@@ -28,7 +28,7 @@ use datalib_sql::{sql, sql_id, Sql};
 /// get a row, changes.
 pub(super) const NODES_SHAPE: &str = "2";
 
-/// How many nodes one statement settles, its uuids bound as one array.
+/// How many nodes one statement rewrites, its uuids bound as one array.
 const AT_ONCE: usize = 4_000;
 
 /// Writes each node of the JSON array `?` as one account of it tells it:
@@ -148,7 +148,7 @@ pub(super) fn node_row(unrowed: &Unrowed) -> Option<GridRow> {
     })
 }
 
-/// What settling the touched nodes did.
+/// What [`settle`] did to the touched nodes.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Settled {
     pub touched: usize,
@@ -160,8 +160,10 @@ pub(super) struct Settled {
     pub rows_dropped: usize,
 }
 
-/// Bring the nodes the transaction touched, and their rows, in line with
-/// what the documents now carry.
+/// For the nodes the transaction touched: rewrite each `nodes` row from
+/// the documents' accounts ([`SETTLE`]), delete the nodes no document
+/// carries and the grid rows written for them, and write a grid row for
+/// each node that has none.
 pub(super) async fn settle(
     conn: &mut sqlx::pool::PoolConnection<sqlx::Sqlite>,
     write_lock: &WriteLock,

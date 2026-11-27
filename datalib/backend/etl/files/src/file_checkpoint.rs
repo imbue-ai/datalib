@@ -354,7 +354,7 @@ mod tests {
         cursor.get(&f.rel) == Some(&f.blake3)
     }
 
-    /// The store forgets every cursor when a table is recreated, and it
+    /// The store clears every cursor when a table is recreated, and it
     /// finds them by name in `datalib_etl`, which cannot see this crate.
     /// A cursor table missing from that list would survive a schema
     /// change and let the next run skip files the table no longer has.

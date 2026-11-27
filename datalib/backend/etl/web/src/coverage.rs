@@ -180,7 +180,7 @@ pub async fn cover(tx: &mut Transaction<'_, Sqlite>, scope: &str, span: Span) ->
     Ok(())
 }
 
-/// Forget every span of `scope`: a channel that is gone, a source reset.
+/// Delete every span of `scope`: a channel that is gone, a source reset.
 pub async fn forget(tx: &mut Transaction<'_, Sqlite>, scope: &str) -> Result<()> {
     sql!(
         "etl.web.coverage.delete_spans_of_scope",

@@ -166,8 +166,8 @@ pub async fn set_held_version(
     Ok(())
 }
 
-/// Upstream no longer has `key`: its sidecar row and its fetch problem
-/// go, in the transaction that removes its content.
+/// Upstream no longer has `key`: delete its sidecar row and its fetch
+/// problem, in the transaction that removes its content.
 pub async fn forget(tx: &mut Transaction<'_, Sqlite>, table: &str, key: &str) -> Result<()> {
     // Audited: `table` is a provider's `&'static str`; the key is bound.
     let sql = Sql::dynamic(

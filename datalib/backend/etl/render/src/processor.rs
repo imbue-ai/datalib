@@ -3,11 +3,11 @@
 //! Split from [`datalib_etl::processor`], which keeps the download
 //! half. The two contexts share no fields: a render pass wants the raw
 //! cursor and the three document sinks, a download wants the
-//! store handle, the metrics scope and the interrupt hooks. Fusing
-//! them into one struct meant every field was `Option` and half the
-//! accessors panicked on the wrong phase — and, because the sinks
-//! carry `RenderedMarkdown`, it also put `datalib_schema` in front of
-//! every downloader.
+//! store handle, the metrics scope and the interrupt hooks. In one
+//! struct every field would be an `Option` and half the accessors
+//! would panic on the wrong phase — and, because the sinks carry
+//! `RenderedMarkdown`, it would put `datalib_schema` in front of every
+//! downloader.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};

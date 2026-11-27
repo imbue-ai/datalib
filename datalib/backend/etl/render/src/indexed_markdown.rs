@@ -458,7 +458,7 @@ pub struct IndexedMarkdownStore {
 /// dropped as soon as the future completes, and sqlx returns a
 /// checked-out connection to its pool from a task *spawned* at drop
 /// (`PoolConnection::drop`): kill the runtime first and that task never
-/// runs, the pool forgets the connection, and the next `acquire` opens
+/// runs, the pool never gets the connection back, and the next `acquire` opens
 /// a second connection to the same doltlite file while the first is
 /// still closing on its worker thread — two live handles on one store,
 /// surfacing as `database is locked` under load.

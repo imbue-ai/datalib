@@ -312,7 +312,7 @@ pub fn names_seen_under(
     let mut unread = 0usize;
     for (handle, name) in authors {
         // An author shown as another handle (a forged `From`) is not a
-        // name for this one; a source contact's names were settled at
+        // name for this one; a source contact's names were cleaned at
         // render (`crate::names`).
         let anothers =
             datalib_handle::Handle::spelled_by(&name).is_some_and(|h| h.as_str() != handle);

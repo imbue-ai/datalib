@@ -222,7 +222,7 @@ pub struct ChatRenderer<'a> {
 }
 
 impl<'a> ChatRenderer<'a> {
-    /// `docs_total` is announced as the queue straight away.
+    /// `docs_total` is set as the progress bar's total straight away.
     pub fn new(
         profile: &'a RenderProfile,
         source_id: &'a str,

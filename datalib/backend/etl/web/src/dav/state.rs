@@ -132,8 +132,8 @@ pub async fn owed(pool: &SqlitePool, collection: &str) -> Result<Vec<Resource>> 
         .collect())
 }
 
-/// Upstream no longer has the object at `href`: its listing row, its
-/// sidecar and its fetch problem go, in the transaction that removes
+/// Upstream no longer has the object at `href`: delete its listing row,
+/// its sidecar and its fetch problem, in the transaction that removes
 /// the provider's content for it.
 pub async fn forget(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &str) -> Result<()> {
     unlist(tx, collection, href).await?;
@@ -155,8 +155,9 @@ pub async fn unlist(tx: &mut Transaction<'_, Sqlite>, collection: &str, href: &s
 }
 
 /// Upstream no longer has `collection` at all: everything it listed,
-/// the sidecars, the fetch problems and any listing under way go, in
-/// the transaction that removes the provider's content for it.
+/// the sidecars, the fetch problems and any listing under way are
+/// deleted, in the transaction that removes the provider's content for
+/// it.
 pub async fn forget_collection(tx: &mut Transaction<'_, Sqlite>, collection: &str) -> Result<()> {
     for sql in [
         sql!(
@@ -245,7 +246,8 @@ pub async fn stored(pool: &SqlitePool, ids: &[String]) -> Result<HashSet<String>
     Ok(out)
 }
 
-/// A page named these hrefs, present or deleted: they are settled.
+/// A page named these hrefs, present or deleted: delete them from
+/// `dav_unconfirmed`, since the listing has now named them.
 pub async fn settle(
     tx: &mut Transaction<'_, Sqlite>,
     collection: &str,
@@ -268,7 +270,7 @@ pub async fn settle(
 
 /// The listing of `collection` reached its end. Returns the hrefs a
 /// whole listing never named — deleted upstream — for the provider to
-/// forget; none when no whole listing was under way.
+/// delete ([`forget`]); none when no whole listing was under way.
 pub async fn finish_listing(
     tx: &mut Transaction<'_, Sqlite>,
     collection: &str,
@@ -477,7 +479,8 @@ mod tests {
     /// An object is owed until it is held at the etag it is listed at:
     /// listed and never fetched, listed again at a new etag, or fetched
     /// and failed. A listing that names it at the etag it is held at
-    /// owes nothing, and one that forgets it owes nothing for it.
+    /// owes nothing, and once [`forget`] has deleted it nothing is owed
+    /// for it.
     #[tokio::test]
     async fn an_object_is_owed_until_held_at_its_listed_etag() {
         let (_d, pool) = store().await;

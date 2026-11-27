@@ -7,7 +7,8 @@ use datalib_etl::download_problems::RunProblem;
 use datalib_etl::run_problems::RunProblems;
 use datalib_etl::upstream::Upstream;
 
-/// Raised by whatever asked, and caught by [`settle`].
+/// Returned as an error by the code that sent the request, and caught
+/// by [`settle`].
 #[derive(Debug, thiserror::Error)]
 #[error("{said}")]
 pub struct RunEnded {
@@ -24,8 +25,9 @@ impl RunEnded {
     }
 }
 
-/// `result`, with a [`RunEnded`] in it made a problem and a give-up when
-/// `anything_came`, and the run's failure when nothing did.
+/// `result`, with a [`RunEnded`] in it turned into a run problem, and
+/// the run marked given up, when `anything_came`, and into the run's
+/// error when nothing did. Any other error is returned as it is.
 pub fn settle(
     result: Result<()>,
     service: &str,

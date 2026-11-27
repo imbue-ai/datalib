@@ -1,5 +1,5 @@
 //! What a document's rows, edges, source contacts and photos call people
-//! and things, settled once for every source as the document is written
+//! and things, cleaned once for every source as the document is written
 //! ([`grid_index::apply_one`](crate::grid_index::apply_one), which both
 //! the render store and the grid index write through): a name, a subject
 //! or a label loses its bidi controls ([`without_bidi_controls`]), and a
@@ -23,7 +23,7 @@ use datalib_schema::search_terms::SearchTerm;
 use crate::grid_index::RenderedMarkdown;
 use crate::html::{is_bidi_control, without_bidi_controls};
 
-/// `md` as it is stored. Borrowed when nothing needed settling, which is
+/// `md` as it is stored. Borrowed when nothing needed changing, which is
 /// nearly always, so a document's sections are copied only when it
 /// changes.
 pub(crate) fn settled(md: &RenderedMarkdown) -> Cow<'_, RenderedMarkdown> {
@@ -519,7 +519,7 @@ mod tests {
         assert!(matches!(settled(&d), Cow::Borrowed(_)));
     }
 
-    /// Every string column of `GridRow` is either settled or listed here
+    /// Every string column of `GridRow` is either cleaned or listed here
     /// as one a person does not read as a name: an id, a path, a stamp,
     /// a body. A column added to `GridRow` fails this until it is put in
     /// `settle_row` or here.

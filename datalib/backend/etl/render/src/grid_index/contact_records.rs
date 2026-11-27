@@ -54,7 +54,7 @@ pub(super) async fn cursors(
 }
 
 /// Records that `source_id`'s contacts are in line with `commit`; `None`
-/// forgets it.
+/// deletes the source's row in `contact_cursors`.
 pub(super) async fn set_cursor(
     conn: &mut SqliteConnection,
     source_id: &str,

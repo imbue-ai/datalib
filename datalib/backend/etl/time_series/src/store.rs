@@ -299,7 +299,7 @@ pub async fn write_source(conn: &mut SqliteConnection, s: &TimeSeriesSourceRow) 
     Ok(())
 }
 
-/// Forget a source: its row in `time_series_sources` and its rows.
+/// Delete a source: its row in `time_series_sources` and its rows.
 pub async fn remove_source(conn: &mut SqliteConnection, source_id: &str) -> Result<()> {
     sql!(
         "etl.time_series.delete_series_of_source",

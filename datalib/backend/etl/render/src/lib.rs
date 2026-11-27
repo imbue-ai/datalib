@@ -5,8 +5,8 @@
 //! It sits above [`datalib_etl`] rather than inside it because this is
 //! the only side that knows `datalib_schema` — the `grid_rows` /
 //! `edges` / `markdowns` tables the UI reads. A downloader links
-//! `datalib_etl` and stops there, so moving a `grid_rows` column no
-//! longer rebuilds the code that fetches from Slack.
+//! `datalib_etl` and stops there, so moving a `grid_rows` column does
+//! not rebuild the code that fetches from Slack.
 
 pub mod diff;
 pub mod document_window;
@@ -29,7 +29,7 @@ pub mod title;
 
 /// Bump when what this crate writes into every source's documents
 /// changes — a shared writer (`title`, `message`, `html`,
-/// `front_matter`) or what `names` settles — so every source renders
-/// again. It rides in every source's render params; a provider's own
+/// `front_matter`) or what `names` cleans — so every source renders
+/// again. It is in every source's render params; a provider's own
 /// change bumps its own version.
 pub const SHARED_RULES_VERSION: u32 = 2;

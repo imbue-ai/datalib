@@ -1372,8 +1372,8 @@ fn misfiled(md: &RenderedMarkdown) -> Option<String> {
 }
 
 /// Write one rendered document into the index unconditionally. Every
-/// document reaches a render store or the grid index through here, so its
-/// names are settled and its rows filed under their source here
+/// document reaches a render store or the grid index through here, so the
+/// names in it are cleaned and its rows filed under their source here
 /// ([`crate::names`]).
 pub async fn apply_one(write_lock: &WriteLock, md: &RenderedMarkdown) -> Result<usize> {
     apply_page(write_lock, std::slice::from_ref(md)).await
@@ -2461,9 +2461,9 @@ async fn write_source_cursor(
 }
 
 /// Remove documents and everything hanging off them: the deletes
-/// `apply_page` runs before re-inserting, without the insert. Only
-/// reachable because the index diffs rather than re-reads — a deleted
-/// conversation used to stay in the grid forever.
+/// `apply_page` runs before re-inserting, without the insert. Called for
+/// the documents a source no longer has ([`remove_documents`]); without
+/// it a deleted conversation would stay in the grid.
 pub async fn delete_markdowns(write_lock: &WriteLock, markdown_uuids: &[String]) -> Result<()> {
     let mut guard = write_lock.acquire().await?;
     let removed = delete_document_rows(guard.conn(), write_lock.store(), markdown_uuids).await?;
@@ -2712,7 +2712,7 @@ mod open_index_tests {
         pool.close().await;
     }
 
-    /// Every statement that settles nodes reads each by its uuid, also
+    /// Every statement `nodes::settle` runs reads each node by its uuid, also
     /// while a build has the read indexes dropped, which is when it runs.
     /// Read by anything wider it was seconds on each source of a large
     /// index (#1926), or quadratic in a first build.
@@ -4346,7 +4346,7 @@ mod source_cursor_tests {
             .collect()
     }
 
-    /// Only the nodes a pass touched are settled, so after each change the
+    /// Only the nodes a pass touched are rewritten, so after each change the
     /// index holds what one built from nothing holds: a node is told of by
     /// the document that holds its row, else by its newest, whichever
     /// comes, changes or goes, and a page whose document goes while its

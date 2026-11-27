@@ -1101,9 +1101,10 @@ mod live {
         .collect()
     }
 
-    /// curl's exit for a body past `--max-filesize`: 63 when the size
-    /// was announced, 56 when it was not, which is also a dropped
-    /// connection, so the message tells the two apart.
+    /// curl's exit for a body past `--max-filesize`: 63 when the
+    /// response named its size (`Content-Length`), 56 when it did not,
+    /// which is also a dropped connection, so the message tells the two
+    /// apart.
     fn past_the_cap(exit: i32, stderr: &str) -> bool {
         exit == 63 || (exit == 56 && stderr.contains("maximum allowed file size"))
     }

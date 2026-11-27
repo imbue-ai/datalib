@@ -246,8 +246,8 @@ pub async fn sync_collection<'a, S: ObjectStore>(
 }
 
 /// One page, one transaction: the listing, the objects that came with
-/// their data held at their etag, the deletions, the settled hrefs and
-/// the token.
+/// their data held at their etag, the deletions, the hrefs the page
+/// named taken out of `dav_unconfirmed`, and the token.
 async fn store_page<S: ObjectStore>(
     run: &Run<'_>,
     store: &S,
