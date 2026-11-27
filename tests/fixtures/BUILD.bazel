@@ -61,7 +61,7 @@ sh_binary(
 #
 # `bazelisk build //tests/fixtures:ingested_tng` runs the full
 # pipeline (ingest -> render) against the checked-in TNG-themed source
-# JSON and emits four outputs:
+# JSON and emits these outputs:
 #
 #   * backend_index.sqlite -- the grid index the backend reads (plain SQLite),
 #                   its search terms included.
@@ -70,9 +70,11 @@ sh_binary(
 #                   inside) and blob store.
 #   * rendered_md.tar -- every document's markdown as `datalib-step
 #                   markdown` exports it, for the UI's render preview.
-#   * config_body.toml -- every source as a render-only group plus the
-#                   two fan-ins, for materialize_tng_root.sh to declare
-#                   in the root it builds from the tars.
+#   * config_body.toml -- the TNG library's config: every source, the
+#                   fan-ins and the embeds, for materialize_tng_root.sh to
+#                   finish with where the library's inputs are.
+#   * library.tar -- every source's raw stores, and the copies of the
+#                   files the file-reading sources read.
 
 filegroup(
     name = "source_json",
@@ -158,6 +160,7 @@ genrule(
         "ingested/rendered_md.tar",
         "ingested/time_series.tar",
         "ingested/config_body.toml",
+        "ingested/library.tar",
         "ingested/sql_scans.jsonl",
     ],
     tools = [
@@ -253,8 +256,7 @@ genrule(
         # The grid alone: the sync's `unified_grid_and_search_index` step wrote the search index's
         # tables beside it, which `:ingested_tng_search_index` makes again.
         "python3 $(execpath grid_alone.py) $(execpath ingested/backend_index.sqlite)",
-        # The sources as render-only groups, for materialize_tng_root.sh
-        # to splice into the root's config.toml.
+        # The library's config, for materialize_tng_root.sh to finish.
         "cp $(RULEDIR)/sync_workspace/config_body.toml $(execpath ingested/config_body.toml)",
         "python3 $(execpath sql_scans.py) $(execpath //third-party/doltlite:doltlite) $(RULEDIR)/sync_workspace/sql_census $(RULEDIR)/sync_workspace $(execpath ingested/sql_scans.jsonl)",
         # A sync can end without error and leave a source out of the
@@ -285,6 +287,7 @@ genrule(
             "$(execpath ingested/rendered_md.tar)",
             "$(execpath ingested/time_series.tar)",
             "$(RULEDIR)/exported_md",
+            "$(execpath ingested/library.tar)",
         ]),
     ]),
     visibility = ["//visibility:public"],
@@ -680,4 +683,22 @@ py_test(
 build_test(
     name = "manual_targets_build",
     targets = [":tng_fuzz_test"],
+)
+
+# The TNG library `materialize_tng_root` lays down syncs: twice, with
+# the shipped binaries, every source either finding its copied inputs
+# unchanged or keeping its raw store, and the second sync redoing
+# nothing.
+py_test(
+    name = "tng_library_test",
+    size = "medium",
+    srcs = ["tng_library_test.py"],
+    args = [
+        "$(rootpath :materialize_tng_root)",
+        "$(rootpath //datalib/backend:bin)",
+    ],
+    data = [
+        ":materialize_tng_root",
+        "//datalib/backend:bin",
+    ],
 )
