@@ -635,7 +635,7 @@ fn slack() -> Vec<Document> {
     let channels = BTreeMap::from([("C1".to_string(), hostile(&channel))]);
     let inputs = Inputs::default();
     // A workspace id, so each mention is a chip link: the hostile name
-    // then rides in a link's text and its title too.
+    // then appears in a link's text and its title too.
     let labels = Labels {
         users: inputs.lookup("users", &users),
         channels: inputs.lookup("channels", &channels),

@@ -354,14 +354,11 @@ async fn unchanged_source_produces_no_commit() -> Result<()> {
     let (stats, second) = f.ingest().await?;
     assert!(stats.rows > 0, "the run really did rewrite every row");
     assert_eq!(stats.stale_tables_dropped, 0);
-    // Note what this covers, now that every run drops and recreates
-    // every table: it is not only "no row changed" but "no *schema*
-    // changed either". A `CREATE TABLE` that differed in any way from
-    // the one at HEAD — a stray NOT NULL, a type that didn't round-trip
-    // — would dirty the tree and force a commit here. The earlier
-    // shape-comparing design needed a separate assertion for that, and
-    // still shipped a bug where ten of a real catalog's 133 tables
-    // rebuilt on every run.
+    // Every run drops and recreates every table, so this covers not
+    // only "no row changed" but "no *schema* changed either". A
+    // `CREATE TABLE` that differed in any way from the one at HEAD — a
+    // stray NOT NULL, a type that didn't round-trip — would dirty the
+    // tree and force a commit here.
     assert_eq!(
         second, None,
         "an unchanged catalog must not produce a commit — that is the deduplication"

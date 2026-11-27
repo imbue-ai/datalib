@@ -24,8 +24,8 @@ pub struct DownloadMetrics {
     peak_in_flight: AtomicU64,
     /// Rows passed through the entity/CAS upsert chokepoints, keyed by
     /// table (`cas_objects` for the blob store). Counts *attempts* —
-    /// some are no-op updates / `INSERT OR IGNORE` dupes — which is the
-    /// requested "rows_upserted (some upserts may be updates)" signal.
+    /// some are no-op updates / `INSERT OR IGNORE` dupes — so the count is
+    /// rows upserted, some of which may be updates.
     rows_upserted: Mutex<BTreeMap<String, u64>>,
     sink: Progress,
 }

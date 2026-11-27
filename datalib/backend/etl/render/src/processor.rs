@@ -3,11 +3,11 @@
 //! Split from [`datalib_etl::processor`], which keeps the download
 //! half. The two contexts share no fields: a render pass wants the raw
 //! cursor and the three document sinks, a download wants the
-//! store handle, the metrics scope and the interrupt hooks. Fusing
-//! them into one struct meant every field was `Option` and half the
-//! accessors panicked on the wrong phase — and, because the sinks
-//! carry `RenderedMarkdown`, it also put `datalib_schema` in front of
-//! every downloader.
+//! store handle, the metrics scope and the interrupt hooks. In one
+//! struct every field would be an `Option` and half the accessors
+//! would panic on the wrong phase — and, because the sinks carry
+//! `RenderedMarkdown`, it would put `datalib_schema` in front of every
+//! downloader.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -25,7 +25,7 @@ pub use crate::indexed_markdown::Input;
 use crate::inputs::{RawRange, RenderUnit};
 use crate::pages::PageSize;
 
-/// One source's render wave, as a unit the step driver can run.
+/// One processor of a source's render step, as the step driver runs it.
 #[async_trait]
 pub trait RenderProcessor: Send + Sync {
     fn id(&self) -> &str;
@@ -69,7 +69,7 @@ pub trait RenderProcessor: Send + Sync {
     }
 }
 
-/// What a provider writes to render a source whose render wave is one
+/// What a provider writes to render a source whose render step runs one
 /// processor over its raw store — every source but one. The processor
 /// around it, [`plan_source_render`], carries the step id and the raw
 /// path; this carries the knobs and the work.
@@ -100,7 +100,8 @@ pub trait SourceRender: Send + Sync + 'static {
     async fn run(&self, raw_path: &Path, ctx: &RenderCtx<'_>) -> Result<String>;
 }
 
-/// The render wave for a source rendered by one [`SourceRender`].
+/// The render step's processors for a source rendered by one
+/// [`SourceRender`]: one.
 pub fn plan_source_render<R: SourceRender>(
     ctx: PlanContext,
     raw_path: &Path,
@@ -146,10 +147,10 @@ impl<R: SourceRender> RenderProcessor for SourceRenderProcessor<R> {
     }
 }
 
-/// A render processor emits each finished document through this callback;
-/// Program A keeps Load fused into it (the orchestrator's sink upserts the
-/// doc inline). `Send` so a render processor's `run` future stays `Send`
-/// like every other processor's.
+/// A render processor emits each finished document through this callback,
+/// and the orchestrator's sink writes the document into the store inside
+/// it. `Send` so a render processor's `run` future stays `Send` like every
+/// other processor's.
 pub type DocCallback<'a> = dyn FnMut(RenderedMarkdown) -> Result<()> + Send + 'a;
 
 /// How a run ended one render unit it looked at.
@@ -174,8 +175,8 @@ pub enum RenderUnitEnd<'a> {
 pub type DeclareCallback<'a> = dyn FnMut(&str, RenderUnitEnd<'_>) -> Result<()> + Send + 'a;
 
 /// A processor reports what it could not do with raw entities — a
-/// payload that would not deserialize has no document to hang a
-/// problem off — and the driver stores the rows under those entities.
+/// payload that would not deserialize has no document to file a
+/// problem under — and the driver stores the rows under those entities.
 /// The [`ReadScope`] says what the report is complete for: every
 /// parse-stage row on an entity of a table the parse read whole is
 /// replaced by the report, so a row that reads cleanly again is
@@ -202,9 +203,10 @@ pub enum ReadScope {
 
 /// One raw row a parse could not read: the table and id that name it
 /// in the raw store, and what the payload looked like. What a provider
-/// records instead of `continue`ing past the row — the half of R1
-/// ("drop, count, log; never abort, never hide") that a silent skip
-/// loses.
+/// records instead of `continue`ing past the row, so the row is counted
+/// and reported rather than only dropped
+/// (`docs/dev/data_architecture_parse_and_render.md` §"R1 — Drop, count,
+/// log; never abort, never hide").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unparsed {
     pub table: &'static str,
@@ -253,8 +255,10 @@ pub fn document_failed(
     )
 }
 
-/// Interior-mutable wrapper around the orchestrator's fused-Load callback so
-/// a render processor can emit through a shared `&RenderCtx`. The `Mutex`
+/// Interior-mutable wrapper around the orchestrator's [`DocCallback`],
+/// which [`RenderCtx::emit_doc`] calls with each rendered document, so a
+/// render processor can hand documents over through a shared
+/// `&RenderCtx`. The `Mutex`
 /// keeps [`RenderCtx`] `Sync` (hence every `run` future `Send`); per-source
 /// render is sequential, so the lock is never actually contended.
 struct DocSink<'a> {

@@ -310,15 +310,15 @@ shared writers apply it for every source:
   which every write of a document into a render store or the grid index
   goes through
   (`IndexedMarkdownStore::put_document` included), takes it through
-  `names::settled`. That strips the rows' kind, source label, author,
+  `names::cleaned`. That strips the rows' kind, source label, author,
   contact, email, phone, account, project, org, channel, subject and
   supplied search terms; each edge's label; each source contact's
   names, org, title, groups and members; and each photo's title,
   headline, copyright, creator, camera, lens, color label, keywords,
   people, albums, place names, file name and folder. A row's preview
   and a photo's caption are prose and keep their controls. A
-  `GridRow` string column is either settled there or listed as an
-  id, path, stamp or body in `every_grid_row_string_is_settled_or_kept`,
+  `GridRow` string column is either cleaned there or listed as an
+  id, path, stamp or body in `every_grid_row_string_is_cleaned_or_kept`,
   which fails on a new column that is in neither list.
 
 A change to what these write bumps

@@ -29,7 +29,7 @@ pub struct Series<'a> {
     pub rules: &'a [String],
     /// `RDATE`s: dates no rule gives.
     pub rdates: &'a [EventTime],
-    /// The dates the series' own occurrence no longer stands on:
+    /// The dates the series' own occurrence no longer falls on:
     /// `EXDATE`s, and the original start of every occurrence that was
     /// moved, edited or cancelled on its own.
     pub removed: &'a [EventTime],
@@ -364,7 +364,7 @@ impl Clock {
     }
 }
 
-/// The dates a series no longer stands on, matched the way a
+/// The dates a series no longer falls on, matched the way a
 /// `RECURRENCE-ID` is: by the instant, however it was written. A bare
 /// date against a timed series takes out that day's occurrence.
 struct Removed<'a> {

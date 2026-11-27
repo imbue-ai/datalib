@@ -518,7 +518,7 @@ mod tests {
     }
 
     /// A cache an older build wrote has no ctime to compare, so its rows
-    /// would vouch for files the current check would rehash. It goes.
+    /// would vouch for files the current check would rehash. It is dropped.
     #[tokio::test]
     async fn a_cache_in_an_older_shape_is_dropped_not_read() {
         let tmp = tempfile::tempdir().unwrap();
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(tree.children("top.txt"), None, "a file has no children");
     }
 
-    /// Absolute keys are what make one host one chain — a sibling root
+    /// Absolute keys are what make one host one cache — a sibling root
     /// must not leak into this one's view.
     #[tokio::test]
     async fn a_sibling_root_is_not_visible() {
@@ -800,7 +800,7 @@ mod tests {
         assert!(tree.blake3("a.bin").is_none());
         assert_eq!(tree.blake3("b.bin"), Some([2u8; 32]));
 
-        // Forgetting something absent is not an error.
+        // `forget` of a key the cache does not hold is not an error.
         assert_eq!(cache.forget(&[abs_key(root, "never")]).await.unwrap(), 0);
         assert_eq!(cache.forget(&[]).await.unwrap(), 0);
     }

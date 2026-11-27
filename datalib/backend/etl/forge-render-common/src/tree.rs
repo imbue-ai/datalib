@@ -1,5 +1,7 @@
-//! Where a change request sits: in its repository or project, a place,
-//! and read together itself. Its own row is the description, so the
+//! Where a change request's rows sit in the grid's tree: its repository
+//! or project is a **place**, and the change request is **read together**
+//! (`docs/dev/grid_rows.md` §"`parent_uuid`, `sort_key`, `read_uuid`,
+//! `place_uuid`: where a row sits"). Its own row is the description, so the
 //! document's row is the container's, as a Notion page's is. Its
 //! comments sit inside it, and a reply is an edge to what it answers.
 //! No account, as on the rows: the login that fetched a change request

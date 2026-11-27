@@ -10,9 +10,9 @@
 //!
 //! Run it twice per provider: from an empty store, and from the store an
 //! earlier run left ([`Rig::seed`]) against a tape where upstream has
-//! changed. Garmin's old code passed every cut of a first sync and
-//! failed the second kind: none of its bugs could show until something
-//! was already stored.
+//! changed. A download can pass every cut of a first sync and fail the
+//! second kind, with bugs that cannot show until something is already
+//! stored.
 //!
 //! Playback only: the cut is made where a replayed request is served.
 

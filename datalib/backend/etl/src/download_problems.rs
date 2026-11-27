@@ -292,7 +292,7 @@ impl RunProblem {
     }
 
     /// A listing the run did not ask for, because the service refused
-    /// this credential it recently and a refusal does not pass by
+    /// this credential recently and a refusal does not pass by
     /// itself. Only `info`: nothing failed this run, and a warning every
     /// sync about a call the token was never going to be allowed reads
     /// as something broken.

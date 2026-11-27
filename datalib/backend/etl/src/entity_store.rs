@@ -34,7 +34,8 @@ impl EntityStore {
         Self::open_migrating(db_path, ddl, &[]).await
     }
 
-    /// [`Self::open`], climbing the provider's migration ladder first
+    /// [`Self::open`], first running the rungs of the provider's
+    /// migration ladder the store has not had
     /// (etl/README.md §"The migration ladder").
     pub async fn open_migrating<S: AsRef<str>>(
         db_path: &Path,

@@ -1,6 +1,6 @@
-//! Shared helpers for doltlite-backed data sources — the "easy button" that
-//! lets every such source follow one storage-ownership pattern under the
-//! [`crate::processor`] model.
+//! Shared helpers for doltlite-backed data sources, through which every
+//! such source follows one rule for who opens, seals and closes its stores
+//! under the [`crate::processor`] model.
 
 use std::sync::Arc;
 
@@ -47,9 +47,9 @@ struct SealState {
     /// before the edge rows naming its blobs are written.
     cas_pool: Option<SqlitePool>,
     checkpointer: std::sync::Mutex<crate::checkpointer::Checkpointer>,
-    /// Where a seal is announced. `Progress` is the channel that already
-    /// crosses from `etl` out to whatever is driving the step, so a
-    /// checkpoint rides it rather than growing a second one.
+    /// Where a seal's commit is reported. `Progress` is the channel that
+    /// already crosses from `etl` out to whatever is driving the step, so
+    /// a checkpoint is reported on it rather than on a second one.
     progress: crate::progress::Progress,
     stop: crate::stop::StopFlag,
     /// The running download's problems, written ahead of each seal so a
@@ -299,7 +299,7 @@ impl RawStoreSession {
     ///
     /// A commit that fails fails the step: the rows are on disk, but the
     /// next writer's `open` discards whatever was never committed, so a
-    /// pass that logged its commit failure and returned `Ok` would have
+    /// run that logged its commit failure and returned `Ok` would have
     /// done its work for nothing and said it succeeded. The step is
     /// idempotent; the retry refetches.
     async fn finish(self, summary: String) -> Result<String> {
@@ -324,7 +324,7 @@ impl SealState {
     fn wrote(&self, rows: u64) -> impl std::future::Future<Output = ()> + '_ {
         // A stop makes every consistent point a seal: the caller is telling
         // us its store is consistent right now, and there may not be a next
-        // time. The cadence is a latency dial, not a correctness one.
+        // time. The cadence trades latency, never correctness.
         let due = {
             let mut c = self.checkpointer.lock().unwrap();
             c.wrote(rows);
@@ -624,10 +624,10 @@ mod tests {
         );
     }
 
-    /// The version announced has to be the commit the seal just made —
+    /// The version reported has to be the commit the seal just made —
     /// that string is what a consumer pins to.
     #[tokio::test]
-    async fn a_seal_announces_the_commit_it_made() {
+    async fn a_seal_reports_the_commit_it_made() {
         let dir = tempfile::tempdir().unwrap();
         let entities = store(&dir.path().join("entities.doltlite_db")).await;
         if !crate::doltlite_raw::has_dolt_extensions(&entities).await {

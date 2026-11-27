@@ -155,7 +155,7 @@ fn render_one(
     }
 
     // `row` reaches the index through `on_doc_complete` below; the
-    // renderer writes no projection of its own any more.
+    // renderer writes no projection of its own.
     on_doc_complete(RenderedMarkdown {
         searchable: true,
         content_hash: None,
@@ -643,7 +643,7 @@ mod tests {
         );
         contact.names = vec!["Jean-Luc Picard".to_string()];
         // Offset-bearing per the grid's created_at contract (the
-        // builder now rejects bare dates — see GridRowBuilder).
+        // builder rejects bare dates — see GridRowBuilder).
         contact.created_at = Some("2024-01-02T00:00:00+00:00".to_string());
         contact.source_url = Some("https://www.linkedin.com/in/jlp".to_string());
         contact.org = Some("Starfleet".to_string());
@@ -994,8 +994,8 @@ mod tests {
 
     /// A stored photo is linked at its blob-store address, on the page
     /// and as the contact's URL in the index. A photo no browser draws is
-    /// still on its page but gives the chip no URL, and a contact with no photo carries none, so the chip draws
-    /// an initial.
+    /// still on its page but gives the chip no URL, and a contact with no
+    /// photo carries none, so the chip draws an initial.
     #[test]
     fn a_stored_photo_is_linked_where_its_blob_store_holds_it() {
         let address = format!("/data/linkedin/ingest/blob/{}", "ab".repeat(32));
@@ -1229,8 +1229,8 @@ mod tests {
         }
     }
 
-    /// The sink's answer is the run's answer: a document it refuses fails
-    /// the render rather than being logged and left out.
+    /// A document the sink refuses fails the render rather than being
+    /// logged and left out.
     #[test]
     fn a_sink_that_refuses_fails_the_render() {
         let mut refuse = |_: RenderedMarkdown| -> Result<()> { anyhow::bail!("no room") };

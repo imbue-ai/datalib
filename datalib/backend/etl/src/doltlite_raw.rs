@@ -284,8 +284,9 @@ pub const SHARED_LOOKUP_INDEXES: &[&str] = &[datalib_problems::BY_SCOPE_INDEX_DD
 
 /// The framework's ladder, for the tables stores share rather than own:
 /// `problems`, which every raw and render store holds. Every store this
-/// module opens climbs it, before its owner's ladder, and records where
-/// it stands in `_datalib_meta.shared_schema_version`. A rung checks the
+/// module opens runs the rungs of it the store has not had, before its
+/// owner's ladder, and records how many it has had in
+/// `_datalib_meta.shared_schema_version`. A rung checks the
 /// shape it changes, since a store may not hold the table.
 pub const SHARED_LADDER: &[Migration] = &[Migration {
     version: 1,
@@ -785,7 +786,7 @@ pub enum OnSchemaBreak {
     /// Fail the open, naming the table and the change, and leave the
     /// file as it was. Raw stores: their rows may be the only copy.
     Refuse,
-    /// Drop the table, recreate it empty, and forget the store's
+    /// Drop the table, recreate it empty, and clear the store's
     /// cursors so the next run refills it. Derived stores, whose rows
     /// are a function of another store.
     Rebuild,
@@ -899,7 +900,7 @@ pub async fn open_migrating(
 
 /// A store whose rows a person wrote by hand, for its one writer: no
 /// download bookkeeping, and [`OnSchemaBreak::Refuse`], since nothing
-/// can rebuild it. Its `ladder` climbs as [`open_migrating`]'s does.
+/// can rebuild it. Its `ladder` runs as [`open_migrating`]'s does.
 pub async fn open_curated(
     db_path: &Path,
     ddl: &[&str],
@@ -977,7 +978,7 @@ impl std::error::Error for SchemaBreak {}
 /// committed — a file its writer has only just created, no commit, or none
 /// holding a table — yields `None` rather
 /// than a reader onto its working set; the caller decides what that means
-/// (a consumer does nothing that pass).
+/// (a consumer does nothing in that run).
 ///
 /// A store a reader is handed is in this build's shape: the launch's prepare
 /// pass migrates every raw store, and a render refuses one it could not
@@ -1103,7 +1104,7 @@ async fn open_inner(
     // the store gets from the shape an older build left to the one this
     // DDL declares. Each rung is its own commit, so a crash between two
     // leaves a store the next open resumes from. A file with no tables
-    // — a new one — has nothing to climb: the DDL below creates it at
+    // — a new one — has no rung to run: the DDL below creates it at
     // the ladder's top. And a caller with no DDL (`open_index`, a reset)
     // does no schema work at all, the ladder included.
     let shared: &[&str] = if include_shared { SHARED_DDL } else { &[] };
@@ -1172,7 +1173,7 @@ async fn open_inner(
     // load-bearing. `parse_create_table_name` returns `None` for exactly
     // the statements that must wait.
     // `_datalib_meta` first, in every store: it says which build wrote
-    // the file, and it rides in the same schema commit as the rest.
+    // the file, and it goes in the same schema commit as the rest.
     let meta_ddl: &[&str] = &[datalib_store_meta::DDL];
     let ddl = || meta_ddl.iter().chain(extra_ddl).chain(shared);
     let is_create_table = |stmt: &&&str| parse_create_table_name(stmt).is_some();
@@ -1221,10 +1222,10 @@ async fn open_inner(
     // empty as a recreated one, and a cursor that says "read through
     // here" would leave it empty until upstream changed. A store whose
     // every table was just created is a first open, with no cursor to
-    // forget.
+    // clear.
     let first_open = created.len() == plans.len();
     if !recreated.is_empty() || (!created.is_empty() && !first_open) {
-        forget_cursors(&pool, &created, &recreated).await?;
+        clear_cursors(&pool, &created, &recreated).await?;
     }
     // Indexes last, so they see the reconciled columns — and so a
     // recreate costs no index.
@@ -1455,7 +1456,8 @@ async fn table_columns(pool: &SqlitePool, table: &str) -> Result<Vec<ColumnInfo>
 ///
 /// The probe runs **in memory**, never against the store being opened: a
 /// create+drop nets to nothing in the working tree but still appends chunks
-/// nobody collects, so it made every `open` cost bytes. See the README.
+/// nobody collects, so it would make every `open` cost bytes. See the
+/// README.
 async fn declared_columns(create_sql: &str, table: &str) -> Result<Vec<ColumnInfo>> {
     const PROBE: &str = "__datalib_schema_probe__";
     // A fresh in-memory database per call, not a shared scratch pool: the
@@ -1745,10 +1747,10 @@ pub const CURSOR_TABLES: &[&str] = &["sync_scope_state", "ingested_files"];
 /// table is empty, and so is one that just appeared, and a cursor that
 /// says "read through here" would let the next run resume past rows the
 /// table does not have — a store that stays empty until upstream
-/// changes, with nothing saying why. So either forgets every cursor in
+/// changes, with nothing saying why. So either clears every cursor in
 /// the store, and the next run walks from the start into every table,
 /// which the unchanged ones absorb as no-op upserts.
-async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[String]) -> Result<()> {
+async fn clear_cursors(pool: &SqlitePool, created: &[String], recreated: &[String]) -> Result<()> {
     let mut cleared = Vec::new();
     for table in CURSOR_TABLES {
         if table_columns(pool, table).await?.is_empty() {
@@ -1790,7 +1792,7 @@ async fn forget_cursors(pool: &SqlitePool, created: &[String], recreated: &[Stri
 /// Put the working set back at the last commit, dropping whatever a writer
 /// that died left there: `dolt_reset --hard` for the tracked tables, then
 /// `dolt_clean` for any it created and never committed. Every commit here
-/// is `-Am`, so anything still dirty would ride into the schema commit.
+/// is `-Am`, so anything still dirty would go into the schema commit.
 ///
 /// A `sqlite_sequence` that `dolt_clean` leaves behind is emptied instead,
 /// since SQLite refuses to drop it
@@ -2459,8 +2461,8 @@ pub async fn collect_garbage(db_path: &Path) -> Result<bool> {
 /// The writer's open with no schema work: the lock, the working set
 /// discarded and a stranded seal published, and nothing else. For a
 /// caller that is not the store's owner and so knows neither its DDL nor
-/// its ladder; [`open`] without them would refuse a store the ladder has
-/// climbed, and record the wrong shape on one it has not.
+/// its ladder; [`open`] without them would refuse a store whose rungs
+/// have run, and record the wrong shape on one whose rungs have not.
 pub async fn open_bare(db_path: &Path) -> Result<SqlitePool> {
     open_inner(
         db_path,
@@ -3077,8 +3079,8 @@ pub async fn merge_volatile_payloads_in_tx(
 /// Two sets, because "what to render" and "what the diff named" part ways
 /// when a fan-out table changed: then every render unit renders, but the ones
 /// the diff named are still the only ones that can have vanished, and a
-/// provider that stopped probing them left every document deleted in
-/// that range in the store for good.
+/// provider that did not probe them would leave every document deleted
+/// in that range in the store for good.
 #[derive(Debug, Clone, Default)]
 pub struct DiffScan {
     /// The render units to load and render. `None` → every render unit: no cursor,
@@ -3161,11 +3163,11 @@ pub async fn scan_render_units(
     .fetch_all(pool)
     .await;
     let elapsed = started.elapsed();
-    // A failed scan used to cold-start unconditionally, logging at `info`
-    // through `tracing` — which the tests that would have caught it do not
-    // capture. That is the AGENTS.md hazard exactly: it *succeeded*,
+    // A failed scan must not cold-start unconditionally, logging at `info`
+    // through `tracing`, which the tests that would catch it do not
+    // capture. That is the AGENTS.md hazard exactly: it *succeeds*,
     // re-rendering everything and reaching the right answer the slow way, so
-    // a render unit query broken by a rename survived a whole review.
+    // a render unit query broken by a rename goes unnoticed.
     //
     // But the two causes are not the same thing, and only one is a bug.
     //
@@ -3839,20 +3841,20 @@ mod tests {
         let db = dir.path().join("entities.doltlite_db");
 
         // The first open creates the file and commits the schema, so it is the
-        // one open that is supposed to write. Settle it before measuring.
+        // one open that is supposed to write. Get it done before measuring.
         open_test(&db).await.close().await;
         open_test(&db).await.close().await;
-        let settled = std::fs::metadata(&db).unwrap().len();
+        let size_after_open = std::fs::metadata(&db).unwrap().len();
 
         for i in 0..3 {
             open_test(&db).await.close().await;
             let now = std::fs::metadata(&db).unwrap().len();
             assert_eq!(
                 now,
-                settled,
+                size_after_open,
                 "open #{} grew an untouched store by {} bytes",
                 i + 3,
-                now as i64 - settled as i64,
+                now as i64 - size_after_open as i64,
             );
         }
     }
@@ -3877,7 +3879,7 @@ mod tests {
         let v1 = head_commit(&pool).await.unwrap().expect("doltlite HEAD");
         pool.close().await;
 
-        // A wave that pulls nothing new: commit_run finds a clean tree and
+        // A run that pulls nothing new: commit_run finds a clean tree and
         // returns None, but HEAD — and so the version — holds.
         let pool = open_test(&path).await;
         assert!(commit_run(&pool, "second").await.unwrap().is_none());
@@ -5200,7 +5202,7 @@ mod tests {
             "{err:#}"
         );
 
-        // A reset store keeps its version: nothing is left to climb.
+        // A reset store keeps its version: no rung is left to run.
         reset_store(&p).await.unwrap();
         let pool = open_migrating(&p, &[V1], LADDER)
             .await
@@ -5334,7 +5336,7 @@ mod tests {
     /// empty as a recreated one, so the cursors go; a store whose every
     /// table is new is a first open and has none to lose.
     #[tokio::test]
-    async fn a_new_table_forgets_the_stores_cursors() {
+    async fn a_new_table_clears_the_stores_cursors() {
         let d = tempdir().unwrap();
         let p = d.path().join("new_table.doltlite_db");
         store_with_cursors(&p, &[WIDGETS_DDL]).await;
@@ -5493,9 +5495,9 @@ mod tests {
     /// A recreated table is empty, and a cursor that survived it would
     /// let the next run resume past rows the table no longer has: the
     /// store then stays empty until upstream changes, with nothing saying
-    /// why. Recreating forgets every cursor in the store.
+    /// why. Recreating clears every cursor in the store.
     #[tokio::test]
-    async fn a_recreate_forgets_the_stores_cursors() {
+    async fn a_recreate_clears_the_stores_cursors() {
         let d = tempdir().unwrap();
         let p = d.path().join("recreate_cursors.doltlite_db");
         store_with_cursors(&p, &[STALE_WIDGETS_DDL]).await;
@@ -6329,7 +6331,7 @@ mod tests {
         let hash1 = meta.schema_hash.clone();
         a.close().await;
 
-        // At HEAD, through a pinned reader: the rows rode the schema commit.
+        // At HEAD, through a pinned reader: the rows are in the schema commit.
         let reader = open_reader(&path, None).await.unwrap().expect("committed");
         let pinned: i64 = test_sql!("SELECT count(*) FROM _datalib_meta")
             .query_scalar()

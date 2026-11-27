@@ -294,7 +294,7 @@ where
 /// `DELETE FROM ingested_files WHERE scope = ?`. Use from a provider's
 /// `reset` path when wiping per-feed state.
 pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
-    forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{scope}:")).await?;
+    delete_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{scope}:")).await?;
     sql!(
         "etl.files.checkpoint.delete_files_of_scope",
         "DELETE FROM ingested_files WHERE scope = ?"
@@ -308,7 +308,7 @@ pub async fn clear_scope(pool: &SqlitePool, scope: &str) -> Result<()> {
 }
 
 pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
-    forget_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{prefix}")).await?;
+    delete_problems_under(pool, &format!("{FILE_PROBLEM_PREFIX}{prefix}")).await?;
     sql!(
         "etl.files.checkpoint.delete_files_under_scope_prefix",
         "DELETE FROM ingested_files WHERE scope LIKE ?"
@@ -321,7 +321,7 @@ pub async fn clear_scope_prefix(pool: &SqlitePool, prefix: &str) -> Result<()> {
     Ok(())
 }
 
-async fn forget_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()> {
+async fn delete_problems_under(pool: &SqlitePool, key_prefix: &str) -> Result<()> {
     let end = datalib_etl::key_range::prefix_end(key_prefix)
         .with_context(|| format!("no key follows the prefix {key_prefix:?}"))?;
     sql!(
@@ -354,12 +354,12 @@ mod tests {
         cursor.get(&f.rel) == Some(&f.blake3)
     }
 
-    /// The store forgets every cursor when a table is recreated, and it
+    /// The store clears every cursor when a table is recreated, and it
     /// finds them by name in `datalib_etl`, which cannot see this crate.
     /// A cursor table missing from that list would survive a schema
     /// change and let the next run skip files the table no longer has.
     #[test]
-    fn the_store_forgets_this_cursor_on_a_schema_change() {
+    fn the_store_clears_this_cursor_on_a_schema_change() {
         assert!(datalib_etl::doltlite_raw::CURSOR_TABLES.contains(&INGESTED_FILES_TABLE));
     }
 

@@ -144,8 +144,8 @@ pub struct Parsed {
 impl Parsed {
     /// Narrow to what changed since the cursor. A change request's row
     /// id is its render unit key, so a changed one names itself — gone or
-    /// not; a changed comment names its change request, and a comment
-    /// that went is the driver's to name.
+    /// not; a changed comment names its change request, and a deleted
+    /// comment is the driver's to name.
     pub fn narrow(
         &mut self,
         table: &str,

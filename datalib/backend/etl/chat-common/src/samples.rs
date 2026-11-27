@@ -138,8 +138,8 @@ fn chat(id: &str, display: &str, items: Vec<NormalizedChatItem>) -> NormalizedCh
     }
 }
 
-/// The complaint this whole layout change came from: an LLM turn whose
-/// tool plumbing outweighs what was actually said.
+/// An LLM turn whose tool plumbing outweighs what was actually said: the
+/// case folding a run of asides into one `<details>` exists for.
 fn assistant_turn_with_tools() -> NormalizedChat {
     chat(
         "sample-tool-run",
@@ -285,7 +285,7 @@ fn group_chat() -> NormalizedChat {
 
 /// A message far taller than the pane, with an ordinary short one on
 /// either side. The case the clamp and the sticky jump controls exist
-/// for: without them, one message is a scroll you have to ride out.
+/// for: without them, a reader has to scroll past all of it.
 fn long_message() -> NormalizedChat {
     let mut body = String::from(
         "Full diagnostic dump from the port nacelle, as requested. \

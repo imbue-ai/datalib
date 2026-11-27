@@ -28,9 +28,9 @@ text. Every other event has none and renders without the section.
 no end date has infinitely many, and even a bounded window ("the next
 year") would make the render depend on *today*: the same raw store would
 render differently tomorrow, re-render every series every day, and fail
-the fixture's byte-identical convergence. The rule on the series page is
-the whole truth about them. Listing them is the `render_occurrences`
-step's job, in a store of its own that does depend on today
+the fixture's check that the same store renders to the same bytes. The
+rule on the series page is the whole truth about them. Listing them is
+the `render_occurrences` step's job, in a store of its own that does depend on today
 (`calendar_render/src/occurrences/README.md`); `occurrences.rs` here
 runs a series forward and `recur.rs` follows its `RRULE`, refusing by
 name a part it does not follow (`BYWEEKNO`, a sub-daily `FREQ`).

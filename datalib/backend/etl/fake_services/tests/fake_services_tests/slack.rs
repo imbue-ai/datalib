@@ -396,9 +396,9 @@ async fn an_edited_root_inside_the_refresh_window_lands_on_the_next_sync() {
 /// `conversations.history` lists roots only, and the thread's
 /// `latest_reply` and `reply_count` do not move for an edit, so the
 /// download has nothing to notice it by (INGEST.md § "Thread replies: when
-/// the thread is re-fetched anyway"). This is the gap the Imbue Studio
-/// eval of 2026-11-18 surfaced; the test holds the download to what it
-/// documents, and should turn around when the gap is closed.
+/// the thread is re-fetched anyway"). The test holds the download to
+/// what INGEST.md documents, and its assertion should be inverted when
+/// the gap is closed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_edited_reply_in_a_quiet_thread_is_not_re_read() {
     let fakes = Fakes::start(&BTreeMap::from([(SLACK, seed())])).expect("the fakes serve");
