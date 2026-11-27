@@ -3,7 +3,7 @@ import { GRID, searchAndSettle } from "./grid-helpers";
 
 // Two contracts a single ranked query has to satisfy. They share
 // the same setup (open page → type free-text → the search ranks it → score
-// column appears), so they ride one test to avoid paying for the model
+// column appears), so they share one test to avoid paying for the model
 // warm-up twice.
 //
 // 1. **Score sort**: when a search is ranked by the search index the grid must
@@ -55,7 +55,8 @@ test.describe("ranked search: score-desc sort + scroll-to-top", () => {
 
     // 3. Viewport must have scrolled to row 0. `scrollRowIntoView(0)`
     //    writes scrollTop near 0 (browser may add a sub-pixel for
-    //    alignment). Poll briefly to absorb the post-sort layout settle.
+    //    alignment). Poll briefly: the layout can still move just after
+    //    the sort.
     await expect
       .poll(async () => viewport.evaluate((el) => el.scrollTop), {
         timeout: 5_000,

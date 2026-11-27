@@ -70,7 +70,7 @@ function notSearched(config: string): string[] {
 const stepBlock = (group: string, fn: string) => new RegExp(`id = "${group}/${fn}"\n`);
 const idField = (page: Page) => field(page, "ID");
 /// The step-role mark. It leads the name, where a group's brand mark
-/// sits — there is no Step column any more — and `aria-label` is the
+/// sits, and `aria-label` is the
 /// only place the word survives, which is also what a person gets by
 /// hovering it.
 /// A step's Name is its chip, whose accessible name carries its phase.
@@ -215,8 +215,9 @@ test("a step's Edit opens its source, and Rendering brings a hand-removed render
 
   // Take the render step out by hand, the way a config edited in an
   // editor might lack one — including the reference to it that adding
-  // the source put on `unified_grid_and_search_index`. Both halves, because a step id that
-  // names nothing is an invalid config and the save would be refused:
+  // the source put on `unified_grid_and_search_index`. Both, because a
+  // step id that names nothing is an invalid config and the save would
+  // be refused:
   // the index fans in from every source's render step, so removing one
   // means removing it from two places. That is the edit a person doing
   // this by hand actually has to make.
@@ -395,12 +396,9 @@ test("a provider with render options writes them on the render step, from the on
   page,
 }) => {
   // Apple Mail's render step has an option, the mailboxes it renders.
-  // Before the one-dialog wizard it came as a second dialog, and the
-  // remount between the two once wrote the render step under the
-  // group's id instead of its own — a config `datalib-pipeline` refuses with
-  // "a step writes only the tree its id names". One dialog has no second
-  // mount to get wrong; the assertion on the composed id stays because
-  // that is the config bug it would catch.
+  // The assertion on the composed id catches a render step written under
+  // the group's id instead of its own — a config `datalib-pipeline`
+  // refuses with "a step writes only the tree its id names".
   const editor = page.locator(".m2-editor");
   await page.getByRole("button", { name: "Add source" }).click();
   await wizard(page)

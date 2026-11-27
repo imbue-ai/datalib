@@ -11,9 +11,9 @@ import { GRID, searchAndSettle } from "./grid-helpers";
 async function rankedSearch(page: import("@playwright/test").Page, q: string) {
   await page.goto(GRID);
   await page.locator(".grid-box .slick-row").first().waitFor({ timeout: 10_000 });
-  // Settle first, then assert. The score column is only ever populated
-  // by ranked rows, so once the grid is painting this query its
-  // presence *is* the routing assertion — no timeout needed, and a
+  // Wait until the grid shows this query's results, then assert. The
+  // score column is only ever populated by ranked rows, so once the
+  // grid is painting this query its presence *is* the routing assertion — no timeout needed, and a
   // query that silently stopped routing now fails immediately instead
   // of after a 90s wait indistinguishable from a slow daemon.
   await searchAndSettle(page, q);

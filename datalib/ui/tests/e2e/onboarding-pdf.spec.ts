@@ -193,8 +193,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
       await expect(row(page, id)).toHaveCount(1);
     }
     // The index step is labelled by its function, not by the generic
-    // "Index" the label map falls through to when a key is stale —
-    // which is what happened when the functions were renamed.
+    // "Index" the label map falls back to for a key it does not know.
     await expect(
       nameCell(page, "unified_grid_and_search_index/unified_grid_and_search_index"),
     ).toContainText("Grid and search index");
@@ -258,7 +257,7 @@ test.describe("onboarding: empty folder → indexed PDFs", () => {
     const firstRun = await stampsBefore(page, SYNCED_ROWS);
     await row(page, "pdfs/ingest").getByRole("button", { name: "Sync now" }).click();
 
-    // Download, render and index all run — syncing a source claims
+    // Download, render and index all run — a sync of a source also runs
     // everything downstream of it, and the index step is the reason the
     // grid below has anything in it.
     const firstDone = await settleRows(page, SYNCED_ROWS, firstRun);

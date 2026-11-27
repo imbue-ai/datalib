@@ -2,13 +2,13 @@
 // sequence it produces.
 //
 //   * **A sync of one source must not touch another's history.** Every
-//     run walks the whole graph to publish output versions, and it used
-//     to write `not_selected` into the steps it walked past — so a
-//     source that succeeded yesterday came back as "not selected",
-//     stamped with the time of a run that never touched it.
-//   * **The row must show the sync happening.** "Running" only reached
-//     the runner's record when a step *finished*, so pressing Sync looked
-//     like nothing had happened until it was over.
+//     run walks the whole graph to publish output versions; writing
+//     `not_selected` into the steps it walks past would show a source
+//     that succeeded yesterday as "not selected", stamped with the time
+//     of a run that never touched it.
+//   * **The row must show the sync happening.** "Running" has to reach
+//     the loop's store when a step *starts*, not when it finishes, or
+//     pressing Sync looks like nothing happened until it is over.
 //
 // `pdf` is the local-only provider that has *both* halves, which is why
 // it carries most of this spec: an `ingest -> render_markdown` edge is
@@ -114,7 +114,7 @@ async function writeConfig(page: Page, text: string) {
   await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 
   // Reload, so the rows this test then watches were painted from the
-  // config *and* the runner's record together.
+  // config *and* the loop's store together.
   //
   // Without this the sequence sampler below recorded
   // `["Queued", "Never run", "Succeeded"]` and failed the monotonicity
@@ -242,8 +242,8 @@ ${applets()}`;
     const docsSynced = await lastSyncedOf(page, "docs/ingest");
     expect(docsSynced, "a synced row should carry an exact stamp").toBeTruthy();
 
-    // Now sync the *other* source. A run that walked docs/raw used to
-    // write "not selected" over its record.
+    // Now sync the *other* source. A run that walks docs/raw must not
+    // write "not selected" over docs' row.
     const pdfsWas = await lastSyncedOf(page, "pdfs/ingest");
     await syncBtn(page, "pdfs/ingest").click();
     expect(await settle(page, "pdfs/ingest", pdfsWas)).toBe("Succeeded");
@@ -342,8 +342,8 @@ ${applets()}`;
     ).toBeGreaterThan(0);
 
     // What the sequence must contain: a frame from before the run was
-    // over, which used to be missing entirely — the click produced no
-    // visible change until the whole run was done.
+    // over. Without one, the click shows no visible change until the
+    // whole run is done.
     expect(statusWord(seen[0]), `sequence was ${JSON.stringify(seen)}`).toMatch(
       /^(Queued|Running)$/,
     );
@@ -354,8 +354,8 @@ ${applets()}`;
     // The sequence must be monotonic. A status going backwards reads as
     // "about to run again", which is worse than a stale one.
     // Total over the whole vocabulary, on purpose. An unranked status
-    // used to make this crash with "received value must be a number"
-    // and no hint as to which status it choked on — a test that fails
+    // would make this crash with "received value must be a number" and
+    // no hint as to which status it choked on — a test that fails
     // uninformatively about the one thing it exists to describe.
     //
     // "Never run" ranks *below* Queued: it is the absence of history,
@@ -408,11 +408,11 @@ ${applets()}`;
     // What only a browser can answer about this column. The arithmetic
     // — every unit boundary, a stamp in another UTC offset, one in the
     // future — is in src/config/timeFormat.test.ts, because provoking
-    // "6 days ago" from a live backend would mean forging the runner's
-    // state file. What that unit test cannot show is any of the below:
-    // that the column is wired to the relative form at all, that the
-    // absolute stamp survives as the hover, and what the repaint loop
-    // does to a cell nobody has touched.
+    // "6 days ago" from a live backend would mean forging the loop's
+    // store, `system/supervisor.sqlite`. What that unit test cannot show
+    // is any of the below: that the column is wired to the relative form
+    // at all, that the absolute stamp survives as the hover, and what the
+    // repaint loop does to a cell nobody has touched.
     //
     // That loop is `setInterval(tickRelative, 1000)` in TableGrid.ce.vue,
     // and it is driven here by a fake clock rather than by waiting —
@@ -455,16 +455,15 @@ ${applets()}`;
 
     // ...and it stays put. `runFor` fires every timer due in the
     // window, so this is four real turns of the repaint loop with
-    // nothing else happening. Against the per-second countup this
-    // column used to do, they would have read 3, 4, 5 — this is the
-    // assertion that fails if the countup ever comes back.
+    // nothing else happening. A column counting up each second would
+    // read 3, 4, 5 — this is the assertion that fails if it does.
     await page.clock.runFor(4000);
     await expect(cell, "Status ticked while nothing happened").toHaveText("seconds ago");
 
     // The crossing to "1 minute ago" — the only self-repaint this
-    // column does, and the reason the loop exists. It went untested
-    // while this spec waited on the wall clock, because catching it
-    // meant spending a real minute in a suite that runs in about 40s.
+    // column does, and the reason the loop exists. On the wall clock,
+    // catching it would mean spending a real minute in a suite that runs
+    // in about 40s.
     //
     // The stamp is a real instant from the run above, so the delta at
     // this point is 60s, plus the second skipped at the pause, plus

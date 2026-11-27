@@ -53,8 +53,8 @@ type Upgrade = {
 ///
 /// A prepare pass that ended with a step it could not migrate is an
 /// error here, not a banner: every spec on that root would run under "N
-/// sources could not be updated", and the cause is in the server's log, where no
-/// spec looks.
+/// sources could not be updated", and the cause is in the server's log,
+/// where no spec looks.
 async function awaitHealthy(servers: Server[], token: string): Promise<void> {
   const deadline = Date.now() + 60_000;
   for (const server of servers) {

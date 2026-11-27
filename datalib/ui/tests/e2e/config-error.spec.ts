@@ -105,8 +105,8 @@ test("a broken entry costs that entry, and nothing else", async ({ page, request
 
 test("a config warning drops nothing, and the System row counts it", async ({ page }) => {
   // A group with nothing under it loads, with a warning. No entry's row
-  // is dropped, so before the System row carried the count the app
-  // never showed it.
+  // is dropped, so the System row's count is the only place the warning
+  // shows.
   writeConfig(`${original}\n[[groups]]\nid = "lonely"\n`);
 
   await page.goto("/data_sources");

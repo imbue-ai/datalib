@@ -116,8 +116,8 @@ describe("pickPath", () => {
   const folder = { picks: "dir" as const, title: "Choose your WhatsApp backup folder" };
 
   it("is unavailable in a browser rather than throwing", async () => {
-    // The wizard hides the button on `isDesktopApp()`, so this is the
-    // belt to that braces: a browser must never see a dialog attempt.
+    // The wizard hides the button on `isDesktopApp()`, so this is a
+    // second guard behind it: a browser must never see a dialog attempt.
     await expect(pickPath(folder)).resolves.toEqual({
       outcome: "unavailable",
       reason: "not running in the desktop app",

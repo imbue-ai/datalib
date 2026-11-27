@@ -34,7 +34,7 @@ export const shownTabName = (page: Page) => page.locator(".ct-tab.is-selected .c
 export const SEARCH_ROWS = ".grid-box .slick-row";
 
 /// The search grid on its default query, documents only. `/` opens on
-/// the Dashboard card now, so a spec about the grid goes here.
+/// the Dashboard card, so a spec about the grid goes here.
 export const GRID = "/searchView()";
 
 /// The search grid with its query cleared: every row, the messages
@@ -340,9 +340,10 @@ export async function fillConfigEditor(page: Page, text: string) {
   }).toPass();
 }
 
-/// The config editor (`.m2-editor`) open beside the sources card. `/data_sources` opens the sources card alone, which is
-/// what a person gets; a spec that reads or writes `config.toml`
-/// through the editor asks for both cards by their stack.
+/// The config editor (`.m2-editor`) open beside the sources card.
+/// `/data_sources` opens the sources card alone, which is what a person
+/// gets; a spec that reads or writes `config.toml` through the editor
+/// asks for both cards by their stack.
 export const MANAGE_WITH_CONFIG = "/sourcesView():1.6/configView()";
 
 /// How long a save of the config may take to answer. The server checks
@@ -484,7 +485,7 @@ export async function pickRowMenu(
 
 /// One drawing of a Pipeline row: every cell a spec reads, taken in one
 /// pass over the DOM so no two values come from different paints. The
-/// server sends a row with its config and the loop's record already
+/// server sends a row with its config and the loop's store already
 /// joined, so in a drawn row a null means the value is really absent.
 export type RowReading = {
   /// The status icon's accessible name — the word a person gets by
@@ -733,8 +734,8 @@ export async function settleRunner(page: Page, timeout = ROW_SETTLE) {
 }
 
 /// Resolves once the wall clock is in a later second than when it was
-/// called. A stamp is to the second, and the server's loop takes a sync
-/// on the moment it is asked: without this, a run started straight after
+/// called. A stamp is to the second, and the server's loop starts a sync
+/// the moment it is asked: without this, a run started straight after
 /// another can carry the same stamp, and `settleRow`, which waits for the
 /// stamp to move, waits for ever. Every stamp read before calling this is
 /// of a run already over, so a run started after it stamps later.

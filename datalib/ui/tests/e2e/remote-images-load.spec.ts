@@ -1,7 +1,7 @@
 // Loading a document's remote images (issue #648, second half): a
 // click records an allow row — one URL, one host, this document, this
 // source — the body re-renders with those references proxied through
-// `/api/remote_media`, the rows survive a reload and can be forgotten
+// `/api/remote_media`, the rows survive a reload and can be deleted
 // from the banner. Writes the allow store, so it runs on its own root.
 
 import { test, expect, type Page } from "@playwright/test";
