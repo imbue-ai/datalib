@@ -2,8 +2,8 @@
 //! Gmail: the download reports a total big enough to count down from,
 //! and every phase's ticks add up to it.
 //!
-//! It guards against reporting the phase count, `5`, as the total, which
-//! made a mailbox of forty thousand messages count down from four. The
+//! It guards against reporting the phase count as the total, which made
+//! a mailbox of forty thousand messages count down from a handful. The
 //! total reported is exact: the emails the store owes, then the `.eml`s
 //! it lacks.
 

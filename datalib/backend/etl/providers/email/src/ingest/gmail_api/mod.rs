@@ -1,4 +1,4 @@
-//! Gmail REST API downloader — the third mode of `type: email`.
+//! Gmail REST API downloader, one of the four modes of `type: email`.
 //!
 //! `history.list` or a `messages.list` walk says which messages exist
 //! and which changed; `super::listed` keeps that apart from what has
@@ -504,7 +504,7 @@ struct Run<'a> {
     /// failed.
     muted: Option<HashSet<String>>,
     now: &'a IsoOffsetTimestamp,
-    /// The run's one progress bar. Announcing a total is what turns the
+    /// The run's one progress bar. Reporting a total is what turns the
     /// Manage screen's activity cell from a bare count into "N queued"
     /// ticking down.
     bar: RunBar,
@@ -931,7 +931,7 @@ impl Run<'_> {
             muted: self.muted.as_ref(),
             stop: &self.opts.control.stop,
             cap: self.opts.blob_size_limit_bytes,
-            // Belt-and-braces client-side label check. A walk is narrowed
+            // A second label check, client-side. A walk is narrowed
             // server-side, but `history.list` names every message in the
             // account.
             only_label_ids: filter_label_ids.iter().map(String::as_str).collect(),
@@ -1392,8 +1392,8 @@ impl Fetcher<Stored> for MessagesGet<'_> {
     /// The flush's bytes into the CAS; then the email rows, their joins
     /// and threads, and the messages that are gone
     /// (`listed::write_batch_in_tx`), and the thread each message is in;
-    /// then the `.eml` edges, whose sidecar is this fetcher's to stamp,
-    /// the listing's being the loop's.
+    /// then the `.eml` edges, whose sidecar is this fetcher's to stamp;
+    /// the listing's sidecar is stamped by `owed::drain`.
     async fn store(
         &self,
         tx: &mut Transaction<'static, Sqlite>,

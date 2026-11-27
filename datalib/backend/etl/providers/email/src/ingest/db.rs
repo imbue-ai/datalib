@@ -1,4 +1,5 @@
-//! Open + non-DDL data-manipulation for the JMAP raw store.
+//! Open + non-DDL data-manipulation for the email raw store, which every
+//! download mode writes.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
@@ -298,8 +299,9 @@ impl RawDb {
     // ── blob skip-check ────────────────────────────────────────────
 
     /// `(blob_id, blake3)` for every `.eml` already resolved to CAS bytes.
-    /// Pre-loaded once at the top of `sync_blobs`, so the per-blob "do we have
-    /// this?" decision is a `HashMap` hit rather than a SQLite round trip.
+    /// Loaded once per run (`sync_blobs`, the mbox reads), so the per-blob
+    /// "do we have this?" decision is a `HashMap` hit rather than a SQLite
+    /// round trip.
     pub async fn loaded_blob_ids(&self) -> Result<HashMap<String, String>> {
         let rows = sql!(
             "email.list_blobs_with_bytes",
@@ -496,8 +498,9 @@ pub struct LoadedAttachment {
 pub struct EmailJoins {
     pub mailboxes: HashMap<String, Vec<String>>,
     pub keywords: HashMap<String, Vec<String>>,
-    /// Per-email attachment parts, populated by `parse_doltlite_async`
-    /// from the mail-parsed `.eml`. Not loaded from a DB table.
+    /// Per-email attachment parts, filled by the render's
+    /// `extract_attachments_from_emls` from the mail-parsed `.eml`. Not
+    /// loaded from a DB table.
     pub attachments: HashMap<String, Vec<LoadedAttachment>>,
 }
 
@@ -515,7 +518,7 @@ pub struct LoadedRaw {
 
 /// Synchronous loader for tests / ad-hoc callers that want every
 /// entity table at once. Production render calls
-/// `datalib_etl_email_render::render::parse::parse(..., last_render_hash)` instead.
+/// `datalib_etl_email_render::render::parse::open` instead.
 pub fn block_on_load_all(db_path: &Path) -> Result<LoadedRaw> {
     let path = db_path.to_path_buf();
     tokio::task::block_in_place(|| {
@@ -971,7 +974,7 @@ mod tests {
     }
 
     /// Hard-delete cascades: the email row, its joins and its bookkeeping all
-    /// go. CAS bytes are untouched, verified by stashing a `cas_objects` row
+    /// go. CAS bytes are untouched, verified by inserting a `cas_objects` row
     /// directly, deleting the owning email, and checking the bytes survive.
     #[tokio::test]
     async fn delete_email_cascades_to_joins_and_bookkeeping() {
@@ -983,7 +986,7 @@ mod tests {
             "attachments": [{"partId": "1", "blobId": "B-att"}],
         });
         upsert_email(&db, &EmailRow::from_jmap_envelope("A", &p).unwrap()).await;
-        // Stash an entry in the sibling CAS directly so we can prove
+        // Insert an entry in the sibling CAS directly so we can prove
         // it survives.
         let stashed = db.cas().put(b"raw", Some("message/rfc822")).await.unwrap();
 

@@ -5,11 +5,11 @@
 //! come back for. Any other definitive failure means the message still
 //! exists and is still wanted: it stays listed and unfetched, which is
 //! what makes the next run ask for it again, with the attempts counted
-//! on it. The cursor does not wait for it — a message that never fetches
-//! once held the cursor for good, and every run walked the whole mailbox
-//! again. And a transient failure that outlasts the retry loop's give-up
-//! bounds ends the fetch: nothing after it would fare better, and what
-//! was fetched before is kept.
+//! on it. The cursor does not wait for it — a message that never fetched
+//! once kept the cursor from moving for good, and every run walked the
+//! whole mailbox again. And a transient failure that outlasts the retry
+//! loop's give-up bounds ends the fetch: nothing after it would fare
+//! better, and what was fetched before is kept.
 //!
 //! Driven through the HTTP playback layer: no credential, no network.
 

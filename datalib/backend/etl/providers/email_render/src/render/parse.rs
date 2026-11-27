@@ -130,7 +130,7 @@ pub struct ScanResult {
 /// threads.
 #[derive(Debug, Clone, Default)]
 pub struct Shared {
-    /// `(account id, payload)`. The id rides beside the payload rather
+    /// `(account id, payload)`. The id is kept beside the payload rather
     /// than inside it: a JMAP `Account` object has no `id` field — the
     /// id is the key it sits under in the session's `accounts` map.
     pub accounts: Vec<(String, Value)>,
@@ -884,9 +884,8 @@ async fn load_render_units(
     }
 
     // Attachments are extracted later by mail-parsing each loaded
-    // `.eml` — see `extract_attachments_from_emls`. No
-    // `email_attachments` table to query after the eml-as-canonical
-    // port.
+    // `.eml` — see `extract_attachments_from_emls`. There is no
+    // `email_attachments` table.
 
     Ok(by_key.into_values().collect())
 }
@@ -900,9 +899,6 @@ mod tests {
     use std::str::FromStr;
 
     use datalib_sql::{test_sql, test_sql_id, Sql};
-    /// A full render of a mailbox with more threads than SQLite binds in
-    /// one statement (#1156): each thread, its email and the email's
-    /// mailbox and keyword all come back.
     /// An email attached to an email, a forward or a bounce, was skipped:
     /// the page showed the outer one with no sign it held another.
     #[test]

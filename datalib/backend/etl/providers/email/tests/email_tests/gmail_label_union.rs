@@ -2,9 +2,9 @@
 //!
 //! Driven through the HTTP playback layer, so it runs in CI with no
 //! credential and no network. The fixtures model Gmail's real behaviour,
-//! measured live: repeated `labelIds` in one request
-//! **intersect**, so asking for two labels at once returns only the
-//! messages carrying both. That is what made a three-label config
+//! measured live: repeated `labelIds` in one request **intersect**, so
+//! asking for two labels at once returns only the messages carrying
+//! both. That is what made a three-label config
 //! download nothing at all while reporting success.
 
 use std::collections::BTreeSet;
@@ -82,7 +82,7 @@ fn write_fixtures(playback: &Path) {
         ]),
     );
 
-    // What Gmail answers when both labels ride on one request: the
+    // What Gmail answers when both labels are in one request: the
     // intersection, not the union. Present so that code combining them
     // fails this test on the row count rather than on a missing fixture.
     put_gmail(

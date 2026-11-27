@@ -1,5 +1,5 @@
-//! Every hermetic email (JMAP, Gmail, mbox, Apple Mail) test, one binary: each module is one
-//! behaviour.
+//! Every hermetic email (JMAP, Gmail, mbox, Apple Mail) test, one
+//! binary: each module is one behaviour.
 
 mod apple_mail;
 mod apple_mail_tng;

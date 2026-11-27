@@ -1,6 +1,6 @@
 //! Email (JMAP) render: convert parsed threads into the shared
-//! `chat-common` normalized model and delegate markdown / grid-row /
-//! grid-row plumbing to [`datalib_etl_chat_common::render::ChatRenderer`].
+//! `chat-common` normalized model, and leave writing the markdown and
+//! the grid rows to [`datalib_etl_chat_common::render::ChatRenderer`].
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -37,51 +37,11 @@ use datalib_schema::providers::Provider;
 use mail_parser::{AddressList, MessageParser, MessagePart, PartKind};
 
 /// Bump when the item-shape / column mapping changes meaningfully.
-/// v3: render via chat-common (+ quoted-text folding, label chips).
-/// v4: an email with a missing or malformed `Date` header gets a null
-///     `created_at` instead of a real-looking `1970-01-01T00:00:00` — see
-///     `docs/dev/data_architecture_parse_and_render.md` §6. Malformed
-///     `Date` headers are common in real mail, so this changes real
-///     output and stale docs must be re-rendered.
-/// v6: `account` is the mailbox's address rather than the JMAP account
-///     id (`u432643a7`).
-/// v7: v6 only managed that for mbox and Gmail — a JMAP account object
-///     has no `id` field, so the lookup missed every Fastmail row.
-/// v8: ids are minted through `datalib_id` under `Upstream(account_id)`,
-///     every row carries its backpointer, and an email's id carries its
-///     `received_at` in its leading bits (`datalib_id`'s v8 layout).
-///     Every uuid moved, `chat_uuid` among them.
-/// v10: the label line leads with Starred and Important, and leaves out
-///     Gmail's All Mail.
-/// v11: the author span carries the author's handle as `data-handle`.
-/// v12: a recipients line (To, Cc) under the header, each with its handle.
-/// v13: Bcc on the recipients line, and an `@` mention drawn as a chip.
-/// v14: attachments and inline images are linked inside the stored
-///     `.eml`, and no `blobs/` is written beside the page.
-/// v16: the account's own address is a source contact marked as the
-///     account, so search reads it as `me`.
-/// v17: mail-parser 1.0: base64 without its final `=` decodes whole,
-///     RFC 8621's body lists, and a `Fr om:` line is no longer From.
-/// v18: whether an email is unread comes from its read mark, and every
-///     thread declares the marks it reads.
-/// v19: an email attached to an email is listed among the attachments.
-/// v20: an email's stamp keeps the offset its `Date` was written in.
-/// v21: a quote's attribution line is plain text, and an HTML body's
-///     `<pre>` and `&amp;lt;` read as the sender wrote them.
-/// v22: a body part is HTML only when its Content-Type says so: a
-///     plain-text email went through the HTML converter, losing every
-///     `<…>` and running its lines together.
-/// v23: a thread sits in its account and is filed under its emails'
-///     labels; an email's `In-Reply-To` is a reply edge.
-/// v24: a sender's hover title names their address once, not twice.
-/// v25: a body loses its preheader padding, runs of characters that show
-///     nothing; a link around blocks or around another link is written
-///     on one line.
 pub const RENDER_VERSION: u32 = 25;
 
 /// Which webmail to build each email's `↗` outlink for. Mirrors
-/// `datalib_core::config::EmailOutlink`; the orchestrator maps the
-/// config enum onto this one (the provider crate doesn't depend on core).
+/// `datalib_etl_email_config::EmailOutlink`; `outlink_format` in this
+/// crate's `processor.rs` maps the config enum onto this one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutlinkFormat {
     Gmail,
@@ -162,12 +122,12 @@ fn profile() -> RenderProfile {
     }
 }
 
-/// The render params recorded alongside the cursor. Both knobs change
-/// what the tree should contain for documents the upstream diff would
-/// never surface, so a change to either re-renders everything.
 /// The config key the render's label filter is written under.
 const K_ONLY_RENDER_LABELS: &str = "only_render_labels";
 
+/// The render params recorded alongside the cursor. Both params change
+/// what the tree should contain for documents the upstream diff would
+/// never surface, so a change to either re-renders everything.
 pub fn render_params(outlink: Option<OutlinkFormat>, only_labels: &[String]) -> serde_json::Value {
     // Sorted so a reordered config list isn't mistaken for a change.
     let mut labels: Vec<&str> = only_labels.iter().map(String::as_str).collect();
@@ -289,7 +249,7 @@ impl Lookups {
 }
 
 /// Renders every thread `store` hands out, a page at a time; `on_page`
-/// hears how each page ended before the next is read. On a full walk
+/// is called with how each page ended before the next is read. On a full walk
 /// under a label filter, a first page names the threads the filter
 /// keeps out, which were never loaded.
 pub fn render_store(

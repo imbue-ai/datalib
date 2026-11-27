@@ -17,7 +17,8 @@ use datalib_etl_web::http::{
 };
 
 /// Playback key. `HttpService::Gmail.impersonates()` is false — Google
-/// does not front the API with a JA3 wall.
+/// does not refuse a request by its TLS fingerprint (JA3), so the API
+/// needs no Chrome-impersonating curl.
 pub const HTTP_SERVICE: HttpService = HttpService::Gmail;
 
 const BASE: &str = "https://gmail.googleapis.com/gmail/v1/users";
@@ -36,7 +37,7 @@ pub const UNITS_GET_PROFILE: u32 = 1;
 
 /// What every request carries: the latchkey identity to send as, and the
 /// counter the retry classifier bumps on each rate-limit response so the
-/// [`QuotaThrottle`] that minted it can hear about it.
+/// [`QuotaThrottle`] that created it can read the count.
 #[derive(Debug, Clone)]
 pub struct Client {
     latchkey: LatchkeySettings,
@@ -981,8 +982,9 @@ mod tests {
         "details":[{"reason":"ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}"#;
 
     /// Google's per-user rate limit arrives as a 403 as often as a 429,
-    /// and a 403 read as an auth failure held the cursor and walked on —
-    /// the run "succeeded" with every remaining message marked failed.
+    /// and a 403 read as an auth failure left the cursor where it was and
+    /// went on: the run "succeeded" with every remaining message marked
+    /// failed.
     #[test]
     fn retries_the_403_that_is_really_a_rate_limit() {
         assert!(matches!(

@@ -35,9 +35,9 @@ pub const DATA_TABLES: &[&str] = &[
     super::listed::LISTED,
 ];
 
-/// `blobs.kind` discriminator for the RFC5322 `.eml` source of an
-/// email, stored in the shared `blobs` table keyed by JMAP
-/// `Email.blobId` (or `sha256(eml_bytes)` for Mbox).
+/// The kind name of an email's RFC 5322 `.eml` source. The `.eml` itself
+/// is in the CAS, its edge in `email_blobs`, keyed by JMAP's
+/// `Email.blobId` or, for the other modes, the `.eml`'s blake3.
 pub const BLOB_KIND_EML: &str = "email";
 
 // ── entity rows ─────────────────────────────────────────────────────

@@ -37,13 +37,13 @@ fn insert_eml(bundle: &mut BlobBundle, ref_id: &str, body: &[u8]) {
     bundle.add_stored_with_bytes(ref_id, STEP, body.to_vec(), Some("message/rfc822".into()));
 }
 
-/// Account `A1` (thad@example.com) with one Inbox, holding one thread.
 /// What a render is handed: the shared rows and one page of threads.
 struct ParsedEmail {
     shared: Shared,
     docs: Vec<EmailThreadRenderUnit>,
 }
 
+/// Account `A1` (thad@example.com) with one Inbox, holding one thread.
 fn one_thread(
     thread_id: &str,
     emails: Vec<LoadedEmail>,
@@ -377,7 +377,7 @@ fn calendar_invite_is_linked_once() {
 /// The narrow half of the same rule: an inline part that is also a
 /// listed attachment is skipped only when it is *not* an image. An
 /// image keeps its inline preview — seeing the picture beats a second
-/// link to it — so this must NOT get swept up in the invite fix.
+/// link to it — so the rule for invites must NOT skip it.
 #[test]
 fn inline_image_that_is_also_an_attachment_keeps_its_preview() {
     const PNG: &str = "not-really-png-but-bytes-are-bytes";

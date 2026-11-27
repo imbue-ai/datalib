@@ -13,7 +13,8 @@ use datalib_etl_render::processor::{
 };
 use std::path::Path;
 
-/// Render wave: always present (renders whatever is in the raw store).
+/// The render step's processor, always planned: it renders whatever is in
+/// the raw store.
 pub fn plan_render(
     ctx: PlanContext,
     config: EmailRenderConfig,
@@ -29,8 +30,8 @@ pub fn plan_render(
     ))
 }
 
-/// Email's render processor — reads the raw store and emits one rendered
-/// markdown per thread through the fused-Load callback.
+/// Email's render processor — reads the raw store and hands one rendered
+/// markdown per thread to `RenderCtx`'s document callback.
 pub struct EmailRender {
     outlink: Option<OutlinkFormat>,
     /// Render only threads with at least one email under one of these mailbox
@@ -46,7 +47,7 @@ impl SourceRender for EmailRender {
         crate::render::render::RENDER_VERSION
     }
 
-    // Both knobs change the rendered output for documents the diff
+    // Both params change the rendered output for documents the diff
     // would never surface, so a change to either re-renders everything.
     fn render_params(&self) -> serde_json::Value {
         datalib_etl_chat_common::render::layout_params_with(crate::render::render::render_params(
@@ -92,8 +93,8 @@ impl SourceRender for EmailRender {
         // Each page is declared before the next is read. A stale thread
         // no email still belongs to builds no chat: declared with
         // nothing, its documents go once the diff says its emails left.
-        // One the label filter keeps out goes on the filter's word. The
-        // rendered ones follow and replace that.
+        // One the label filter keeps out goes by `exclude_render_unit`.
+        // The rendered ones follow and replace that.
         let mut on_page = |page: PageEnd| -> Result<()> {
             ctx.declare_empty(page.looked_at.iter().map(String::as_str))?;
             for thread in &page.rendered.excluded {

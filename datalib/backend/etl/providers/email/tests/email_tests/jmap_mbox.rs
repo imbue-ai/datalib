@@ -1,7 +1,7 @@
 //! End-to-end mbox-mode test: run the mbox extractor against the checked-in
 //! Star Trek fixture, read it back through the shared raw store, and render
-//! it. The same path the orchestrator takes when a `type: email` source has
-//! no `sync:` block and `input_path` points at an `.mbox`.
+//! it. The same path `datalib-step` takes when a `type: email` source's
+//! `mbox.path` names an `.mbox`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -109,10 +109,10 @@ async fn fetch_into_tmp(mbox_path: PathBuf) -> (tempfile::TempDir, PathBuf) {
     })
     .await
     .expect("mbox download fetch");
-    // Commit what the fetch wrote, the way the processor's `RawStoreSession`
-    // does in production. Render reads committed state only, so a store left
-    // dirty here would render as empty — which is right, and not what this
-    // test is about.
+    // Commit what the fetch wrote, the way the processor's
+    // `RunCtx::run_store` does in production. Render reads committed
+    // state only, so a store left dirty here would render as empty —
+    // which is right, and not what this test is about.
     datalib_etl::doltlite_raw::commit_run(db.pool(), "test: mbox fetch")
         .await
         .expect("commit the mbox fetch");
@@ -208,7 +208,7 @@ async fn star_trek_mbox_lands_envelope_rows_and_joins() {
         .unwrap();
     assert!(exists);
 
-    // Re-running is idempotent: same email ids on a second pass.
+    // Re-running is idempotent: same email ids on a second run.
     db.commit_all("test").await.unwrap();
     db.close().await;
     let db2 = RawDb::open(&db_path).await.unwrap();

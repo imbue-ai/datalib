@@ -21,9 +21,10 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: a live table (`jmap`, `gmail`) selects a server
-/// mode; `mbox` reads the `.mbox` at its `path`, or beside `gmail` is
-/// the Takeout that mode starts from; `apple_mail` reads Mail's folder.
+/// The download step's processor: a live table (`jmap`, `gmail`) selects
+/// a server mode; `mbox` reads the `.mbox` at its `path`, or beside
+/// `gmail` is the Takeout that mode starts from; `apple_mail` reads
+/// Mail's folder.
 pub fn plan_ingest(ctx: PlanContext, config: EmailConfig) -> Result<Vec<Box<dyn DataProcessor>>> {
     let name = ctx.name;
     if config.outlink_format.is_some() || !config.only_render_labels.is_empty() {
@@ -100,8 +101,8 @@ pub struct EmailIngest {
     blob_size_limit_bytes: Option<u64>,
     /// Which latchkey identity to authenticate as, forwarded whole from
     /// the source's `latchkey_settings:` block. Both live modes use it
-    /// (JMAP's `fastmail`, Gmail's `google-gmail`); the mbox mode makes
-    /// no requests and ignores it.
+    /// (JMAP's `fastmail`, Gmail's `google-gmail`); the mbox and Apple
+    /// Mail modes make no requests and ignore it.
     latchkey: LatchkeySettings,
     /// Full mailbox label paths to limit extraction to (empty = every
     /// mailbox). Every mode.

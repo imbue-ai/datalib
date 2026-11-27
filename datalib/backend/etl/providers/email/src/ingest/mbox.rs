@@ -256,7 +256,7 @@ async fn read_files(opts: FetchOptions, found: RunProblems) -> Result<FetchSumma
         unparsed_files.extend(unparsed.problem(&f));
         // An mbox has no envelope that could say "no messages", so a file
         // with none (0 bytes, no `From ` line) is not read as an empty
-        // mailbox: it holds the prune back, and deleting the file is what
+        // mailbox: it stops the prune, and deleting the file is what
         // drops what it held.
         let failed = failed.or_else(|| {
             (messages_in_file == 0)
@@ -1198,7 +1198,7 @@ impl Accumulator {
         }
     }
 
-    /// Parse one message's envelope + MIME structure, stash the row
+    /// Parse one message's envelope + MIME structure, add the row
     /// and any blob bytes into `pending`, and update `summary`'s
     /// counters. Returns `Ok(true)` when a new row was pushed,
     /// `Ok(false)` when the message was a duplicate of one we've
@@ -1217,9 +1217,9 @@ impl Accumulator {
 
         // One hash per .eml: blake3 over the raw bytes is both the
         // CAS key and (for ref-id / fallback email-id purposes) the
-        // content-addressed identifier. sha256 was a profile hotspot
-        // on Apple Silicon (no ARMv8 hardware accel in the `sha2`
-        // crate), and hashing every message twice was pure waste.
+        // content-addressed identifier. A second hash would cost as much
+        // again; sha256 is slow on Apple Silicon (no ARMv8 hardware
+        // acceleration in the `sha2` crate).
         let eml_blake3 = blake3_hex(raw);
         let eml_blob_id = eml_blake3.clone();
         let email_id = envelope::email_id(gmail_id, &msg, &eml_blob_id);
@@ -2889,8 +2889,8 @@ mod tests {
         }
     }
 
-    /// A read that could not use every file vouches for nothing, so the
-    /// next run reads it all again.
+    /// A read that could not use every file writes no stamp, so the next
+    /// run reads it all again.
     #[tokio::test(flavor = "multi_thread")]
     async fn a_read_that_did_not_finish_cleanly_is_read_again() {
         let dir = tempfile::tempdir().unwrap();

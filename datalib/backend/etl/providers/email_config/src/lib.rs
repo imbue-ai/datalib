@@ -1,5 +1,5 @@
-//! Provider-owned config schema for the `email` source — Program A goal #1
-//! ("one config definition per source, adjacent to the source").
+//! The config schema for the `email` source, kept beside the source: one
+//! config definition per source.
 
 use datalib_source_common::{expand_tilde, LatchkeySettings, RenderCommon, SourceCommon};
 use serde::{Deserialize, Serialize};
@@ -144,7 +144,7 @@ pub struct EmailRenderConfig {
 
 /// Which live-server transport a source selected, if any. The file-backed
 /// mbox mode is deliberately *not* a variant: it is [`EmailConfig::mbox`],
-/// and the provider asks for [`EmailConfig::live_mode`] first and reads
+/// and the provider calls [`EmailConfig::live_mode`] first and reads
 /// the mbox table when it comes back `None`.
 #[derive(Debug, Clone)]
 pub enum EmailLiveMode<'a> {

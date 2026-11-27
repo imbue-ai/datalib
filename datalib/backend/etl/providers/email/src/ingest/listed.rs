@@ -614,8 +614,8 @@ pub async fn save_token_in_tx(
 /// no longer replay. So nothing is listed whole any more, and the delta
 /// starts again from `token`, the account's state now. With `refetch`,
 /// what changed while no delta was replaying is taken to be unknown:
-/// every listed message is listed again and nothing held answers for
-/// it. Without, what is held stands.
+/// every listed message is listed again under `token` and its
+/// `held_version` cleared. Without, what is held stands.
 pub async fn start_over(
     pool: &SqlitePool,
     token_scope: &str,
