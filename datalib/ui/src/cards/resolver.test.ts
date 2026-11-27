@@ -53,7 +53,7 @@ describe("Resolver", () => {
   });
 
   /** A link made in one document has to redraw a grid already showing
-   *  the old answer: `forget` tells every surface, and its next draw
+   *  the old answer: `dropAnswers` tells every surface, and its next draw
    *  asks again. */
   it("forgets a key on an edit, tells subscribers, and asks again on the next draw", async () => {
     const { r, calls, answer } = fake();
@@ -65,7 +65,7 @@ describe("Resolver", () => {
     })();
     const told: string[][] = [];
     r.subscribe((keys) => told.push([...keys]));
-    r.forget(["a"]);
+    r.dropAnswers(["a"]);
     expect(told).toEqual([["a"]]);
     expect(r.lookup("a")).toBeUndefined();
     await tick();
@@ -76,7 +76,7 @@ describe("Resolver", () => {
     const { r, pending, answer } = fake();
     r.lookup("a");
     await tick();
-    r.forget(["a"]);
+    r.dropAnswers(["a"]);
     pending[0].resolve(new Map([["a", "before the edit"]]));
     await tick();
     expect(r.get("a")).toBeUndefined();
@@ -260,7 +260,7 @@ describe("Resolver", () => {
     r.revalidate();
     await tick();
     r.revalidate();
-    r.forget(["a"]);
+    r.dropAnswers(["a"]);
     pending[1].resolve(new Map([["a", "stale"]]));
     await tick();
     await tick();

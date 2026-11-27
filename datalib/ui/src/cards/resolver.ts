@@ -20,7 +20,7 @@ export class Resolver<V> {
   private readonly inflight = new Map<string, Promise<void>>();
   /// Keys revalidated while their question was out: asked again when it lands.
   private readonly owed = new Set<string>();
-  /// Bumped by `forget`: an answer for an older generation is stale.
+  /// Bumped by `dropAnswers`: an answer for an older generation is stale.
   private readonly generation = new Map<string, number>();
   private readonly listeners = new Set<Listener>();
   private next: { keys: string[]; done: Promise<void> } | null = null;
@@ -56,7 +56,7 @@ export class Resolver<V> {
 
   /** Drop what is known about `keys` and tell every surface; the next
    *  draw asks again. Call it after any edit that changes an answer. */
-  forget(keys: Iterable<string>): void {
+  dropAnswers(keys: Iterable<string>): void {
     const dropped = new Set<string>();
     for (const key of keys) {
       this.known.delete(key);
