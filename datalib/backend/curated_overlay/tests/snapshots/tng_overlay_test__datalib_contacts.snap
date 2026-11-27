@@ -26,13 +26,13 @@ expression: dump
     {
       "key": "schema_hash",
       "tz_offset": "[redacted]",
-      "value": "27c6f2ad6c3836d76e12d6c0c83a1226db55bcd3dad950d5773a23ac2e59f95e",
+      "value": "86be9ccf98b1cf83ee7834fced251ae846cf69210c8ab76fb7441b15cb17ea33",
       "written_at_utc": "[redacted]"
     },
     {
       "key": "schema_version",
       "tz_offset": "[redacted]",
-      "value": "2",
+      "value": "3",
       "written_at_utc": "[redacted]"
     },
     {
@@ -139,6 +139,17 @@ expression: dump
     },
     {
       "agent": null,
+      "contact_id": "9a095f49-91f8-4f6a-ade9-04dbb57babd4",
+      "created_at_utc": "2026-11-27T07:55:12.176545+00:00",
+      "kind": "person",
+      "merged_into": null,
+      "name": "Marie Picard",
+      "note": null,
+      "tz_offset": "+00:00",
+      "updated_at_utc": "2026-11-27T07:55:12.176545+00:00"
+    },
+    {
+      "agent": null,
       "contact_id": "abfb5f3f-44dc-49cf-90c5-7e62ee70f26c",
       "created_at_utc": "2026-11-26T08:36:50.537387+00:00",
       "kind": "person",
@@ -147,6 +158,17 @@ expression: dump
       "note": null,
       "tz_offset": "+00:00",
       "updated_at_utc": "2026-11-26T08:36:50.537387+00:00"
+    },
+    {
+      "agent": null,
+      "contact_id": "d03d8bad-358f-4d74-ba5e-43b3eaa633ac",
+      "created_at_utc": "2026-11-27T07:55:12.174496+00:00",
+      "kind": "person",
+      "merged_into": null,
+      "name": "Robert Picard",
+      "note": null,
+      "tz_offset": "+00:00",
+      "updated_at_utc": "2026-11-27T07:55:12.174496+00:00"
     }
   ],
   "fields": [
@@ -385,6 +407,19 @@ expression: dump
     {
       "agent": null,
       "confidence": null,
+      "contact_id": "9a095f49-91f8-4f6a-ade9-04dbb57babd4",
+      "handle": "email:marie@labarre.earth",
+      "linked_at_utc": "2026-11-27T07:55:12.176545+00:00",
+      "linked_how": "manual",
+      "reason": null,
+      "reviewed_at_utc": null,
+      "run": null,
+      "stopped_working_by": null,
+      "tz_offset": "+00:00"
+    },
+    {
+      "agent": null,
+      "confidence": null,
       "contact_id": "9600826a-f64d-4508-a230-0f4006f41092",
       "handle": "email:picard@enterprise.starfleet",
       "linked_at_utc": "2026-11-26T08:36:50.466108+00:00",
@@ -427,6 +462,32 @@ expression: dump
       "contact_id": "053cf673-0eb8-4ee8-8605-ebfec110af30",
       "handle": "email:troi@enterprise.starfleet",
       "linked_at_utc": "2026-11-26T08:36:50.528489+00:00",
+      "linked_how": "manual",
+      "reason": null,
+      "reviewed_at_utc": null,
+      "run": null,
+      "stopped_working_by": null,
+      "tz_offset": "+00:00"
+    },
+    {
+      "agent": null,
+      "confidence": null,
+      "contact_id": "9a095f49-91f8-4f6a-ade9-04dbb57babd4",
+      "handle": "email:vineyard@labarre.earth",
+      "linked_at_utc": "2026-11-27T07:55:12.178068+00:00",
+      "linked_how": "manual",
+      "reason": null,
+      "reviewed_at_utc": null,
+      "run": null,
+      "stopped_working_by": null,
+      "tz_offset": "+00:00"
+    },
+    {
+      "agent": null,
+      "confidence": null,
+      "contact_id": "d03d8bad-358f-4d74-ba5e-43b3eaa633ac",
+      "handle": "email:vineyard@labarre.earth",
+      "linked_at_utc": "2026-11-27T07:55:12.174496+00:00",
       "linked_how": "manual",
       "reason": null,
       "reviewed_at_utc": null,

@@ -17,8 +17,8 @@ use crate::labels::{normalize_label, person_label, plan_agent_label, Held, Label
 use crate::schema::labels::LabelRow;
 use crate::schema::not_linked::NotLinkedRow;
 use crate::{
-    contact_subject, holder, insert_contact, insert_handle, plan_link, DecidedHow, LinkPlan, Maker,
-    Store,
+    contact_subject, holders, insert_contact, insert_handle, plan_link, DecidedHow, LinkPlan,
+    Maker, Store, WhenHeld,
 };
 use datalib_sql::sql;
 
@@ -157,14 +157,16 @@ enum AgentLink {
     Refused(String),
 }
 
-fn plan_agent_link(holder: Option<&str>, turned_down: bool, target: &str) -> AgentLink {
+/// An agent never shares a handle or moves one: an address on another
+/// contact is the person's to decide about.
+fn plan_agent_link(holders: &[String], turned_down: bool, target: &str) -> AgentLink {
     if turned_down {
         return AgentLink::Refused("a person said it is not this contact".to_string());
     }
-    match plan_link(holder, target) {
+    match plan_link(holders, target, WhenHeld::Refuse) {
         LinkPlan::Insert => AgentLink::Insert,
         LinkPlan::AlreadyLinked => AgentLink::Already,
-        LinkPlan::HeldBy(other) => AgentLink::Refused(format!("already belongs to {other}")),
+        _ => AgentLink::Refused(format!("already belongs to {}", holders.join(" and "))),
     }
 }
 
@@ -223,34 +225,36 @@ async fn awaiting_labels(
     .context("read the labels waiting for review")
 }
 
-/// Unlink `handle` inside `tx` and write down that it is not theirs.
-/// Returns whether it was linked.
+/// Unlink `handle` from `contact_id` inside `tx` and write down that it
+/// is not theirs. Returns whether it was linked to them.
 pub(crate) async fn unlink_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     handle: &str,
+    contact_id: &str,
     now: &str,
     tz: &str,
 ) -> Result<bool> {
     let Some(r) = sql!(
         "contacts_app.review.read_link_to_undo",
-        "SELECT h.contact_id, h.agent, h.reason, c.name \
-           FROM handles h LEFT JOIN contacts c USING (contact_id) WHERE h.handle = ?"
+        "SELECT h.agent, h.reason, c.name \
+           FROM handles h LEFT JOIN contacts c USING (contact_id) \
+          WHERE h.handle = ? AND h.contact_id = ?"
     )
     .query()
     .bind(handle)
+    .bind(contact_id)
     .fetch_optional(&mut **tx)
     .await
     .context("read the link to undo")?
     else {
         return Ok(false);
     };
-    let contact_id: String = r.get("contact_id");
     let row = NotLinkedRow {
         handle: handle.to_string(),
         contact_name: r
             .get::<Option<String>, _>("name")
-            .unwrap_or_else(|| contact_id.clone()),
-        contact_id,
+            .unwrap_or_else(|| contact_id.to_string()),
+        contact_id: contact_id.to_string(),
         agent: r.get("agent"),
         reason: r.get("reason"),
         decided_at_utc: now.to_string(),
@@ -277,10 +281,11 @@ pub(crate) async fn unlink_in(
     .context("write down a turned-down link")?;
     sql!(
         "contacts_app.review.delete_unlinked_handle",
-        "DELETE FROM handles WHERE handle = ?"
+        "DELETE FROM handles WHERE handle = ? AND contact_id = ?"
     )
     .query()
     .bind(handle)
+    .bind(contact_id)
     .execute(&mut **tx)
     .await
     .context("unlink a handle")?;
@@ -644,13 +649,13 @@ impl Store {
             };
             let mut plans = Vec::new();
             for h in &handles {
-                let held = holder(&mut tx, h).await?;
+                let held = holders(&mut *tx, h).await?;
                 let plan = match &target {
                     Some(id) => {
                         let refused = turned_down(&mut tx, h.as_str(), id).await?;
-                        plan_agent_link(held.as_deref(), refused, id)
+                        plan_agent_link(&held, refused, id)
                     }
-                    None => plan_agent_link(held.as_deref(), false, ""),
+                    None => plan_agent_link(&held, false, ""),
                 };
                 plans.push((h, plan));
             }
@@ -757,40 +762,42 @@ impl Store {
         let mut done = 0;
         for s in subjects {
             let subject = check_subject(&mut tx, s).await?;
-            let pending: Vec<String> = match subject.strip_prefix("contact:") {
+            let pending: Vec<(String, String)> = match subject.strip_prefix("contact:") {
                 Some(id) => sql!(
                     "contacts_app.review.list_agent_links_of_contact",
-                    "SELECT handle FROM handles \
+                    "SELECT handle, contact_id FROM handles \
                       WHERE contact_id = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL"
                 )
-                .query_scalar()
+                .query_as()
                 .bind(id),
                 None => sql!(
                     "contacts_app.review.list_agent_link_of_handle",
-                    "SELECT handle FROM handles \
+                    "SELECT handle, contact_id FROM handles \
                       WHERE handle = ? AND linked_how = 'agent' AND reviewed_at_utc IS NULL"
                 )
-                .query_scalar()
+                .query_as()
                 .bind(&subject),
             }
             .fetch_all(&mut *tx)
             .await
             .context("read the links waiting for review")?;
-            for h in &pending {
+            for (h, contact_id) in &pending {
                 if agree {
                     sql!(
                         "contacts_app.review.mark_link_reviewed",
-                        "UPDATE handles SET reviewed_at_utc = ?, tz_offset = ? WHERE handle = ?"
+                        "UPDATE handles SET reviewed_at_utc = ?, tz_offset = ? \
+                          WHERE handle = ? AND contact_id = ?"
                     )
                     .query()
                     .bind(&now)
                     .bind(&tz)
                     .bind(h)
+                    .bind(contact_id)
                     .execute(&mut *tx)
                     .await
                     .context("confirm an agent's link")?;
                     done += 1;
-                } else if unlink_in(&mut tx, h, &now, &tz).await? {
+                } else if unlink_in(&mut tx, h, contact_id, &now, &tz).await? {
                     done += 1;
                 }
             }
@@ -1057,14 +1064,18 @@ mod tests {
 
     #[test]
     fn an_agent_never_takes_a_handle_or_repeats_what_a_person_refused() {
-        assert_eq!(plan_agent_link(None, false, "a"), AgentLink::Insert);
-        assert_eq!(plan_agent_link(Some("a"), false, "a"), AgentLink::Already);
+        let held = |ids: &[&str]| -> Vec<String> { ids.iter().map(|s| s.to_string()).collect() };
+        assert_eq!(plan_agent_link(&[], false, "a"), AgentLink::Insert);
+        assert_eq!(
+            plan_agent_link(&held(&["a"]), false, "a"),
+            AgentLink::Already
+        );
         assert!(matches!(
-            plan_agent_link(Some("b"), false, "a"),
+            plan_agent_link(&held(&["b"]), false, "a"),
             AgentLink::Refused(_)
         ));
         assert!(matches!(
-            plan_agent_link(None, true, "a"),
+            plan_agent_link(&[], true, "a"),
             AgentLink::Refused(_)
         ));
     }
@@ -1351,11 +1362,11 @@ mod tests {
             .unwrap();
         let lore = Handle::parse(&email("lore@enterprise.org")).unwrap();
         store.propose(&lore_to_data(&data, &lore)).await.unwrap();
-        assert!(store.unlink(&lore).await.unwrap());
+        assert!(store.unlink(&lore, &data).await.unwrap());
         assert_eq!(store.turned_down().await.unwrap().len(), 1);
-        store.link(&lore, &data).await.unwrap();
+        store.link(&lore, &data, WhenHeld::Refuse).await.unwrap();
         assert!(store.turned_down().await.unwrap().is_empty());
-        assert!(store.unlink(&lore).await.unwrap());
+        assert!(store.unlink(&lore, &data).await.unwrap());
         let down = store.turned_down().await.unwrap();
         assert_eq!(down.len(), 1, "a person's own link is written down too");
         assert_eq!(down[0].agent, None);
