@@ -10,13 +10,19 @@ use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
 
 use crate::review::Skipped;
-use crate::{holder, insert_contact, insert_handle, name_of, ContactKind, Maker, Store};
+use crate::{
+    holders, insert_contact, insert_handle, link_in, names_of, ContactKind, Maker, Store, WhenHeld,
+};
 use datalib_sql::sql;
 
 #[derive(Debug, Clone)]
 pub struct NewPerson {
     pub name: String,
     pub handles: Vec<Handle>,
+    /// Handles other contacts have, which the person said are this one's
+    /// too or this one's alone. They never make the person one of those
+    /// contacts, as one in `handles` would.
+    pub held: Vec<(Handle, WhenHeld)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
@@ -61,25 +67,19 @@ impl Store {
         for person in people {
             let name = person.name.trim();
             let mut free: Vec<&Handle> = Vec::new();
-            let mut holders = BTreeSet::new();
+            let mut holders_of_theirs = BTreeSet::new();
             for h in &person.handles {
-                match holder(&mut tx, h).await? {
-                    Some(id) => {
-                        holders.insert(id);
-                    }
-                    None if !free.contains(&h) => free.push(h),
-                    None => {}
+                let held = holders(&mut *tx, h).await?;
+                if held.is_empty() && !free.contains(&h) {
+                    free.push(h);
                 }
+                holders_of_theirs.extend(held);
             }
-            let into = match plan(holders) {
+            let into = match plan(holders_of_theirs) {
                 Plan::OnSeveral(ids) => {
-                    let mut names = Vec::new();
-                    for id in &ids {
-                        names.push(name_of(&mut tx, id).await?);
-                    }
                     out.skipped.push(Skipped {
                         what: name.to_string(),
-                        why: format!("their handles are on {}", names.join(" and ")),
+                        why: format!("their handles are on {}", names_of(&mut tx, &ids).await?),
                     });
                     continue;
                 }
@@ -91,7 +91,7 @@ impl Store {
                         }
                     }
                     free = theirs;
-                    if free.is_empty() {
+                    if free.is_empty() && person.held.is_empty() {
                         out.already += 1;
                         continue;
                     }
@@ -105,7 +105,11 @@ impl Store {
                     });
                     continue;
                 }
-                Plan::Create if free.is_empty() && is_a_name(&mut tx, name).await? => {
+                Plan::Create
+                    if free.is_empty()
+                        && person.held.is_empty()
+                        && is_a_name(&mut tx, name).await? =>
+                {
                     out.already += 1;
                     continue;
                 }
@@ -117,6 +121,9 @@ impl Store {
             };
             for h in free {
                 insert_handle(&mut tx, h, &into, Maker::Person, &now, &tz).await?;
+            }
+            for (h, when) in &person.held {
+                link_in(&mut tx, h, &into, name, *when, &now, &tz).await?;
             }
         }
         tx.commit().await?;
@@ -172,6 +179,7 @@ mod tests {
         NewPerson {
             name: name.into(),
             handles: handles.iter().map(|h| Handle::parse(h).unwrap()).collect(),
+            held: Vec::new(),
         }
     }
 
@@ -191,8 +199,8 @@ mod tests {
             .await
             .unwrap();
         let spam = Handle::parse("email:will@risa.test").unwrap();
-        store.link(&spam, &riker).await.unwrap();
-        store.unlink(&spam).await.unwrap();
+        store.link(&spam, &riker, WhenHeld::Refuse).await.unwrap();
+        store.unlink(&spam, &riker).await.unwrap();
 
         let people = [
             person(
@@ -267,6 +275,39 @@ mod tests {
         let again = store.add_people(&people).await.unwrap();
         assert_eq!((again.created, again.added_to, again.already), (0, 0, 4));
         assert_eq!(store.list().await.unwrap(), listed);
+        store.close().await;
+    }
+
+    /// Adding someone from their page with an address another contact has,
+    /// which the person said they share: a new contact beside the other,
+    /// not more handles for it.
+    #[tokio::test]
+    async fn a_shared_handle_adds_a_new_person_beside_its_holder() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let vineyard = Handle::parse("email:vineyard@labarre.earth").unwrap();
+        let robert = store
+            .create(
+                "Robert Picard",
+                ContactKind::Person,
+                std::slice::from_ref(&vineyard),
+            )
+            .await
+            .unwrap();
+        let mut marie = person("Marie Picard", &["email:marie@labarre.earth"]);
+        marie.held = vec![(vineyard.clone(), WhenHeld::Share)];
+        let got = store.add_people(&[marie]).await.unwrap();
+        assert_eq!((got.created, got.added_to), (1, 0), "{got:?}");
+        let names: Vec<Vec<String>> = store
+            .resolve(&[vineyard])
+            .await
+            .unwrap()
+            .into_values()
+            .map(|cs| cs.into_iter().map(|c| c.names[0].clone()).collect())
+            .collect();
+        assert_eq!(names, [["Marie Picard", "Robert Picard"]]);
+        let robert = store.contact(&robert).await.unwrap().unwrap();
+        assert_eq!(robert.handles.len(), 1, "Marie's own address is hers");
         store.close().await;
     }
 }

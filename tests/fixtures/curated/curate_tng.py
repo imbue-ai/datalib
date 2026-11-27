@@ -32,7 +32,9 @@ picard = a.make(
     ],
 )
 a.contacts(
-    "POST", "/stopped_working", {"handle": "email:jlpicard@starfleet.gov", "by": "2364"}
+    "POST",
+    "/stopped_working",
+    {"handle": "email:jlpicard@starfleet.gov", "contact_id": picard, "by": "2364"},
 )
 a.contacts("POST", "/me", {"contact_id": picard, "me": True})
 
@@ -132,7 +134,7 @@ beverly = a.make(
     ],
 )
 # Wesley's number, linked to his mother by mistake and taken off.
-a.contacts("POST", "/unlink", {"handle": "tel:+12025550142"})
+a.contacts("POST", "/unlink", {"handle": "tel:+12025550142", "contact_id": beverly})
 # A shared address belongs to a group contact: the ship's status mail.
 ship = a.make("Enterprise systems", ["email:lcars@enterprise.starfleet"], kind="group")
 

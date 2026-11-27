@@ -393,6 +393,7 @@ impl Store {
 mod tests {
     use super::*;
     use crate::ContactKind;
+    use crate::WhenHeld;
     use strum::VariantArray;
 
     use datalib_sql::test_sql;
@@ -611,7 +612,10 @@ mod tests {
             .await
             .unwrap();
         let email = Handle::email("riker@enterprise.org").unwrap();
-        f.store.link(&email, &f.riker).await.unwrap();
+        f.store
+            .link(&email, &f.riker, WhenHeld::Refuse)
+            .await
+            .unwrap();
 
         let saved = f
             .store
@@ -620,7 +624,7 @@ mod tests {
             .unwrap();
         assert!(matches!(saved, Saved::Saved { .. }), "{saved:?}");
         let got = f.store.resolve(std::slice::from_ref(&email)).await.unwrap();
-        assert_eq!(got[email.as_str()].names, ["Will Riker"]);
+        assert_eq!(got[email.as_str()][0].names, ["Will Riker"]);
     }
 
     #[tokio::test]
