@@ -81,15 +81,15 @@ rust_test(
     ],
 )
 
-# Env-gated end-to-end test: skipped silently unless both
-# SIGNAL_BACKUP_AEP and SIGNAL_BACKUP_SNAPSHOT are set in the
-# environment, so `bazel test //...` stays green for everyone.
+# End-to-end test against a real Signal backup. `manual` keeps it out of
+# `bazel test //...`; run by name it fails unless both variables are passed:
+#   bazelisk test //datalib/backend/signal-backup:signal_backup_e2e \
+#     --test_env=SIGNAL_BACKUP_AEP=... --test_env=SIGNAL_BACKUP_SNAPSHOT=...
 rust_test(
     name = "signal_backup_e2e",
     srcs = ["tests/e2e.rs"],
     crate_root = "tests/e2e.rs",
     edition = "2021",
-    # Hermetic by default; users opt in via `--test_env`.
     tags = ["manual"],
     deps = [
         ":datalib_signal_backup",
