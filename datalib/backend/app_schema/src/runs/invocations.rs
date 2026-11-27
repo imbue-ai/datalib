@@ -1,5 +1,5 @@
-// One row per invocation: one process the loop started for one step, its
-// retries included until retries move into the loop's tick. What it was
+// One row per invocation: one process the loop started for one step, one
+// attempt of it (a retry is the next invocation). What it was
 // started with, how it is going and how it ended. The requests it served
 // are in `invocation_requests`.
 

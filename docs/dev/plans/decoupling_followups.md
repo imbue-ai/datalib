@@ -10,9 +10,9 @@ other type's is still `datalib-step probe`), item 8 (applets and probes
 get their params in `DATALIB_DAG_PARAMS`; the config model's move to a
 crate of its own is decided, not done) and item 9 (the lint checks are
 in, the `AGENTS.md` rule is not). Untouched: item 3. Of the reconciler
-in section 10, steps 1 to 5 are done (#2033, #2034, #2036, #2038,
-#2040, invocations for step 4 and one vocabulary for step 5); step 6
-is not.
+in section 10, steps 1 to 6 are done (#2033, #2034, #2036, #2038,
+#2040, invocations for step 4, #2090 for step 5, and retries in the
+tick for step 6).
 
 ## The end state
 
@@ -540,7 +540,14 @@ Each step ships alone, and the harness stays green throughout.
    that failed before it for its requests); and `RunKind::Migrate`,
    since nothing writes it but an older build's `runs` rows hold the
    word and the run picker shows it.
-6. **Retries in the tick.**
+6. **Retries in the tick. (done)** A failed invocation is one attempt;
+   the tick decides whether the step is tried again (`RetryPolicy`, now
+   in `supervisor/tick.rs`, numbers unchanged) and when, from the
+   attempt's number, failure kind and end time and the host's clock in
+   `Facts::now`. A step waiting out a backoff is `waiting` with
+   `waiting_for` `backoff`, holds no lock, and keeps its readers waiting
+   (open question 4). `invoke_with_retry` is gone; each attempt is an
+   invocation of its own, handed its number in `DATALIB_DAG_ATTEMPT`.
 
 The step protocol (#1894) already made verbs something a program
 declares (`[[programs]].verbs`) and sends `--prepare` at every start.
@@ -570,10 +577,36 @@ now outside the loop.
    downstream of one, waits (`Wait::Prepare`), and Sync stays offered.
    A CLI sync that finds no loop running runs the same loop until it is
    idle, with the same pass.
-4. **Retries and locks.** With retries in the tick, a step backing off
+4. **Retries and locks. (answered: none does; every lock is released
+   during a backoff.)** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it
-   lets another step take the slot in between. Check whether any
-   current step relies on keeping its lock across a retry.
+   lets another step take the slot in between. The locks the tree
+   declares, and what each protects:
+   - `network` (4 slots) and `cpu` (4), the defaults
+     (`supervisor/locks.rs`): budgets, not files. Releasing during a
+     backoff lets another download or render use the slot, which is
+     what a budget is for.
+   - `index` (2, `datalib-step`'s `step_entry::LOCKS`, the starter
+     config, `configs/dag_example.toml`): a budget for the fan-ins. Each
+     index step writes only its own tree.
+   - `embedder` (1, the same three places): the one lock that protects
+     a file several steps write, the search index's inference cache,
+     and keeps one embedding model loaded. Releasing it lets another
+     source's `embed` run between two attempts. That is safe: each
+     attempt is a process of its own, so the failed one has exited and
+     holds nothing open; the cache is plain SQLite, so a write the
+     failed attempt did not commit was rolled back; and an `embed` fills
+     only its own source's chunks, so the next attempt finds the cache
+     as the other `embed` left it, which is a state any attempt must
+     already handle.
+   - A step's own tree, as a read/write lock between it and the steps
+     that read it off disk (`reads = "files"`), is not released to its
+     readers: a step backing off counts as a producer about to run (rule
+     6), so they keep waiting, as they did while the retry ran inside the
+     invocation.
+
+   So no lock is kept across a backoff, and nothing needs a lock that a
+   backoff does not release.
 5. **One process per streaming consumer, instead of one per seal.**
    A step that reads a streaming input could be started once and stay
    alive until its inputs finish, the way `producer | consumer` works:

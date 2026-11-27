@@ -14,7 +14,6 @@ use std::time::Duration;
 
 use datalib_dag::config;
 use datalib_dag::events::FanOutSink;
-use datalib_dag::scheduler::RetryPolicy;
 use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
@@ -23,6 +22,7 @@ use datalib_dag::supervisor::loop_host::LoopHost;
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, LoopState};
 use datalib_dag::supervisor::reload::ConfigFile;
 use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
+use datalib_dag::supervisor::tick::RetryPolicy;
 use datalib_dag::{Event, EventSink, Runner};
 use tokio::sync::{mpsc, watch};
 

@@ -2192,7 +2192,7 @@ mod tests {
         let g = Graph::build(vec![spec]).unwrap();
         // One retry round-trip happens (rate_limited is retryable) —
         // zero backoff keeps the test fast.
-        let r = Runner::new(root.path()).retry(crate::scheduler::RetryPolicy {
+        let r = Runner::new(root.path()).retry(crate::supervisor::tick::RetryPolicy {
             backoff: std::time::Duration::ZERO,
             rate_limited_attempts: 2,
             ..Default::default()

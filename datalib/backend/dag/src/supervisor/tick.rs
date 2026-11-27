@@ -1,14 +1,65 @@
 //! The reconcile tick: from the graph, the open requests and the facts,
 //! each step's state and the starts, stops and request closures to make.
-//! Pure — no clock, no I/O; the host turns events into [`Facts`] and acts
-//! on the [`Tick`]. The rules are `dag/README.md`
+//! Pure — no clock, no I/O: the host reads the clock into [`Facts::now`],
+//! turns events into the rest of the [`Facts`] and acts on the [`Tick`].
+//! The rules are `dag/README.md`
 //! §"What the loop runs, and what makes a step stale".
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use strum::{EnumString, IntoStaticStr, VariantArray};
 
 use super::locks::Hold;
+use crate::step::FailureKind;
+
+/// How many times a step that fails is run, by failure kind, and how long
+/// the loop waits between two attempts. Each attempt is an invocation of
+/// its own; while the loop waits, the step holds no lock.
+#[derive(Debug, Clone)]
+pub struct RetryPolicy {
+    /// Max attempts (first try + retries) per failure kind.
+    pub transient_attempts: u32,
+    pub rate_limited_attempts: u32,
+    /// The wait before the first retry, doubled for each further one.
+    pub backoff: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            transient_attempts: 3,
+            rate_limited_attempts: 3,
+            backoff: Duration::from_secs(1),
+        }
+    }
+}
+
+impl RetryPolicy {
+    pub fn max_attempts(&self, kind: FailureKind) -> u32 {
+        match kind {
+            FailureKind::Transient => self.transient_attempts,
+            FailureKind::RateLimited => self.rate_limited_attempts,
+            // Auth: a human has to act. Data: retrying won't help.
+            // Cancelled: the user asked us to stop. Incomplete: the
+            // step's own retries already ran out. Incompatible: what it
+            // wrote will not change by asking again.
+            FailureKind::Auth
+            | FailureKind::Permission
+            | FailureKind::Data
+            | FailureKind::Cancelled
+            | FailureKind::Incomplete
+            | FailureKind::Incompatible => 1,
+        }
+    }
+
+    /// When attempt `number`, which failed with `kind` and ended at
+    /// `ended`, is tried again; `None` when it is the last.
+    pub fn retry_at(&self, number: u32, kind: FailureKind, ended: Instant) -> Option<Instant> {
+        (number < self.max_attempts(kind))
+            .then(|| ended + self.backoff * 2u32.saturating_pow(number.saturating_sub(1)))
+    }
+}
 
 pub type StepIx = usize;
 pub type SinkIx = usize;
@@ -36,6 +87,7 @@ pub struct Shape {
     pub locks: Vec<LockShape>,
     /// Every step, producers before the steps that read them.
     pub topo: Vec<StepIx>,
+    pub retry: RetryPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +131,9 @@ pub struct Facts {
     /// The data root's disk is under the config's `[disk_space]` floor:
     /// nothing starts, and what runs is stopped.
     pub low_disk: bool,
+    /// The host's clock as it read the rest: what a retry's backoff is
+    /// measured against.
+    pub now: Instant,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -115,6 +170,11 @@ pub struct Attempt {
     /// not done, and it runs again for a request that still wants it.
     pub stopped: bool,
     pub consumed: Consumed,
+    /// Which attempt it was, from 1: a retry is the next.
+    pub number: u32,
+    /// For one that failed, how, and when its process ended: whether it is
+    /// tried again, and when.
+    pub failure: Option<(FailureKind, Instant)>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,12 +194,17 @@ pub struct Tick {
     /// What each open request wants, indexed like [`Intent::requests`]
     /// and then like [`Shape::steps`].
     pub scopes: Vec<Vec<bool>>,
+    /// The earliest moment a step waiting out a backoff may be retried:
+    /// when the host ticks again with nothing else to wake it.
+    pub wake_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Start {
     pub step: StepIx,
     pub consumed: Consumed,
+    /// Which attempt this is, from 1: `DATALIB_DAG_ATTEMPT`.
+    pub attempt: u32,
 }
 
 /// `StateKind` is the word `system/supervisor.sqlite` stores for a state
@@ -191,6 +256,9 @@ pub enum Wait {
     DiskSpace,
     /// The prepare pass has not yet reached it, or a step it reads.
     Prepare,
+    /// Its last attempt failed in a way that is retried, and the backoff
+    /// before the next has not run out.
+    Backoff,
 }
 
 /// What a `waiting` step waits for, as `system/supervisor.sqlite` stores
@@ -214,6 +282,9 @@ pub enum WaitKind {
     /// The prepare pass at the loop's start has not yet reached it, or a
     /// step it reads.
     Prepare,
+    /// Its last attempt failed in a way that is retried; the loop waits out
+    /// the backoff before the next, holding no lock.
+    Backoff,
 }
 
 impl WaitKind {
@@ -235,6 +306,7 @@ impl From<Wait> for WaitKind {
             Wait::Lock(_) => WaitKind::Lock,
             Wait::DiskSpace => WaitKind::DiskSpace,
             Wait::Prepare => WaitKind::Prepare,
+            Wait::Backoff => WaitKind::Backoff,
         }
     }
 }
@@ -286,6 +358,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     // Something upstream of the step, not the step itself, is running or
     // due. Every producer comes first in `topo`, so its state is final.
     let mut moving_above = vec![false; n];
+    let mut wake_at: Option<Instant> = None;
 
     for &i in &shape.topo {
         let step = &shape.steps[i];
@@ -317,13 +390,25 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             continue;
         }
 
-        for &r in &wanting[i] {
-            failed_for[i][r] = f.last_attempt.as_ref().is_some_and(|a| {
-                a.failed
-                    && !a.stopped
-                    && a.started >= intent.requests[r].opened
-                    && a.consumed == now
+        // Its last attempt failed, on what it reads now, in a way that is
+        // tried again: which attempt is next, and when. Until then it has
+        // not failed for anyone.
+        let retry = f
+            .last_attempt
+            .as_ref()
+            .filter(|a| a.failed && !a.stopped && a.consumed == now)
+            .and_then(|a| {
+                let (kind, ended) = a.failure?;
+                Some((a.number + 1, shape.retry.retry_at(a.number, kind, ended)?))
             });
+        for &r in &wanting[i] {
+            failed_for[i][r] = retry.is_none()
+                && f.last_attempt.as_ref().is_some_and(|a| {
+                    a.failed
+                        && !a.stopped
+                        && a.started >= intent.requests[r].opened
+                        && a.consumed == now
+                });
         }
         let live: Vec<usize> = wanting[i]
             .iter()
@@ -334,7 +419,8 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
             states[i] = StepState::Failed;
             continue;
         }
-        let due = stale
+        let due = retry.is_some()
+            || stale
             || live
                 .iter()
                 .any(|&r| step.source && !started_since(f, intent.requests[r].opened));
@@ -350,6 +436,12 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         if facts.low_disk {
             pending[i] = true;
             states[i] = StepState::Waiting(Wait::DiskSpace);
+            continue;
+        }
+        if let Some((_, at)) = retry.filter(|&(_, at)| facts.now < at) {
+            pending[i] = true;
+            states[i] = StepState::Waiting(Wait::Backoff);
+            wake_at = Some(wake_at.map_or(at, |w: Instant| w.min(at)));
             continue;
         }
 
@@ -399,6 +491,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         starts.push(Start {
             step: i,
             consumed: now,
+            attempt: retry.map_or(1, |(next, _)| next),
         });
     }
 
@@ -426,6 +519,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
         stops,
         closed,
         scopes,
+        wake_at,
     }
 }
 
@@ -525,7 +619,7 @@ fn blocking_producer(
         w != i
             && match states[w] {
                 StepState::Running => !facts.steps[w].streams_output || !shape.steps[i].pins_reads,
-                StepState::Waiting(Wait::Lock(_) | Wait::Reader(_)) => true,
+                StepState::Waiting(Wait::Lock(_) | Wait::Reader(_) | Wait::Backoff) => true,
                 _ => false,
             }
     })
@@ -569,6 +663,7 @@ mod tests {
             topo: (0..steps.len()).collect(),
             steps,
             locks: default_locks(),
+            retry: RetryPolicy::default(),
         }
     }
 
@@ -599,6 +694,8 @@ mod tests {
                         failed: false,
                         stopped: false,
                         consumed,
+                        number: 1,
+                        failure: None,
                     }),
                     running: None,
                     streams_output: false,
@@ -611,6 +708,7 @@ mod tests {
             sinks,
             steps,
             low_disk: false,
+            now: Instant::now(),
         }
     }
 
@@ -645,6 +743,8 @@ mod tests {
             failed: outcome.is_err(),
             stopped: false,
             consumed,
+            number: 1,
+            failure: None,
         });
     }
 
@@ -1258,6 +1358,8 @@ mod tests {
             failed: true,
             stopped: true,
             consumed: c0,
+            number: 1,
+            failure: None,
         });
         let t = tick(&s, &intent, &facts);
         assert!(t.starts.is_empty(), "{t:?}");
@@ -1300,5 +1402,99 @@ mod tests {
         facts.low_disk = true;
         let t = tick(&s, &request(&[1], 5), &facts);
         assert_eq!(t.closed, vec![(0, Outcome::Done)]);
+    }
+
+    /// The step fails `kind` as the attempt `start` was, its process
+    /// ending at `ended`.
+    fn fail(facts: &mut Facts, step: StepIx, start: &Start, kind: FailureKind, ended: Instant) {
+        let r = facts.steps[step].running.take().expect("was running");
+        facts.steps[step].last_attempt = Some(Attempt {
+            started: r.started,
+            failed: true,
+            stopped: false,
+            consumed: start.consumed.clone(),
+            number: start.attempt,
+            failure: Some((kind, ended)),
+        });
+    }
+
+    /// A transient failure with attempts left is a wait, not a failure:
+    /// the step holds no lock while it backs off, so another step takes
+    /// the one slot; what reads it waits; the request stays open; and once
+    /// the backoff is out it starts again as the next attempt, the wait
+    /// doubling each time. Before, a retry waited inside its invocation,
+    /// holding its lock and reading as running.
+    #[test]
+    fn a_failure_that_is_retried_waits_out_its_backoff_holding_no_lock() {
+        // Sources 0 and 1 share the one network slot; 2 reads 0.
+        let mut s = shape(&[&[], &[], &[0]]);
+        s.locks[NETWORK].slots = 1;
+        s.retry.backoff = Duration::from_secs(10);
+        let mut facts = all_fresh(&s, 1);
+        facts.steps[2].last_success = None;
+        let t0 = Instant::now();
+        facts.now = t0;
+        let intent = request(&[0, 1], 5);
+
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(started(&t), vec![0], "1 waits for the network slot");
+        let first = t.starts[0].clone();
+        assert_eq!(first.attempt, 1);
+        run(&mut facts, 0, 6);
+        fail(&mut facts, 0, &first, FailureKind::Transient, t0);
+
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(t.states[0], StepState::Waiting(Wait::Backoff));
+        assert_eq!(started(&t), vec![1], "0's slot is free while it backs off");
+        assert_eq!(t.states[2], StepState::Waiting(Wait::Upstream(0)));
+        assert_eq!(t.wake_at, Some(t0 + Duration::from_secs(10)));
+        assert!(t.closed.is_empty(), "{t:?}");
+        let one = t.starts[0].clone();
+        run(&mut facts, 1, 7);
+        finish(&mut facts, 1, one.consumed, Ok("v1"));
+
+        facts.now = t0 + Duration::from_secs(10);
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(started(&t), vec![0], "the backoff is out");
+        let second = t.starts[0].clone();
+        assert_eq!(second.attempt, 2);
+        run(&mut facts, 0, 8);
+        let ended = facts.now;
+        fail(&mut facts, 0, &second, FailureKind::Transient, ended);
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(
+            t.wake_at,
+            Some(t0 + Duration::from_secs(30)),
+            "the second wait is twice the first"
+        );
+    }
+
+    /// The last attempt's failure is the step's: it is not tried again,
+    /// and the request closes failed. A failure of a kind that is not
+    /// retried is the last attempt at once.
+    #[test]
+    fn the_last_attempt_fails_the_step_and_closes_its_request() {
+        let mut s = shape(&[&[]]);
+        s.retry.transient_attempts = 2;
+        let mut facts = all_fresh(&s, 1);
+        let t0 = Instant::now();
+        facts.now = t0;
+        let intent = request(&[0], 5);
+        let mut start = tick(&s, &intent, &facts).starts[0].clone();
+        start.attempt = 2;
+        run(&mut facts, 0, 6);
+        fail(&mut facts, 0, &start, FailureKind::Transient, t0);
+        let t = tick(&s, &intent, &facts);
+        assert_eq!(t.states[0], StepState::Failed);
+        assert_eq!(t.wake_at, None);
+        assert_eq!(t.closed, vec![(0, Outcome::Failed { step: 0 })]);
+
+        let first = Start {
+            attempt: 1,
+            ..start
+        };
+        run(&mut facts, 0, 7);
+        fail(&mut facts, 0, &first, FailureKind::Auth, t0);
+        assert_eq!(tick(&s, &intent, &facts).states[0], StepState::Failed);
     }
 }

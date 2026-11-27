@@ -103,8 +103,8 @@ step off: that is a row too. Only the process holding `runner-lock` runs the
 loop, and it hears of new rows because whoever writes one announces it:
 writes a line to every FIFO in `system/supervisor-listeners/` (below,
 "What wakes the loop"). An **invocation** is one process the loop
-starts for one step (its retries included, until retries move into the
-tick); it is started for every open request whose scope wants the step,
+starts for one step (a retry is an invocation of its own, the next
+attempt); it is started for every open request whose scope wants the step,
 and the run store files it under each of them. What the app calls a
 **run** is one request (or one job: a reset, a compaction, the prepare
 pass) with the invocations started for it (§"History: invocations and
@@ -179,12 +179,12 @@ starts** in a tick, visited in topological order, iff:
 
 A step that waits says why twice in its row. `waiting_for` is the
 kind, one word a program can test (`WaitKind` in `supervisor/tick.rs`):
-`upstream`, `reader`, `lock`, `disk_space`, or `config` for a step a
+`upstream`, `reader`, `lock`, `disk_space`, `prepare`, `backoff`, or `config` for a step a
 request names that the config the loop runs does not have yet.
 `state_detail` is the sentence a person reads: `waiting for a`,
 `waiting for c, which reads what this writes`, `waiting for lock gpu,
 held by trainer`, `waiting for disk space: 3.2 GB free on the data
-root's disk; steps pause under 10.0 GB and run again from 15.0 GB`. Each step writes only the tree its id names, so
+root's disk; steps pause under 10.0 GB and run again from 15.0 GB`, `waiting to retry after a transient failure: attempt 2 of 3 starts at 2026-11-27T14:03:05+00:00`. Each step writes only the tree its id names, so
 no two steps ever wait on each other as writers of one sink.
 
 A consumer of a streaming producer can run as several invocations in
@@ -236,9 +236,23 @@ reported is a version like any other, and a dependent reads it; a fan-in
 reads every source that worked. A step whose inputs have *never* been
 published — a first download that failed — has nothing to read and is
 `blocked`. Failure kinds map to a retry policy; the step only classifies.
-Retries re-invoke the step inside one invocation, which is safe because
-steps promise idempotency, and once they run out the step is not started
-again for that request unless something it reads moves.
+
+**A retry is the tick's decision** (`RetryPolicy` in `supervisor/tick.rs`:
+`transient` and `rate_limited` failures get 3 attempts, 1 s before the
+second and 2 s before the third; every other kind gets 1). A failed
+invocation is one attempt. While attempts are left, and what the step
+reads is what that attempt read, the step has not failed for any
+request: it is `waiting` with `waiting_for` `backoff` until the wait is
+out, then starts as the next attempt, handed its number in
+`DATALIB_DAG_ATTEMPT`. While it waits it has no process, so it holds no
+lock; the steps that read it wait for it as for a producer about to run
+(rule 6), so none reads its tree between two attempts. That is safe
+because each attempt is a process of its own and steps promise
+idempotency. An invocation the loop sent SIGINT to that fails in a way
+that is retried is recorded as stopped, not retried. Once the attempts
+run out the step has failed, and is not started again for that request
+unless something it reads moves. A retried failure is an attempt of
+the same run, so a request's `failed_before` does not count it.
 
 **A request closes** when nothing in its scope is running or waiting:
 `failed`, naming the first step in topological order that failed for it

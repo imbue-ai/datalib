@@ -15,7 +15,7 @@ loop; `datalib-http` writes it for the life of the server. The tables:
 | table | one row per |
 |---|---|
 | `processes` | a process that took part (below) |
-| `invocations` | an invocation: one process the loop started for one step, its retries included. What it was started with (`fingerprint`, `reads`, `now`, `verb` for one a job started), its state (`running`, then how it ended), attempt, error, message, exit, start and end. One whose loop died is closed as `stopped` by the next loop |
+| `invocations` | an invocation: one process the loop started for one step: one attempt, a retry being the next invocation. What it was started with (`fingerprint`, `reads`, `now`, `verb` for one a job started), its state (`running`, then how it ended), attempt, error, message, exit, start and end. One whose loop died is closed as `stopped` by the next loop |
 | `invocation_requests` | an invocation and a request it served: each open request whose scope wanted the step, or the job (a reset, a compaction, the prepare pass) that started it. Request and job rows themselves are in `system/supervisor.sqlite` |
 | `log` | a line |
 | `invocation_metrics`, `invocation_metric_samples` | an invocation's numbers — the newest value of each series, and a sparse time series. A value the runner keeps for a step it is not running (a consumer's `queued{from=…}`) goes under the step's latest invocation, or under an empty id before it has one |

@@ -21,8 +21,8 @@ pub enum Event {
     RunPlan {
         steps: Vec<PlannedStep>,
     },
-    /// The loop started an invocation of this step: one process, its
-    /// retries included, and what it was started for and with. Comes
+    /// The loop started an invocation of this step: one process, one
+    /// attempt, and what it was started for and with. Comes
     /// before the invocation's first `StepStart`.
     InvocationStart {
         step: StepId,

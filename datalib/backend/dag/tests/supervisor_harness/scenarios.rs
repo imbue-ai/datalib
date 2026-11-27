@@ -145,38 +145,57 @@ async fn a_turned_off_step_stops_and_runs_again_on_turn_on() {
     h.finish().await;
 }
 
-/// A stop during a retry's backoff ends the wait at once: the backoff
-/// here is an hour.
+/// Whether `step`'s row says it waits out a backoff before attempt `next`.
+fn backing_off(s: &State, step: &str, next: u32) -> Option<()> {
+    let st = s.record.steps.get(step)?;
+    let says =
+        format!("waiting to retry after a transient failure: attempt {next} of 3 starts at ");
+    (st.state == Some(StateKind::Waiting)
+        && st.waiting_for == Some(WaitKind::Backoff)
+        && st.state_detail.as_deref()?.starts_with(&says))
+    .then_some(())
+}
+
+/// A transient failure ends its invocation: the step's row says it waits
+/// to retry, and when. A stop during the backoff (an hour here) closes the
+/// request at once, and nothing starts again. Before, the backoff was a
+/// sleep inside the invocation, which a stop cut short.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_stop_during_a_retry_backoff_ends_it_at_once() {
     let mut h = Harness::new(&[source("a")]).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
     h.run("a", "fail transient").await;
+    let end = h.ended("a", 1).await;
+    assert_eq!((end.outcome.as_str(), end.attempts), ("failed", 1));
+    h.until("a to wait out its backoff", |s| backing_off(s, "a", 2))
+        .await;
     h.stop(&sync).await;
     assert_eq!(h.closed(&sync).await, RequestOutcome::Stopped);
-    let end = h.ended("a", 1).await;
-    assert_eq!((end.outcome.as_str(), end.attempts), ("stopped", 1));
+    assert_eq!(h.state().await.started("a"), 1);
     h.finish().await;
 }
 
+/// Turned off during its backoff, a step is off, and its request closes
+/// without it.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_turn_off_during_a_retry_backoff_ends_it_at_once() {
     let mut h = Harness::new(&[source("a")]).await;
     let sync = h.sync(&["a"]).await;
     h.started("a").await;
     h.run("a", "fail transient").await;
+    h.until("a to wait out its backoff", |s| backing_off(s, "a", 2))
+        .await;
     h.turn_off("a").await;
-    let end = h.ended("a", 1).await;
-    assert_eq!((end.outcome.as_str(), end.attempts), ("stopped", 1));
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
+    assert_eq!(h.state().await.started("a"), 1);
     h.finish().await;
 }
 
-/// A transient failure is retried inside the same invocation, by a new
-/// process.
+/// A transient failure is retried by a new invocation, which is handed
+/// the next attempt's number in `DATALIB_DAG_ATTEMPT`.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_transient_failure_is_retried_by_a_new_process_in_one_invocation() {
+async fn a_transient_failure_is_retried_by_a_new_invocation() {
     let mut h = Harness::with(&[source("a")], retries_at_once()).await;
     let sync = h.sync(&["a"]).await;
     let first = h.started("a").await;
@@ -185,9 +204,13 @@ async fn a_transient_failure_is_retried_by_a_new_process_in_one_invocation() {
     assert_ne!(first, second);
     h.run("a", "ok v1").await;
     assert_eq!(h.closed(&sync).await, RequestOutcome::Done);
-    let end = h.ended("a", 1).await;
-    assert_eq!((end.outcome.as_str(), end.attempts), ("succeeded", 2));
-    assert_eq!(h.state().await.started("a"), 1, "one invocation");
+    let state = h.state().await;
+    let ends: Vec<(&str, u32)> = state
+        .ended("a")
+        .into_iter()
+        .map(|e| (e.outcome.as_str(), e.attempts))
+        .collect();
+    assert_eq!(ends, [("failed", 1), ("succeeded", 2)], "two invocations");
     h.finish().await;
 }
 

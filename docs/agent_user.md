@@ -226,7 +226,8 @@ step's log even when the step ends `succeeded`, and its `request_end`
 row counts them in `failed_before`. Failures carry a kind
 (`transient` / `rate_limited` / `auth` / `permission` / `data` /
 `cancelled` / `incomplete`); the
-runner already retries transient/rate-limited ones with backoff, and
+runner already retries transient/rate-limited ones with backoff (each
+attempt its own invocation, the wait shown as `waiting_for: backoff`), and
 what a failed step committed is still read downstream; only a step
 whose inputs were never written at all is `blocked`. Ctrl-C is graceful:
 steps checkpoint-commit partial progress and the next run resumes.

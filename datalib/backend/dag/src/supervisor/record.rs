@@ -41,7 +41,7 @@ pub struct LastInvocation {
     pub finished_at: Option<String>,
     /// How it ended, as `RunState::as_str`; empty while it runs.
     pub status: String,
-    /// How many attempts this took, retries included.
+    /// Which attempt it was, from 1: a retry is the next invocation.
     pub attempts: u32,
     pub error: Option<String>,
     /// Why it failed, when it did.

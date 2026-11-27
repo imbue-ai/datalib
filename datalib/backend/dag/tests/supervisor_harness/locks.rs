@@ -48,6 +48,38 @@ async fn a_named_mutex_keeps_its_holders_apart_and_nobody_else() {
     h.finish().await;
 }
 
+/// A step waiting out a retry's backoff holds no lock: the other holder of
+/// a one-slot lock runs in the meantime. Before, the retry slept inside its
+/// invocation, holding the slot, and the other source waited the whole
+/// backoff (an hour here).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_step_backing_off_lets_another_take_its_lock() {
+    let steps = [
+        source("a").locks(r#"["quota"]"#),
+        source("b").locks(r#"["quota"]"#),
+    ];
+    let quota = "[[locks]]\nname = \"quota\"\nslots = 1\n\n";
+    let mut h = Harness::with_locks(&steps, Clocks::default(), quota).await;
+    let sync = h.sync(&["a", "b"]).await;
+    let first = first_started(&mut h, &["a", "b"]).await;
+    let second = if first == "a" { "b" } else { "a" };
+    h.run(&first, "fail transient").await;
+    h.started(second).await;
+    h.run(second, "ok v1").await;
+    let what = format!("{first} to wait out its backoff");
+    let st = h
+        .until(&what, |s| {
+            let st = s.record.steps.get(first.as_str())?;
+            (st.waiting_for.map(|w| w.as_str()) == Some("backoff")).then(|| st.clone())
+        })
+        .await;
+    assert!(st.requests.contains(&sync), "it still serves the sync");
+    assert_eq!(h.state().await.started(&first), 1, "not retried yet");
+    h.stop(&sync).await;
+    assert_eq!(h.closed(&sync).await, RequestOutcome::Stopped);
+    h.finish().await;
+}
+
 /// `slots = 2`: two of three holders run at once, and the third takes the
 /// slot the first to end gives back.
 #[tokio::test(flavor = "multi_thread")]
