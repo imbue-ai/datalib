@@ -1,4 +1,4 @@
-//! The environment variables datalib's processes hand each other: the
+//! The environment variables Datalib's processes hand each other: the
 //! runner to a step, the gateway to an applet, anything to latchkey. One
 //! spelling per name, so the side that sets a variable and the side that
 //! reads it cannot drift apart silently; and the short list of what a

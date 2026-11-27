@@ -1,6 +1,6 @@
 //! What macOS's FSEvents history does and does not vouch for, one test per
 //! fact, measured so a fast path for `file_changes_scan` can be designed around them.
-//! Nothing in datalib uses FSEvents yet.
+//! Nothing in Datalib uses FSEvents yet.
 //!
 //! The question each test asks is the one a sync would: "what changed under
 //! this root since the event id I stored last run?" A new stream replays the

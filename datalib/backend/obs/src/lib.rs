@@ -1,4 +1,4 @@
-//! Observability wiring for every datalib Rust binary.
+//! Observability wiring for every Datalib Rust binary.
 
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -135,8 +135,8 @@ pub fn init(args: &ObsArgs, service_name: &'static str) -> Result<TracingGuard> 
     // different concrete types that can't share a variable.
     // The diagnostics layer captures every WARN/ERROR event into the
     // ambient per-source buffer (when one is installed via
-    // `diagnostics::scope`) so the sync orchestrator can fold them into
-    // the per-source summary. It's a no-op on tasks without a buffer.
+    // `diagnostics::scope`, as the ingest step does). It's a no-op on
+    // tasks without a buffer.
     let registry = tracing_subscriber::registry()
         .with(filter)
         .with(otel_layer)

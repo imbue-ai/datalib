@@ -1,4 +1,4 @@
-# Clippy config for the datalib Rust workspace.
+# Clippy config for the Datalib Rust workspace.
 #
 # Anything here that fires becomes a hard error in pre-commit, which
 # runs `bazelisk build --config=clippy //...`. The .bazelrc block for
@@ -12,8 +12,8 @@
 # `MultiProgress` and wires it into an `IndicatifWriter` that the
 # tracing fmt layer uses, so every log emission suspends bar draws
 # before writing. A second `MultiProgress` somewhere else in the
-# workspace would race for stderr and reintroduce the flicker we
-# already debugged out of existence.
+# workspace would race for stderr, and its bars would flicker over the
+# log lines.
 #
 # If a new caller needs progress bars, pull the shared MP via
 # `datalib_obs::shared_multi()` and attach bars there.
