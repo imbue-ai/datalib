@@ -8,7 +8,6 @@ use datalib_etl::control::DownloadControl;
 use datalib_etl::download_metrics::DownloadMetrics;
 use datalib_etl::processor::RunCtx;
 use datalib_etl::progress::Progress;
-use datalib_obs::diagnostics::Diagnostics;
 
 use datalib_etl::doltlite_raw::commit_run;
 use datalib_etl_discord::ingest::{self, db_path_for, schema_raw, snowflake, FetchSummary, RawDb};
@@ -425,7 +424,6 @@ async fn first_sync_missing_a_channel(seal_as_it_goes: bool) -> (i64, Value) {
             &progress,
             &control,
             DownloadMetrics::new(),
-            Diagnostics::new(),
         );
         let db = RawDb::open(&db_path_for(&store)).await.unwrap();
         let (pool, cas_pool) = (db.pool().clone(), db.cas().pool().clone());

@@ -54,10 +54,8 @@ pub const EXAMPLES: &[datalib_source_common::ConfigExample] = &[
     },
 ];
 
-/// The full config for a `type: email` source: the shared `common:` envelope
-/// (paths + cross-source knobs, composed from `source_common` and resolved by
-/// the orchestrator's `normalize()`) plus everything email-specific. `name`
-/// and `enabled` stay orchestrator-owned and are NOT here.
+/// The params of an email source's `ingest` step: the `common` settings
+/// every download takes, and everything email-specific.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailConfig {
@@ -121,7 +119,7 @@ pub struct EmailConfig {
 
 /// Params for the email **render** step. Split from [`EmailConfig`]
 /// (the download-step params) so each step's params carry only what
-/// that wave reads.
+/// that step reads.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EmailRenderConfig {

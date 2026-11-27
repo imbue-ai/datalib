@@ -2054,14 +2054,14 @@ async fn apply_source(
         if !to_read.is_empty() || !removed.is_empty() {
             let rewritten = nodes::rewrite_touched(conn, write_lock)
                 .await
-                .with_context(|| format!("settle {stanza}'s nodes"))?;
+                .with_context(|| format!("rewrite the nodes rows {stanza} touched"))?;
             tracing::debug!(
                 source = %stanza,
                 touched = rewritten.touched,
                 changed = rewritten.changed,
                 rows_kept = rewritten.rows_kept,
                 rows_dropped = rewritten.rows_dropped,
-                "nodes settled"
+                "nodes rewritten"
             );
         }
         took.nodes_ms = laps.lap();

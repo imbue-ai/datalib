@@ -30,20 +30,6 @@ impl DownloadParams {
     pub const DEFAULT_MAX_SEQUENTIAL_FAILURES: u64 = 50;
     pub const DEFAULT_MAX_REQUESTS_AT_ONCE: u64 = 8;
 
-    pub fn merge(&self, source: &DownloadParams) -> DownloadParams {
-        DownloadParams {
-            maximum_time_without_progress_in_minutes: source
-                .maximum_time_without_progress_in_minutes
-                .or(self.maximum_time_without_progress_in_minutes),
-            maximum_sequential_failed_requests: source
-                .maximum_sequential_failed_requests
-                .or(self.maximum_sequential_failed_requests),
-            maximum_requests_at_once: source
-                .maximum_requests_at_once
-                .or(self.maximum_requests_at_once),
-        }
-    }
-
     pub fn max_time_without_progress(&self) -> std::time::Duration {
         let mins = self
             .maximum_time_without_progress_in_minutes

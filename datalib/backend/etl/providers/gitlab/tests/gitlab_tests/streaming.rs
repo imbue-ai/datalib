@@ -22,7 +22,6 @@ use datalib_etl_gitlab_render::render::{parse_api_dir, render_gitlab};
 use datalib_etl_render::inputs::RawRange;
 use datalib_etl_render::section::join;
 use datalib_etl_web::playback;
-use datalib_obs::diagnostics::Diagnostics;
 
 use crate::interrupt::{tape, Edition};
 use crate::support::PROJECT;
@@ -76,7 +75,6 @@ async fn ingest(raw: &Path, playback_tree: &Path, now: &str) -> Vec<String> {
         &progress,
         &control,
         DownloadMetrics::new(),
-        Diagnostics::new(),
     );
     playback::scope(playback_tree, proc.run(&ctx))
         .await

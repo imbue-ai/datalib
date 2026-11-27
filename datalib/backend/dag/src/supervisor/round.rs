@@ -1118,7 +1118,7 @@ impl Runner {
         let opened_at = store.job(&job).await?.map(|j| j.opened_at);
         tracing::info!(
             steps = to_prepare.len(),
-            "supervisor: asking each step to prepare"
+            "supervisor: running each step's command with --prepare"
         );
         let ids: Vec<&str> = to_prepare.iter().map(String::as_str).collect();
         store.begin_job_steps(&job, &ids).await?;
@@ -1979,8 +1979,8 @@ fn record_states(
             )),
             Row::Waiting(Wait::Backoff) => retrying.get(&i).cloned(),
             Row::Waiting(Wait::Prepare) => Some(
-                "waiting for the upgrade: this build has not yet asked it, or a step it reads, \
-                 to make what it stored usable"
+                "waiting for the upgrade: this build has not yet run its command, or that of a step \
+                 it reads, with --prepare to bring what it stored to this build's shape"
                     .to_string(),
             ),
             Row::Waiting(Wait::DiskSpace) => Some(match low {

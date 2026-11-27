@@ -143,7 +143,7 @@ pub async fn run(
         ..
     } = planned;
     let Processors::Render(processors) = processors else {
-        anyhow::bail!("the diff driver was handed source {name:?}'s ingest wave");
+        anyhow::bail!("the diff driver was handed source {name:?}'s download processors");
     };
     anyhow::ensure!(
         !processors.is_empty(),

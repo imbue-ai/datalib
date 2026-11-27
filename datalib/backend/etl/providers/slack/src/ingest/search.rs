@@ -105,7 +105,7 @@ impl<Q: Fn(&Span) -> String> SearchWalk<Q> {
                     self.page = 1;
                 }
                 None => anyhow::bail!(
-                    "{M_SEARCH}: {MAX_PAGES} pages settled nothing of {}..{}; the rest was not searched",
+                    "{M_SEARCH}: {MAX_PAGES} pages covered none of {}..{}; the rest was not searched",
                     key_ts(&self.stretch.lo),
                     key_ts(&self.stretch.hi)
                 ),
@@ -200,7 +200,7 @@ mod tests {
         assert_eq!(lowered.page, 1);
 
         let err = next(&mut past_the_last_page("90")).await.err().unwrap();
-        assert!(format!("{err:#}").contains("settled nothing"), "{err:#}");
+        assert!(format!("{err:#}").contains("covered none"), "{err:#}");
     }
 
     #[test]
