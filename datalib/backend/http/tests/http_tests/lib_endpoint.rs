@@ -135,8 +135,7 @@ async fn put_writes_the_two_files_that_define_a_component() {
     assert_eq!(body, source);
 }
 
-/// The capability the old name-only format could not express: a
-/// component that appears in the gallery *with* arguments.
+/// A component can appear in the gallery *with* arguments.
 #[tokio::test]
 async fn component_args_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
@@ -338,9 +337,8 @@ async fn put_rejects_names_that_are_not_identifiers() {
     }
 }
 
-/// Namespacing removed the need to reserve builtin view names: a
-/// component called `gridView` is `comp.user.gridView`, which cannot
-/// shadow the builtin `gridView()`.
+/// Builtin view names need no reserving: a component called `gridView` is
+/// `comp.user.gridView`, which cannot shadow the builtin `gridView()`.
 #[tokio::test]
 async fn a_component_may_take_a_builtin_view_name() {
     let tmp = tempfile::tempdir().unwrap();

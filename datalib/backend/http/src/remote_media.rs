@@ -394,7 +394,7 @@ pub struct Covered {
 #[derive(Serialize)]
 pub struct CheckResponse {
     /// Every URL asked about that a row covers, with the row. A URL not
-    /// here is held.
+    /// here is not loaded.
     pub allowed: Vec<Covered>,
 }
 

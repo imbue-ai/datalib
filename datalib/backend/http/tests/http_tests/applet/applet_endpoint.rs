@@ -291,7 +291,7 @@ async fn an_applet_that_never_binds_is_bounded() {
     assert!(err.contains("did not report a listening port"), "{err}");
 }
 
-/// Readiness is the applet's own announcement, not an open port.
+/// Readiness is the line the applet prints on stdout, not an open port.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_listening_applet_that_never_announces_is_not_adopted() {
     let tmp = tempfile::tempdir().unwrap();

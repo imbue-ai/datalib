@@ -1,6 +1,7 @@
-//! Every launch on a root: the server's loop asks every step whose program
-//! takes the verb to `--prepare`, holding back only what it has not asked
-//! and what reads that, and runs the ones that answer `needs_rerun`
+//! Every launch on a root: the server's loop runs every step whose program
+//! takes the verb with `--prepare` appended, starts no other run of a step
+//! whose `--prepare` has not exited or of what reads one, and runs the
+//! steps whose `--prepare` reported `needs_rerun`
 //! (`dag/README.md` §"Upgrading a root").
 
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ use tower::ServiceExt;
 const TOKEN: &str = "upgrade-on-launch-test-token";
 
 /// Stands in for `datalib-step` on the binary path: logs how it was
-/// invoked, and as `b`'s render answers that it needs to run again. While
+/// invoked, and as `b`'s render's `--prepare` reports `needs_rerun`. While
 /// a `hold` file is in the root, a prepare waits for it to go.
 const FAKE_STEP: &str = r#"#!/bin/sh
 case " $* " in *" --prepare "*) mode=prepare ;; *) mode=sync ;; esac
@@ -75,12 +76,12 @@ async fn boot(root: &Path, bin: &Path) -> AppState {
 
 /// A sync of `groups`' downloads, opened before the server is up.
 async fn sync_before_boot(root: &Path, groups: &[&str]) {
-    let mailbox = datalib_dag::supervisor::store::Store::open(root)
+    let supervisor_store = datalib_dag::supervisor::store::Store::open(root)
         .await
         .unwrap();
     let roots: Vec<String> = groups.iter().map(|g| format!("{g}/ingest")).collect();
-    mailbox.open_request(&roots, "ui").await.unwrap();
-    mailbox.close().await;
+    supervisor_store.open_request(&roots, "ui").await.unwrap();
+    supervisor_store.close().await;
 }
 
 async fn sync_a_and_wait(root: &Path) {
@@ -116,14 +117,15 @@ async fn get(state: &AppState, uri: &str) -> serde_json::Value {
     serde_json::from_slice(&bytes).unwrap()
 }
 
-/// Every step is asked, producers first, and none syncs before it and
-/// every step it reads have been asked; the next launch asks every step
-/// again, since the runner cannot tell whether a program changed in
-/// between. `b`'s render, which says it needs to run again, is run on that
-/// launch without anyone asking — only `a` is synced — and leaves the list
+/// Every step's `--prepare` runs, producers first, and no step syncs
+/// before its own `--prepare` and those of every step it reads have
+/// exited; the next launch runs every step's `--prepare` again, since the
+/// runner cannot tell whether a program changed in between. `b`'s render,
+/// whose `--prepare` reports `needs_rerun`, is run on that launch without
+/// anyone pressing Sync on it — only `a` is synced — and leaves the list
 /// of what is behind once it has.
 #[tokio::test]
-async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
+async fn a_launch_prepares_every_step_before_it_or_a_reader_syncs_at_every_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -145,14 +147,14 @@ async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
             .position(|l| l == line)
             .unwrap_or_else(|| panic!("no {line:?} in {lines:?}"))
     };
-    let mut asked: Vec<&str> = lines
+    let mut prepared: Vec<&str> = lines
         .iter()
         .map(String::as_str)
         .filter(|l| l.starts_with("prepare"))
         .collect();
-    asked.sort();
+    prepared.sort();
     assert_eq!(
-        asked,
+        prepared,
         [
             "prepare a/ingest",
             "prepare a/render_markdown",
@@ -168,9 +170,9 @@ async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
             "a download syncs only once it is asked: {lines:?}"
         );
         let rendered = at(&format!("sync {group}/render_markdown"));
-        for asked in ["ingest", "render_markdown"] {
+        for function in ["ingest", "render_markdown"] {
             assert!(
-                at(&format!("prepare {group}/{asked}")) < rendered,
+                at(&format!("prepare {group}/{function}")) < rendered,
                 "a render syncs only once it and what it reads are asked: {lines:?}"
             );
         }
@@ -200,13 +202,13 @@ async fn a_launch_asks_every_step_before_it_or_a_reader_syncs_at_every_start() {
     let state = boot(&root, &bin).await;
     until_invoked(&root, "sync a/render_markdown").await;
     until_invoked(&root, "sync b/render_markdown").await;
-    let mut asked: Vec<String> = invoked(&root)
+    let mut prepared: Vec<String> = invoked(&root)
         .into_iter()
         .filter(|l| l.starts_with("prepare"))
         .collect();
-    asked.sort();
+    prepared.sort();
     assert_eq!(
-        asked,
+        prepared,
         [
             "prepare a/ingest",
             "prepare a/render_markdown",
@@ -232,12 +234,12 @@ async fn until_caught_up(state: &AppState) -> serde_json::Value {
     }
 }
 
-/// While the downloads' `--prepare`s are still running, the run's record
-/// already lists every step the pass will run `--prepare` for, the rest as
+/// While the downloads' `--prepare`s are still running, the run's rows in
+/// the run store already list every step the pass will run `--prepare` for, the rest as
 /// pending, so a person can see how many are left (#1678: the pass's run
 /// listed only the steps reached).
 #[tokio::test]
-async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
+async fn the_prepare_run_lists_every_step_it_will_prepare_from_the_start() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();
@@ -282,11 +284,11 @@ async fn the_prepare_run_lists_every_step_it_will_ask_from_the_start() {
 
 /// While the pass runs, Sync stays offered. A sync of a source the pass
 /// has not reached waits for it, its step reading as waiting on the
-/// upgrade, and a step the pass does not hold runs at once. Before, every
-/// Sync was disabled until the whole pass was over, and the loop took no
-/// request at all until then.
+/// upgrade, and a step the pass is not keeping from starting runs at once.
+/// Before, every Sync was disabled until the whole pass was over, and the
+/// loop served no request at all until then.
 #[tokio::test]
-async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
+async fn a_sync_waits_only_for_the_steps_the_pass_has_not_reached() {
     use datalib_dag::supervisor::tick::WaitKind;
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
@@ -307,10 +309,10 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
     let rows = get(&state, "/api/manage/rows").await;
     assert_eq!(rows["sync_paused"], serde_json::Value::Null, "{rows}");
 
-    let mailbox = datalib_dag::supervisor::store::Store::open(&root)
+    let supervisor_store = datalib_dag::supervisor::store::Store::open(&root)
         .await
         .unwrap();
-    let id = mailbox
+    let id = supervisor_store
         .open_request(&["a/ingest".into(), "c/out".into()], "ui")
         .await
         .unwrap();
@@ -322,7 +324,7 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    while mailbox.load_record().await.unwrap().steps["a/ingest"].waiting_for
+    while supervisor_store.load_record().await.unwrap().steps["a/ingest"].waiting_for
         != Some(WaitKind::Prepare)
     {
         assert!(
@@ -336,18 +338,21 @@ async fn a_sync_waits_only_for_the_steps_the_pass_holds() {
         "{:?}",
         invoked(&root)
     );
-    assert_eq!(mailbox.request(&id).await.unwrap().unwrap().closed, None);
+    assert_eq!(
+        supervisor_store.request(&id).await.unwrap().unwrap().closed,
+        None
+    );
 
     std::fs::remove_file(root.join("hold")).unwrap();
     until_invoked(&root, "sync a/ingest").await;
-    mailbox.close().await;
+    supervisor_store.close().await;
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// Two sources have no path between them, so their `--prepare`s run at
-/// the same time: with every `--prepare` held, both downloads' have
-/// started, and neither render's has. The pass once ran one at a time, so
-/// `b`'s waited for `a`'s and everything downstream of it.
+/// Two sources have no path between them, so their `--prepare`s run at the
+/// same time: with every `--prepare` kept waiting by the `hold` file, both
+/// downloads' have started, and neither render's has. The pass once ran one
+/// at a time, so `b`'s waited for `a`'s and everything downstream of it.
 #[tokio::test]
 async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
     let td = tempfile::tempdir().unwrap();
@@ -376,12 +381,12 @@ async fn the_prepares_of_unrelated_steps_run_at_the_same_time() {
     state.sync.shutdown(Duration::from_secs(10)).await;
 }
 
-/// A root with no config yet has no step to ask, so its pass is over at
-/// once. The first-run screen waits for `settled`; when the pass moved
+/// A root with no config yet has no step to run `--prepare` for, so its
+/// pass is over at once. The first-run screen waits for `settled`; when the pass moved
 /// into the loop, a loop that could not start for want of a config never
 /// said it, and the screen waited for good.
 #[tokio::test]
-async fn a_root_with_no_config_settles_its_pass_at_once() {
+async fn a_root_with_no_config_ends_its_pass_at_once() {
     let td = tempfile::tempdir().unwrap();
     let root = td.path().join("root");
     std::fs::create_dir_all(&root).unwrap();

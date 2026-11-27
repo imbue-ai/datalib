@@ -66,7 +66,7 @@ impl Echoes {
         self.0.fetch_max(chain.saturating_add(1), Ordering::Relaxed);
     }
 
-    /// The chain the frame for what was logged continues, forgetting it.
+    /// The chain the frame for what was logged continues; resets it to 0.
     pub fn take(&self) -> Option<u32> {
         match self.0.swap(0, Ordering::Relaxed) {
             0 => None,
