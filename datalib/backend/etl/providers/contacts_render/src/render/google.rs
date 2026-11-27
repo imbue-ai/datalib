@@ -641,7 +641,7 @@ mod tests {
     }
 
     /// A download's problem about a photo or a contact names only its raw
-    /// row; it opens that contact's page.
+    /// row; it is shown in the banner above that contact's page.
     #[test]
     fn a_problem_about_a_photo_opens_the_contacts_page() {
         let docs = rendered(vec![riker()]);

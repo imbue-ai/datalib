@@ -1,8 +1,8 @@
-//! A CardDAV account shaped like Fastmail's, measured live on
-//! 2026-09-24: the bare host answers 404, `/.well-known/carddav`
-//! redirects to `/dav/addressbooks`, every value is CDATA, each
-//! collection's missing properties come back in a 404 propstat, and the
-//! cards are the `Bridge.vcf` fixture's own, CRLF and folded as served.
+//! A CardDAV account shaped like Fastmail's, as measured live: the bare
+//! host answers 404, `/.well-known/carddav` redirects to
+//! `/dav/addressbooks`, every value is CDATA, each collection's missing
+//! properties come back in a 404 propstat, and the cards are the
+//! `Bridge.vcf` fixture's own, CRLF and folded as served.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -340,11 +340,11 @@ async fn stored_uids(store: &Path) -> Option<String> {
 }
 
 /// RFC 6578 answers a sync token the server no longer honours with 403
-/// `valid-sync-token`. That used to read as "sync-collection
-/// unsupported": the run logged a fallback that did not exist, kept the
-/// dead token, and the address book never synced again. Now the token is dropped and the book listed whole,
-/// and a card the whole listing does not name — deleted while no token
-/// was held — goes.
+/// `valid-sync-token`. Guards against reading that as "sync-collection
+/// unsupported", which logged a fallback that did not exist, kept the
+/// dead token, and never synced the address book again. The token is
+/// dropped and the book listed whole, and a card the whole listing does
+/// not name — deleted while no token was held — goes.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_expired_token_lists_the_book_whole_again() {
     let d = tempfile::tempdir().expect("tempdir");
@@ -735,9 +735,9 @@ async fn an_address_book_the_server_no_longer_lists_goes_with_its_cards() {
 }
 
 /// A home listing that names nothing is not an empty home: a `Depth: 1`
-/// PROPFIND always answers for the home itself. A 200 with an empty body
-/// parsed to no address books, and every stored book and its cards was
-/// deleted (#991). Now the run fails and deletes nothing.
+/// PROPFIND always answers for the home itself. Guards against #991, where
+/// a 200 with an empty body parsed to no address books and every stored
+/// book and its cards was deleted. The run fails and deletes nothing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_home_listing_that_names_nothing_deletes_no_address_book() {
     let d = tempfile::tempdir().expect("tempdir");

@@ -23,30 +23,7 @@ use super::parse::{ParsedContact, ParsedContacts};
 use datalib_schema::providers::Provider;
 
 /// Bump when the rendered layout changes enough that every existing
-/// contact doc needs re-rendering. Bumped to 2 when contacts adopted the
-/// shared contact-common layout (uuid-named files, generic frontmatter,
-/// richer grid-row search text); to 3 when `account` stopped carrying
-/// the source name; to 4 when ids moved onto `datalib_id` under
-/// the configured source and every row gained its backpointer — every uuid
-/// moved; to 5 when labels came from `X-ABLabel` and every `TYPE`,
-/// `CREATED` became `created_at`, and groups listed their members; to 7
-/// when a card listed the groups it is in, and to 8 when its `CATEGORIES`
-/// joined them; to 10 when a `+1` number without ten digits after the 1
-/// stopped having a handle; to 12 when a card's photo reached the index
-/// as the URL the app serves it at.
-/// 13: a photo no browser draws has no URL.
-/// 14: a card is its own conversation, filed under its address book as
-/// the channel alone, with its first address and number in columns and
-/// a group's members drawn as chips.
-/// 16: a card's photo is linked where the blob store holds it, and one
-/// the store lacks is a `blob_missing` problem.
-/// 17: a group's card is a place in its address book, and a card is filed
-/// under each group naming it and each of its categories.
-/// 18: a category is keyed by its address book's id, which a rename of
-/// the book keeps, not by the book's label.
-/// 19: a card whose only name is a `tel:` number is titled by the number.
-/// 20: a person with no handle is headed by a chip naming their page, and
-/// a number with no country code is a term by its digits.
+/// contact doc needs re-rendering.
 pub const RENDER_VERSION: u32 = 20;
 
 /// Every card by `(addressbook, UID)`, for a group to name its members.
@@ -499,7 +476,7 @@ mod tests {
             n.contact.modified_at.as_deref(),
             Some("2026-06-05T19:18:39+00:00")
         );
-        // The grid's own contract must accept it (this is what was failing).
+        // The grid's own contract must accept it.
         datalib_time::validate_iso_offset(n.contact.modified_at.as_deref().unwrap())
             .expect("normalized modified_at must satisfy GridRow's RFC 3339 contract");
     }

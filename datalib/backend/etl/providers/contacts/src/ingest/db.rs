@@ -67,7 +67,7 @@ impl RawDb {
     /// contacts — no commit to pin, or a build without the dolt
     /// extensions. The caller sweeps every document this pass did not
     /// name, so handing back an empty read here would delete every
-    /// contact the source has. See the plan's "The sink contract".
+    /// contact the source has.
     ///
     /// Pinned at `commit` — the one the render driver diffed against —
     /// or at HEAD when there is none.
@@ -432,9 +432,9 @@ impl RawDb {
     }
 
     /// Drop the address book a `.vcf` file was, with its contacts and
-    /// their sidecar rows, and forget the file's cursor entry — in
-    /// one transaction, so a crash leaves the file stamped and the next run
-    /// retries. Returns how many contacts went.
+    /// their sidecar rows, and delete the file's `ingested_files` row —
+    /// in one transaction, so a crash leaves that row in place and the
+    /// next run retries. Returns how many contacts went.
     pub async fn delete_file_addressbook(
         &self,
         addressbook_id: &str,

@@ -1,9 +1,8 @@
-//! Program-A `DataProcessor`s for the contacts source. Contacts contributes
-//! a **download** processor ([`ContactsIngest`] — Google's People API, live
-//! CardDAV server sync or file-backed `.vcf` ingest, chosen by which method
-//! table is set) and a **render** processor ([`ContactsRender`]). [`plan_ingest`] / [`plan_render`] build the
-//! per-wave processors the orchestrator drives, owning every contacts-specific decision (which
-//! download mode) so the orchestrator destructures nothing.
+//! The contacts source's download processor, [`ContactsIngest`]: Google's
+//! People API, a CardDAV server, or a tree of `.vcf` files, chosen by
+//! which method table the config sets. [`plan_ingest`] makes that choice,
+//! so `datalib_step`'s dispatch reads nothing of the config itself. The
+//! render processor is in `datalib_etl_contacts_render`.
 
 use std::path::PathBuf;
 
@@ -36,8 +35,8 @@ pub async fn migrate(raw_dir: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ingest wave: `google` → the People API; `fastmail` or `carddav` → live CardDAV server; `vcf` →
-/// file mode (`.vcf` tree under its `path`, no account override).
+/// `google` → the People API; `fastmail` or `carddav` → a CardDAV server;
+/// `vcf` → the `.vcf` tree under its `path`, no account override.
 pub fn plan_ingest(
     ctx: PlanContext,
     config: ContactsConfig,

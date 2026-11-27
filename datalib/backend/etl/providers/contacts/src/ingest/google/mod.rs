@@ -51,7 +51,8 @@ pub struct FetchOptions {
     pub latchkey: LatchkeySettings,
     pub progress: Progress,
     pub control: DownloadControl,
-    /// Seals as pages land, when the step driver hands one over.
+    /// Told after each page is stored, so it seals when a seal is due;
+    /// the processor passes the one `RunCtx::run_store` gives it.
     pub sealer: Option<Sealer>,
 }
 
@@ -257,8 +258,9 @@ struct Listing<'a> {
 impl Listing<'_> {
     /// The changes since the sync token, or every contact when there is
     /// none, or it was listed under another choice of labels: a delta
-    /// would not name the contacts the new choice takes in. The reason nothing was deleted and the token was left, when
-    /// something was listed that could be any stored contact.
+    /// would not name the contacts the new choice takes in. Returns the
+    /// reason nothing was deleted and the token was left, when something
+    /// was listed that could be any stored contact.
     async fn sync(&self, summary: &mut FetchSummary) -> Result<Option<String>> {
         let labels = self.selection.key();
         let token = self
