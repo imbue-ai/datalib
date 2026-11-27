@@ -1,7 +1,7 @@
 //! What a process running the loop builds around it, the same whichever
 //! process that is (`datalib-pipeline`, or the app's server): the steps'
-//! environment and the run store's record of one busy period, and what it
-//! puts right when it takes the lock.
+//! environment and the run store's sink for one run, and what it puts
+//! right when it takes the lock.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -16,7 +16,7 @@ use crate::subprocess::{ENV_NOW, ENV_RUN_ID};
 use crate::supervisor::store::{JobKind, JobRow, RequestRow, Store};
 use strum::VariantArray;
 
-/// The environment every step of one busy period gets on top of the
+/// The environment every step of one run gets on top of the
 /// host's own, and the log filter it was built with.
 pub struct StepEnv {
     pub vars: BTreeMap<String, String>,
@@ -25,7 +25,7 @@ pub struct StepEnv {
 
 /// `binary_dir` is the host's override of the config's `binary_dir`;
 /// `extra_path` goes on `PATH` after it, ahead of the host's own `PATH`.
-/// `now` and `run_id` are pinned for the busy period: every stamped
+/// `now` and `run_id` are pinned for the run: every stamped
 /// output agrees on them.
 pub fn step_env(
     cfg: &DagConfig,
@@ -63,9 +63,9 @@ pub fn step_env(
     Ok(StepEnv { vars, log_filter })
 }
 
-/// The run store's record of one busy period. `None` when the store
-/// could not be opened: a sync without a record beats one that refuses
-/// to start over an unwritable status file.
+/// The run store's sink for one run. `None` when the store could not be
+/// opened: a sync the run store does not see beats one that refuses to
+/// start over an unwritable status file.
 pub fn start_record(
     data_root: &Path,
     cfg: &DagConfig,
@@ -81,9 +81,9 @@ pub fn start_record(
 /// How many steps a run's reason names before it only counts the rest.
 const REASON_NAMES: usize = 3;
 
-/// Why a busy period started, from the requests and wipes open as it did.
-/// A period with nothing but compactions and collections to do is a
-/// shrink; any other is a sync.
+/// Why a run started, from the requests and wipes open as it did. A run
+/// with nothing but compactions and collections to do is a shrink; any
+/// other is a sync.
 pub fn period_start(requests: &[RequestRow], wipes: &[JobRow]) -> RunStart {
     let mut parts = Vec::new();
     if !requests.is_empty() {
@@ -184,7 +184,7 @@ pub struct TakenOver {
 
 /// For the process that has just taken `runner-lock`, before its first
 /// loop: close what a loop that died holding the lock left open — its
-/// run, in the record and in the run store, so no row reads its steps as
+/// run, in `system/supervisor.sqlite` and in the run store, so no row reads its steps as
 /// live, and its invocations. Holding the lock is what makes anything open
 /// a thing a dead loop left.
 pub async fn take_over(store: &Store, data_root: &Path) -> Result<TakenOver> {
@@ -251,7 +251,7 @@ mod tests {
     }
 
     /// Guards the free-disk run that was logged as a sync "with no sync
-    /// request open": a period that only frees disk says so, and is a
+    /// request open": a run that only frees disk says so, and is a
     /// shrink.
     #[test]
     fn a_period_that_only_frees_disk_is_a_shrink_and_says_who_asked() {

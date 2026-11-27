@@ -1,9 +1,9 @@
-//! The loop's record: what each step last read and published, what
-//! happened the last time a run reached it, the run in flight, and one row
-//! per process the loop started. The loop holds it in memory as a
-//! [`Record`] and saves what [`changes`] finds into
-//! `system/supervisor.sqlite`. Only the process holding `runner-lock`
-//! writes it; anyone may read it, with any `sqlite3`.
+//! The tables of `system/supervisor.sqlite` only the loop writes: what
+//! each step last read and published, what happened the last time a run
+//! reached it, the run in flight, and one row per process the loop
+//! started. The loop keeps a copy in memory as a [`Record`] and saves what
+//! [`changes`] finds into the file. Only the process holding `runner-lock`
+//! writes them; anyone may read them, with any `sqlite3`.
 
 use std::collections::BTreeMap;
 
@@ -22,8 +22,8 @@ pub struct Record {
     pub current_run: Option<CurrentRun>,
 }
 
-/// One busy period of the loop: the stretch from taking a request on to
-/// having none left.
+/// One run of the loop: from when it starts serving a request or a job
+/// to when it has none left.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CurrentRun {
     pub run_id: String,
@@ -70,9 +70,10 @@ pub struct StepRecord {
     /// however unchanged its inputs: that is how a config edit takes
     /// effect.
     pub fingerprint: String,
-    /// It answered a launch's `--migrate` with `needs_rerun`: what it wrote
-    /// is in a shape this build cannot reach in place. The tick holds it
-    /// due, and the loop runs it after the pass, until it next succeeds.
+    /// Its `--prepare` run at the loop's start reported `needs_rerun`:
+    /// what it wrote is in a shape this build cannot reach in place. The
+    /// tick treats it as due, and the loop runs it after the pass, until
+    /// it next succeeds.
     pub needs_rerun: bool,
     /// What happened the last time a run reached it, whatever the
     /// outcome: what "last synced" says.
@@ -102,11 +103,12 @@ pub enum Change<'a> {
     /// The run, and every step's state in it.
     Run(&'a CurrentRun),
     Step(&'a str, &'a StepRecord),
-    /// A step whose record was dropped, by a reset.
+    /// A step whose entry was removed, by a purge: its `steps` and
+    /// `sinks` rows are deleted.
     Forget(&'a str),
 }
 
-/// What changed between two records, so a save writes that and nothing
+/// What changed between two [`Record`]s, so a save writes that and nothing
 /// else: the loop saves after every event, and most change one step.
 pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     let mut out = Vec::new();
@@ -154,7 +156,7 @@ pub(super) const STEPS: &str = "CREATE TABLE IF NOT EXISTS steps (
     )";
 
 pub(super) const DDL: [&str; 5] = [
-    // One per busy period of the loop; the newest is the run in flight,
+    // One per run of the loop; the newest is the run in flight,
     // or the one that finished last.
     "CREATE TABLE IF NOT EXISTS runs (
         run_id TEXT PRIMARY KEY,
@@ -233,7 +235,7 @@ pub struct InvocationEnd {
 }
 
 impl Store {
-    /// The record as the last save left it.
+    /// The loop's tables as the last save left them.
     pub async fn load_record(&self) -> Result<Record> {
         let run = sql!(
             "dag.supervisor.read_latest_run",
@@ -483,8 +485,8 @@ impl Store {
         Ok(())
     }
 
-    /// Whether a loop has taken the request on: a step's record names
-    /// it, or it has already closed.
+    /// Whether a loop has started serving the request: some step's
+    /// `requests` column names it, or it has already closed.
     pub async fn taken_on(&self, request: &str) -> Result<bool> {
         Ok(sql!("dag.supervisor.is_request_taken_on", "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
              OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)").query_scalar()
@@ -602,7 +604,7 @@ impl Store {
     }
 }
 
-/// The record at `root`, as a test reads it back.
+/// The loop's tables at `root`, as a test reads them back.
 #[cfg(test)]
 pub(crate) async fn recorded(root: &std::path::Path) -> Record {
     let store = Store::open(root).await.unwrap();
@@ -611,7 +613,7 @@ pub(crate) async fn recorded(root: &std::path::Path) -> Record {
     record
 }
 
-/// Write `next` over the record at `root`, as a test sets one up.
+/// Write `next` over the loop's tables at `root`, as a test sets them up.
 #[cfg(test)]
 pub(crate) async fn record(root: &std::path::Path, next: &Record) {
     let store = Store::open(root).await.unwrap();
@@ -670,8 +672,8 @@ mod tests {
         }
     }
 
-    /// The loop saves after every event; a save that rewrote the whole
-    /// record each time would write every step on every tick.
+    /// The loop saves after every event; a save that rewrote every table
+    /// each time would write every step on every tick.
     #[test]
     fn a_save_writes_what_changed_and_nothing_else() {
         let prev = Record {
@@ -713,8 +715,9 @@ mod tests {
         assert_eq!(store.load_record().await.unwrap(), st);
     }
 
-    /// A reset forgets a step: its row and its tree's version go, so the
-    /// next run does its work from the start.
+    /// A purge removes a step: its `steps` row and its tree's `sinks` row
+    /// are deleted, so a step of that id later does its work from the
+    /// start.
     #[tokio::test]
     async fn a_forgotten_step_leaves_nothing_behind() {
         let root = tempfile::tempdir().unwrap();

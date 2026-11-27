@@ -1,4 +1,4 @@
-//! The loop held for the whole life of the process that runs it,
+//! The loop that runs for the whole life of the process that runs it,
 //! `datalib-pipeline serve`, which the app's server starts as a child. It
 //! takes `runner-lock` (waiting while another process holds
 //! it), closes what a dead loop left, then runs the loop, whose prepare
@@ -32,10 +32,10 @@ pub struct ServeOptions {
     pub now: Option<String>,
     /// At most this many steps at once; the runner's default when `None`.
     pub parallelism: Option<usize>,
-    /// Where every event also goes, beside the open busy period's run
-    /// store record: a `datalib-pipeline` verb's stderr.
+    /// Where every event also goes, beside the open run's sink in the run
+    /// store: a `datalib-pipeline` verb's stderr.
     pub events: Option<Arc<dyn crate::events::EventSink>>,
-    /// The first busy period's run id, in place of a fresh one. For a
+    /// The first run's id, in place of a fresh one. For a
     /// fixture that finds its run by id.
     pub run_id: Option<String>,
     /// The config file, when it is not the root's own `config.toml`: a
@@ -100,8 +100,8 @@ pub async fn run(opts: &ServeOptions, emit: Emit, mut stop: watch::Receiver<bool
 
 /// The loop for as long as anything is open, for a `datalib-pipeline`
 /// verb that wrote its request or job and found no other process running
-/// the loop. The caller holds `runner-lock`. The last busy period's
-/// report, or why the loop could not go on.
+/// the loop. The caller holds `runner-lock`. The last run's report, or
+/// why the loop could not go on.
 pub async fn run_until_idle(
     opts: &ServeOptions,
     store: &Store,
@@ -119,9 +119,9 @@ enum Until {
 }
 
 /// What a process holding the lock does: close what a dead loop left,
-/// then run the loop. One held until `stop` starts again at the next
-/// change to the store or the config when it fails; one held until idle
-/// says why and returns.
+/// then run the loop. Run until `stop`, a loop that fails starts again at
+/// the next change to the store or the config; run until idle, it says
+/// why and returns.
 async fn hold(
     opts: &ServeOptions,
     emit: Emit,
@@ -156,7 +156,7 @@ async fn hold(
         let ran = match load_config_at(&opts.root, &opts.config_path()) {
             Ok(checked) => run_the_loop(opts, &checked, store, &periods, stop, until).await,
             Err(why) => {
-                // With no config there is no step to ask: the pass is over,
+                // With no config there is no step to run `--prepare` for: the pass is over,
                 // and a root waiting for its first config is not waiting
                 // on it. A closed job with no steps says so.
                 if !std::mem::replace(&mut said_no_pass, true) {
@@ -171,7 +171,7 @@ async fn hold(
             Ok(report) => return Ok(report),
             Err(why) => why,
         };
-        // Its requests would otherwise be taken on at once, and fail the
+        // Its requests would otherwise be served again at once, and fail the
         // same way; the next change to the store or the config is the
         // next try.
         periods.close_any();
@@ -192,7 +192,8 @@ async fn hold(
     }
 }
 
-/// A prepare pass with nothing to ask, open and closed at once.
+/// A prepare pass with no step to run `--prepare` for, open and closed at
+/// once.
 async fn no_pass(store: &Store) -> anyhow::Result<()> {
     let job = store
         .open_job(
@@ -334,20 +335,21 @@ fn now(opts: &ServeOptions) -> String {
         .unwrap_or_else(|| datalib_time::IsoOffsetTimestamp::now_local().to_rfc3339_secs())
 }
 
-/// Each busy period recorded in the run store, and said to the parent.
+/// Each run recorded in the run store, and said to the parent.
 struct Periods<'a> {
     opts: &'a ServeOptions,
     emit: Emit,
-    /// The runner's sink: the open period's record, or nothing.
+    /// The runner's sink: the open run's sink in the run store, or
+    /// nothing.
     record: Arc<PeriodSink>,
-    /// The run id of the period open now.
+    /// The id of the run open now.
     open: Mutex<Option<String>>,
-    /// [`ServeOptions::run_id`], until the first period takes it.
+    /// [`ServeOptions::run_id`], until the first run takes it.
     first_run_id: Mutex<Option<String>>,
 }
 
 impl Periods<'_> {
-    /// A loop that failed may have left its period open.
+    /// A loop that failed may have left its run open.
     fn close_any(&self) {
         let open = self.open.lock().expect("the open period's lock").clone();
         if let Some(run_id) = open {
@@ -384,7 +386,7 @@ impl LoopHost for Periods<'_> {
         Ok(env.vars)
     }
 
-    /// The run store's record closes when its sink is dropped, here:
+    /// The run store closes the run when its sink is dropped, here:
     /// before the loop says the sync is over, so no one reads "over"
     /// before it is.
     fn close(&self, run_id: &str) {

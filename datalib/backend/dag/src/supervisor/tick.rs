@@ -90,12 +90,12 @@ pub struct StepFacts {
     /// Whether the step said its consumers may read its sink before it
     /// finishes.
     pub streams_output: bool,
-    /// It answered a launch's `--migrate` with `needs_rerun`, and has not
-    /// succeeded since: due whatever it read.
+    /// Its `--prepare` run at the loop's start reported `needs_rerun`, and
+    /// it has not succeeded since: due whatever it read.
     pub needs_rerun: bool,
-    /// The launch's prepare pass has not yet asked it, or a step it reads,
-    /// to make what it stored usable: wanted, it waits rather than read or
-    /// write a store in an older shape.
+    /// The prepare pass has not yet seen its `--prepare`, or that of a step
+    /// it reads, exit: wanted, it waits rather than read or write a store
+    /// in an older shape.
     pub preparing: bool,
 }
 
@@ -142,7 +142,7 @@ pub struct Start {
     pub consumed: Consumed,
 }
 
-/// `StateKind` is the word the record stores for a state
+/// `StateKind` is the word `system/supervisor.sqlite` stores for a state
 /// (`steps.state`), without what it waits on or is blocked by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumDiscriminants)]
 #[strum_discriminants(
@@ -193,12 +193,14 @@ pub enum Wait {
     Prepare,
 }
 
-/// What a `waiting` step waits for, as the record stores it
-/// (`steps.waiting_for`) beside the sentence that names the step or lock.
+/// What a `waiting` step waits for, as `system/supervisor.sqlite` stores
+/// it (`steps.waiting_for`) beside the sentence that names the step or
+/// lock.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, EnumString, IntoStaticStr, VariantArray)]
 #[strum(serialize_all = "snake_case")]
 pub enum WaitKind {
-    /// A step it reads: running, about to run, or not yet settled.
+    /// A step it reads: running, about to run, or itself waiting on a
+    /// producer that is.
     Upstream,
     /// A step that reads what it writes, unpinned, is running.
     Reader,
@@ -206,7 +208,8 @@ pub enum WaitKind {
     /// The data root's disk is under the config's `[disk_space]` floor.
     DiskSpace,
     /// A request names it, and the config the loop runs does not have it
-    /// yet: the sync in progress takes the new one on when it ends.
+    /// yet: the loop starts using the new one when the sync in progress
+    /// ends.
     Config,
     /// The prepare pass at the loop's start has not yet reached it, or a
     /// step it reads.
@@ -426,7 +429,7 @@ pub fn tick(shape: &Shape, intent: &Intent, facts: &Facts) -> Tick {
     }
 }
 
-/// Running, or due and held back: what it writes may still move.
+/// Running, or due and not started: what it writes may still move.
 fn moving(state: StepState) -> bool {
     matches!(state, StepState::Running | StepState::Waiting(_))
 }
@@ -507,7 +510,7 @@ fn nothing_to_read(step: &StepShape, facts: &Facts) -> Option<StepIx> {
 
 /// A producer of something `i` reads that `i` must wait for. Two reasons,
 /// and only two: it is running and does not stream, so its sink may be
-/// half-written; or it is about to run, held only by a lock or a reader,
+/// half-written; or it is about to run, waiting only for a lock or a reader,
 /// and will rewrite what `i` would read. A producer that is
 /// itself waiting on something upstream may not run for a long time, and a
 /// fan-in that waited on it would wait for its slowest source. A step that
@@ -917,9 +920,9 @@ mod tests {
         assert!(started(&t).contains(&4), "{t:?}");
     }
 
-    /// A step that waits for its inputs to settle reads a streaming
+    /// A step with `start = "after_inputs_settle"` reads a streaming
     /// producer as one that does not stream, and waits for what is above
-    /// that too: a render between its download's seals has not settled.
+    /// that too: a render between its download's seals is still waiting.
     #[test]
     fn a_step_waiting_for_settled_inputs_starts_once_after_its_producers_end() {
         let mut s = chain();
@@ -1205,7 +1208,7 @@ mod tests {
         assert_eq!(started(&t), vec![1]);
     }
 
-    /// A step that answered a launch's `--migrate` with `needs_rerun` is due
+    /// A step whose `--prepare` reported `needs_rerun` is due
     /// for the request that reaches it, though nothing it reads moved, and
     /// is left alone by a request that does not: a sync of one source never
     /// re-renders another.
@@ -1271,8 +1274,7 @@ mod tests {
     }
 
     /// A step the prepare pass has not reached waits, and its request
-    /// stays open; a step it does not hold runs beside it. Before, the
-    /// pass ran to the end before the loop took any request at all.
+    /// stays open; a step it does not keep waiting runs beside it.
     #[test]
     fn a_step_being_prepared_waits_and_holds_its_request_open() {
         let s = shape(&[&[], &[]]);
