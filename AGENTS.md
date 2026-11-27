@@ -167,7 +167,8 @@ is the literal description.
 
 - **Prefer the operation itself to a higher-level word for it.** Write
   "sends SIGINT to the step's process group", not "pokes the step";
-  "deletes the request's row", not "the loop forgets the request". A
+  "sets the request's `outcome` to `stopped`", not "the loop drops the
+  request". A
   longer example: each time the runner starts, it runs every step whose
   program takes the `prepare` verb with `--prepare` appended to its
   command, and the program exits once it has brought what it stored to
