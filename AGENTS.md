@@ -186,9 +186,10 @@ is the literal description.
      As a stand-in for one operation, like "pokes" for one signal, it
      almost never does: name the operation, or abbreviate it
      transparently.
-  3. **It needs no definition.** Defining a word first is one more
-     thing the reader has to hold. Where the plain description is
-     available, use it instead of defining a word for it.
+  3. **A definition, if it needs one, is counted as a cost.** A word
+     may be worth defining, but the definition is one more thing the
+     reader has to hold. Weigh that against what the word saves; where
+     the plain description is about as short, use it instead.
 - **Match the level the reader asked for.** When someone asks how a
   thing works, keep higher-level words to what is strictly necessary,
   even when the text gets longer.
@@ -216,10 +217,11 @@ read the code:
 - **Start with the problem as something that could happen**: "an
   `<img>` in an email made the app re-measure the whole data root",
   not "closes the GET-walk hole".
-- **Write the plain description instead of a word the code uses in a
-  narrow sense** (§"Write plainspoken"). "Walks the data root" means
-  nothing to a reader; "measures the size of every directory under the
-  data root, which takes minutes on a large one" does.
+- **Prefer the plain description to a word the code uses in a narrow
+  sense**, and define the word the first time it appears when you keep
+  it (§"Write plainspoken"). "Walks the data root" means nothing to a
+  reader; "measures the size of every directory under the data root,
+  which takes minutes on a large one" does.
 - **Give each change a before, an after, and what a person notices.**
   "Nothing visible" is a valid answer; say it, so the reader knows it
   was checked. When a route or a flag changes, say what happens to a
