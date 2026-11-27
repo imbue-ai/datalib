@@ -1,4 +1,4 @@
-//! The ingest wave for the airvisual source: its planner and the
+//! The ingest step's processor for the airvisual source: its planner and the
 //! `DataProcessor` it plans.
 
 use std::path::PathBuf;

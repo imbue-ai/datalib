@@ -1,4 +1,4 @@
-//! The render wave for the airvisual source: its planner and the
+//! The render step's processor for the airvisual source: its planner and the
 //! [`RenderProcessor`] it plans.
 
 use anyhow::{Context, Result};

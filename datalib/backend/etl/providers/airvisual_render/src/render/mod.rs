@@ -4,8 +4,10 @@
 //! drawn from the time-series store.
 
 pub mod parse;
-// `render/render.rs` inside `render/` is the repo-wide stage layout, not
-// an accident — see the same allow in the perseus provider.
+// `render/render.rs` inside `render/` is the layout every provider's
+// render crate shares, not an accident. Allowed here rather than
+// repo-wide so a module named like its parent anywhere else still fails
+// clippy's `module_inception`.
 #[allow(clippy::module_inception)]
 pub mod render;
 pub mod time_series;
@@ -16,10 +18,4 @@ pub mod units;
 /// re-rendered. Stamped onto the `markdowns` row AND into the render
 /// cursor's `params`, so a bump invalidates the "HEAD unchanged → skip"
 /// fast path too.
-/// v2: ids moved to `datalib_id`'s v8 layout (none carries a stamp
-///     here, but the layout changed under them).
-/// v7: every stamp on a page is a `<time>`.
-/// v8: a reading is at its real time, not the device's local clock read as
-///     UTC.
-/// v9: a device's box is a part of the page (`PAGE_PART`), drawn flat.
 pub const RENDER_VERSION: u32 = 9;
