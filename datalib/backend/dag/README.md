@@ -301,9 +301,10 @@ pass runs beside everything else. A step's `--prepare` starts once the
 at once (`round::PREPARES_AT_ONCE`). A step whose `--prepare` has not
 exited, and every step downstream of one, does not start a normal run
 (`waiting_for = "prepare"`); the rest run as requests want them. A
-`datalib-pipeline` sync on its own runs every step's `--prepare` first,
-one at a time, through `Runner::prepare`, before it serves anything. Since it asks at every start,
-a step answers quickly when there is nothing to do. It answers in one
+`datalib-pipeline sync` that finds no loop running runs the same loop
+until it is idle (`Runner::run_until_idle`), with the same pass. Since
+`--prepare` runs at every start, a step should exit quickly when there
+is nothing to do. It answers in one
 of four ways:
 
 1. **Nothing to do.** The record is left as it was.

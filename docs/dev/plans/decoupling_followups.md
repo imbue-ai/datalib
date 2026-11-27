@@ -529,8 +529,9 @@ now outside the loop.
    host's loop beside everything else, up to four `--prepare` processes
    at once, each started after those of the steps upstream of it have
    exited. A step whose `--prepare` has not exited, and every step
-   downstream of one, waits (`Wait::Prepare`), and Sync stays offered. The CLI's sync still asks every step first, until it becomes
-   a client.
+   downstream of one, waits (`Wait::Prepare`), and Sync stays offered.
+   A CLI sync that finds no loop running runs the same loop until it is
+   idle, with the same pass.
 4. **Retries and locks.** With retries in the tick, a step backing off
    releases its locks. That is better for a shared rate limit, but it
    lets another step take the slot in between. Check whether any
