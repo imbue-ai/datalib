@@ -295,7 +295,7 @@ fn contacts_are_counted_as_from_finds_and_unfiled_is_everyone_else() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
 
     let (status, body) = get(port, "/people/contacts", Some(SECRET));
     assert_eq!(status, 200, "{body}");
