@@ -22,6 +22,7 @@ mod local_embedder;
 mod map;
 mod models;
 mod mutes;
+mod people_list;
 mod places;
 mod problems;
 mod results;
@@ -208,6 +209,8 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/index_state", post(index_state))
             .route("/docs", get(list_docs))
             .route("/people", post(people))
+            .route("/people/contacts", get(people_list::contact_counts))
+            .route("/people/unfiled", get(people_list::unfiled))
             .route("/embedding_map", get(map::handler))
             .route("/embedding_map/matches", get(map::matches_handler))
             .route("/problems", get(problems::handler))

@@ -435,6 +435,42 @@ async fn a_finished_run_reaches_the_rows() {
     );
 }
 
+/// A running group said only "Running": which of its steps, and how far
+/// the sync had got through the group, were left to the tooltip.
+#[tokio::test]
+async fn a_running_group_names_its_step_and_counts_what_is_complete() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_root(
+        tmp.path(),
+        CONFIG,
+        Some(
+            r#"{
+              "steps": {
+                "slack/ingest": {"succeeded": true},
+                "slack/render_markdown": {"state": "running", "requests": ["q1"]}
+              },
+              "current_run": {
+                "run_id": "r2",
+                "started_at": "2026-08-31T11:00:00+01:00",
+                "states": {"slack/ingest": "succeeded", "slack/render_markdown": "running"}
+              }
+            }"#,
+        ),
+    )
+    .await;
+
+    let rows = by_key(&get_rows(tmp.path()).await);
+    let slack = &rows["group:slack"];
+    assert_eq!(slack["status"]["key"], "running");
+    assert_eq!(slack["status_from"], "slack/render_markdown");
+    assert_eq!(
+        slack["status"]["label"],
+        "Running: Render markdown \u{b7} 1/2 complete"
+    );
+    // The step's own row keeps its plain word.
+    assert_eq!(rows["slack/render_markdown"]["status"]["label"], "Running");
+}
+
 /// Rows written into the root's grid index as `unified_grid_and_search_index` would copy
 /// them in.
 async fn index_problems(root: &Path, rows: &[&datalib_problems::ProblemRow]) {

@@ -50,6 +50,7 @@ rust_library(
         "src/manage/dashboard.rs",
         "src/manage/items.rs",
         "src/manage/group.rs",
+        "src/manage/ingest_word.rs",
         "src/manage/mod.rs",
         "src/manage/problems.rs",
         "src/manage/spend.rs",
@@ -93,15 +94,18 @@ rust_library(
     # `$(execpath)` expands to the execroot-relative path of the
     # directory output — usable directly from rustc's CWD (execroot).
     # The guide .md files are `include_str!`'d by the `/agent/cards.md`
-    # and `/agent/config.md` handlers, the plugin's files by plugins.rs.
+    # and `/agent/config.md` handlers, the plugin's files by plugins.rs,
+    # and the ingest methods table by manage/ingest_word.rs.
     compile_data = [
         ":ui_dist_host",
         "src/agent_cards_guide.md",
         "src/agent_config_guide.md",
         "//third-party/latchkey-garmin:plugin",
+        "//datalib/ui:src/config/ingestMethods.json",
     ],
     rustc_env = {
         "DATALIB_UI_DIST": "$(execpath :ui_dist_host)",
+        "INGEST_METHODS_JSON": "$(execpath //datalib/ui:src/config/ingestMethods.json)",
         # Absolute, because `include_str!` resolves a relative path from
         # the source file, which rules_rust has copied under bazel-out.
         "LATCHKEY_GARMIN_DIR": "$${pwd}/third-party/latchkey-garmin",
@@ -115,6 +119,7 @@ rust_library(
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/problems:datalib_problems",
         "//datalib/backend/problem_mutes:datalib_problem_mutes",
+        "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/env:datalib_env",
         "//datalib/backend/step_protocol:datalib_step_protocol",

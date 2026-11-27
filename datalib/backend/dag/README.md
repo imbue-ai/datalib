@@ -370,10 +370,12 @@ button that runs them, while any step the pass marked `needs_rerun` has
 not run since. The pass is a job in `system/supervisor.sqlite` of kind
 `prepare`, which the loop opens as it starts and closes when it is done,
 with a row per step it runs `--prepare` for (`job_steps`);
-`/api/config`'s `upgrade`
-reads it, and each change is announced as `pass_changed` on
-`/api/sync/stream`;
-freeing disk space is drawn by the same pill (§"Resets and purges").
+`/api/config`'s `upgrade` reads it, and reads the steps it marked
+`needs_rerun` from the same store. Every commit to
+`system/supervisor.sqlite` is announced as `pass_changed` on
+`/api/sync/stream`, so the screen and the pill go as soon as the last
+re-run succeeds. Freeing disk space is drawn by the same pill
+(§"Resets and purges").
 
 Before any of that, the http server moves each tree a config rewrite
 renamed to its new path, with its steps' rows in
