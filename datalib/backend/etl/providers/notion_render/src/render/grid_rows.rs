@@ -548,8 +548,20 @@ mod tests {
                 .into_iter()
                 .collect(),
             comments: vec![
-                comment("c2", "p1", "d1", "Beverly Crusher", "2026-01-02T00:00:00.000Z"),
-                comment("c1", "p1", "d1", "Beverly Crusher", "2026-01-01T00:00:00.000Z"),
+                comment(
+                    "c2",
+                    "p1",
+                    "d1",
+                    "Beverly Crusher",
+                    "2026-01-02T00:00:00.000Z",
+                ),
+                comment(
+                    "c1",
+                    "p1",
+                    "d1",
+                    "Beverly Crusher",
+                    "2026-01-01T00:00:00.000Z",
+                ),
             ],
             ..Default::default()
         };
@@ -642,10 +654,7 @@ mod tests {
             ..Default::default()
         };
         let docs = gather_documents(&parsed, "notion").unwrap();
-        assert_eq!(
-            docs.pages[0].rows[0].author.as_deref(),
-            Some("Deanna Troi")
-        );
+        assert_eq!(docs.pages[0].rows[0].author.as_deref(), Some("Deanna Troi"));
     }
 
     /// An unresolved id still has to render something, and must not
@@ -697,7 +706,13 @@ mod tests {
     /// truncated uuid.
     #[test]
     fn comment_authors_use_the_name_notion_resolved() {
-        let c = comment("c1", "p1", "d1", "Beverly Crusher", "2026-01-01T00:00:00.000Z");
+        let c = comment(
+            "c1",
+            "p1",
+            "d1",
+            "Beverly Crusher",
+            "2026-01-01T00:00:00.000Z",
+        );
         assert_eq!(comment_author(&c).as_deref(), Some("Beverly Crusher"));
         let mut anon = c.clone();
         anon["display_name"] = json!({"type": "user"});
