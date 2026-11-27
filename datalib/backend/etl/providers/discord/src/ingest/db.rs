@@ -394,7 +394,7 @@ struct OwedRow {
 
 /// Deletes the `account` row, and its sidecar, of any account but `id`:
 /// the table holds one row, the account signed in now.
-pub async fn forget_other_accounts(tx: &mut Tx<'_>, id: &str) -> Result<()> {
+pub async fn delete_other_accounts(tx: &mut Tx<'_>, id: &str) -> Result<()> {
     for sql in [
         sql!(
             "discord.forget_other_accounts.delete_account_bookkeeping",
