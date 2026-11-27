@@ -61,9 +61,10 @@ pub struct StepRecord {
     /// however unchanged its inputs: that is how a config edit takes
     /// effect.
     pub fingerprint: String,
-    /// It answered a launch's `--migrate` with `needs_rerun`: what it wrote
-    /// is in a shape this build cannot reach in place. The tick holds it
-    /// due, and the loop runs it after the pass, until it next succeeds.
+    /// Its `--prepare` run at the loop's start reported `needs_rerun`:
+    /// what it wrote is in a shape this build cannot reach in place. The
+    /// tick treats it as due, and the loop runs it after the pass, until
+    /// it next succeeds.
     pub needs_rerun: bool,
     /// What happened the last time a request reached it, whatever the
     /// outcome: what "last synced" says.
@@ -91,11 +92,12 @@ pub struct StepRecord {
 #[derive(Debug, PartialEq)]
 pub enum Change<'a> {
     Step(&'a str, &'a StepRecord),
-    /// A step whose record was dropped, by a reset.
-    Forget(&'a str),
+    /// A step whose entry was removed, by a purge: its `steps` and
+    /// `sinks` rows are deleted.
+    Remove(&'a str),
 }
 
-/// What changed between two records, so a save writes that and nothing
+/// What changed between two [`Record`]s, so a save writes that and nothing
 /// else: the loop saves after every event, and most change one step.
 pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     let mut out = Vec::new();
@@ -106,7 +108,7 @@ pub fn changes<'a>(prev: &'a Record, next: &'a Record) -> Vec<Change<'a>> {
     }
     for id in prev.steps.keys() {
         if !next.steps.contains_key(id) {
-            out.push(Change::Forget(id));
+            out.push(Change::Remove(id));
         }
     }
     out
@@ -201,7 +203,7 @@ pub struct InvocationEnd {
 }
 
 impl Store {
-    /// The record as the last save left it.
+    /// The loop's tables as the last save left them.
     pub async fn load_record(&self) -> Result<Record> {
         let mut versions: BTreeMap<String, String> = BTreeMap::new();
         for r in sql!(
@@ -369,7 +371,7 @@ impl Store {
                         }
                     }
                 }
-                Change::Forget(id) => {
+                Change::Remove(id) => {
                     for stmt in [
                         sql!(
                             "dag.save_record.delete_steps",
@@ -390,8 +392,8 @@ impl Store {
         Ok(())
     }
 
-    /// Whether a loop has taken the request on: a step's record names
-    /// it, or it has already closed.
+    /// Whether a loop has started serving the request: some step's
+    /// `requests` column names it, or it has already closed.
     pub async fn taken_on(&self, request: &str) -> Result<bool> {
         Ok(sql!("dag.supervisor.is_request_taken_on", "SELECT EXISTS(SELECT 1 FROM steps, json_each(steps.requests) WHERE json_each.value = ?1) \
              OR EXISTS(SELECT 1 FROM requests WHERE id = ?1 AND closed_at_utc IS NOT NULL)").query_scalar()
@@ -505,7 +507,7 @@ impl Store {
     }
 }
 
-/// The record at `root`, as a test reads it back.
+/// The loop's tables at `root`, as a test reads them back.
 #[cfg(test)]
 pub(crate) async fn recorded(root: &std::path::Path) -> Record {
     let store = Store::open(root).await.unwrap();
@@ -514,7 +516,7 @@ pub(crate) async fn recorded(root: &std::path::Path) -> Record {
     record
 }
 
-/// Write `next` over the record at `root`, as a test sets one up.
+/// Write `next` over the loop's tables at `root`, as a test sets them up.
 #[cfg(test)]
 pub(crate) async fn record(root: &std::path::Path, next: &Record) {
     let store = Store::open(root).await.unwrap();
@@ -568,8 +570,8 @@ mod tests {
         }
     }
 
-    /// The loop saves after every event; a save that rewrote the whole
-    /// record each time would write every step on every tick.
+    /// The loop saves after every event; a save that rewrote every table
+    /// each time would write every step on every tick.
     #[test]
     fn a_save_writes_what_changed_and_nothing_else() {
         let prev = Record {
@@ -588,7 +590,7 @@ mod tests {
             changes(&prev, &next),
             [
                 Change::Step("b/raw", &next.steps["b/raw"]),
-                Change::Forget("c/raw"),
+                Change::Remove("c/raw"),
             ]
         );
     }
@@ -604,10 +606,11 @@ mod tests {
         assert_eq!(store.load_record().await.unwrap(), st);
     }
 
-    /// A reset forgets a step: its row and its tree's version go, so the
-    /// next run does its work from the start.
+    /// A purge removes a step: its `steps` row and its tree's `sinks` row
+    /// are deleted, so a step of that id later does its work from the
+    /// start.
     #[tokio::test]
-    async fn a_forgotten_step_leaves_nothing_behind() {
+    async fn a_removed_step_leaves_nothing_behind() {
         let root = tempfile::tempdir().unwrap();
         let store = Store::open(root.path()).await.unwrap();
         let st = stepped();

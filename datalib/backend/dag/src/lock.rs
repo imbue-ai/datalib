@@ -12,7 +12,7 @@ pub use datalib_flock::{FileLock, LockError};
 
 use crate::supervisor::announce::{announce, listeners_dir, FROM_LOCK, RUNNER_LOCK_RELEASED};
 
-/// `runner-lock`, held. Dropping it lets go and says so.
+/// `runner-lock`, held. Dropping it releases the lock and announces that.
 pub struct RunnerLock {
     lock: Option<FileLock>,
     listeners: PathBuf,
@@ -26,14 +26,15 @@ impl Drop for RunnerLock {
 }
 
 /// The runner's claim, relative to the data root. A sibling of
-/// `system/supervisor.sqlite`, whose record is the thing it guards.
+/// `system/supervisor.sqlite`, which only the lock's holder writes.
 pub const RUNNER_LOCK_REL_PATH: &str = "system/runner-lock";
 
 /// How long a starting runner keeps trying a lock someone holds. The
-/// server's `runner_is_held` answers by taking the lock for an instant,
-/// and it asks on every change under the root — most often just as a
-/// run starts — so a runner that gave up at once would sometimes refuse
-/// to start against nobody. A real second runner holds it far longer.
+/// server's `runner_is_held` works by taking the lock for an instant,
+/// and the server calls it on every change under the root — most often
+/// just as a run starts — so a runner that gave up at once would
+/// sometimes refuse to start against nobody. A real second runner holds
+/// it far longer.
 const PROBE_GRACE: Duration = Duration::from_secs(2);
 const PROBE_POLL: Duration = Duration::from_millis(10);
 

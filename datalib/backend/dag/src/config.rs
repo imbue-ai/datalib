@@ -1939,7 +1939,8 @@ pub struct ConfigCheck {
     /// the ids it stood for; `cfg` and `graph` hold the ids only.
     pub expansions: Vec<crate::input_pattern::Expansion>,
     /// One per problem, in file order — the order someone fixing them reads.
-    /// Sort by [`Severity`] for worst-first; its `Ord` is blast radius.
+    /// Sort by [`Severity`] for worst-first; its `Ord` ranks by how much
+    /// of the config a problem drops.
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -2112,7 +2113,7 @@ mod disk_floor_tests {
     use crate::disk_space::DiskFloor;
 
     /// The floor is written the way a person says a size, reaches the
-    /// graph the loop reads (so an edit mid-sync is taken on), and is on
+    /// graph the loop reads (so an edit mid-sync is used), and is on
     /// at its defaults in a config that says nothing of it.
     #[test]
     fn the_free_space_floor_reads_human_units_and_reaches_the_graph() {
@@ -2653,9 +2654,8 @@ mod graded_tests {
         v
     }
 
-    /// The headline of #209: one stray key in one step used to cost the
-    /// grid, search, the document view and every applet. It now costs
-    /// that step.
+    /// Guards #209: one stray key in one step costs that step, not the
+    /// grid, search, the document view and every applet.
     #[test]
     fn one_bad_step_costs_only_that_step() {
         let check = check_text(

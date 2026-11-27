@@ -23,9 +23,9 @@ pub fn changed(reads: &[SinkIx], last_success: Option<&Consumed>, now: &Consumed
 
 /// Whether a producer's most recent run ended without succeeding: it
 /// failed, gave up `incomplete`, was stopped, or was blocked. One running
-/// now has not ended. What this busy period saw of it wins over
-/// `recorded`, how its last run ended in the record, which a producer the
-/// period has not run still has from an earlier one.
+/// now has not ended. What this run saw of it wins over `recorded`, how
+/// its last run ended as its `steps` row has it, which a producer this run
+/// has not run still has from an earlier one.
 pub fn ended_short(producer: &StepFacts, recorded: Option<RunState>) -> bool {
     if producer.running.is_some() {
         return false;
@@ -86,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn a_producer_that_failed_or_stopped_this_period_ended_short() {
+    fn a_producer_that_failed_or_stopped_this_run_ended_short() {
         let mut f = StepFacts {
             last_attempt: Some(attempt(true, false)),
             ..Default::default()
@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    fn a_producer_this_period_has_not_run_is_read_from_the_record() {
+    fn a_producer_this_run_has_not_run_is_read_from_its_steps_row() {
         let f = StepFacts::default();
         for (recorded, short) in [
             (Some(RunState::Failed), true),

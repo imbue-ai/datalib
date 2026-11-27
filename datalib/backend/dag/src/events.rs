@@ -61,10 +61,10 @@ pub enum Event {
         step: StepId,
         attempt: u32,
     },
-    /// A streaming pass of the step ended: its process is over, and this
-    /// is how, but the step is not — the final pass is still to come, so
-    /// its state stays where it was. A pass that failed says so here, so
-    /// the failure is on the record even when the next pass succeeds.
+    /// One process of a streaming consumer ended, and this is how, but the
+    /// step is not over: its last process is still to come, so its state
+    /// stays where it was. A process that failed says so here, so the run
+    /// store keeps the failure even when the next process succeeds.
     PassEnd {
         step: StepId,
         status: RunState,
@@ -87,7 +87,7 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signal: Option<i32>,
     },
-    /// What this step's *sink* can do, announced once as it starts.
+    /// What this step's *sink* can do, reported once as it starts.
     ///
     /// Separate from [`Event::Checkpoint`], and deliberately: a step may
     /// seal for durability — so a killed run keeps what it had — without
@@ -95,11 +95,11 @@ pub enum Event {
     /// Those are different claims, and collapsing them would let a
     /// consumer read a sink that cannot be read.
     ///
-    /// Announced rather than probed. The alternative was running each
-    /// step's command a second time with a `--capabilities` flag, which
-    /// for a third-party step that ignores unknown flags would start the
-    /// real work. A step is already going to run; it can say this on the
-    /// way past.
+    /// Reported by the step rather than probed. The alternative was
+    /// running each step's command a second time with a `--capabilities`
+    /// flag, which for a third-party step that ignores unknown flags
+    /// would start the real work. A step is already going to run; it can
+    /// say this as it starts.
     Capabilities {
         step: StepId,
         /// P2 in `datalib/backend/dag/README.md` § "What a sink owes its consumers":
@@ -115,12 +115,12 @@ pub enum Event {
     /// A step sealed part of its output and is still running.
     ///
     /// `version` is the same kind of string the terminal `outcome` reports —
-    /// a content version the step vouches for — so a consumer comparing them
+    /// a content version the step reports — so a consumer comparing them
     /// needs no new vocabulary. There is no `path`: a step has exactly one
     /// output, and its id *is* that path.
     ///
     /// **A checkpoint is a hint, never an obligation.** A consumer that
-    /// ignores every one of them does a single pass at the end and is
+    /// ignores every one of them runs once at the end and is
     /// correct, just later. That is what keeps a dropped notification a
     /// performance question rather than a correctness one, and it is worth
     /// protecting: the moment something *needs* these to be right, we have
@@ -235,8 +235,8 @@ pub struct StepSummary {
     pub attempts: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    /// Passes that failed and were run again because what the step reads
-    /// moved; `status` is the last pass's.
+    /// Processes of this step that failed and were started again because
+    /// what the step reads moved; `status` is the last process's.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub failed_passes: u32,
     pub outputs: Vec<OutputSummary>,
