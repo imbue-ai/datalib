@@ -164,10 +164,9 @@ pub enum RootEvent {
     /// (`unified_time_series_index/time_series_index/time_series.doltlite_db`)
     /// has a new HEAD: the time series, or their points, moved.
     TimeSeriesIndexChanged,
-    /// A pass over the steps moved — the launch's migrate pass, or freeing
-    /// disk space — or the loop's record did, which the steps left to re-run
-    /// and the free-space pass are read from: `/api/config`'s `upgrade` or
-    /// `free_space` may be new.
+    /// The loop's record moved, which the prepare pass, freeing disk space
+    /// and the steps left to re-run are all read from: `/api/config`'s
+    /// `upgrade` or `free_space` may be new.
     PassChanged,
     /// Nothing changed; the stream is open. See [`HEARTBEAT`].
     Heartbeat,

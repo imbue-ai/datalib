@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Lay out a docker build context as datalib/docker/Dockerfile expects it:
-# the Dockerfile and entrypoint, the demo library's inputs, this
+# the Dockerfile and entrypoint, the demo library, this
 # architecture's binaries tarball and runtime asset under `dist/<arch>/`,
 # and for the CUDA variant the two archives stage_cuda.sh made, each
 # checked against its sidecar, then re-rooted under `cuda/` at the path
@@ -11,27 +11,35 @@
 # layers' digests are then the same from one release to the next
 # (docs/dev/docker.md § "The CUDA variant").
 #
-#   scripts/release/stage_docker_context.sh <ctx> <arch> <triple> <assets dir> [<cuda dir>]
+#   scripts/release/stage_docker_context.sh <ctx> <arch> <triple> <assets dir> <library dir> [<cuda dir>]
+#
+# <library dir> holds the TNG library's `library.tar` and
+# `config_body.toml` (release.yml's `tng-library` job), which
+# datalib/docker/stage_demo.sh stages as the demo; `-` stages no demo,
+# for a build of the image without it (`--target app`).
 #
 # Run by release.yml's two image jobs and by .github/workflows/cuda.yml.
 set -euo pipefail
 
-if [[ $# -lt 4 || $# -gt 5 ]]; then
-    echo "usage: $0 <ctx> <arch> <triple> <assets dir> [<cuda dir>]" >&2
+if [[ $# -lt 5 || $# -gt 6 ]]; then
+    echo "usage: $0 <ctx> <arch> <triple> <assets dir> <library dir|-> [<cuda dir>]" >&2
     exit 2
 fi
 ctx="$1"
 arch="$2"
 triple="$3"
 assets="$4"
-cuda="${5:-}"
+library="$5"
+cuda="${6:-}"
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/../.." && pwd -P)"
 
 mkdir -p "$ctx/dist/$arch"
 cp "$repo_root/datalib/docker/Dockerfile" "$repo_root/datalib/docker/entrypoint.sh" "$ctx/"
-"$repo_root/datalib/docker/stage_demo.sh" "$ctx"
+if [[ "$library" != - ]]; then
+    "$repo_root/datalib/docker/stage_demo.sh" "$ctx" "$library"
+fi
 cp "$assets/datalib-$triple.tar.gz" \
    "$assets/runtime-$triple.tar.gz" \
    "$assets/runtime-$triple.tar.gz.sha256" \

@@ -17,6 +17,7 @@ import {
   type Who,
 } from "./contacts";
 import { contactSubject, pageSubject } from "./cardSources";
+import { detailValue, orgValue, titleValue, type SourceValue } from "./contactFields";
 import type { PageAnswer } from "./contactPages";
 
 /** Who a person's page is about: whoever holds a handle, one of your
@@ -236,6 +237,8 @@ export type Offer = {
   label: string | null;
   /** The sources that say it is theirs, the page's order. */
   sources: string[];
+  /** The first card that says it, which adding it keeps with its label. */
+  card: { source_id: string; key: string } | null;
   written: string | null;
   /** Your contacts who have it already, so it is not ticked: adding it
    *  asks whether both have it or it moves here. */
@@ -260,15 +263,18 @@ export function nameToOffer(subject: Subject, model: PersonModel): string {
 export function offers(subject: Subject, model: PersonModel, answers: Answers): Offer[] {
   if (model.mine || model.sharedBy.length) return [];
   const out = new Map<string, Offer>();
-  const put = (h: RecordHandle, source: string | null, sure: boolean) => {
+  const put = (h: RecordHandle, from: NormalizedContact | null, sure: boolean) => {
     const owners = answers.who(h.handle)?.mine ?? [];
     const had = out.get(h.handle);
+    const source = from?.source_id ?? null;
+    const card = from ? { source_id: from.source_id, key: from.key } : null;
     if (!had) {
       out.set(h.handle, {
         handle: h.handle,
         shown: h.shown,
         label: h.label,
         sources: source ? [source] : [],
+        card,
         written: h.written,
         owners,
         ticked: sure && owners.length === 0,
@@ -276,6 +282,7 @@ export function offers(subject: Subject, model: PersonModel, answers: Answers): 
       return;
     }
     if (source && !had.sources.includes(source)) had.sources.push(source);
+    had.card ??= card;
     had.label ??= h.label;
     had.written ??= h.written;
     had.ticked ||= sure && owners.length === 0;
@@ -292,7 +299,7 @@ export function offers(subject: Subject, model: PersonModel, answers: Answers): 
     const theirs =
       s.sameDigits.length === 0 ||
       handles.some((h) => h.sure && h.written && s.sameDigits.includes(h.handle));
-    for (const h of handles) put(h, s.sourceId, theirs && h.sure);
+    for (const h of handles) put(h, s.contact, theirs && h.sure);
   }
   return [...out.values()];
 }
@@ -308,23 +315,33 @@ export function offerNote(o: Offer, sourceName: (id: string) => string): string 
     .join(" · ");
 }
 
+/** One line of a section, and what *Use* copies from it into your
+ *  contact, where it is something a contact holds. */
+export type SectionLine = { label: string; value: string; use: SourceValue | null };
+
 /** The lines a section shows under its source's name, in reading order:
- *  the names it adds beyond the first, its role, and the rest of what it
- *  says. Empty parts are left out. `stamp` writes a stamp for reading. */
+ *  the names it adds beyond the first, its title and organization, and
+ *  the rest of what it says. Empty parts are left out. `stamp` writes a
+ *  stamp for reading. */
 export function sectionLines(
   c: NormalizedContact,
   stamp: (iso: string) => string = (iso) => iso,
-): { label: string; value: string }[] {
-  const out: { label: string; value: string }[] = [];
-  if (c.names.length > 1) out.push({ label: "Also called", value: c.names.slice(1).join(", ") });
-  const role = [c.title, c.org].filter((s): s is string => !!s?.trim()).join(", ");
-  if (role) out.push({ label: "Role", value: role });
-  for (const d of c.details ?? []) out.push({ label: d.label, value: d.value });
-  if (c.note?.trim()) out.push({ label: "Note", value: c.note.trim() });
+): SectionLine[] {
+  const out: SectionLine[] = [];
+  if (c.names.length > 1) {
+    out.push({ label: "Also called", value: c.names.slice(1).join(", "), use: null });
+  }
+  if (c.title?.trim()) out.push({ label: "Title", value: c.title, use: titleValue(c.title) });
+  if (c.org?.trim()) out.push({ label: "Organization", value: c.org, use: orgValue(c.org) });
+  for (const d of c.details ?? []) out.push({ ...d, use: detailValue(d) });
+  if (c.note?.trim()) {
+    const note = c.note.trim();
+    out.push({ label: "Note", value: note, use: { part: "note", value: note } });
+  }
   if (c.seen) {
     const items = `${c.seen.items} ${c.seen.items === 1 ? "item" : "items"}`;
     const last = c.seen.last_at ? `, last ${stamp(c.seen.last_at)}` : "";
-    out.push({ label: "Seen", value: `${items}${last}` });
+    out.push({ label: "Seen", value: `${items}${last}`, use: null });
   }
   return out;
 }

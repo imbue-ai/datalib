@@ -97,9 +97,7 @@ rust_binary(
         "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/parent_watch:datalib_parent_watch",
         "//datalib/backend/runs:datalib_runs",
-        "//datalib/backend/runtime:datalib_runtime",
         "//datalib/backend/sql_work:datalib_sql_work",
-        "//datalib/backend/time:datalib_time",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
         "@datalib_crates//:serde_json",
@@ -251,28 +249,26 @@ insta_update(
 # A library copied as a person backs one up: the whole of it to another
 # path, an older copy put back, its raw and curated stores alone, and
 # through a backup tool that skips caches (tests/copy_restore.rs). Over
-# the Docker image's demo library, laid out by the image's own
-# stage_demo.sh.
+# the Docker image's demo library, the TNG library, laid out by the
+# image's own stage_demo.sh and unpack.sh.
 rust_test(
     name = "copy_restore_test",
     size = "medium",
     srcs = ["tests/copy_restore.rs"],
     data = [
         "//datalib/backend:bin",
-        "//datalib/backend/etl/providers/claude:tng_fixture",
         "//datalib/backend/etl/providers/contacts:tng_fixture",
-        "//datalib/backend/etl/providers/email:tng_fixture",
-        "//datalib/backend/etl/providers/google_takeout:tng_fixture",
-        "//datalib/backend/etl/providers/linkedin:tng_fixture",
-        "//datalib/backend/etl/providers/pdf:pdf_fixture",
-        "//datalib/backend/etl/providers/sms_backup_restore:tng_fixture",
-        "//datalib/docker:demo/config.toml",
+        "//datalib/docker:demo/applets.toml",
+        "//datalib/docker:demo/unpack.sh",
         "//datalib/docker:stage_demo.sh",
+        "//tests/fixtures:ingested/config_body.toml",
+        "//tests/fixtures:ingested/library.tar",
         "//tests/fixtures/curated:tng",
     ],
     edition = "2021",
     deps = [
         "//datalib/backend/curated_overlay:datalib_curated_overlay",
+        "//datalib/backend/migrate_config:datalib_migrate_config",
         "@datalib_crates//:runfiles",
         "@datalib_crates//:serde_json",
         "@datalib_crates//:tempfile",

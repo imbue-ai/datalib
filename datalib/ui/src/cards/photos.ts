@@ -1,5 +1,5 @@
 // A `datalib:photo/…` name, drawn by whichever applet says it serves
-// `photo` (its component's `serves`, docs/dev/plans/photos_applet.md):
+// `photo` (its component's `serves`, docs/dev/applets.md):
 // its card for the photo, and the address of its pictures.
 
 import { parsePhoto } from "@/uri";

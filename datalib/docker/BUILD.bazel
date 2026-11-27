@@ -9,12 +9,11 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 exports_files([
     "Dockerfile",
     "entrypoint.sh",
-    # The baked demo library's config, validated against the provider
-    # schemas by //datalib/backend/datalib_step:datalib_step_unittests
-    # alongside the docs' example configs.
-    "demo/config.toml",
-    # Lays out the demo's inputs; the image build runs it, and so does
+    # Stage the demo library and unpack it, with the applets its config
+    # ends with; the image build runs them, and so does
     # //datalib/backend/dag:copy_restore_test.
+    "demo/applets.toml",
+    "demo/unpack.sh",
     "stage_demo.sh",
 ])
 

@@ -16,6 +16,7 @@ import {
   expectSyncEverything,
   nameCell,
   rowMenuEntry,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 import { readFileSync, writeFileSync } from "node:fs";
 
@@ -186,7 +187,7 @@ test("a file that is not a config blocks the app, and unblocks it live", async (
   // which does not wait for the file watcher to report the write. This
   // direction is the one that is easy to get wrong: the cards behind the
   // gate have to come back as they were.
-  await expect(gate(page)).toHaveCount(0);
+  await expect(gate(page)).toHaveCount(0, { timeout: SAVE_ANSWERED });
   await expect(toolbar(page)).toBeVisible();
   await expect(
     page.locator(".tg-grid[data-probe]"),

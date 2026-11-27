@@ -19,10 +19,10 @@ use datalib_dag::supervisor::announce::{
     announce, missed_announcements, Listener, CONFIG_CHANGED, FROM_SERVER,
 };
 use datalib_dag::supervisor::host;
-use datalib_dag::supervisor::period::{PeriodSink, RunPeriods};
+use datalib_dag::supervisor::loop_host::{LoopHost, PeriodSink};
 use datalib_dag::supervisor::record::{InvocationEnd, InvocationRow, Record};
 use datalib_dag::supervisor::reload::ConfigFile;
-use datalib_dag::supervisor::store::{RequestOutcome, RequestRow, Store, WipeKind, WipeRow};
+use datalib_dag::supervisor::store::{JobKind, JobRow, RequestOutcome, RequestRow, Store};
 use datalib_dag::{Event, EventSink, Runner};
 use tokio::sync::{mpsc, watch};
 
@@ -123,7 +123,7 @@ pub struct State {
     pub record: Record,
     pub invocations: Vec<(InvocationRow, Option<InvocationEnd>)>,
     pub requests: Vec<RequestRow>,
-    pub wipes: Vec<WipeRow>,
+    pub wipes: Vec<JobRow>,
 }
 
 impl State {
@@ -628,7 +628,7 @@ impl Harness {
             record: self.person.load_record().await.unwrap(),
             invocations: self.person.invocations().await.unwrap(),
             requests: self.person.recent_requests(1000).await.unwrap(),
-            wipes: self.person.wipes().await.unwrap(),
+            wipes: self.person.jobs().await.unwrap(),
         }
     }
 
@@ -710,18 +710,18 @@ impl Harness {
     }
 
     pub async fn reset(&mut self, steps: &[&str]) -> String {
-        self.wipe(WipeKind::Reset, steps).await
+        self.wipe(JobKind::Reset, steps).await
     }
 
     pub async fn purge(&mut self, groups: &[&str]) -> String {
-        self.wipe(WipeKind::Purge, groups).await
+        self.wipe(JobKind::Purge, groups).await
     }
 
-    async fn wipe(&mut self, kind: WipeKind, targets: &[&str]) -> String {
+    async fn wipe(&mut self, kind: JobKind, targets: &[&str]) -> String {
         let targets: Vec<String> = targets.iter().map(|t| t.to_string()).collect();
         let id = self
             .person
-            .open_wipe(kind, &targets, "person")
+            .open_job(kind, &targets, "person")
             .await
             .unwrap();
         self.note(format!("person: {} {targets:?} = {id}", kind.as_str()));
@@ -798,7 +798,7 @@ impl Periods {
     }
 }
 
-impl RunPeriods for Periods {
+impl LoopHost for Periods {
     fn open(&self, start: datalib_runs::RunStart) -> Result<BTreeMap<String, String>, String> {
         let _ = self.report.send(Seen::Host("busy period".into()));
         let (checked, _) = self.graph().ok_or("the config does not load")?;

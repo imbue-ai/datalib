@@ -1,12 +1,12 @@
 # The TNG fixture through the server, then a fuzzer over it
 
-**Status: steps 1 and 2 are built — the fixture goes through the
-server, and `tests/fixtures/tng_fuzz_test.py` plays the person's events
-and step deaths; server deaths and steps 3–4 are a proposal
-(2026-09-24).**
-Rewritten after the supervisor landed: the first version of this plan
-(#659) drove `/api/sync/jobs`, which no longer exists. Where this doc
-and the tree disagree, the tree wins.
+**Status: proposal (2026-09-24), checked against the tree on
+2026-11-27. Step 1 is built (#770): the TNG fixture is synced through
+`datalib-http`. Step 2 is built for the person's events and step
+deaths (#774), and the fuzzer is still `manual`; server deaths, step 3
+(upstream faults) and step 4 (the live config) are not built.** The
+first version of this plan (#659) drove `/api/sync/jobs`, which no
+longer exists.
 
 ## 0. The idea
 
@@ -28,31 +28,17 @@ Two tests, one harness.
    trusting a half-written store lands different rows, and the diff
    names them.
 
-## 1. What step 1 built
+## 1. The fixture through the server: built
 
-- `datalib-http --now <RFC 3339>` pins every sync's "now", as
-  `datalib-pipeline --now` does for one run. Ingest reads the wall clock
-  either way; it is render and the index that stamp `now`, and without
-  the pin the fixture would change every day and re-run the qmd embed
-  downstream of it.
-- `tests/fixtures/sync_drivers.py` has two drivers with the same four
-  calls (build the config, sync, reset, close). `run_sync_pipeline.py`
-  takes the server as an optional 30th argument; the genrule passes it,
-  `ingested_tng_test` and `render_contract_test` do not, so both doors
-  run over the same fixture on every build.
-- The second Slack capture used to arrive by changing an environment
-  variable between runs. A server fixes its steps' environment when it
-  starts, so the playback path is now a link the script repoints — a
-  changed upstream behind the same address.
-- qmd is off in the fixture's config, as a person turns it off from
-  Manage; `:ingested_tng_qmd` embeds separately, as before.
-
-Measured on a warm mac: the whole script takes 4–7s through either
-door, the spread being run-to-run noise. The two runs produced the same
-markdown file for file and the same grid index row for row once commit
-hashes and wall-clock stamps are masked (those differ between any two
-runs of either door); the only other difference was ten Storage rows
-one byte apart, which is store size on disk.
+Built in #770. The `:ingested_tng` genrule drives `datalib-http` over
+its API through `tests/fixtures/sync_drivers.py`, and
+`:ingested_tng_test` runs the same driver through `datalib-pipeline`,
+so both doors run over the same fixture on every build
+([`tests/fixtures/README.md`](../../../tests/fixtures/README.md) has
+how). `datalib-http --now` pins every sync's "now", as
+`datalib-pipeline --now` does. When it landed, the two doors produced
+the same documents and grid rows once commit hashes and wall-clock
+stamps were masked.
 
 ## 2. The fuzzer
 
@@ -116,10 +102,12 @@ on.
 **Budget**: a case with 40 events and the two closing syncs takes about
 30s on a warm mac. The target runs seeds 0–3, one per shard; new
 schedules come from changing the list, on purpose. `TNG_FUZZ_SEED=<n>`
-replays or explores one. It is `manual` for now — run it with
-`bazelisk test //tests/fixtures:tng_fuzz_test` — because starting and
-stopping single steps from the Manage screen is still being built; its
-events join the storm when it lands, and the target joins CI.
+replays or explores one. It is `manual` — run it with
+`bazelisk test //tests/fixtures:tng_fuzz_test` — and is not in CI. Its
+BUILD comment says it waits for the Manage screen to start and stop
+single steps; a request already names its roots and a step can be
+turned off, so that reason may be out of date, and joining CI is the
+open part.
 
 **Kills often find nothing to kill.** A kill with no step running asks
 for a sync of a few sources and waits up to 3s for one to start; when
@@ -163,12 +151,14 @@ A red first run is a finding. Named in advance:
 
 ## 4. Plan of record
 
-1. **The fixture through the server.** Built (§1).
-2. **The fuzzer on the fixture**: built, with the person's events and
-   step deaths. Next: server death, which needs a second server on the
-   same root after the first is killed.
+1. **The fixture through the server.** Built (#770, §1).
+2. **The fuzzer on the fixture**: built (#774), with the person's
+   events and step deaths. Left: server death, which needs a second
+   server on the same root after the first is killed; kills that land
+   every time (§2, "Kills often find nothing to kill"); and the target
+   in CI.
 3. **Upstream faults as events**, sharing #644's hostile playback.
-   Playback answers inside `datalib_etl::http`, before latchkey is
+   Playback answers inside `datalib_etl_web` (`playback.rs`), before latchkey is
    spawned, so a fault injected there never crosses the credential
    path. The sign-in suite (`datalib/ui/tests/e2e_auth/`, 2026-10-05)
    has the other door: a fake internet behind the real `latchkey curl`

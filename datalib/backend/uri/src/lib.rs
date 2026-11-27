@@ -15,7 +15,7 @@ pub enum Name {
         section: Option<String>,
     },
     /// A photo or video, by its grid row's uuid; whichever applet says it
-    /// serves `photo` hands out its pictures (docs/dev/plans/photos_applet.md).
+    /// serves `photo` hands out its pictures (docs/dev/applets.md).
     Photo { id: String },
     /// A node of a source's tree, by its `data_nodes` uuid: a channel, a
     /// label, a folder, a page (docs/dev/chips.md § "A node").

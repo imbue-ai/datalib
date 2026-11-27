@@ -20,6 +20,7 @@ import {
   searchHeader,
   TABLE_ROWS,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 
 const ROWS = TABLE_ROWS;
@@ -73,7 +74,7 @@ async function writeConfig(page: Page, text: string): Promise<void> {
   await openManage(page);
   await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 }
 
 /// The Browse button on a group's row. Group rows carry `group:<id>` as

@@ -52,6 +52,7 @@ import {
   statusOf,
   TABLE_ROWS,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 import { expectSanePaints, watchPaints } from "./paint-watch";
 
@@ -97,7 +98,7 @@ async function writeConfig(page: Page, text: string) {
   await openManager(page);
   await fillConfigEditor(page, text);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
   // Remount, so the rows are painted from the config and the runner's
   // record together — see data-sources-sync.spec.ts for the frame this
   // avoids.

@@ -41,7 +41,9 @@ export type NormalizedContact = {
   details?: { label: string; value: string }[];
   /** The person's own page at the source, where it has one. */
   source_url?: string | null;
-  seen: { items: number; last_at: string | null } | null;
+  /** How much of this source they wrote: its rows by their handles,
+   *  what `from:` finds there. Only the index's answer has it. */
+  seen?: { items: number; last_at: string | null } | null;
   /** A photo the app serves, app-relative, where the source has one and
    *  the server can serve it; absent or null otherwise. The chip's lead. */
   photo_url?: string | null;
@@ -522,18 +524,43 @@ function holderIds(handle: string): string[] {
  *  one, linking such a handle is refused. */
 export type WhenHeld = "share" | "move";
 
+/** What the card a handle came from said of it, which the contact keeps:
+ *  its label, and the card (`datalib_contacts::HandleFrom`, hand-kept). */
+export type HandleFrom = {
+  label?: string | null;
+  copied_from?: { source_id: string; key: string } | null;
+};
+
 export async function linkHandle(
   handle: string,
   contactId: string,
   held?: WhenHeld,
+  from: HandleFrom = {},
 ): Promise<void> {
   const before = holderIds(handle);
-  await post("/link", { handle, contact_id: contactId, ...(held ? { held } : {}) });
+  await post("/link", { handle, contact_id: contactId, ...(held ? { held } : {}), ...from });
   people.forget(withItsContacts(handle, [contactId, ...before]));
   contactsById.revalidate();
 }
 
-export type NewPerson = { name: string; handles: string[] };
+/** Your contact's label for one of its handles ("work"); null clears it. */
+export async function setHandleLabel(
+  handle: string,
+  contactId: string,
+  label: string | null,
+): Promise<void> {
+  await post("/handle_label", { handle, contact_id: contactId, label: label?.trim() || null });
+  people.forget(withItsContacts(handle, holderIds(handle)));
+  contactsById.revalidate();
+}
+
+export type NewPerson = {
+  name: string;
+  handles: string[];
+  held?: Record<string, WhenHeld>;
+  /** What the card each handle came from said of it, by handle. */
+  said?: Record<string, HandleFrom>;
+};
 
 /** What adding many people came to (`datalib_contacts::AddedPeople`). */
 export type AddedPeople = {
@@ -682,11 +709,17 @@ export async function autosaveDraft(
   return r.handles;
 }
 
-/** Publish the draft, unless the contact moved since `seen`, the
- *  published commit the card last showed: then nothing is saved and the
- *  answer is the new view. A save renames every chip of the contact. */
-export async function saveDraft(contactId: string, seen: string): Promise<Saved> {
-  const saved = await post<Saved>(`${contactPath(contactId)}/draft/save`, { seen });
+/** Publish the draft, each address and number in it becoming the
+ *  contact's, unless the contact moved since `seen`, the published commit
+ *  the card last showed (the answer is then the new view), or one of
+ *  those is another contact's and `held` does not say whose (the answer
+ *  names them). A save renames every chip of the contact. */
+export async function saveDraft(
+  contactId: string,
+  seen: string,
+  held: Record<string, WhenHeld> = {},
+): Promise<Saved> {
+  const saved = await post<Saved>(`${contactPath(contactId)}/draft/save`, { seen, held });
   if (saved.outcome === "saved") {
     people.revalidate();
     contactsById.revalidate();

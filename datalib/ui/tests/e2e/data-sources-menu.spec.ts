@@ -16,6 +16,7 @@ import {
   pipelineRow,
   MANAGE_WITH_CONFIG,
   expectSyncEverything,
+  SAVE_ANSWERED,
 } from "./grid-helpers";
 
 /// The menu's entries by their text — separators carry none.
@@ -161,7 +162,7 @@ test("Rename edits the group's name in the cell and writes it to the config", as
 
   await expect(
     page.getByText("Renamed unified_grid_and_search_index to Everything, indexed."),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: SAVE_ANSWERED });
   // The group's Name is its chip, which shows the new name.
   await expect(nameCell(page, "group:unified_grid_and_search_index").locator("a.chip")).toHaveText(
     "Everything, indexed",
@@ -171,5 +172,5 @@ test("Rename edits the group's name in the cell and writes it to the config", as
   // Put the root back for the next spec on this sandbox.
   await fillConfigEditor(page, original);
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved the config.")).toBeVisible();
+  await expect(page.getByText("Saved the config.")).toBeVisible({ timeout: SAVE_ANSWERED });
 });

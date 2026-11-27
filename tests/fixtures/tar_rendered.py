@@ -37,6 +37,11 @@ source's `<stanza>/render_time_series/` and the index over them,
 store by its path under the data root and the commit it read, so the
 stores extract next to it unchanged.
 
+A fourth, `library.tar`, is what the TNG library adds to those: every
+source's raw stores (`<stanza>/ingest/`) and the copies of the files the
+file-reading sources read (`inputs/`), so a sync of the library has
+what each download step needs.
+
 Determinism guarantees for every archive: mtime / uid / gid / uname /
 gname zeroed, entries sorted.
 
@@ -46,6 +51,7 @@ Args (positional):
     3: output path for rendered_md.tar (markdown only)
     4: output path for time_series.tar (the time-series stores)
     5: the folder `datalib-step markdown --out` exported the documents to
+    6: output path for library.tar (the raw stores and the inputs)
 """
 
 from __future__ import annotations
@@ -67,6 +73,12 @@ def _add(tf: tarfile.TarFile, path: Path, arcname: str) -> None:
             tf.addfile(ti, f)
     else:
         tf.addfile(ti)
+
+
+def _is_lock(p: Path) -> bool:
+    """A store's lock files: ours (`<store>.lock`) and doltlite's
+    (`.<store>-lock`). Whoever opens the store next makes its own."""
+    return p.name.endswith(".lock") or p.name.endswith("-lock")
 
 
 def _write_tar(out_tar: Path, src_root: Path, entries: list[Path]) -> None:
@@ -114,6 +126,18 @@ def main() -> int:
     for d in series_dirs:
         series_entries.extend([d.parent, d] + sorted(d.rglob("*")))
     _write_tar(Path(sys.argv[4]).resolve(), src_root, sorted(set(series_entries)))
+
+    library_dirs = sorted(
+        d
+        for d in src_root.glob("*/ingest")
+        if d.is_dir() and d.parent.name not in not_stanzas
+    ) + [src_root / "inputs"]
+    library_entries: list[Path] = []
+    for d in library_dirs:
+        if d.parent != src_root:
+            library_entries.append(d.parent)
+        library_entries.extend([d] + sorted(p for p in d.rglob("*") if not _is_lock(p)))
+    _write_tar(Path(sys.argv[6]).resolve(), src_root, sorted(set(library_entries)))
     return 0
 
 

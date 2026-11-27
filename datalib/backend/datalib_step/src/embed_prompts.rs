@@ -1,7 +1,7 @@
 //! `datalib-step embed-prompts`: prompts on stdin, vectors on stdout,
 //! through the embedder the `embed` step uses, so a vector made here is
 //! the one the step would have made. What a rented GPU runs for a source
-//! embedded elsewhere (docs/dev/plans/embed_on_modal.md). One JSON object
+//! embedded elsewhere (docs/dev/embed_on_modal.md). One JSON object
 //! a line each way, `{"hash", "prompt"}` in and `{"hash", "vector", "cut"}`
 //! out, in order; stdout holds nothing else.
 

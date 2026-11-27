@@ -12,8 +12,7 @@
 //! (a checkpoint, the end of the run) without anyone checking what is
 //! in it. How many documents share one transaction is a throughput choice
 //! ([`IndexedMarkdownStore::begin_batch`]): each transaction rewrites every
-//! page it touched (docs/dev/doltlite.md#what-a-write-costs). See
-//! `docs/dev/plans/completed/one_mode.md`.
+//! page it touched (docs/dev/doltlite.md#what-a-write-costs).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -2304,7 +2303,7 @@ mod tests {
     /// they had, and a re-render that no longer names someone drops them —
     /// rows and handles both — the way a re-render drops stale edges.
     fn source_contacts_travel_with_their_document() {
-        use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact, Seen};
+        use datalib_contact_schema::{ContactHandle, ContactKind, NormalizedContact};
         let td = tempfile::tempdir().unwrap();
         let st = store(td.path());
         let mut riker =
@@ -2314,10 +2313,6 @@ mod tests {
             ContactHandle::email(None, "riker@enterprise.org"),
             ContactHandle::phone(Some("cell".into()), "(555) 010-1234"),
         ];
-        riker.seen = Some(Seen {
-            items: 2,
-            last_at: Some("2369-05-28T15:08:20+00:00".into()),
-        });
         let mut d = doc("a", "fp");
         d.contacts = vec![riker.clone()];
         st.put_document(&d).unwrap();

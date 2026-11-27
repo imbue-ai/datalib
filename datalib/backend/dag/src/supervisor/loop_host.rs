@@ -1,7 +1,7 @@
-//! What a busy period still is to a loop that never exits: the run
-//! store's grouping of the work done while some request or wipe was
-//! open. The loop says when one opens and closes; the host that runs the
-//! loop records it.
+//! What the loop tells the host that runs it, for a loop that never
+//! exits: when a busy period opens and closes, which is all a busy period
+//! still is (the run store's grouping of the work done while some request
+//! or job was open). Everything else it says, it writes to the store.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -10,9 +10,9 @@ use datalib_runs::RunStart;
 
 use crate::events::{Event, EventSink};
 
-/// How a host records each busy period of [`Runner::run_forever`]
-/// (`crate::scheduler::Runner`).
-pub trait RunPeriods: Send + Sync {
+/// How a host hears what [`Runner::run_forever`]
+/// (`crate::scheduler::Runner`) does.
+pub trait LoopHost: Send + Sync {
     /// A period opens, for `start`'s reason. The environment its steps
     /// get, which carries the period's run id and "now"
     /// (`DATALIB_DAG_RUN_ID`, `DATALIB_DAG_NOW`); or why nothing can run,

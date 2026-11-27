@@ -1,7 +1,7 @@
 //! The render wave for the lightroom source: one document per photo or
 //! video, with no file on disk. The `photos` applet draws it from the
 //! `source_photos` row the document carries
-//! (`docs/dev/plans/photos_applet.md`).
+//! (`lightroom/INGEST.md` § "Rendering").
 
 use std::path::Path;
 

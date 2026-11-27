@@ -5,25 +5,47 @@
 //! the most. The contacts app's own answer ranks above all of these, and
 //! is joined in by the UI, never here.
 //!
-//! A chat describes a person once per document, and its name is decided
-//! across all of them by how much was written under each, so one
-//! message, forged or not, cannot rename the person everywhere.
+//! How much someone wrote is the grid's rows, the one count: what `from:`
+//! finds (docs/dev/contacts.md §"How much someone wrote"). A chat
+//! describes a person once per document, and its name is decided across
+//! all of them by how much was written under each, so one message, forged
+//! or not, cannot rename the person everywhere.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use datalib_contact_schema::{NormalizedContact, Seen};
 use datalib_handle::Handle;
 use serde::Serialize;
 
-/// One of the index's contact records reached through one of its handles,
-/// its `seen` summed over the documents that carry it.
+/// One of the index's contact records reached through one of its handles.
+#[derive(Clone)]
 pub struct HandleRow {
     pub handle: String,
     pub contact: NormalizedContact,
-    /// What its first name is credited with: what was written in each
-    /// document that carries it, and at least one for a document that
-    /// only names them.
+    /// What its first name is credited with: the grid's rows its handles
+    /// wrote in each document that carries it, and at least one for a
+    /// document they wrote nothing in.
     pub credit: u64,
+    /// A document that carries it is a contact's own page: the record is a
+    /// source about people, an address book's card or a profile.
+    pub about: bool,
+}
+
+/// How much one handle wrote in one source: its rows there, and the
+/// newest one's stamp.
+pub type Authored = HashMap<(String, String), Seen>;
+
+/// A source's record of a person, with how much of that source they
+/// wrote, as `POST /people` answers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Counted {
+    #[serde(flatten)]
+    pub contact: NormalizedContact,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seen: Option<Seen>,
+    /// For ranking; the record's documents say it, not the record.
+    #[serde(skip)]
+    about: bool,
 }
 
 /// What the index read about some people, one row per distinct record.
@@ -38,17 +60,19 @@ pub struct PeopleRows {
     pub pages: Vec<HandleRow>,
     /// Every full number any of these records' numbers may be.
     pub full_numbers: Vec<Handle>,
+    /// How much each of these records' handles wrote in its source.
+    pub authored: Authored,
 }
 
 /// Who each handle and each contact's page is, as `POST /people` answers.
 #[derive(Debug, Default, Serialize)]
 pub struct People {
     /// Each handle's records, ranked. One no source mentions is absent.
-    pub people: BTreeMap<String, Vec<NormalizedContact>>,
+    pub people: BTreeMap<String, Vec<Counted>>,
     /// Each number's records that write it without its country code.
-    pub same_digits: BTreeMap<String, Vec<NormalizedContact>>,
+    pub same_digits: BTreeMap<String, Vec<Counted>>,
     /// Each contact's page, by its id.
-    pub pages: BTreeMap<String, NormalizedContact>,
+    pub pages: BTreeMap<String, Counted>,
     /// Each number a record above writes without its country code, as it
     /// wrote it, with the full numbers a source knows that it may be.
     pub full_numbers: BTreeMap<String, Vec<Handle>>,
@@ -77,9 +101,9 @@ impl People {
             }
         }
         Self {
-            people: merge_and_rank(rows.holding),
-            same_digits: merge_and_rank(rows.same_digits),
-            pages: merge_and_rank(rows.pages)
+            people: merge_and_rank(rows.holding, &rows.authored),
+            same_digits: merge_and_rank(rows.same_digits, &rows.authored),
+            pages: merge_and_rank(rows.pages, &rows.authored)
                 .into_iter()
                 .filter_map(|(page, contacts)| Some((page, contacts.into_iter().next()?)))
                 .collect(),
@@ -99,8 +123,7 @@ pub fn for_each_number(numbers: &[Handle], by_digits: Vec<HandleRow>) -> Vec<Han
                 .filter(|number| number.may_be(&row.handle) && !row.contact.holds(number))
                 .map(|number| HandleRow {
                     handle: number.as_str().to_string(),
-                    contact: row.contact.clone(),
-                    credit: row.credit,
+                    ..row.clone()
                 })
         })
         .collect()
@@ -110,17 +133,19 @@ struct Merged {
     contact: NormalizedContact,
     /// How many items were written under each name.
     weight: BTreeMap<String, u64>,
+    about: bool,
 }
 
 /// Records for the same handle, source and person — a chat's differ by
-/// the names it showed — become one source contact; then each handle's
-/// are ranked.
-fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContact>> {
+/// the names it showed — become one source contact, with how much of the
+/// source its handles wrote; then each handle's are ranked.
+fn merge_and_rank(rows: Vec<HandleRow>, authored: &Authored) -> BTreeMap<String, Vec<Counted>> {
     let mut merged: BTreeMap<(String, String, String), Merged> = BTreeMap::new();
     for HandleRow {
         handle,
         mut contact,
         credit,
+        about,
     } in rows
     {
         contact.names = own_names(&handle, &contact);
@@ -128,19 +153,21 @@ fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContac
         let entry = merged.entry(key).or_insert_with(|| Merged {
             contact: NormalizedContact {
                 names: Vec::new(),
-                seen: None,
                 ..contact.clone()
             },
             weight: BTreeMap::new(),
+            about: false,
         });
+        entry.about |= about;
         add(entry, contact, credit);
     }
-    let mut out: BTreeMap<String, Vec<NormalizedContact>> = BTreeMap::new();
+    let mut out: BTreeMap<String, Vec<Counted>> = BTreeMap::new();
     for (
         (handle, _, _),
         Merged {
             mut contact,
             weight,
+            about,
         },
     ) in merged
     {
@@ -149,16 +176,40 @@ fn merge_and_rank(rows: Vec<HandleRow>) -> BTreeMap<String, Vec<NormalizedContac
         // answer does not hang on the order the rows were read in.
         names.sort_by(|(a, wa), (b, wb)| wb.cmp(wa).then_with(|| a.cmp(b)));
         contact.names = names.into_iter().map(|(n, _)| n).collect();
-        out.entry(handle).or_default().push(contact);
+        let seen = seen_in_source(&contact, authored);
+        out.entry(handle).or_default().push(Counted {
+            contact,
+            seen,
+            about,
+        });
     }
     for contacts in out.values_mut() {
         contacts.sort_by(|a, b| {
             rank(a)
                 .cmp(&rank(b))
-                .then_with(|| a.source_id.cmp(&b.source_id))
+                .then_with(|| a.contact.source_id.cmp(&b.contact.source_id))
         });
     }
     out
+}
+
+/// How much of its source the record's handles wrote; `None` for nothing.
+fn seen_in_source(contact: &NormalizedContact, authored: &Authored) -> Option<Seen> {
+    let mut seen: Option<Seen> = None;
+    for h in contact.handles.iter().filter_map(|h| h.handle.as_ref()) {
+        let key = (h.as_str().to_string(), contact.source_id.clone());
+        let Some(wrote) = authored.get(&key) else {
+            continue;
+        };
+        seen = Some(match seen {
+            None => wrote.clone(),
+            Some(s) => Seen {
+                items: s.items + wrote.items,
+                last_at: s.last_at.max(wrote.last_at.clone()),
+            },
+        });
+    }
+    seen.filter(|s| s.items > 0)
 }
 
 /// One record of the person. Its names come most used first (chat-common's
@@ -169,13 +220,6 @@ fn add(into: &mut Merged, other: NormalizedContact, credit: u64) {
         let credit = if i == 0 { credit } else { 0 };
         *into.weight.entry(name).or_insert(0) += credit;
     }
-    into.contact.seen = match (into.contact.seen.take(), other.seen) {
-        (Some(a), Some(b)) => Some(Seen {
-            items: a.items + b.items,
-            last_at: a.last_at.max(b.last_at),
-        }),
-        (a, b) => a.or(b),
-    };
 }
 
 /// The names that are names: one that reads as an address or another
@@ -193,13 +237,11 @@ fn own_names(handle: &str, contact: &NormalizedContact) -> Vec<String> {
         .collect()
 }
 
-/// Lower ranks first: a source about people, then the chat where they
+/// Lower ranks first: a source about people, then the one where they
 /// wrote the most.
-fn rank(c: &NormalizedContact) -> (bool, std::cmp::Reverse<u64>) {
-    match &c.seen {
-        None => (false, std::cmp::Reverse(u64::MAX)),
-        Some(s) => (true, std::cmp::Reverse(s.items)),
-    }
+fn rank(c: &Counted) -> (bool, std::cmp::Reverse<u64>) {
+    let items = c.seen.as_ref().map_or(0, |s| s.items);
+    (!c.about, std::cmp::Reverse(items))
 }
 
 #[cfg(test)]
@@ -207,67 +249,86 @@ mod tests {
     use super::*;
     use datalib_contact_schema::{ContactHandle, ContactKind};
 
-    fn source_contact(
-        source: &str,
-        key: &str,
-        name: &str,
-        seen: Option<(u64, &str)>,
-    ) -> NormalizedContact {
+    fn source_contact(source: &str, key: &str, name: &str) -> NormalizedContact {
         let mut c = NormalizedContact::new(source, key, ContactKind::Person);
         c.names = vec![name.to_string()];
-        c.seen = seen.map(|(items, at)| Seen {
-            items,
-            last_at: Some(at.to_string()),
-        });
+        if let Some(h) = Handle::parse(key) {
+            c.handles = vec![ContactHandle::of(h)];
+        }
         c
     }
 
-    fn row(handle: &str, c: NormalizedContact) -> HandleRow {
+    /// A chat's record, its first name credited with `credit`.
+    fn row(handle: &str, c: NormalizedContact, credit: u64) -> HandleRow {
         HandleRow {
             handle: handle.to_string(),
-            credit: c.seen.as_ref().map_or(0, |s| s.items).max(1),
+            credit,
+            about: false,
             contact: c,
         }
     }
 
+    fn wrote(entries: &[(&str, &str, u64, &str)]) -> Authored {
+        entries
+            .iter()
+            .map(|(h, source, items, at)| {
+                let seen = Seen {
+                    items: *items,
+                    last_at: Some(at.to_string()),
+                };
+                ((h.to_string(), source.to_string()), seen)
+            })
+            .collect()
+    }
+
+    /// One record per name a chat showed is one source contact, its count
+    /// the grid's rows by its handle in that source.
     #[test]
-    fn one_account_per_source_summed_over_its_documents() {
+    fn one_account_per_source_counted_from_the_grid() {
         let h = "email:riker@enterprise.org";
-        let got = merge_and_rank(vec![
-            row(
-                h,
-                source_contact("mail", h, "Will Riker", Some((2, "2369-01-01"))),
-            ),
-            row(
-                h,
-                source_contact("mail", h, "Number One", Some((3, "2369-05-01"))),
-            ),
-        ]);
+        let got = merge_and_rank(
+            vec![
+                row(h, source_contact("mail", h, "Will Riker"), 2),
+                row(h, source_contact("mail", h, "Number One"), 3),
+            ],
+            &wrote(&[(h, "mail", 5, "2369-05-01"), (h, "slack", 9, "2370-01-01")]),
+        );
         let mail = &got[h][0];
         assert_eq!(
-            mail.names,
+            mail.contact.names,
             ["Number One", "Will Riker"],
             "most written first"
         );
-        assert_eq!(mail.seen.as_ref().unwrap().items, 5);
         assert_eq!(
-            mail.seen.as_ref().unwrap().last_at.as_deref(),
-            Some("2369-05-01")
+            mail.seen,
+            Some(Seen {
+                items: 5,
+                last_at: Some("2369-05-01".into())
+            }),
+            "this source's rows only"
         );
     }
 
     #[test]
     fn a_source_about_people_outranks_chats_and_chats_rank_by_volume() {
         let h = "tel:+15550101010";
-        let got = merge_and_rank(vec![
-            row(h, source_contact("whatsapp", h, "Deanna", Some((1, "a")))),
-            row(h, source_contact("signal", h, "Counselor", Some((9, "b")))),
-            row(
-                h,
-                source_contact("address_book", "Bridge#troi", "Deanna Troi", None),
-            ),
-        ]);
-        let order: Vec<&str> = got[h].iter().map(|c| c.source_id.as_str()).collect();
+        let mut book = source_contact("address_book", "Bridge#troi", "Deanna Troi");
+        book.handles = vec![ContactHandle::of(Handle::parse(h).unwrap())];
+        let got = merge_and_rank(
+            vec![
+                row(h, source_contact("whatsapp", h, "Deanna"), 1),
+                row(h, source_contact("signal", h, "Counselor"), 9),
+                HandleRow {
+                    about: true,
+                    ..row(h, book, 1)
+                },
+            ],
+            &wrote(&[(h, "whatsapp", 1, "a"), (h, "signal", 9, "b")]),
+        );
+        let order: Vec<&str> = got[h]
+            .iter()
+            .map(|c| c.contact.source_id.as_str())
+            .collect();
         assert_eq!(order, ["address_book", "signal", "whatsapp"]);
     }
 
@@ -277,33 +338,17 @@ mod tests {
     #[test]
     fn one_message_cannot_rename_a_sender() {
         let h = "email:riker@enterprise.org";
-        let genuine = |_document| {
-            row(
-                h,
-                source_contact("mail", h, "William Riker", Some((1, "2369-01-01"))),
-            )
-        };
-        let forged = || {
-            row(
-                h,
-                source_contact(
-                    "mail",
-                    h,
-                    "PAY INVOICE NOW - Riker",
-                    Some((1, "2369-09-09")),
-                ),
-            )
-        };
+        let genuine = |_document| row(h, source_contact("mail", h, "William Riker"), 1);
+        let forged = || row(h, source_contact("mail", h, "PAY INVOICE NOW - Riker"), 1);
         for forged_at in [0, 5, 10] {
             let mut rows: Vec<HandleRow> = (0..10).map(genuine).collect();
             rows.insert(forged_at, forged());
-            let got = merge_and_rank(rows);
+            let got = merge_and_rank(rows, &wrote(&[(h, "mail", 11, "2369-09-09")]));
             assert_eq!(
-                got[h][0].names,
+                got[h][0].contact.names,
                 ["William Riker", "PAY INVOICE NOW - Riker"],
                 "forged row read at {forged_at}"
             );
-            assert_eq!(got[h][0].seen.as_ref().unwrap().items, 11);
         }
     }
 
@@ -311,12 +356,12 @@ mod tests {
     #[test]
     fn a_tie_does_not_hang_on_row_order() {
         let h = "email:riker@enterprise.org";
-        let a = || row(h, source_contact("mail", h, "Will Riker", Some((2, "a"))));
-        let b = || row(h, source_contact("mail", h, "Number One", Some((2, "b"))));
-        let one = merge_and_rank(vec![a(), b()]);
-        let other = merge_and_rank(vec![b(), a()]);
-        assert_eq!(one[h][0].names, other[h][0].names);
-        assert_eq!(one[h][0].names, ["Number One", "Will Riker"]);
+        let a = || row(h, source_contact("mail", h, "Will Riker"), 2);
+        let b = || row(h, source_contact("mail", h, "Number One"), 2);
+        let one = merge_and_rank(vec![a(), b()], &Authored::new());
+        let other = merge_and_rank(vec![b(), a()], &Authored::new());
+        assert_eq!(one[h][0].contact.names, other[h][0].contact.names);
+        assert_eq!(one[h][0].contact.names, ["Number One", "Will Riker"]);
     }
 
     /// A display name that is someone else's address is not a name: a
@@ -326,22 +371,22 @@ mod tests {
     #[test]
     fn a_name_that_is_another_handle_is_dropped() {
         let q = "email:q@continuum.test";
-        let mut stranger = source_contact("mail", q, "picard@enterprise.org", Some((25, "a")));
+        let mut stranger = source_contact("mail", q, "picard@enterprise.org");
         stranger.names.push("mailto:picard@enterprise.org".into());
         stranger.names.push("+1 202 555 0101".into());
         stranger.names.push("q@continuum.test".into());
-        let got = merge_and_rank(vec![row(q, stranger)]);
-        assert_eq!(got[q][0].names, ["q@continuum.test"]);
+        let got = merge_and_rank(vec![row(q, stranger, 25)], &Authored::new());
+        assert_eq!(got[q][0].contact.names, ["q@continuum.test"]);
 
         let troi = "email:troi@enterprise.org";
-        let mut book = source_contact("book", "Bridge#troi", "deanna@betazed.test", None);
+        let mut book = source_contact("book", "Bridge#troi", "deanna@betazed.test");
         book.handles = vec![
             ContactHandle::email(None, "troi@enterprise.org"),
             ContactHandle::email(None, "deanna@betazed.test"),
         ];
-        let got = merge_and_rank(vec![row(troi, book)]);
+        let got = merge_and_rank(vec![row(troi, book, 1)], &Authored::new());
         assert_eq!(
-            got[troi][0].names,
+            got[troi][0].contact.names,
             ["deanna@betazed.test"],
             "a handle it holds"
         );

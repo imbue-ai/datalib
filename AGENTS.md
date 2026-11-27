@@ -39,6 +39,7 @@ merge conflict waiting to happen.
 - [`docs/dev/step_protocol.md`](docs/dev/step_protocol.md) — how to write a custom step command; `datalib-step` is the reference implementation.
 - [`docs/dev/packages.md`](docs/dev/packages.md) — packages: custom steps and applets published at a URL, added to a library and pinned in its config.
 - [`docs/dev/config_model.md`](docs/dev/config_model.md) — what a config is made of: groups, steps as an `id` and a `command`, ingest methods and their reach, the fan-ins' `inputs`. [`configs/dag_example.toml`](configs/dag_example.toml) is a complete, commented one.
+- [`docs/dev/embed_on_modal.md`](docs/dev/embed_on_modal.md) — the `embed` step on Modal's GPUs: what a person writes, what leaves the machine, how the step drives the Sandboxes and what a run reports it spent. **Start here** for anything about embedding off the machine.
 - [`docs/dev/logging.md`](docs/dev/logging.md) — the one log store, who writes it, how to add a line from each writer and how to read it. Read before adding a `tracing` line, a UI event or a log endpoint.
 
 **Data architecture**
@@ -156,9 +157,55 @@ from it, and the test then checks something nobody runs. Call it to
 
 ## Write plainspoken
 
-In docs — and in the few comments you keep — be clear and unhurried,
-explain a term the first time it appears, and don't assume the reader
-already shares your context. Plainspoken means *clear*, not *long*.
+In docs, PR descriptions, reviews and the few comments you keep, be
+clear and unhurried, and don't assume the reader already shares your
+context. Plainspoken means *clear*, not *long*: every word the reader
+has to translate into what actually happens is a cost, so the default
+is the literal description.
+
+**Words: say what happens.**
+
+- **Prefer the operation itself to a higher-level word for it.** Write
+  "sends SIGINT to the step's process group", not "pokes the step";
+  "sets the request's `outcome` to `stopped`", not "the loop drops the
+  request". A
+  longer example: each time the runner starts, it runs every step whose
+  program takes the `prepare` verb with `--prepare` appended to its
+  command, and the program exits once it has brought what it stored to
+  this build's shape. Write "runs the step's command with `--prepare`
+  appended" and "when that process exits", not "asks the step" and "the
+  step answers". A higher-level word is justified only when all of
+  these hold:
+  1. **A reader understands it without context.** "Asks the step"
+     fails: nothing in it says a `--prepare` invocation is meant. "The
+     step's `--prepare` run" passes, though it does not spell out the
+     exact operation.
+  2. **It saves more than it costs.** It earns its place when it stands
+     for a series of connected operations that cannot be described more
+     briefly: "a sync" for downloading, rendering and indexing a source.
+     As a stand-in for one operation, like "pokes" for one signal, it
+     almost never does: name the operation, or abbreviate it
+     transparently.
+  3. **A definition, if it needs one, is counted as a cost.** A word
+     may be worth defining, but the definition is one more thing the
+     reader has to hold. Weigh that against what the word saves; where
+     the plain description is about as short, use it instead.
+- **Match the level the reader asked for.** When someone asks how a
+  thing works, keep higher-level words to what is strictly necessary,
+  even when the text gets longer.
+- **No invented metaphors and no coined terms.** Use an established
+  term unmodified, or describe the behavior directly: "the fallback is
+  never reached", not "the road not taken"; never decorate a known term
+  into an unknown one ("a standing dirty bit").
+
+**Structure: let the reader see what you refer to.**
+
+- **Don't refer back to something the reader can't see.** State a list,
+  number it, then refer to its items by number.
+- **If it's a list, make it a list.** Three or more parallel items go in
+  bullets or a numbered list, not a run of clauses in a paragraph.
+- **Don't signpost structure that isn't there.** "The second half of X"
+  needs a first half the reader can point at.
 
 ## Explain a change by what it does, before and after
 
@@ -170,11 +217,11 @@ read the code:
 - **Start with the problem as something that could happen**: "an
   `<img>` in an email made the app re-measure the whole data root",
   not "closes the GET-walk hole".
-- **Define a word the code uses in a narrow sense** the first time it
-  appears, or write the plain description instead. "Walks the data
-  root" means nothing to a reader until it says "measures the size of
-  every directory under the data root, which takes minutes on a large
-  one".
+- **Prefer the plain description to a word the code uses in a narrow
+  sense**, and define the word the first time it appears when you keep
+  it (§"Write plainspoken"). "Walks the data root" means nothing to a
+  reader; "measures the size of every directory under the data root,
+  which takes minutes on a large one" does.
 - **Give each change a before, an after, and what a person notices.**
   "Nothing visible" is a valid answer; say it, so the reader knows it
   was checked. When a route or a flag changes, say what happens to a
@@ -280,7 +327,7 @@ datalib/
                    `search_*` tables of the grid index's file, and the
                    inference cache: each document's chunks keyed by their
                    prompt's hash, and the vectors, holding no text
-                   (docs/dev/plans/completed/search_index_from_ram.md).
+                   (search_index/README.md).
     embedder/      text to vectors in process: llama.cpp
                    (third-party/llama_cpp) behind a small C shim, on
                    Metal on a mac, CUDA as a module on gnu Linux. Tested

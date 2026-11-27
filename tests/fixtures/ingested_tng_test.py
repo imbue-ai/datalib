@@ -750,8 +750,8 @@ class IngestedTngPipelineTest(unittest.TestCase):
     def _diff_shape(self, group: str) -> dict[str, tuple[str, str]]:
         """A contacts diff group's rows: contact → (status, changed columns).
 
-        The contacts diff is one add, one delete and one edit, which is
-        every row of the table in docs/dev/plans/completed/diff_renderer.md; the
+        The contacts diff is one add, one delete and one edit, every
+        `diff_status` a changed row can have (docs/dev/grid_rows.md); the
         edit names the columns that moved. A real source's rows carry
         NULL, and the diff's rows carry their own ids — the source's
         Picard and the diff's Picard are two rows, or the index would
@@ -1530,17 +1530,29 @@ class IngestedTngPipelineTest(unittest.TestCase):
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT h.handle || '|' || json_extract(c.contact_json, '$.names') || '|' "
+                "SELECT DISTINCT h.handle || '|' || json_extract(c.contact_json, '$.names') || '|' "
                 "|| json_extract(c.contact_json, '$.org') || '|' "
-                "|| json_extract(c.contact_json, '$.title') || '|' || d.seen_items "
+                "|| json_extract(c.contact_json, '$.title') "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
                 "JOIN document_contacts d ON d.record_id = c.record_id "
                 "JOIN markdowns m ON m.markdown_uuid = d.markdown_uuid "
                 "WHERE m.source_id = 'whatsapp' AND h.handle = 'tel:+17015550105';",
             ),
-            ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor|0'],
+            ['tel:+17015550105|["Deanna Troi"]|Starfleet|Counselor'],
             "a WhatsApp reactor who writes nothing, under her address-book entry",
+        )
+        # How much she wrote is the grid's rows by her, the one count:
+        # her reactions, and no message.
+        self.assertEqual(
+            self._query(
+                self._index_db,
+                "SELECT kind || '|' || count(*) FROM grid_rows "
+                "WHERE source_id = 'whatsapp' AND author_handle = 'tel:+17015550105' "
+                "GROUP BY kind;",
+            ),
+            ["WhatsApp Reaction|1"],
+            "a reactor's count is her reactions",
         )
         # A stranger WhatsApp knows by a linked id alone, mapped to no
         # number and named nowhere: still a handle, so their message is a
@@ -1580,17 +1592,17 @@ class IngestedTngPipelineTest(unittest.TestCase):
             "the account's own reaction is the Me chip",
         )
         # A Slack reactor with no profile and no message: in the document
-        # all the same, under the id Slack gave, having written nothing.
+        # all the same, under the id Slack gave.
         self.assertEqual(
             self._query(
                 self._index_db,
-                "SELECT c.name || '|' || d.seen_items "
+                "SELECT DISTINCT c.name "
                 "FROM contact_record_handles h JOIN contact_records c "
                 "ON c.record_id = h.record_id "
                 "JOIN document_contacts d ON d.record_id = c.record_id "
                 "WHERE h.handle = 'slack:T_NCC1701D/U_TROI';",
             ),
-            ["U_TROI|0"],
+            ["U_TROI"],
             "a Slack reactor who writes nothing",
         )
         # A card's photo is in its source's blob store, where the download

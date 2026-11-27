@@ -3,7 +3,7 @@
 //! the first `--cpu` prompts on the CPU one at a time, and fails unless
 //! the GPU was used and each pair agrees past [`AGREEMENT`]. Built by
 //! `.github/workflows/cuda.yml` beside `libggml-cuda.so` and run by hand
-//! on a rented GPU (docs/dev/plans/embed_on_modal.md), since CI has none.
+//! on a rented GPU (docs/dev/embed_on_modal.md), since CI has none.
 //!
 //! Usage: gpu_check <prompts> <model.gguf> [--cpu N] [--out DIR]
 //!                  [--batching PROMPTS:TOKENS]...

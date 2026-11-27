@@ -27,7 +27,7 @@ use datalib_columns::{Chip, ChipKind, ColumnSpec, ColumnType, Identity};
 use datalib_contact_schema::{Medium, NormalizedContact};
 use datalib_contacts::add_people::{AddedPeople, NewPerson};
 use datalib_contacts::drafts::ContactEdit;
-use datalib_contacts::{ContactKind, Store, WhenHeld};
+use datalib_contacts::{ContactKind, HandleFrom, Store, WhenHeld};
 use datalib_handle::Handle;
 use serde::Deserialize;
 use serde_json::json;
@@ -128,11 +128,12 @@ fn api() -> Api {
             Post,
             "/contacts/add",
             Person,
-            "`{people: [{name, handles, held?}]}`: each a contact, in one commit; one whose \
-             handle is on a contact of the same name is that contact, which gets the rest, and \
-             one on a contact of another name is skipped. `held`, `{<handle>: \
-             \"share\" | \"move\"}`, names handles other contacts have that are theirs too or \
-             theirs alone. Answers `{created, added_to, already, skipped: [{what, why}]}`",
+            "`{people: [{name, handles, held?, said?}]}`: each a contact, in one commit; one \
+             whose handle is on a contact of the same name is that contact, which gets the rest, \
+             and one on a contact of another name is skipped. `held`, `{<handle>: \"share\" | \
+             \"move\"}`, names handles other contacts have that are theirs too or theirs alone; \
+             `said`, `{<handle>: {label?, copied_from?}}`, what the card each came from said of \
+             it. Answers `{created, added_to, already, skipped: [{what, why}]}`",
             add_people,
         )
         .add(
@@ -160,10 +161,19 @@ fn api() -> Api {
             Post,
             "/link",
             Person,
-            "`{handle, contact_id, held?}`: link a handle to a contact, as the person's own \
-             link. One another contact has is refused unless `held` is `share` (both have it) \
-             or `move` (it comes off the others as not theirs)",
+            "`{handle, contact_id, held?, label?, copied_from?}`: link a handle to a contact, \
+             as the person's own link. One another contact has is refused unless `held` is \
+             `share` (both have it) or `move` (it comes off the others as not theirs). `label` \
+             and `copied_from` (`{source_id, key}`) are what the card it came from said",
             link,
+        )
+        .add(
+            Post,
+            "/handle_label",
+            Person,
+            "`{handle, contact_id, label}`: label a handle of the contact (\"work\", \"cell\"); \
+             `label: null` clears it",
+            handle_label,
         )
         .add(
             Post,
@@ -222,8 +232,11 @@ fn api() -> Api {
             Post,
             "/contact/{contact_id}/draft/save",
             Person,
-            "`{seen}`, the published commit the card last showed: publish the draft, or \
-             answer `stale` and save nothing",
+            "`{seen, held?}`, the published commit the card last showed: publish the draft, \
+             each email and number in it becoming a handle of the contact. Answers `saved`; \
+             `stale`, with the view, when the contact moved since `seen`; or `held`, `[{handle, \
+             by}]`, for a handle other contacts have that `held` (`{<handle>: \"share\" | \
+             \"move\"}`) says nothing of. Only `saved` saved anything",
             save,
         )
         .add(Get, its_photo, Read, "the contact's photo, as bytes", photo)
@@ -459,6 +472,8 @@ struct PersonBody {
     handles: Vec<String>,
     #[serde(default)]
     held: std::collections::BTreeMap<String, WhenHeld>,
+    #[serde(default)]
+    said: std::collections::BTreeMap<String, HandleFrom>,
 }
 
 async fn add_people(
@@ -471,10 +486,15 @@ async fn add_people(
         .map(|p| {
             let handles = p.handles.iter().map(|h| handle(h));
             let held = p.held.iter().map(|(h, when)| Ok((handle(h)?, *when)));
+            let said = p
+                .said
+                .iter()
+                .map(|(h, s)| Ok((handle(h)?.as_str().into(), s.clone())));
             Ok(NewPerson {
                 name: p.name,
                 handles: handles.collect::<Result<_, ApiError>>()?,
                 held: held.collect::<Result<_, ApiError>>()?,
+                said: said.collect::<Result<_, ApiError>>()?,
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
@@ -531,6 +551,8 @@ struct LinkBody {
     contact_id: String,
     #[serde(default)]
     held: WhenHeld,
+    #[serde(flatten)]
+    from: HandleFrom,
 }
 
 async fn link(
@@ -538,10 +560,37 @@ async fn link(
     Json(body): Json<LinkBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     store
-        .link(&handle(&body.handle)?, &body.contact_id, body.held)
+        .link(
+            &handle(&body.handle)?,
+            &body.contact_id,
+            body.held,
+            &body.from,
+        )
         .await
         .map_err(refused)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct HandleLabelBody {
+    handle: String,
+    contact_id: String,
+    label: Option<String>,
+}
+
+async fn handle_label(
+    State(store): AppState,
+    Json(body): Json<HandleLabelBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let found = store
+        .set_handle_label(
+            &handle(&body.handle)?,
+            &body.contact_id,
+            body.label.as_deref(),
+        )
+        .await
+        .map_err(refused)?;
+    Ok(Json(json!({ "found": found })))
 }
 
 #[derive(Deserialize)]
@@ -709,18 +758,21 @@ async fn autosave(
 struct SaveBody {
     /// The published commit the card last showed.
     seen: String,
+    #[serde(default)]
+    held: std::collections::BTreeMap<String, WhenHeld>,
 }
 
-/// `{"outcome": "saved", "commit"}`, or `{"outcome": "stale", "view"}`
-/// when the contact moved since `seen`: nothing was saved, and the card
-/// shows what changed.
+/// `{"outcome": "saved", "commit"}`; `{"outcome": "stale", "view"}` when
+/// the contact moved since `seen`, and the card shows what changed; or
+/// `{"outcome": "held", "held"}` when a handle in the draft is another
+/// contact's, and the card asks. Only the first saved anything.
 async fn save(
     State(store): AppState,
     Path(contact_id): Path<String>,
     Json(body): Json<SaveBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     Ok(Json(json!(store
-        .save(&contact_id, &body.seen)
+        .save(&contact_id, &body.seen, &body.held)
         .await
         .map_err(refused)?)))
 }
@@ -1237,6 +1289,91 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_FOUND);
         let (_, body) = call(&app, "POST", "/resolve", json!({"handles": [tel.as_str()]})).await;
         assert_eq!(body["resolved"], json!({}));
+
+        drop(app);
+        Arc::try_unwrap(store)
+            .ok()
+            .expect("the router is gone")
+            .close()
+            .await;
+    }
+
+    /// A handle keeps the label and the card it came with, by every way in;
+    /// its label changes at once; and a number typed into a draft that
+    /// another contact has is asked about, not taken, until the save says
+    /// both have it.
+    #[tokio::test]
+    async fn a_handle_keeps_its_label_and_card_and_a_save_asks_before_sharing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&datalib_contacts::store_path(dir.path()))
+            .await
+            .unwrap();
+        let store = Arc::new(store);
+        let app = routes(store.clone());
+        let card = json!({"source_id": "contacts", "key": "tng-riker"});
+        let work = "email:riker@enterprise.org";
+        let (status, body) = call(
+            &app,
+            "POST",
+            "/contacts/add",
+            json!({"people": [{"name": "Will Riker", "handles": [work],
+                    "said": {work: {"label": "work", "copied_from": card}}}]}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let (_, will) = call(&app, "POST", "/resolve", json!({"handles": [work]})).await;
+        let will = &will["resolved"][work][0];
+        let id = will["key"].as_str().unwrap().to_string();
+        assert_eq!(will["handles"][0]["label"], "work");
+
+        let home = "email:will@risa.test";
+        let body = json!({"handle": home, "contact_id": id, "label": "home", "copied_from": card});
+        let (status, body) = call(&app, "POST", "/link", body).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let body = json!({"handle": work, "contact_id": id, "label": "Enterprise"});
+        let (_, body) = call(&app, "POST", "/handle_label", body).await;
+        assert_eq!(body["found"], true);
+        let (_, will) = call(&app, "GET", &format!("/contact/{id}"), json!(null)).await;
+        let labels: Vec<(&str, &str)> = will["handles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| (h["handle"].as_str().unwrap(), h["label"].as_str().unwrap()))
+            .collect();
+        assert_eq!(labels, [(work, "Enterprise"), (home, "home")]);
+
+        let tel = "tel:+15550123456";
+        call(
+            &app,
+            "POST",
+            "/contacts",
+            json!({"name": "Deanna Troi", "handles": [tel]}),
+        )
+        .await;
+        let draft = format!("/contact/{id}/draft");
+        let (_, view) = call(&app, "POST", &draft, json!(null)).await;
+        let seen = view["published_commit"].as_str().unwrap().to_string();
+        let edit = json!({"name": "Will Riker", "note": null,
+            "fields": [{"field_id": "f1", "kind": "phone", "label": "cell",
+                        "value": "+1 555 012 3456", "copied_from": null}]});
+        call(&app, "PUT", &draft, edit).await;
+        let save = format!("{draft}/save");
+        let (_, body) = call(&app, "POST", &save, json!({ "seen": seen })).await;
+        assert_eq!(body["outcome"], "held", "{body}");
+        assert_eq!(
+            body["held"],
+            json!([{"handle": tel, "by": ["Deanna Troi"]}])
+        );
+        let (_, body) = call(
+            &app,
+            "POST",
+            &save,
+            json!({"seen": seen, "held": {tel: "share"}}),
+        )
+        .await;
+        assert_eq!(body["outcome"], "saved", "{body}");
+        let (_, both) = call(&app, "POST", "/resolve", json!({"handles": [tel]})).await;
+        assert_eq!(both["resolved"][tel].as_array().unwrap().len(), 2, "{both}");
 
         drop(app);
         Arc::try_unwrap(store)

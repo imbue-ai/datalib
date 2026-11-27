@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Stage what CUDA adds to a release, x86_64 gnu Linux only
-# (docs/dev/plans/embed_on_modal.md), into the current directory, each
+# (docs/dev/embed_on_modal.md), into the current directory, each
 # with a `.sha256` sidecar:
 #
 #   ggml-cuda-x86_64-unknown-linux-gnu.tar.gz   the release asset:
