@@ -442,14 +442,18 @@ async fn a_running_group_names_its_step_and_counts_what_is_complete() {
         CONFIG,
         Some(
             r#"{
+              "requests": [{"id": "q1", "roots": ["slack/ingest"]}],
               "steps": {
-                "slack/ingest": {"succeeded": true},
-                "slack/render_markdown": {"state": "running", "requests": ["q1"]}
-              },
-              "current_run": {
-                "run_id": "r2",
-                "started_at": "2026-08-31T11:00:00+01:00",
-                "states": {"slack/ingest": "succeeded", "slack/render_markdown": "running"}
+                "slack/ingest": {"succeeded": true, "last_run": {
+                  "invocation_id": "i1", "requests": ["q1"],
+                  "started_at": "2026-08-31T11:00:00+01:00",
+                  "finished_at": "2026-08-31T11:00:05+01:00",
+                  "status": "succeeded"
+                }},
+                "slack/render_markdown": {"state": "running", "requests": ["q1"], "last_run": {
+                  "invocation_id": "i2", "requests": ["q1"],
+                  "started_at": "2026-08-31T11:00:06+01:00"
+                }}
               }
             }"#,
         ),
