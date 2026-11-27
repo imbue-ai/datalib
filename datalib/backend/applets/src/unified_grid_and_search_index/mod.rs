@@ -229,7 +229,7 @@ pub fn serve(port: u16) -> Result<()> {
         tracing::info!(address = %bound, "listening");
         // There was nothing to write first, so binding is all this one
         // owes before the gateway may look.
-        crate::announce_port(bound.port());
+        crate::print_port(bound.port());
         axum::serve(listener, app).await.context("serve")
     })
 }

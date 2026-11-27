@@ -325,7 +325,7 @@ pub fn serve(port: u16, params: &serde_json::Value) -> Result<()> {
     let gate = crate::gate::Gate::from_env(bound)?;
     tracing::info!(port = bound, tree = %tree, "listening");
     // Written and bound, in that order — now the gateway may look.
-    crate::announce_port(bound);
+    crate::print_port(bound);
 
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };

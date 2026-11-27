@@ -46,7 +46,7 @@ fn search_command(root: &std::path::Path, q: &str) -> Command {
 
 /// The port the applet prints on stdout (`DATALIB_APPLET_PORT=`), once it
 /// is listening.
-fn announced_port(child: &mut Child) -> u16 {
+fn printed_port(child: &mut Child) -> u16 {
     let stdout = child.stdout.take().expect("piped stdout");
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
@@ -141,7 +141,7 @@ fn it_serves_the_root_it_was_started_on_and_leaves_with_its_parent() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
 
     let (status, body) = get(port, "/search?q=&limit=3", Some(SECRET));
     assert_eq!(status, 200, "{body}");
@@ -173,7 +173,7 @@ fn it_leaves_with_its_parent_after_a_search_by_meaning() {
         .stderr(std::fs::File::create(&log).unwrap())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
 
     let (status, body) = get(port, "/search?q=the%20enterprise&limit=3", Some(SECRET));
     assert_eq!(status, 200, "{body}");
@@ -217,7 +217,7 @@ fn people_by_handle_gives_each_sources_account() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
 
     let picard = "email:picard@enterprise.starfleet";
     let (status, body) = post(
@@ -267,7 +267,7 @@ fn sql_reads_a_store_it_lists() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
     let grid = "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite";
 
     let (status, body) = get(port, "/sql/stores", Some(SECRET));
@@ -318,7 +318,7 @@ fn an_answer_says_how_many_rows_it_took() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
 
     let read_for = |limit: usize| {
         let asked = serde_json::json!({
@@ -354,7 +354,7 @@ fn places_list_a_library_a_level_at_a_time() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
 
     let (status, body) = get(port, "/places/source:tng_email", Some(SECRET));
     assert_eq!(status, 200, "{body}");
@@ -468,7 +468,7 @@ fn a_drive_opens_onto_its_folders() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut child);
+    let port = printed_port(&mut child);
     let sql = |sql: &str| {
         let (status, body) = post(
             port,
@@ -605,7 +605,7 @@ fn the_search_command_answers_what_the_search_box_gets() {
         .stdout(Stdio::piped())
         .spawn()
         .expect("start the applet");
-    let port = announced_port(&mut server);
+    let port = printed_port(&mut server);
 
     let searches: &[(&str, &[(&str, &str)])] = &[
         ("", &[("limit", "3")]),
