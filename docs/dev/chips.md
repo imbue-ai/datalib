@@ -125,7 +125,11 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   header, shows the name that message gave instead of the source's
   (see [Trust](#trust)). A name that spells out an address or another
   handle the person does not hold is never shown; the chip shows its
-  own identifier instead. A chip not on a contact shows its kind's mark.
+  own identifier instead. Nor is an id a service minted: a Slack,
+  Discord, Signal, Notion, WhatsApp, Facebook or Google account whose
+  only name is its id (a Slack user seen only in a reaction) is "Slack
+  user", and so on, its mark and tooltip saying which
+  (`contacts.ts::namedFor`). A chip not on a contact shows its kind's mark.
   One that is on a contact of yours is blue, and one that is not is
   grey (`chip.css`). Every chip of the contact you marked *This is me*
   carries a small "me" after its name (`ChipLook.me`, `.chip-me`),

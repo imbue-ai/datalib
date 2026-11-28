@@ -321,7 +321,7 @@ onBeforeUnmount(() => {
         <select v-model="sort" class="contacts-input contacts-sort" aria-label="Sort contacts">
           <option v-for="s in LIST_SORTS" :key="s.sort" :value="s.sort">{{ s.label }}</option>
         </select>
-        <span class="contacts-count">
+        <span v-if="loaded" class="contacts-count">
           {{
             shown.length === listed.length ? listed.length : `${shown.length} of ${listed.length}`
           }}
@@ -340,6 +340,7 @@ onBeforeUnmount(() => {
         </form>
       </div>
       <div v-if="error" class="contacts-error">{{ error }}</div>
+      <p v-if="!loaded && !error" class="contacts-empty">Loading…</p>
       <p v-if="loaded && !error && label !== null && listed.length === 0" class="contacts-empty">
         None of your contacts is labelled {{ label }}. Label one on their page.
       </p>

@@ -238,7 +238,7 @@ test("a contact picked with @ finds everything that reached its handles", async 
   expect(await total(`with:contact:${id}`)).toBe(byHandle);
 });
 
-/// "This is me" on the person card: the contacts table marks the contact,
+/// "This is me" on the person card's menu: the contacts table marks the contact,
 /// and `from:me` finds what its address wrote, which no source says is
 /// the owner's. Data's address, which no other test touches; unmarked at
 /// the end, since the root is shared.
@@ -264,9 +264,8 @@ test("a contact marked as me on its card is who from:me finds", async ({ page, r
 
   await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(data)}, {})`)}`);
   const card = page.locator(".person");
-  const isMe = card.getByTestId("contact-is-me");
-  await expect(isMe).not.toBeChecked({ timeout: 15_000 });
-  await isMe.check();
+  await card.getByRole("button", { name: "More for this contact" }).click({ timeout: 15_000 });
+  await page.getByRole("menuitem", { name: "This is me" }).click();
   await expect.poll(() => total(`from:me from:${data}`)).toBe(his);
 
   await page.goto("/contactsView()");
@@ -331,6 +330,32 @@ test("the contacts table draws a contact with no handle as a chip, merges and de
   await expect(row(keep)).toHaveCount(0);
   const gone = await request.get(`/applet/datalib_contacts/contact/${keep}`);
   expect(gone.status()).toBe(404);
+});
+
+/// Merging from a contact's page: its menu's Merge into… asks for the
+/// contact to keep, and the page then shows that one, holding both
+/// contacts' handles.
+test("a contact is merged into another from its page", async ({ page, request }) => {
+  const stamp = Date.now();
+  const make = async (name: string, handles: string[]) => {
+    const r = await request.post("/applet/datalib_contacts/contacts", { data: { name, handles } });
+    expect(r.ok(), await r.text()).toBeTruthy();
+    return ((await r.json()) as { contact_id: string }).contact_id;
+  };
+  const keep = await make(`Keiko Ishikawa ${stamp}`, [`email:keiko.${stamp}@enterprise.test`]);
+  const dup = await make(`K. O'Brien ${stamp}`, [`email:kob.${stamp}@enterprise.test`]);
+
+  await page.goto(`/${encodeURIComponent(`personView(${JSON.stringify(`contact:${dup}`)}, {})`)}`);
+  const card = page.locator(".person");
+  await card.getByRole("button", { name: "More for this contact" }).click({ timeout: 15_000 });
+  await page.getByRole("menuitem", { name: "Merge into…" }).click();
+  await card.getByLabel("Contact to merge into").fill(`Keiko Ishikawa ${stamp}`);
+  page.once("dialog", (d) => void d.accept());
+  await card.getByRole("button", { name: `Merge into Keiko Ishikawa ${stamp}` }).click();
+  await expect(card.locator(".person-name")).toContainText(`Keiko Ishikawa ${stamp}`);
+  const held = await heldWith(request, [`email:kob.${stamp}@enterprise.test`]);
+  expect(held[`email:kob.${stamp}@enterprise.test`]?.id).toBe(keep);
+  await deleteContacts(request, [keep]);
 });
 
 /// The contacts list says how much each contact wrote, which is what

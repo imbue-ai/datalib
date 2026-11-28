@@ -201,8 +201,13 @@ function sourceName(c: NormalizedContact, handle: string, who: Who): string {
  *  message's name shows on that message and nowhere else. */
 function unlinkedName(handle: string, shownAs: string, who: Who, ownName: boolean): string {
   const best = who.sourceContacts[0];
-  if (ownName && shownAs.trim()) return sourceLabel(shownAs, handle, who);
-  return best ? sourceName(best, handle, who) : sourceLabel(shownAs, handle, who);
+  const name =
+    ownName && shownAs.trim()
+      ? sourceLabel(shownAs, handle, who)
+      : best
+        ? sourceName(best, handle, who)
+        : sourceLabel(shownAs, handle, who);
+  return namedFor(name, handle);
 }
 
 /** A partial date by which `handle` had stopped working, as `c` records it. */
@@ -1145,8 +1150,31 @@ export function identifierText(handle: string, shown: string, who: Who): string 
   const written = shown.trim() || handleValue(handle);
   if (!isMinted(handle)) return written;
   const record = who.sourceContacts.find((c) => c.handles.some((h) => h.handle === handle));
-  if (record?.names.length) return sourceName(record, handle, who);
-  return handleValue(handle).match(/^name\/(.+)$/)?.[1] ?? written;
+  if (record?.names.length) return namedFor(sourceName(record, handle, who), handle);
+  return handleValue(handle).match(/^name\/(.+)$/)?.[1] ?? namedFor(written, handle);
+}
+
+const SERVICE: Partial<Record<HandleKind, string>> = {
+  slack: "Slack",
+  discord: "Discord",
+  signal_aci: "Signal",
+  notion: "Notion",
+  whatsapp: "WhatsApp",
+  facebook: "Facebook",
+  google: "Google",
+};
+
+/** `name`, unless it is nothing but the id a service minted (the id, or
+ *  its last part: `U_TROI` of `slack:T1/U_TROI`), as when a source knows
+ *  an account only by the id, a Slack user seen only in a reaction: then
+ *  "Slack user", whose mark and tooltip say which. */
+export function namedFor(name: string, handle: string): string {
+  if (!isMinted(handle)) return name;
+  const id = handleValue(handle);
+  const bare = name.trim();
+  const onlyTheId = !bare || bare === id || bare === handle || id.endsWith(`/${bare}`);
+  const kind = handleKind(handle);
+  return onlyTheId && kind && SERVICE[kind] ? `${SERVICE[kind]} user` : name;
 }
 
 /** A chip that shows the handle rather than the person, for a list of

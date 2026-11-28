@@ -15,8 +15,10 @@ import { personSource, searchSource } from "./cardSources";
 import {
   addedSummary,
   addPeople,
+  chipLook,
   contactsById,
   movesPeople,
+  NOBODY,
   people,
   setLabel,
   unfiledPeople,
@@ -109,7 +111,9 @@ function openPerson(row: UnfiledRow) {
 }
 
 function menu(row: UnfiledRow, targets: UnfiledRow[]): MenuEntry[] {
-  const name = row.person.label;
+  // The name the row's chip shows, not the index's: "Slack user" where
+  // the index has only the id.
+  const name = chipLook(row.handle, row.person.label, people.get(row.handle) ?? NOBODY).text;
   return [
     {
       name: targets.length === 1 ? "Add to contacts" : `Add ${targets.length} to contacts`,
@@ -178,7 +182,7 @@ onBeforeUnmount(() => {
       <select v-model="sort" class="contacts-input contacts-sort" aria-label="Sort unfiled people">
         <option v-for="s in LIST_SORTS" :key="s.sort" :value="s.sort">{{ s.label }}</option>
       </select>
-      <span class="contacts-count">
+      <span v-if="loaded" class="contacts-count">
         {{ shown.length === rows.length ? rows.length : `${shown.length} of ${rows.length}` }}
         {{ rows.length === 1 ? "person" : "people" }}
       </span>
@@ -191,6 +195,7 @@ onBeforeUnmount(() => {
       </button>
     </div>
     <div v-if="error" class="contacts-error">{{ error }}</div>
+    <p v-if="!loaded && !error" class="contacts-empty">Loading…</p>
     <p v-if="loaded && !error && rows.length === 0" class="contacts-empty">
       Everyone who wrote something here is in your contacts.
     </p>

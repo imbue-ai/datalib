@@ -731,10 +731,12 @@ Everything is in `datalib/ui/src/cards/`:
   (`personView`; its rules are `person.ts`). It is about a handle, one
   of your contacts by its id, with or without a handle, or whoever a
   card with no handle describes (`Subject`). Its heading is the
-  person's chip; then your contact when they are one,
-  which the card edits (§"Fields, and editing a contact through a
-  draft"), with *This is me* to mark the contact as you (§"Searching
-  for a person"); then each source's record that holds one of the card's handles, a
+  person's chip, and beside *Everything with them*, for your contact,
+  a ⋯ menu: *This is me* to mark the contact as you (§"Searching for a
+  person"), and *Merge into…*, which searches your contacts by name for
+  the one to keep (`POST /merge`), the page then showing that one. Then
+  your contact when they are one, which the card edits (§"Fields, and
+  editing a contact through a draft"); then each source's record that holds one of the card's handles, a
   section per source and never merged, the source the chip was seen in
   first, each saying which address, number or login it was found
   *via* (an id a service minted is left to the record's own chip). Every
@@ -989,7 +991,7 @@ chip in the UI is separate and always uses the latest answer.
 
 ## Not built
 
-- merging or deleting from the person card;
+- deleting from the person card;
 - undo;
 - the triage grid of unresolved handles;
 - labels in search (`label:` and its negation) and on a chip;

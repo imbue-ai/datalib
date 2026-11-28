@@ -10,6 +10,7 @@
 // your contact or takes it off.
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { formatStamp } from "@/config/timeFormat";
+import { confirmAction } from "@/desktop";
 import { contactSubject, personSource, searchSource } from "./cardSources";
 import { isBrowserClick } from "./chatLink";
 import { uriFromEntity } from "./chipLinks";
@@ -34,6 +35,7 @@ import {
   labelCounts,
   labelsOf,
   linkHandle,
+  mergeContacts,
   nameOf,
   NOBODY,
   notTheirs,
@@ -453,10 +455,68 @@ async function takeLabel(label: string) {
   if (mine) await act(() => labelContact(mine.key, label, false).then(ask));
 }
 
-async function toggleMe(ev: Event) {
+// ── The page's menu, for your contact ─────────────────────────────────
+// *This is me*, and *Merge into…*, which asks for the contact to keep.
+
+const pageMenu = ref<{ entries: MenuItem[]; x: number; y: number } | null>(null);
+
+function openPageMenu(ev: MouseEvent) {
   const mine = model.value.mine;
-  const me = (ev.target as HTMLInputElement).checked;
-  if (mine) await act(() => setMe(mine.key, me));
+  if (!mine) return;
+  const box = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+  pageMenu.value = {
+    x: box.left,
+    y: box.bottom,
+    entries: [
+      { id: "me", label: mine.account ? "This is not me" : "This is me" },
+      { id: "merge", label: "Merge into…", separator: true },
+    ],
+  };
+}
+
+async function onPageMenuPick(id: string) {
+  pageMenu.value = null;
+  const mine = model.value.mine;
+  if (!mine) return;
+  if (id === "me") await act(() => setMe(mine.key, !mine.account));
+  if (id === "merge") {
+    merging.value = true;
+    mergeQuery.value = "";
+    void findMergeTargets();
+    await nextTick();
+    mergeInput.value?.focus();
+  }
+}
+
+const merging = ref(false);
+const mergeQuery = ref("");
+const mergeTargets = ref<ContactSummary[]>([]);
+const mergeInput = ref<HTMLInputElement | null>(null);
+
+/// The contacts whose name holds what was typed, but this one.
+async function findMergeTargets() {
+  const mine = model.value.mine;
+  const q = mergeQuery.value.trim();
+  const hits = await searchContacts(q).catch(() => []);
+  if (q === mergeQuery.value.trim()) {
+    mergeTargets.value = hits.filter((c) => c.contact_id !== mine?.key).slice(0, 8);
+  }
+}
+
+async function mergeInto(target: ContactSummary) {
+  const mine = model.value.mine;
+  if (!mine) return;
+  const name = nameOf(mine);
+  const ok = await confirmAction(
+    `Merge ${name} into ${target.name}? ${target.name} keeps everything of ${name}: ` +
+      "handles, details, labels and its photo where it has none.",
+  );
+  if (!ok) return;
+  await act(async () => {
+    await mergeContacts(mine.key, target.contact_id);
+    merging.value = false;
+    await ask();
+  });
 }
 
 function addLabel(s: PersonSection): string {
@@ -655,6 +715,41 @@ const headPhoto = computed(() => {
           >
             Everything with them
           </button>
+          <button
+            v-if="model.mine"
+            type="button"
+            class="person-button"
+            title="This is me, Merge into…"
+            aria-label="More for this contact"
+            :disabled="busy"
+            @click.stop="openPageMenu"
+          >
+            ⋯
+          </button>
+        </div>
+        <div v-if="merging && model.mine" class="person-merge">
+          <input
+            ref="mergeInput"
+            v-model="mergeQuery"
+            class="person-input"
+            :placeholder="`Merge ${model.title} into…`"
+            aria-label="Contact to merge into"
+            @input="findMergeTargets"
+            @keydown.esc="merging = false"
+          />
+          <ul class="person-found">
+            <li v-for="c in mergeTargets" :key="c.contact_id">
+              <button
+                type="button"
+                class="person-button"
+                :disabled="busy"
+                @click.stop="mergeInto(c)"
+              >
+                Merge into <b>{{ c.name }}</b>
+              </button>
+            </li>
+          </ul>
+          <button type="button" class="person-button" @click.stop="merging = false">Cancel</button>
         </div>
         <ul v-if="model.sharedBy.length" class="person-shared" aria-label="Who has it">
           <li
@@ -754,16 +849,6 @@ const headPhoto = computed(() => {
 
     <section v-if="model.mine" class="person-section person-mine" aria-label="Your contact">
       <h2 class="person-source">Your contact</h2>
-      <label class="person-me" title="from:me, to:me and with:me find every handle on this contact">
-        <input
-          type="checkbox"
-          data-testid="contact-is-me"
-          :checked="!!model.mine.account"
-          :disabled="busy"
-          @change="toggleMe"
-        />
-        This is me
-      </label>
       <div class="person-labels" role="group" aria-label="Labels">
         <span v-for="l in myLabels" :key="l" class="person-label">
           {{ l }}
@@ -927,6 +1012,14 @@ const headPhoto = computed(() => {
 
     <p v-if="nothing" class="person-muted person-empty">{{ nothing }}</p>
     <ChipMenu
+      v-if="pageMenu"
+      :entries="pageMenu.entries"
+      :x="pageMenu.x"
+      :y="pageMenu.y"
+      @pick="onPageMenuPick"
+      @close="pageMenu = null"
+    />
+    <ChipMenu
       v-if="menu"
       :entries="menu.entries"
       :x="menu.x"
@@ -1074,11 +1167,12 @@ const headPhoto = computed(() => {
   color: var(--datalib-muted);
   cursor: pointer;
 }
-.person-me {
-  display: inline-flex;
+.person-merge {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 0.3rem;
-  margin-bottom: 0.35rem;
+  gap: 0.4rem;
+  margin-top: 0.4rem;
 }
 .person-section {
   border-top: 1px solid var(--datalib-border-soft);

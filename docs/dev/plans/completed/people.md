@@ -1,15 +1,17 @@
 # Contacts: a simpler UI
 
-*Plan (2026-11-24, revised 2026-11-25 after Thad's notes and answers).
-Every step of §"Order of work" is built, and
-[`../contacts.md`](../contacts.md) says how they work; step 6 says the
-two moves left undone. "The problem" is as it was before. What the screens do was seen by using the TNG
-demo. The numbers are counts from copies of real libraries and from one
-real address book. If this is agreed, it replaces
-[`contact_linking.md`](contact_linking.md)'s "Where links are made".
-[`contact_editing.md`](contact_editing.md) (editing a contact, and later
-publishing it) still stands, but for "Fields and links are separate"
-(§"Editing a contact").*
+*Landed, every step of §"Order of work" (#2010 to #2099, November 2026);
+kept as the record of what was decided and why. Proposed 2026-11-24,
+revised 2026-11-25, and each step's paragraph says what was built,
+including where the build departed from the plan: labels stayed, and
+became nodes of the Library tree. What is true now is
+[`contacts.md`](../../contacts.md), with its routes in
+[`contacts_app.md`](../../../user/contacts_app.md). This replaced
+[`contact_linking.md`](../contact_linking.md)'s "Where links are made";
+[`contact_editing.md`](../contact_editing.md) (publishing a contact back
+to an address book) still stands, but for "Fields and links are
+separate" (§"Editing a contact"). The numbers are counts from copies of
+real libraries and from one real address book.*
 
 ## The problem
 
@@ -292,7 +294,7 @@ which counted messages and left out reactions, edit versions, comments,
 and everything from a source whose records counted nothing; it
 disagreed with `from:` for 27 of the fixture's 119 records. It is gone: the
 grid's rows are the one count (built,
-[`../contacts.md`](../contacts.md) §"How much someone wrote"), and the
+[`../contacts.md`](../../contacts.md) §"How much someone wrote"), and the
 author index carries the stamp. A name is still weighed per document,
 so one forged message renames nobody.
 
@@ -330,15 +332,16 @@ Each step stands alone; the first two change no stored data.
    unconfirmed *not real* still hides a sender from *Unfiled*, as §"The
    screens" says.
 6. **What goes, goes**, with the store's rung, the routes and
-   [`contacts_app.md`](../../user/contacts_app.md). Built: rung 4 makes a
+   [`contacts_app.md`](../../../user/contacts_app.md). Built: rung 4 makes a
    group an ordinary contact and gives its members the group's name as
    a label, then drops `members` and `contacts.kind`; `GET /review` and
    the list's *Type* column went. Labels stay, against the table
    above: a contact carries any label, given on its page, shown as the
    list's *Labels*, and each label is a node under *Contacts* in the
    Library tree listing who carries it, as an address book's groups
-   are. *This is me* stays a checkbox on the page, and merging stays on
-   the list's right-click: neither moved to a menu on the page.
+   are. *This is me* and *Merge into…* are on the page's ⋯ menu, beside
+   *Everything with them*; merging is still on the list's right-click
+   too.
 
 ## Decided
 
