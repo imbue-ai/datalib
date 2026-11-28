@@ -2,7 +2,7 @@
 // which colour a status reads in, and what needs a person.
 import type { ManageRow } from "@/api";
 
-export type Tone = "ok" | "run" | "warn" | "error" | "muted";
+export type Tone = "ok" | "run" | "wait" | "warn" | "error" | "muted";
 
 /// A status key (manage/status.rs) as the colour it reads in.
 export function statusTone(key: string): Tone {
@@ -11,9 +11,10 @@ export function statusTone(key: string): Tone {
     case "skipped_up_to_date":
       return "ok";
     case "running":
+      return "run";
     case "waiting":
     case "queued":
-      return "run";
+      return "wait";
     case "failed":
     case "config_rejected":
       return "error";

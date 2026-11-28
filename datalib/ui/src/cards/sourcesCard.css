@@ -183,6 +183,12 @@
 .sx-tone-run {
   color: var(--datalib-accent);
 }
+.sx-tone-wait {
+  color: var(--datalib-wait-fg);
+}
+.sx-tone-wait .sx-dot {
+  background: var(--datalib-wait-dot);
+}
 .sx-tone-warn {
   color: var(--datalib-warn-fg);
 }

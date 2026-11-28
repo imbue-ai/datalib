@@ -219,6 +219,9 @@ onBeforeUnmount(() => (open.value = false));
 li[data-state="done"] .pass-state {
   color: var(--datalib-ok);
 }
+li[data-state="waiting"] .pass-state {
+  color: var(--datalib-wait-fg);
+}
 li[data-state="running"] .pass-state {
   color: var(--datalib-warn-fg);
   font-weight: 600;

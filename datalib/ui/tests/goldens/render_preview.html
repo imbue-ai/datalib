@@ -38,9 +38,13 @@
   --datalib-chip-unlinked-bg: rgba(110, 110, 115, 0.16);
   --datalib-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 
-  /* States: what went right, what needs a person, what broke. */
+  /* States: what went right, what is waiting its turn, what needs a
+     person, what broke. Waiting is yellow, apart from the amber of
+     warn, so a queued step reads as the middle of a traffic light. */
   --datalib-ok: #1f7a3a;
   --datalib-ok-dot: #28a745;
+  --datalib-wait-fg: #6f5c00;
+  --datalib-wait-dot: #f2c500;
   --datalib-warn-fg: #8a5300;
   --datalib-warn-bg: #fff4db;
   --datalib-warn-border: #f0d59a;
@@ -142,6 +146,8 @@ a {
 
     --datalib-ok: #7fd39a;
     --datalib-ok-dot: #4cc47a;
+    --datalib-wait-fg: #f5dc5a;
+    --datalib-wait-dot: #f2d024;
     --datalib-warn-fg: #f3c66f;
     --datalib-warn-bg: #2e2615;
     --datalib-warn-border: #5a4620;
