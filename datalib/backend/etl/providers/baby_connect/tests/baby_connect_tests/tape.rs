@@ -177,7 +177,7 @@ fn entries(edition: Edition, day: &str) -> Vec<Value> {
     out
 }
 
-fn day_answer(edition: Edition, day: &str) -> Value {
+pub fn day_answer(edition: Edition, day: &str) -> Value {
     json!({
         "all": true, "pdt": pdt(day), "deleted": [], "ms": 0, "staff": [], "ts": 0,
         "list": entries(edition, day),
@@ -192,9 +192,14 @@ fn day_answer(edition: Edition, day: &str) -> Value {
 pub fn write(root: &Path, edition: Edition) {
     write_fixture(root, &api::home_request(), &html(&home_page())).unwrap();
     for day in edition.days() {
-        let req = api::list_request(&WESLEY.to_string(), pdt(day), TOKEN);
-        write_fixture(root, &req, &json_response(&day_answer(edition, day))).unwrap();
+        write_day(root, day, &day_answer(edition, day));
     }
+}
+
+/// Writes `answer` as the one `day`'s answer under `root`.
+pub fn write_day(root: &Path, day: &str, answer: &Value) {
+    let req = api::list_request(&WESLEY.to_string(), pdt(day), TOKEN);
+    write_fixture(root, &req, &json_response(answer)).unwrap();
 }
 
 pub const ALEXANDER: u64 = 5629499534213122;

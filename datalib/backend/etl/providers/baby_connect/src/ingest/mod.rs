@@ -195,7 +195,19 @@ impl Ctx<'_> {
                     continue;
                 }
             };
-            if let Some(span) = self.store_day(d, &answer, &held, s).await? {
+            let Some(day) = days::entries_of(&answer, d) else {
+                self.found.listing(
+                    ENTRIES.table,
+                    format!(
+                        "the answer for {} holds no list of entries, so that day was not read; \
+                         the next run asks for it again",
+                        days::key(d)
+                    ),
+                );
+                self.opts.progress.inc(1);
+                continue;
+            };
+            if let Some(span) = self.store_day(d, &day, &answer, &held, s).await? {
                 held.push(span);
                 held = coverage::merged(held);
             }
@@ -206,22 +218,39 @@ impl Ctx<'_> {
 
     /// One day's entries and the people who logged them, and the day
     /// recorded as read when it is more than a day old
-    /// (`days::may_record_as_read`), in one transaction. Returns the span
-    /// recorded.
+    /// (`days::may_record_as_read`) and every entry in its answer names
+    /// its day, in one transaction. Returns the span recorded.
     async fn store_day(
         &mut self,
         d: NaiveDate,
+        day: &days::DayEntries,
         answer: &Value,
         held: &[Span],
         s: &mut FetchSummary,
     ) -> Result<Option<Span>> {
-        let entries = days::entries_of(answer, d);
+        if !day.undated.is_empty() {
+            let ids: Vec<String> = day
+                .undated
+                .iter()
+                .map(|e| e.get("Id").map_or("no id".to_string(), Value::to_string))
+                .collect();
+            self.found.listing(
+                ENTRIES.table,
+                format!(
+                    "the answer for {} holds entries whose day (`Pdt`) is not a number, so \
+                     they were not stored and the day is asked for again next run: {}",
+                    days::key(d),
+                    ids.join(", ")
+                ),
+            );
+        }
+        let entries = &day.entries;
         let users = days::users_of(answer);
         let now = IsoOffsetTimestamp::now_local();
-        let recorded_as_read = days::may_record_as_read(d, self.today);
+        let recorded_as_read = day.undated.is_empty() && days::may_record_as_read(d, self.today);
         let tx = self.writes.tx().await?;
         let mut n = db::write(tx, USERS, &users, &now).await?;
-        n += db::write(tx, ENTRIES, &entries, &now).await?;
+        n += db::write(tx, ENTRIES, entries, &now).await?;
         let span = recorded_as_read.then(|| days::span_for(d, held));
         if let Some(span) = &span {
             coverage::cover(tx, DAYS_SCOPE, span.clone()).await?;

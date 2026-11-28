@@ -120,10 +120,12 @@ fn tip_of(channel: &Value) -> Option<u64> {
     snowflake::parse(channel.get("last_message_id")?.as_str()?)
 }
 
-fn list_of(answer: Value) -> Vec<Value> {
+/// The records of a listing; an answer of any other shape says nothing
+/// about what upstream holds, so it is never read as an empty list.
+fn list_of(answer: Value) -> Result<Vec<Value>, String> {
     match answer {
-        Value::Array(records) => records,
-        _ => Vec::new(),
+        Value::Array(records) => Ok(records),
+        _ => Err("the answer is not a list".to_string()),
     }
 }
 
@@ -168,6 +170,17 @@ impl Ctx<'_> {
         }
     }
 
+    /// [`Self::ask`] for a listing: an answer that is not a list is a
+    /// failed listing too.
+    async fn ask_list(&mut self, name: &str, req: HttpRequest) -> Result<Option<Vec<Value>>> {
+        let Some(answer) = self.ask(name, req).await? else {
+            return Ok(None);
+        };
+        Ok(list_of(answer)
+            .inspect_err(|e| self.found.listing(name, e.clone()))
+            .ok())
+    }
+
     /// Whether the listing `key` is due again.
     async fn due(&mut self, key: &str, every: chrono::Duration) -> Result<bool> {
         let age = db::SWEEPS
@@ -206,11 +219,10 @@ impl Ctx<'_> {
         if !self.opts.sync.dms {
             return Ok(Vec::new());
         }
-        let Some(listed) = self.ask("direct messages", api::dms_request()).await? else {
+        let Some(listed) = self.ask_list("direct messages", api::dms_request()).await? else {
             return Ok(Vec::new());
         };
-        let (chosen, problems) =
-            select::dms(&list_of(listed), self.opts.sync.dm_conversations.as_deref());
+        let (chosen, problems) = select::dms(&listed, self.opts.sync.dm_conversations.as_deref());
         self.found.config(problems);
         let now = IsoOffsetTimestamp::now_local();
         let channels: Vec<&Value> = chosen.iter().collect();
@@ -238,11 +250,11 @@ impl Ctx<'_> {
         if !self.opts.sync.wants_servers() {
             return Ok(Vec::new());
         }
-        let Some(listed) = self.ask("servers", api::guilds_request()).await? else {
+        let Some(listed) = self.ask_list("servers", api::guilds_request()).await? else {
             return Ok(Vec::new());
         };
         let (servers, problems) = select::servers(
-            &list_of(listed),
+            &listed,
             self.opts.sync.servers.as_deref(),
             self.opts.sync.all_servers,
         );
@@ -260,11 +272,13 @@ impl Ctx<'_> {
         let mut whole = true;
         for (guild_id, guild) in rows {
             let name = format!("channels of server {guild_id}");
-            let Some(listed) = self.ask(&name, api::channels_request(guild_id)).await? else {
+            let Some(listed) = self
+                .ask_list(&name, api::channels_request(guild_id))
+                .await?
+            else {
                 whole = false;
                 continue;
             };
-            let listed = list_of(listed);
             let Some(member) = self.member(me, guild_id).await? else {
                 whole = false;
                 continue;
@@ -295,14 +309,13 @@ impl Ctx<'_> {
         let key = format!("roles:{guild_id}");
         if self.due(&key, self.list_every()).await? {
             let name = format!("roles of server {guild_id}");
-            let roles = self.ask(&name, api::roles_request(guild_id)).await?;
+            let roles = self.ask_list(&name, api::roles_request(guild_id)).await?;
             let member = self.ask(&name, api::member_request(guild_id)).await?;
             let (Some(roles), Some(member)) = (roles, member) else {
                 return Ok(None);
             };
             let now = IsoOffsetTimestamp::now_local();
             let run_now = self.opts.now.clone();
-            let roles = list_of(roles);
             let tx = self.writes.tx().await?;
             db::write_roles(tx, guild_id, &roles, &now).await?;
             db::write_member(tx, &[(guild_id, &member)], &now).await?;
@@ -350,11 +363,11 @@ impl Ctx<'_> {
             else {
                 return Ok(false);
             };
-            let threads: Vec<Value> = page
-                .get("threads")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            let Some(threads) = page.get("threads").and_then(Value::as_array).cloned() else {
+                self.found
+                    .listing(&name, "the answer holds no list of threads");
+                return Ok(false);
+            };
             let more = page.get("has_more").and_then(Value::as_bool) == Some(true);
             let tips: Vec<u64> = threads.iter().filter_map(tip_of).collect();
             let top_here = top.or(tips.iter().copied().max());
@@ -450,12 +463,12 @@ impl Ctx<'_> {
             }
             let id = walks[i].channel_id.clone();
             let req = api::messages_request(&id, walks[i].next_before());
-            let Some(page) = self.ask(&format!("messages of {id}"), req).await? else {
+            let Some(page) = self.ask_list(&format!("messages of {id}"), req).await? else {
                 // The next run owes what this one did not read.
                 walks.swap_remove(i);
                 continue;
             };
-            let started = self.store_page(&mut walks[i], list_of(page), s).await?;
+            let started = self.store_page(&mut walks[i], page, s).await?;
             if threads {
                 for thread in started {
                     if seen.insert(thread.id.clone()) {

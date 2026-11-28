@@ -62,7 +62,10 @@ nothing says which kind of session was captured.
    day's entries, plus a few from the days beside it; only entries
    whose `Pdt` is the day asked for are kept, so each entry is stored
    from its own day's answer. Its `users` are the people who logged
-   them.
+   them. An answer with no `list` (`{"Code":200}`, say) says nothing
+   about the day, and an entry whose `Pdt` is not a number cannot be
+   placed on one: either is a `listing:entries` problem, and the day is
+   not recorded as read, so the next run asks for it again.
 
 The days asked for run from `api.since`, else the eldest child's
 birthday (`BDay`), to `api.until` or today, oldest first, less the days
@@ -74,7 +77,9 @@ When `coverage` already holds the day before, the new span starts at
 that day, so a run of days stays one span (`days::span_for`).
 
 Nothing else is kept as a position. A run stopped part-way leaves the
-days it read recorded and asks for the rest next time.
+days it read recorded and asks for the rest next time;
+`tests/baby_connect_tests/interrupt.rs` stops a run at every request
+and requires the next run to end where an uninterrupted one does.
 
 **What a run costs.** One request per day the store does not hold: a
 first run over four years is about 1,500. After that a daily sync is
