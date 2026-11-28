@@ -94,8 +94,8 @@ pub async fn read_at(store: &Path) -> Result<Option<Meta>> {
 /// Every store under a data root: each `*.doltlite_db` up to three levels down
 /// (`system/`, `<group>/ingest/`, `<group>/render_markdown/`,
 /// `unified_grid_and_search_index/unified_grid_and_search_index/`), and the
-/// plain-SQLite stores that carry a meta row: the run store, disk stats and the
-/// grid index. A walk rather than a list of the layout's names, so a store this
+/// plain-SQLite stores that carry a meta row: the run store, disk stats, the
+/// grid index and the inference cache. A walk rather than a list of the layout's names, so a store this
 /// crate has not heard of is inspected too.
 pub fn stores_under(root: &Path) -> Vec<PathBuf> {
     fn walk(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
@@ -126,6 +126,7 @@ pub fn stores_under(root: &Path) -> Vec<PathBuf> {
         datalib_runtime::layout::runs_db(root),
         datalib_runtime::layout::disk_stats_db(root),
         datalib_runtime::layout::grid_index_db(root),
+        datalib_runtime::layout::inference_cache_db(root),
     ] {
         if plain.is_file() {
             out.push(plain);
@@ -183,7 +184,8 @@ mod tests {
     }
 
     /// The walk finds every doltlite store the layout places, at every
-    /// depth, and the run store, and nothing else.
+    /// depth, and the plain-SQLite stores with a meta row, the inference
+    /// cache among them, and nothing else.
     #[test]
     fn the_walk_finds_every_store_the_layout_places() {
         let td = tempfile::tempdir().unwrap();
@@ -201,6 +203,8 @@ mod tests {
             "slack/render_markdown/a/b/c.md",
             "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
             "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite-wal",
+            "unified_grid_and_search_index/search_index/inference_cache.sqlite",
+            "unified_grid_and_search_index/search_index/inference_cache.sqlite-wal",
             "unified_grid_and_search_index/qmd_aggregator/qmd/index.sqlite",
             "config.toml",
         ];
@@ -221,6 +225,7 @@ mod tests {
                 "system/disk_stats.sqlite",
                 "system/remote_media.doltlite_db",
                 "system/runs/runs.sqlite",
+                "unified_grid_and_search_index/search_index/inference_cache.sqlite",
                 "unified_grid_and_search_index/unified_grid_and_search_index/db.sqlite",
             ]
         );

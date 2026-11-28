@@ -56,22 +56,28 @@ pub(crate) async fn open(path: &Path, ddl: &[&str], wait: Duration) -> Result<Sq
     Ok(pool)
 }
 
-/// Make the file at `pool` hold `kind` in `shape`, under the write lock, so
-/// two steps opening an old file together empty it once. Tables in another
-/// shape, or a file that records none, lose every table; indexes in
-/// another shape lose the `remade` tables, which are made again from what
-/// the rest hold. `ddl` then makes whatever is missing.
+/// Make the file at `pool` (opened from `path`) hold `kind` in `shape`,
+/// under the write lock, so two steps opening an old file together empty it
+/// once. A file a newer line of Datalib wrote is refused before anything is
+/// touched (`datalib_store_meta::guard`). Tables in another shape, or a file
+/// that records none, lose every table; indexes in another shape lose the
+/// `remade` tables, which are made again from what the rest hold. `ddl`
+/// then makes whatever is missing.
 pub(crate) async fn keep_in_shape(
     pool: &SqlitePool,
+    path: &Path,
     kind: StoreKind,
     shape: &Shape,
     ddl: &[&str],
     remade: &[&str],
 ) -> Result<()> {
     let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
-    let have = datalib_store_meta::read_in(&mut tx)
-        .await?
-        .map(|m| m.shape());
+    let meta = datalib_store_meta::read_in(&mut tx).await?;
+    if let Err(newer) = datalib_store_meta::refuse_if_newer(path, meta.as_ref()) {
+        tx.rollback().await?;
+        return Err(anyhow::Error::new(newer));
+    }
+    let have = meta.map(|m| m.shape());
     if have.as_ref().map(|h| &h.tables) != Some(&shape.tables) {
         tracing::info!(
             store = kind.as_str(),

@@ -100,6 +100,15 @@ names and every other model's. The cache is a file of its own so that
 rebuilding the keyword index, or the grid index, never throws embedding
 work away.
 
+**A cache in another shape is emptied; one a newer line wrote is
+refused.** Opening the cache as its writer (`InferenceCache::open`)
+drops every table when the tables `_datalib_meta` records are not this
+build's, and makes them again. A cache whose `datalib_version` is a
+newer `major.minor` than this build's is refused before that, with the
+`NewerBuild` error naming the build that wrote it, and keeps every
+vector (`a_cache_a_newer_line_reshaped_is_refused_and_kept`): those
+vectors cost hours of embedding.
+
 **Search ranks by brute force, in memory.** The applet holds every
 embedded chunk's vector as a unit vector in half precision (`half.rs`)
 and compares the query with all of them, which is exact. There is no
