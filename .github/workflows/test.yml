@@ -245,7 +245,7 @@ jobs:
     # moves all of these, and the PR that does it is what tries the new image.
     # A dispatch can name a `sha-<commit>` tag to try one first.
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:6b5abc61403460847a153945562c5cc31106314ffc8a7069dce83858a9445130' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:f6b554b150e3f252ac621442eb5482504a4924293f59af0fbe2d152875f2aaae' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -460,7 +460,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:6b5abc61403460847a153945562c5cc31106314ffc8a7069dce83858a9445130' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:f6b554b150e3f252ac621442eb5482504a4924293f59af0fbe2d152875f2aaae' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -678,7 +678,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:6b5abc61403460847a153945562c5cc31106314ffc8a7069dce83858a9445130' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:f6b554b150e3f252ac621442eb5482504a4924293f59af0fbe2d152875f2aaae' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -753,7 +753,7 @@ jobs:
         shell: bash
 
     container:
-      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:6b5abc61403460847a153945562c5cc31106314ffc8a7069dce83858a9445130' }}
+      image: ghcr.io/imbue-ai/datalib_devcontainer${{ inputs.devcontainer_tag && format(':{0}', inputs.devcontainer_tag) || '@sha256:f6b554b150e3f252ac621442eb5482504a4924293f59af0fbe2d152875f2aaae' }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
