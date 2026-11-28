@@ -271,13 +271,29 @@ when its values pass 8 MB; `next_offset` still says where to go on.
 
 **What it will not do.** It reads, and nothing else. The store is opened
 read-only and pinned to one commit, and every statement is checked before
-it runs: reading tables and calling SQLite's functions is allowed, and so
-are doltlite's that only answer (`dolt_hashof`, `dolt_merge_base`,
-`dolt_version`), its history tables (`dolt_log()`, `dolt_diff_<table>`,
-`dolt_history_<table>`) and the `pragma_…` tables that describe a schema.
-Anything else is refused with a 403 naming it: a write, `ATTACH`, and
-doltlite's functions that change or reach past the store (`dolt_commit`,
-`dolt_push`, `dolt_clone`, `dolt_creds_new`). A query still running after
+it runs: reading tables is allowed, and so are doltlite's history tables
+(`dolt_log()`, `dolt_diff_<table>`, `dolt_history_<table>`) and the
+`pragma_…` tables that describe a schema. A function is allowed by name:
+
+- SQLite's scalar, aggregate and window functions (`count`, `sum`,
+  `group_concat`, `lower`, `substr`, `printf`, `row_number`, `lag`, …);
+- its date and time functions (`date`, `datetime`, `strftime`,
+  `unixepoch`, `julianday`, `timediff`);
+- its JSON functions and the `->` and `->>` operators (`json_extract`,
+  `json_object`, `json_group_array`, the `jsonb_…` ones; `json_each` and
+  `json_tree` are tables, and read as any table does);
+- full-text search's `MATCH`, `bm25`, `highlight`, `snippet`,
+  `matchinfo` and `offsets`;
+- doltlite's that only answer: `active_branch`, `dolt_hashof` and its
+  `_table`, `_index`, `_db` and `_catalog` forms, `dolt_merge_base` and
+  `dolt_version`.
+
+`SELECT name FROM pragma_function_list` lists every function the engine
+has, refused ones among them. Anything else is refused with a 403 naming
+it: a write, `ATTACH`, doltlite's functions that change or reach past the
+store (`dolt_commit`, `dolt_push`, `dolt_clone`, `dolt_creds_new`,
+`dolt_dump`), and SQLite's that load code or write (`load_extension`,
+FTS4's `optimize`). A query still running after
 20 seconds is stopped with a 504; narrow it or page with a smaller
 `limit`. Four run at once, and the rest wait their turn.
 

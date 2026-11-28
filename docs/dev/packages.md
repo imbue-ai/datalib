@@ -239,9 +239,16 @@ The UI writes the config; the server only fetches.
 3. **Fetch.** `POST /api/packages/fetch {url, sha256}` fetches the
    manifest again and refuses it unless it still hashes to the pin. It
    then downloads this platform's archive, checks its sha256, and
-   unpacks it into `system/packages/<pin>/`. A `.datalib-installed`
+   unpacks it into `system/packages/<pin>/`. An archive with a symlink
+   that is absolute, or that climbs out of the package with `..`, is
+   refused (`datalib_fetch::unpack_tar_gz`). A `.datalib-installed`
    stamp there names the platform; a stamp for another platform
-   (a library copied from a Mac to Linux) means not installed.
+   (a library copied from a Mac to Linux) means not installed. The
+   stamp and the copy of the manifest beside it are new files Datalib
+   writes in place of anything the archive had at those names. One
+   fetch unpacks at a time, holding `system/packages/.lock`, so the
+   listing below and an add of the same package do not undo each
+   other.
 4. **Write.** Only then does the UI add the `[[packages]]` entry to the
    config. Adding a source of one of its types then writes the source's
    steps and applets, which run at once.

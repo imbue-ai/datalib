@@ -12,6 +12,7 @@
 mod cached_asset;
 pub mod cuda;
 pub mod runtime;
+mod unpack;
 
 use std::fs;
 use std::io::{Read, Write};
@@ -29,6 +30,7 @@ const MAX_REDIRECTS: usize = 10;
 
 pub use cuda::{enable_cuda_fetch, ensure_cuda_module, ReleaseCudaFetcher};
 pub use runtime::{enable_runtime_fetch, ensure_runtime, ReleaseRuntimeFetcher};
+pub use unpack::unpack_tar_gz;
 
 /// Set, to anything but empty or `0`, by an install that ships everything
 /// it runs (the docker image): every fetch here is then refused, naming
@@ -355,18 +357,6 @@ fn sweep_stale_partials(tag: &str, dest: &Path) {
     }
 }
 
-/// Unpack a `.tar.gz` into `dest`, which must exist. Entries that would
-/// land outside `dest` are refused by the tar crate; modes and symlinks
-/// are kept, which the pnpm layout and `node/bin/node` both need.
-pub fn unpack_tar_gz(archive: &Path, dest: &Path) -> Result<()> {
-    let file = fs::File::open(archive).with_context(|| format!("open {}", archive.display()))?;
-    let gz = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
-    let mut tar = tar::Archive::new(gz);
-    tar.set_overwrite(true);
-    tar.unpack(dest)
-        .with_context(|| format!("unpack {} into {}", archive.display(), dest.display()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -520,44 +510,6 @@ mod tests {
         assert_eq!(
             stale_partials(OsStr::new("m.gguf"), &entries, now),
             ["m.gguf.partial", "m.gguf.Ab12Cd.partial"]
-        );
-    }
-
-    /// Modes and symlinks survive the round trip — a runtime whose
-    /// `node` lost its exec bit, or whose pnpm links dereferenced, is
-    /// no runtime.
-    #[test]
-    fn unpack_keeps_modes_and_symlinks() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let src = dir.path().join("src");
-        fs::create_dir_all(src.join("node/bin")).unwrap();
-        fs::write(src.join("node/bin/node"), b"#!/bin/sh\necho node\n").unwrap();
-        fs::set_permissions(src.join("node/bin/node"), fs::Permissions::from_mode(0o755)).unwrap();
-        std::os::unix::fs::symlink("node/bin/node", src.join("link")).unwrap();
-
-        let archive = dir.path().join("rt.tar.gz");
-        {
-            let f = fs::File::create(&archive).unwrap();
-            let gz = flate2::write::GzEncoder::new(f, flate2::Compression::fast());
-            let mut tar = tar::Builder::new(gz);
-            tar.follow_symlinks(false);
-            tar.append_dir_all(".", &src).unwrap();
-            tar.into_inner().unwrap().finish().unwrap();
-        }
-
-        let out = dir.path().join("out");
-        fs::create_dir_all(&out).unwrap();
-        unpack_tar_gz(&archive, &out).unwrap();
-        let node = out.join("node/bin/node");
-        assert!(fs::metadata(&node).unwrap().permissions().mode() & 0o111 != 0);
-        assert!(fs::symlink_metadata(out.join("link"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
-        assert_eq!(
-            fs::read(out.join("link")).unwrap(),
-            fs::read(&node).unwrap()
         );
     }
 }

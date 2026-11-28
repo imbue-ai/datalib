@@ -19,4 +19,5 @@ rust_test(
     size = "small",
     crate = ":datalib_sql_guard",
     edition = "2021",
+    deps = ["@datalib_crates//:tempfile"],
 )
