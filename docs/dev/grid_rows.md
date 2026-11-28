@@ -532,7 +532,7 @@ a handful of rows tagged `provider = "datalib"`, `source_label =
 download-only source (`file_inventory`, `media`) a place in the grid at
 all. `source:datalib` is "show me what everything weighs". The code,
 with the reasons behind these rules in its header, is
-`datalib/backend/datalib_step/src/introspect.rs`.
+`datalib/backend/datalib_step/lib/src/introspect.rs`.
 
 - **They are filed under `datalib`, not under the source they
   measure**, so "what claude weighs" never lands beside the Claude

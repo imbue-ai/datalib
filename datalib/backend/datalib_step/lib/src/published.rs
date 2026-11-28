@@ -5,6 +5,7 @@
 //! one its crashed predecessor left. A seal names the same commit the same
 //! way, so finishing on the commit last sealed moves nothing downstream.
 
+use futures::future::BoxFuture;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -60,7 +61,11 @@ pub fn time_series_store(env: &StepEnv, data_root: &Path) -> PathBuf {
 
 /// The claim a failed or stopped step reports. A head that cannot be read
 /// is logged and left out: the step's consumers then read what it sealed.
-pub async fn claims(env: &StepEnv, data_root: &Path) -> Vec<OutputClaim> {
+pub fn claims<'a>(env: &'a StepEnv, data_root: &'a Path) -> BoxFuture<'a, Vec<OutputClaim>> {
+    Box::pin(claims_unboxed(env, data_root))
+}
+
+async fn claims_unboxed(env: &StepEnv, data_root: &Path) -> Vec<OutputClaim> {
     match version(env, data_root).await {
         Ok(Some(version)) => vec![OutputClaim {
             path: env.step.clone(),

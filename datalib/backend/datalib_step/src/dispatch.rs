@@ -6,54 +6,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use datalib_etl::processor::{DataProcessor, PlanContext};
-use datalib_etl_render::processor::RenderProcessor;
-use datalib_source_common::{DownloadParams, Reach};
+use datalib_etl::processor::PlanContext;
 
+use crate::planned_source::{Phase, PlannedSource, Processors};
 use crate::source_type::SourceType;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Phase {
-    Ingest,
-    Render,
-}
-
-/// A normalized, planned source: the step's processors plus the
-/// resolved envelope facts the step driver needs.
-pub struct PlannedSource {
-    pub name: String,
-    pub source_type: SourceType,
-    /// The raw store: the ingest step's own tree, or for a render the
-    /// tree its input names.
-    pub raw_path: PathBuf,
-    /// Whether the method the ingest step's params hold reaches a live
-    /// origin or reads files on disk. `None` for a render.
-    pub reach: Option<Reach>,
-    /// Resolved rate-limit give-up bounds for the ingest step.
-    pub download_params: DownloadParams,
-    pub processors: Processors,
-}
-
-/// A planned source's processors, which are of a different type per
-/// phase: download and render share no trait, because they share no run
-/// context.
-pub enum Processors {
-    Ingest(Vec<Box<dyn DataProcessor>>),
-    /// A download whose params say `common.download = false`: nothing to
-    /// run, and the raw store it has is what it publishes.
-    Kept,
-    Render(Vec<Box<dyn RenderProcessor>>),
-}
-
-impl Processors {
-    pub fn len(&self) -> usize {
-        match self {
-            Processors::Ingest(p) => p.len(),
-            Processors::Kept => 0,
-            Processors::Render(p) => p.len(),
-        }
-    }
-}
 
 /// What a download that no longer runs plans (`Processors::Kept`), or why
 /// `source_type` cannot keep what it has without its inputs.
@@ -65,17 +21,6 @@ fn kept(source_type: SourceType) -> Result<Processors> {
          its folder; leave the download on and keep the folder"
     );
     Ok(Processors::Kept)
-}
-
-impl std::fmt::Debug for PlannedSource {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PlannedSource")
-            .field("name", &self.name)
-            .field("source_type", &self.source_type)
-            .field("raw_path", &self.raw_path)
-            .field("processors", &self.processors.len())
-            .finish_non_exhaustive()
-    }
 }
 
 /// `raw_dir` is the raw store this plan is about: for [`Phase::Ingest`]
@@ -473,6 +418,7 @@ pub async fn migrate(step_type: &str, raw_dir: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datalib_source_common::Reach;
     use std::path::Path;
     use strum::VariantArray;
 

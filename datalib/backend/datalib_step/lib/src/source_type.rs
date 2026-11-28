@@ -1,4 +1,4 @@
-//! The source types this binary can run, as one enum.
+//! The source types `datalib-step` can run, as one enum.
 //!
 //! The wire spelling is what a `[[groups]]` entry's `type` names, so it
 //! is fixed by the configs people have already written — `as_str` is
@@ -10,7 +10,7 @@
 //! product's own API — and declared by each provider's config crate
 //! (`IngestMethods`).
 //!
-//! The value of naming them here is that [`crate::dispatch::plan`]
+//! The value of naming them here is that `datalib-step`'s `dispatch::plan`
 //! matches on the enum: adding a variant without wiring it up is a
 //! compile error, not a runtime "unknown source type", and the list a
 //! bad type is reported against is derived from the same enum the
@@ -145,7 +145,7 @@ impl SourceType {
     }
 
     /// Whether this type's data is also time series, which its
-    /// `render_time_series` step writes (`crate::time_series`).
+    /// `render_time_series` step writes (`datalib-step`'s `time_series`).
     pub const fn renders_time_series(self) -> bool {
         matches!(
             self,
@@ -154,7 +154,7 @@ impl SourceType {
     }
 
     /// Whether this type's events have occurrences, which its
-    /// `render_occurrences` step lists (`crate::occurrences`).
+    /// `render_occurrences` step lists (`datalib-step`'s `occurrences`).
     pub const fn renders_occurrences(self) -> bool {
         matches!(self, SourceType::Calendar)
     }

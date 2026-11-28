@@ -3,7 +3,7 @@
 //! (`*/render_time_series`) or by id. They were wired in so the step
 //! could copy their problem rows; problems are now read in each step's
 //! own store, and the step passes over those inputs (`render_inputs` in
-//! `datalib_step/src/unified_grid_and_search_index.rs`). All they still
+//! `datalib_step/lib/src/unified_grid_and_search_index.rs`). All they still
 //! did was run the step again after every such render. The rewrite takes
 //! them out of the step's `inputs`, and changes nothing else. It runs
 //! after `index_step_name.rs`, so it finds the step by its current

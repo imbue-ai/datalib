@@ -69,7 +69,7 @@ for Modal".
 NVIDIA GPU would run themselves ([`docker.md`](docker.md) § "The CUDA
 variant"). It holds `datalib-step`, the pinned embedding model, the CUDA
 module and cuBLAS. Each Sandbox runs `datalib-step embed-prompts`
-(`datalib_step/src/embed_prompts.rs`): one `{"hash", "prompt"}` JSON
+(`datalib_step/lib/src/embed_prompts.rs`): one `{"hash", "prompt"}` JSON
 object a line on stdin, one `{"hash", "vector", "cut"}` a line on
 stdout, in order and 64 at a time, through the same `datalib_embedder`
 the local step uses. So the prompts, the hashing and the model are one
@@ -117,12 +117,12 @@ only one that can deploy a Function, is a tool we do not ship. Its
 JavaScript SDK (npm's `modal`) runs on the Node we bundle and can start a
 Sandbox from a registry image, with a GPU, and talk to it; it cannot
 deploy a Function or `map` one. So the step's Modal half is a small
-driver on that Node, `datalib_step/src/modal/embed_on_modal.mjs`,
+driver on that Node, `datalib_step/lib/src/modal/embed_on_modal.mjs`,
 compiled into `datalib-step` and run with `node --eval`. It imports the
 SDK pinned in `third-party/modal/runtime/` and staged into the runtime
 as `modal/<version>/` ([`runtime_fetch.md`](runtime_fetch.md)). The
-step's side is `datalib_step/src/modal.rs` and `embed_on_modal` in
-`datalib_step/src/search_index.rs`.
+step's side is `datalib_step/lib/src/modal.rs` and `embed_on_modal` in
+`datalib_step/lib/src/search_index.rs`.
 
 - **The step reads what is owed from the inference cache**, as it does locally, and
   writes those prompts to the driver's stdin as it reads the documents.

@@ -218,7 +218,7 @@ the durable fallback, and a lapse is recovered where it is seen:
 
 - **The step says so.** `datalib-step` classifies an
   `io::ErrorKind::PermissionDenied` anywhere in a failure's cause chain
-  as `FailureKind::Permission` (`datalib_step/src/hints.rs`), which is
+  as `FailureKind::Permission` (`datalib_step/lib/src/hints.rs`), which is
   not retried, and emits a hint naming the fix.
 - **The loop keeps the kind** in the step's row
   (`steps.last_failure_kind` in `system/supervisor.sqlite`).

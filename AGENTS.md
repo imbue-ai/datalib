@@ -274,7 +274,11 @@ datalib/
     datalib_step/  `datalib-step`: the step program Datalib ships. A
                    step runs it with `command = "datalib-step run
                    <function> <type>"`, and it reads its params from
-                   `DATALIB_DAG_PARAMS`.
+                   `DATALIB_DAG_PARAMS`. Its `src/` holds what names a
+                   provider crate (`dispatch`, `prepare`, `help`, …);
+                   `lib/` (`datalib_step_lib`) holds the rest and may
+                   depend on no provider, so a provider change
+                   recompiles `src/` alone.
     etl/           shared ingest machinery (raw stores, blob CAS, render
                    cursors) — the download side, and where a
                    downloader's dependencies stop.
@@ -895,7 +899,7 @@ upstream (block types, MIME types), free-form display text
 | how a diff group's row differs between two renders | `DiffStatus` | `schema/src/diff_status.rs` |
 | what an edge means, stored as its number | `EdgeKind` | `schema/src/edges.rs` (`datalib_schema`) |
 | what a term is to its grid row | `SearchTermKind` | `schema/src/search_terms.rs` (`datalib_schema`) |
-| a config's source type | `SourceType` | `datalib_step/src/source_type.rs` |
+| a config's source type | `SourceType` | `datalib_step/lib/src/source_type.rs` |
 | whether an ingest method reaches a service or reads files | `Reach` | `source_common/src/lib.rs` |
 | which of Datalib's stores a file is, in its `_datalib_meta` | `StoreKind` | `store_meta/src/lib.rs` (`datalib_store_meta`) |
 | what namespace a handle is in | `HandleKind` | `handle/src/lib.rs` (`datalib_handle`) |
