@@ -822,8 +822,11 @@ fn list_mbox_files(input: &Path) -> Result<(Vec<MboxFile>, Vec<fswalk::WalkError
         });
         return Ok((files.into_iter().collect(), Vec::new()));
     }
-    let (walked, errors) = fswalk::walk_files(&root, &[], None, is_mbox)
-        .with_context(|| format!("walk {}", root.display()))?;
+    // A folder of `.mbox` files is an export, which anyone can make
+    // (`etl/files/README.md` § "An export can be made by anyone").
+    let (walked, errors) =
+        fswalk::walk_files_with(&root, &[], None, fswalk::Links::Refused, is_mbox)
+            .with_context(|| format!("walk {}", root.display()))?;
     let mut files: Vec<MboxFile> = walked
         .into_iter()
         .map(|w| MboxFile {
@@ -840,11 +843,18 @@ fn list_mbox_files(input: &Path) -> Result<(Vec<MboxFile>, Vec<fswalk::WalkError
 /// file it missed may hold any stored email, so nothing is deleted.
 fn walk_problem(input: &Path, errors: &[fswalk::WalkError]) -> Option<RunProblem> {
     let first = errors.first()?;
+    // The walk's paths are under the resolved folder.
+    let root = input.canonicalize().unwrap_or_else(|_| input.to_path_buf());
     Some(RunProblem::listing(
         "files",
+        // The path first, and short: the sample is cut at 80 characters.
         format!(
             "{}: {} ({} unreadable under {}; nothing was deleted this run)",
-            first.path.display(),
+            first
+                .path
+                .strip_prefix(&root)
+                .unwrap_or(&first.path)
+                .display(),
             first.error,
             errors.len(),
             input.display(),
@@ -2409,6 +2419,38 @@ mod tests {
         std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("c.mbox")).unwrap();
         assert_eq!(run().await.emails_removed, 0);
         assert_eq!(stored(&db_path).await.0.len(), 2);
+    }
+
+    /// A folder of `.mbox` files is an export, which anyone can make. A link
+    /// in it named `.mbox` was followed, and the file it pointed at,
+    /// anywhere on the machine, was read as mail.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_link_in_the_folder_is_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.mbox"), msg_one()).unwrap();
+        std::fs::write(outside.path().join("secret"), msg_two()).unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret"), dir.path().join("b.mbox"))
+            .unwrap();
+        let work = tempfile::tempdir().unwrap();
+        let db_path = work.path().join("e.doltlite_db");
+        run_once(&db_path, dir.path(), FetchOptions::new).await;
+
+        assert_eq!(stored(&db_path).await.0.len(), 1, "only the folder's own");
+        let db = RawDb::open(&db_path).await.unwrap();
+        let samples: Vec<(String, String)> =
+            test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+                .query_as()
+                .fetch_all(db.pool())
+                .await
+                .unwrap();
+        db.close().await;
+        assert!(
+            samples.iter().any(|(key, sample)| key == "listing:files"
+                && sample.starts_with("b.mbox: a symbolic link")),
+            "{samples:?}"
+        );
     }
 
     /// A read error can repeat on every read; a stream that retried it

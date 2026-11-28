@@ -1281,6 +1281,78 @@ async fn a_backup_that_will_not_open_is_a_problem_and_the_rest_are_read() -> Res
     Ok(())
 }
 
+/// A backup folder can be made by anyone. A snapshot that was a link was
+/// passed over and said nothing, a link at a part of one was followed, and
+/// so was a link in the attachment tree.
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_in_the_backup_folder_is_not_followed() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let snapshots = tmp.path().join("snapshots");
+    let elsewhere = tmp.path().join("elsewhere");
+    let store = tmp.path().join("raw").join("signal");
+    let cache = tmp.path().join("fingerprints.sqlite");
+    let (media_name, hash) = write_test_attachment(&elsewhere.join("files"))?;
+    let shard = &media_name[..2];
+    std::fs::create_dir_all(snapshots.join("files").join(shard))?;
+    std::os::unix::fs::symlink(
+        elsewhere.join("files").join(shard).join(&media_name),
+        snapshots.join("files").join(shard).join(&media_name),
+    )?;
+    let mut frames = bridge_crew();
+    frames.push(with_attachment(
+        chat_item(100, 1, 12442118400000, "Status report.", true),
+        png_attachment(&hash),
+    ));
+    let good = write_day(&snapshots, 0, &frames)?;
+    let linked = write_day(&elsewhere, 1, &frames)?;
+    std::os::unix::fs::symlink(elsewhere.join(&linked), snapshots.join(&linked))?;
+    let part_linked = write_day(&snapshots, 2, &frames)?;
+    std::fs::remove_file(snapshots.join(&part_linked).join("main"))?;
+    std::os::unix::fs::symlink(
+        elsewhere.join(&linked).join("main"),
+        snapshots.join(&part_linked).join("main"),
+    )?;
+
+    let (summary, _) =
+        fetch_summary(&snapshots, &store, &cache, DownloadControl::default()).await?;
+    assert_eq!(summary.backups_read, [good.as_str()]);
+    let item = ingest::schema_raw::chat_item_id_recipe(BRIDGE, PICARD, 12442118400000);
+    let mut want = vec![
+        format!("chat_item_attachments:{item}#0"),
+        format!("record:ingested_backups:{linked}"),
+        format!("record:ingested_backups:{part_linked}"),
+    ];
+    want.sort();
+    let got: Vec<String> = problems(&store)
+        .await?
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
+    assert_eq!(got, want);
+
+    let db = ingest::RawDb::open(&datalib_etl::doltlite_raw::db_path_for(&store)).await?;
+    let samples: Vec<String> = test_sql!("SELECT sample FROM problems")
+        .query_scalar()
+        .fetch_all(db.pool())
+        .await?;
+    let stored: Vec<Option<String>> = test_sql!("SELECT blake3 FROM chat_item_attachments")
+        .query_scalar()
+        .fetch_all(db.pool())
+        .await?;
+    db.close().await;
+    assert!(
+        samples.iter().all(|s| s.contains("symbolic link")),
+        "{samples:?}"
+    );
+    assert_eq!(
+        stored,
+        [None],
+        "the linked attachment's bytes are not stored"
+    );
+    Ok(())
+}
+
 /// A passphrase that opens none of the backups is not one problem per
 /// backup: the run fails, and says why.
 #[tokio::test(flavor = "multi_thread")]

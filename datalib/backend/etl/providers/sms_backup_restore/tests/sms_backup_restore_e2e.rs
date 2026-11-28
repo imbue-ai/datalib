@@ -2,7 +2,7 @@
 
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use datalib_etl::progress::Progress;
@@ -22,9 +22,22 @@ fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sms_backup_restore_tng")
 }
 
+/// The fixture as real files under `dir`, as a person's export is: the
+/// tree bazel stages is all links, which the ingest does not follow.
+fn fixture_copy(dir: &Path) -> Result<PathBuf> {
+    let export = dir.join("export");
+    fs::create_dir_all(&export)?;
+    for entry in fs::read_dir(fixture_root())? {
+        let from = entry?.path();
+        fs::copy(&from, export.join(from.file_name().context("file name")?))?;
+    }
+    Ok(export)
+}
+
 #[test]
 fn ingests_and_renders_the_tng_export() -> Result<()> {
     let tmp = tempfile::tempdir()?;
+    let export = fixture_copy(tmp.path())?;
     let raw_dir = tmp.path().join("raw");
     fs::create_dir_all(&raw_dir)?;
 
@@ -40,7 +53,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let summary = ingest::fetch(FetchOptions {
             db: db.clone(),
-            input_path: fixture_root(),
+            input_path: export.clone(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
             control: Default::default(),
@@ -82,7 +95,7 @@ fn ingests_and_renders_the_tng_export() -> Result<()> {
         // a byte, because neither file's stat moved.
         let again = ingest::fetch(FetchOptions {
             db: db.clone(),
-            input_path: fixture_root(),
+            input_path: export.clone(),
             cache: FingerprintCache::open(&tmp.path().join("fpcache.sqlite")).await?,
             progress: Progress::noop(),
             control: Default::default(),
@@ -338,6 +351,61 @@ fn a_walk_error_deletes_nothing() -> Result<()> {
             .fetch_one(db.pool())
             .await?;
         assert_eq!(calls, 3);
+        db.close().await;
+        Ok::<_, anyhow::Error>(())
+    })
+}
+
+/// An export can be made by anyone. A link in it named `.xml` was
+/// followed, and the file it pointed at, anywhere on the machine, was
+/// read as a backup.
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_export_is_not_read() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let raw_dir = tmp.path().join("raw");
+    let input = tmp.path().join("input");
+    let outside = tmp.path().join("outside");
+    fs::create_dir_all(&raw_dir)?;
+    fs::create_dir_all(&input)?;
+    fs::create_dir_all(&outside)?;
+    fs::copy(
+        fixture_root().join("calls-2369041512000.xml"),
+        input.join("calls-2369041512000.xml"),
+    )?;
+    fs::copy(
+        fixture_root().join("sms-2369041512000.xml"),
+        outside.join("sms-2369041512000.xml"),
+    )?;
+    std::os::unix::fs::symlink(
+        outside.join("sms-2369041512000.xml"),
+        input.join("sms-2369041512000.xml"),
+    )?;
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    rt.block_on(async {
+        let db = RawDb::open(&db_path_for(&raw_dir)).await?;
+        let s = fetch_dir(&db, &input, &tmp.path().join("fpcache.sqlite")).await?;
+        assert_eq!((s.sms, s.mms, s.calls), (0, 0, 3), "{s:?}");
+        let messages: i64 = test_sql!("SELECT count(*) FROM sms_messages")
+            .query_scalar()
+            .fetch_one(db.pool())
+            .await?;
+        assert_eq!(messages, 0);
+        let samples: Vec<(String, String)> =
+            test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+                .query_as()
+                .fetch_all(db.pool())
+                .await?;
+        assert!(
+            samples
+                .iter()
+                .any(|(key, sample)| key == "listing:files" && sample.contains("symbolic link")),
+            "{samples:?}"
+        );
         db.close().await;
         Ok::<_, anyhow::Error>(())
     })
@@ -742,6 +810,7 @@ fn a_run_that_fails_before_its_prune_prunes_on_the_next() -> Result<()> {
 #[test]
 fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
     let tmp = tempfile::tempdir()?;
+    let export = fixture_copy(tmp.path())?;
     let raw_dir = tmp.path().join("raw");
     fs::create_dir_all(&raw_dir)?;
     let cache = tmp.path().join("fpcache.sqlite");
@@ -750,7 +819,7 @@ fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
         let db = RawDb::open(&db_path_for(&raw_dir)).await?;
         let mut commits = Vec::new();
         for _ in 0..2 {
-            fetch_dir(&db, &fixture_root(), &cache).await?;
+            fetch_dir(&db, &export, &cache).await?;
             commits.push(datalib_etl::doltlite_raw::commit_run(db.pool(), "test").await?);
         }
         db.close().await;
@@ -769,6 +838,7 @@ fn reading_an_unchanged_export_again_commits_nothing() -> Result<()> {
 #[test]
 fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
     let tmp = tempfile::tempdir()?;
+    let export = fixture_copy(tmp.path())?;
     let raw_dir = tmp.path().join("raw");
     fs::create_dir_all(&raw_dir)?;
     let cache = tmp.path().join("fpcache.sqlite");
@@ -786,7 +856,7 @@ fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
                        WHERE kind = 'mms' AND json_extract(payload, '$.addrs') IS NULL"
         );
 
-        fetch_dir(&db, &fixture_root(), &cache).await?;
+        fetch_dir(&db, &export, &cache).await?;
         datalib_etl::doltlite_raw::commit_run(db.pool(), "first").await?;
         let senders: Vec<String> = sent_from.query_scalar().fetch_all(db.pool()).await?;
         assert_eq!(senders, ["+12025550100"]);
@@ -799,7 +869,7 @@ fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
         let lacking: i64 = without.query_scalar().fetch_one(db.pool()).await?;
         assert!(lacking > 0);
 
-        let again = fetch_dir(&db, &fixture_root(), &cache).await?;
+        let again = fetch_dir(&db, &export, &cache).await?;
         assert!(
             again.mms > 0,
             "the unchanged export is read again: {again:?}"
@@ -808,7 +878,7 @@ fn a_store_from_before_addrs_reads_its_export_once_more() -> Result<()> {
         let lacking: i64 = without.query_scalar().fetch_one(db.pool()).await?;
         assert_eq!(lacking, 0);
 
-        let then = fetch_dir(&db, &fixture_root(), &cache).await?;
+        let then = fetch_dir(&db, &export, &cache).await?;
         assert_eq!(then.mms, 0, "and then it is not: {then:?}");
         db.close().await;
         Ok(())

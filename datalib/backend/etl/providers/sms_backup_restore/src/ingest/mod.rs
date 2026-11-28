@@ -19,6 +19,7 @@ use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::file_checkpoint;
+use datalib_etl_files::fswalk;
 use datalib_problems::{Outcome, Problem, Reason, Severity};
 use datalib_time::IsoOffsetTimestamp;
 use serde::Serialize;
@@ -84,6 +85,8 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         &opts.cache,
         &opts.input_path,
         &file_changes_scan::ScanOptions {
+            // An export can be made by anyone (`etl/files/README.md`).
+            links: fswalk::Links::Refused,
             progress: opts.progress.clone(),
             ..Default::default()
         },

@@ -6,6 +6,9 @@
 //! `wa_db_contacts`, then walks `Media/` into the sidecar CAS and the
 //! `wa_media_files` registry. The caller commits.
 //!
+//! A backup folder can be made by anyone, so no symbolic link in it is
+//! followed (`etl/files/README.md` § "An export can be made by anyone").
+//!
 //! No plaintext ever reaches a user-visible path — the decrypted msgstore is a
 //! `NamedTempFile` dropped at the end, and media are read in place from
 //! `backup_dir/Media/`, which WhatsApp already stores in the clear.
@@ -23,8 +26,10 @@ use datalib_etl::download_problems::RecordProblem;
 use datalib_etl::progress::Progress;
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::export_files::refuse_links_below;
 use datalib_etl_files::file_changes_scan;
 use datalib_etl_files::fingerprint_cache::FingerprintCache;
+use datalib_etl_files::fswalk::Links;
 use datalib_etl_sqlite_mirror::{mirror, MirrorOptions, MirrorStats};
 use datalib_whatsapp_backup::decrypt_file;
 
@@ -37,6 +42,9 @@ const MEDIA_DIR: &str = "Media";
 
 /// Where WhatsApp backs up `wa.db`, the database that holds the names.
 const WA_DB_BACKUP: &str = "Backups/wa.db.crypt15";
+
+/// The encrypted message database.
+const MSGSTORE_BACKUP: &str = "Databases/msgstore.db.crypt15";
 
 /// How many bytes of media may sit in memory before a CAS flush.
 const PUT_BATCH_BYTES: u64 = 64 * 1024 * 1024;
@@ -138,8 +146,9 @@ async fn read_backup(
     progress: &Progress,
     found: RunProblems,
 ) -> Result<IngestSummary> {
-    let crypt_path = backup_dir.join("Databases").join("msgstore.db.crypt15");
+    let crypt_path = backup_dir.join(MSGSTORE_BACKUP);
     tracing::info!(crypt_path = %crypt_path.display(), "whatsapp::ingest start");
+    refuse_links_below(backup_dir, MSGSTORE_BACKUP)?;
 
     let plaintext = decrypt_file(&crypt_path, root_key)
         .with_context(|| format!("decrypt {}", crypt_path.display()))?;
@@ -200,7 +209,9 @@ async fn mirror_beside_msgstore(
     found: &RunProblems,
 ) -> Result<()> {
     let wa_db = backup_dir.join(WA_DB_BACKUP);
-    if wa_db.is_file() {
+    if let Err(e) = refuse_links_below(backup_dir, WA_DB_BACKUP) {
+        found.phase("wa.db contacts", format!("{e:#}"));
+    } else if wa_db.is_file() {
         match read_wa_db_contacts(&wa_db, root_key).await {
             Ok(rows) => summary.contacts = Some(store_contacts(db.pool(), &rows).await?),
             Err(e) => found.phase("wa.db contacts", format!("{e:#}")),
@@ -216,7 +227,9 @@ async fn mirror_beside_msgstore(
     }
 
     let media_root = backup_dir.join(MEDIA_DIR);
-    if media_root.is_dir() {
+    if let Err(e) = refuse_links_below(backup_dir, MEDIA_DIR) {
+        found.listing("media", format!("{e:#}"));
+    } else if media_root.is_dir() {
         mirror_media_files(
             db.pool(),
             db.cas(),
@@ -367,6 +380,7 @@ async fn mirror_media_files(
         media_root,
         &file_changes_scan::ScanOptions {
             ignore: vec![".*".to_string()],
+            links: Links::Refused,
             progress: progress.clone(),
             ..Default::default()
         },
@@ -1032,6 +1046,161 @@ mod tests {
             problems(&db).await,
             vec![("phase:wa.db contacts".into(), "error".into())]
         );
+        db.close().await;
+    }
+
+    async fn problem_samples(db: &RawDb) -> Vec<(String, String)> {
+        test_sql!("SELECT scope_key, sample FROM problems ORDER BY scope_key")
+            .query_as()
+            .fetch_all(db.pool())
+            .await
+            .expect("read problems")
+    }
+
+    async fn cas_count(db: &RawDb) -> i64 {
+        test_sql!("SELECT count(*) FROM cas_objects")
+            .query_scalar()
+            .fetch_one(db.cas().pool())
+            .await
+            .expect("count cas_objects")
+    }
+
+    /// A backup folder can be made by anyone. A link in `Media/` put the
+    /// file it pointed at, anywhere on the machine, in the blob store.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_in_media_puts_nothing_from_outside_in_the_store() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        std::fs::write(outside.join("secret"), b"not from the backup").expect("write");
+        write_media(&backup_dir, "WhatsApp Images/IMG-0001.jpg", b"holodeck");
+        let images = backup_dir.join(MEDIA_DIR).join("WhatsApp Images");
+        std::os::unix::fs::symlink(outside.join("secret"), images.join("IMG-0002.jpg"))
+            .expect("link a file");
+        std::os::unix::fs::symlink(&outside, backup_dir.join(MEDIA_DIR).join("WhatsApp Video"))
+            .expect("link a folder");
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+
+        assert_eq!(registry(&db).await, ["Media/WhatsApp Images/IMG-0001.jpg"]);
+        assert_eq!(cas_count(&db).await, 1, "only the backup's own file");
+        let problems = problem_samples(&db).await;
+        assert!(
+            problems
+                .iter()
+                .any(|(key, sample)| key == "listing:media" && sample.contains("symbolic link")),
+            "{problems:?}"
+        );
+        db.close().await;
+    }
+
+    /// `Media` itself a link had the walk read the folder it pointed at.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_media_folder_that_is_a_link_is_not_walked() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        std::fs::create_dir_all(&backup_dir).expect("mkdir");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        std::fs::write(outside.join("secret"), b"not from the backup").expect("write");
+        std::os::unix::fs::symlink(&outside, backup_dir.join(MEDIA_DIR)).expect("link Media");
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+
+        assert!(registry(&db).await.is_empty());
+        assert_eq!(cas_count(&db).await, 0);
+        let problems = problem_samples(&db).await;
+        assert!(
+            problems.iter().any(|(key, sample)| key == "listing:media"
+                && sample.starts_with("Media: a symbolic link")),
+            "{problems:?}"
+        );
+        db.close().await;
+    }
+
+    /// The backup's databases are at fixed names, and a link at one is
+    /// refused before anything is decrypted: `wa.db` is a row, msgstore
+    /// fails the run.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_link_at_a_database_is_refused() {
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let backup_dir = tmp.path().join("WhatsApp");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).expect("mkdir");
+        std::fs::write(outside.join("secret"), b"not from the backup").expect("write");
+        std::fs::create_dir_all(backup_dir.join("Backups")).expect("mkdir");
+        std::os::unix::fs::symlink(outside.join("secret"), backup_dir.join(WA_DB_BACKUP))
+            .expect("link wa.db");
+        std::os::unix::fs::symlink(&outside, backup_dir.join("Databases")).expect("link Databases");
+        let db = RawDb::open(&tmp.path().join("wa.doltlite_db"))
+            .await
+            .expect("open raw store");
+        let cache = FingerprintCache::open(&tmp.path().join("fp.sqlite"))
+            .await
+            .expect("open fingerprint cache");
+
+        mirror_beside_msgstore(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &mut Default::default(),
+        )
+        .await
+        .expect("ingest beside msgstore");
+        let problems = problem_samples(&db).await;
+        assert!(
+            problems
+                .iter()
+                .any(|(key, sample)| key == "phase:wa.db contacts"
+                    && sample.starts_with("Backups/wa.db.crypt15: a symbolic link")),
+            "{problems:?}"
+        );
+
+        let err = fetch(
+            &backup_dir,
+            &[0u8; 32],
+            &db,
+            &cache,
+            &MirrorKnobs::everything(),
+            &Progress::noop(),
+        )
+        .await
+        .expect_err("a link at msgstore fails the run");
+        let err = format!("{err:#}");
+        assert!(err.contains("Databases: a symbolic link"), "{err}");
         db.close().await;
     }
 

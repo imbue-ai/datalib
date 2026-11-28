@@ -1,6 +1,5 @@
 //! What a download's Manage row says when it is done, against the real
 //! binary over the SMS fixture.
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use serde_json::Value;
@@ -13,7 +12,7 @@ use serde_json::Value;
 async fn a_download_ends_on_its_summary() {
     let d = tempfile::tempdir().unwrap();
     let root = d.path();
-    let fixture = PathBuf::from(std::env::var_os("SMS_FIXTURE_DIR").expect("SMS_FIXTURE_DIR"));
+    let fixture = crate::sms_fixture_in(root);
     let params = root.join("params.json");
     std::fs::write(
         &params,

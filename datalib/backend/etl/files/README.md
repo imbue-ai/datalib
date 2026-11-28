@@ -259,7 +259,10 @@ it would have the walk go round. `ExportFiles::walk` puts a link in
 `errors`, and `ScanOptions { links: Links::Refused, .. }` makes it a walk
 error, so the person sees a problem row saying which, and because what it
 stood for was not seen, nothing is deleted that run. A reader that stops at
-an export it cannot see whole takes `ExportFiles::walk_whole`. The path a
+an export it cannot see whole takes `ExportFiles::walk_whole`. A file an
+export holds at a fixed name (WhatsApp's `Databases/msgstore.db.crypt15`, a
+Signal snapshot's `main`) is checked part by part with
+`export_files::refuse_links_below` before it is opened. The path a
 person configured is theirs to choose, and may itself be a link. A tree bazel
 stages is all links, so a test copies its fixture first, as a person's
 unpacked export is real files.

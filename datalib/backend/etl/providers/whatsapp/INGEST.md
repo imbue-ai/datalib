@@ -160,6 +160,16 @@ and every run tries them again:
 | a media file will not open to be hashed | `record:media:<path under Media/>` | its registry row; the refill goes on for every other file |
 | a media file's bytes will not read | `record:wa_media_files:<relative_path>` | its registry row, so the message names the file and says it is not fetched |
 
+A backup folder can be made by anyone (`etl/files/README.md` § "An
+export can be made by anyone"), so no symbolic link below the folder a
+person chose is followed. A link under `Media/` is a walk error, so a
+`listing:media` row naming it, and the registry is kept whole that run.
+`Media`, `Backups/wa.db.crypt15` and `Databases/msgstore.db.crypt15`
+are fixed names, checked part by part (`export_files::refuse_links_below`)
+before anything is read: a link at `Media` is that `listing:media` row
+with `Media/` not walked, one at `wa.db` is `phase:wa.db contacts`, and
+one at msgstore fails the step.
+
 A run reads again every file whose bytes the CAS lacks, so the
 `record:` rows are replaced whole each run that walks `Media/`; a run
 without `Media/` leaves them as they were.
