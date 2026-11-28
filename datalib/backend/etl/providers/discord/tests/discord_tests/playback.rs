@@ -478,3 +478,82 @@ async fn a_runs_deltas_count_its_problem_whether_or_not_a_seal_followed_it() {
         assert_eq!(deltas["problems"]["added"], 1, "{deltas}");
     }
 }
+
+/// A 200 whose body is not a list of messages (an API change, a proxy's
+/// page) is a failed listing. It used to read as a page with nothing on
+/// it: the re-read deleted every stored message of the refresh window,
+/// and the conversation was covered up to its new tip and never read
+/// again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_messages_answer_that_is_not_a_list_deletes_nothing_and_stays_owed() {
+    let d = tempfile::tempdir().unwrap();
+    let store = d.path().join("store");
+    run(&store, &World::before().tape(d.path(), "before"))
+        .await
+        .unwrap();
+    let tape = World::after().tape(d.path(), "after");
+    let good = World::after().tape(d.path(), "after_good");
+    let req = ingest::api::messages_request(BRIDGE, None);
+    let not_a_list = datalib_etl_web::http::HttpResponse {
+        status: 200,
+        headers: Default::default(),
+        body: br#"{"messages": []}"#.to_vec(),
+        duration_ms: 0,
+    };
+    datalib_etl_web::synthesize::write_fixture(&tape, &req, &not_a_list).unwrap();
+    let sync = DiscordSync {
+        refresh_window_days: Some(60),
+        ..sync()
+    };
+    let bridge = || {
+        count(
+            &store,
+            test_sql!("SELECT COUNT(*) FROM messages WHERE channel_id = '7001'"),
+        )
+    };
+
+    let s = run_at(&store, &tape, sync.clone(), later()).await.unwrap();
+    assert_eq!(s.pruned, 0, "{s:?}");
+    assert_eq!(bridge().await, BRIDGE_MESSAGES as i64);
+    assert_eq!(problems(&store).await, ["listing:messages of 7001"]);
+
+    // An hour later the bridge is still owed, and its new message comes.
+    let soon = datalib_time::parse_with_assumed_utc("2024-06-02T01:00:00Z").unwrap();
+    run_at(&store, &good, sync, soon).await.unwrap();
+    let new = BRIDGE_MESSAGES as u64 + 60;
+    assert!(payload(&store, "messages", &message_key(BRIDGE, new))
+        .await
+        .is_some());
+}
+
+/// A listing answered with an object where a list belongs is a failed
+/// listing, not a server with no channels or a channel with no threads:
+/// read as empty, it named the configured server as one Discord does not
+/// have.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_listing_that_is_not_a_list_is_a_failed_listing() {
+    let (mut got, mut want) = (Vec::new(), Vec::new());
+    for (req, body, listing) in [
+        (ingest::api::guilds_request(), "{}", "listing:servers"),
+        (
+            ingest::api::threads_request(BRIDGE, 0),
+            r#"{"has_more": false}"#,
+            "listing:threads of 7001",
+        ),
+    ] {
+        let d = tempfile::tempdir().unwrap();
+        let store = d.path().join("store");
+        let tape = World::before().tape(d.path(), "before");
+        let answer = datalib_etl_web::http::HttpResponse {
+            status: 200,
+            headers: Default::default(),
+            body: body.as_bytes().to_vec(),
+            duration_ms: 0,
+        };
+        datalib_etl_web::synthesize::write_fixture(&tape, &req, &answer).unwrap();
+        run(&store, &tape).await.unwrap();
+        got.push(problems(&store).await);
+        want.push(vec![listing.to_string()]);
+    }
+    assert_eq!(got, want);
+}

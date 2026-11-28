@@ -138,7 +138,8 @@ account. A page is stored with the people it names, the edges of its
 files and the stretch of ids it shows read whole, in the run's open
 transaction. A page
 shorter than 100 is not read as the end; an empty one is, for everything
-older.
+older. An answer that is not a list at all (an object, say) is not an
+empty page: it is a failed listing, and deletes and covers nothing.
 
 `tests/discord_tests/interrupt.rs` cuts a run off at every request, from
 an empty store and from an earlier one, and requires the next run to end
@@ -169,7 +170,8 @@ stays as it was last read. History keeps what a prune took
 ## When part of a sync fails
 
 A listing or a conversation that fails is a `listing:` row and the sync
-goes on. One the account may not read (403, "Missing Access") or that is
+goes on; so is a 2xx answer that is not JSON, or is not the list (or,
+for threads, the object holding one) it should be. One the account may not read (403, "Missing Access") or that is
 gone (404) is a warning: asking again would be answered the same. A
 refused credential ends the run. A 429 is waited out, by its
 `Retry-After` or the `retry_after` in its body, whichever is longer.
