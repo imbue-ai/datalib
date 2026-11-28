@@ -651,8 +651,11 @@ things the same way.
   proposes a handle any contact has, a suggestion included.
 - **A label is in, out, or unknown.** A row says in or out
   (`applies`); no row says nobody has decided, which is most of them.
-  A label is any word (`labels::normalize_label` writes it lowercase,
-  its spaces `-`), and each stands alone: what one says never changes
+  A label is any word or phrase, kept as typed, trimmed and its inner
+  whitespace one space (`labels::normalize_label`); one typed again in
+  another case is the label already held, in its spelling, so a label
+  never splits in two by case (`review::spelled_as_held`), and `real`
+  is always `real`. Each stands alone: what one says never changes
   another. A person gives a contact theirs on its page. The one agents
   curate is `real` (`REAL`): in when
   the person or sender is not spam, which takes in a machine the person

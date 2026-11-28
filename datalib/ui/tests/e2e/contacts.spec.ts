@@ -403,7 +403,7 @@ test("a label given on a contact's page is a node of the Library tree listing wh
 }) => {
   const stamp = Date.now();
   const name = `Alexander Rozhenko ${stamp}`;
-  const label = `house-of-mogh-${stamp}`;
+  const label = `House of Mogh ${stamp}`;
   const made = await request.post("/applet/datalib_contacts/contacts", { data: { name } });
   expect(made.ok(), await made.text()).toBeTruthy();
   const { contact_id: id } = (await made.json()) as { contact_id: string };

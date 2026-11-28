@@ -170,7 +170,9 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
 - `confidence` is 0 to 1, and the person reviews your least sure first.
   So give each one you can: a close call marked as one costs them less
   than a wrong one marked as sure.
-- A label is any word. `applies` is `true` (the default) or `false`.
+- A label is any word or phrase, kept as you write it ("Bridge crew");
+  one that differs from a label already held only in case is that
+  label. `applies` is `true` (the default) or `false`.
   `real` is the one to work on, about whether a sender is spam; a label
   on a contact is also what the person sees in the Library tree under
   *Contacts*, once they say *Yes* to it.
