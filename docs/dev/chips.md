@@ -127,7 +127,12 @@ What goes into the look is each kind's own rule, pure and unit-tested:
   handle the person does not hold is never shown; the chip shows its
   own identifier instead. A chip not on a contact shows its kind's mark.
   One that is on a contact of yours is blue, and one that is not is
-  grey (`chip.css`). An address several of your contacts share is still
+  grey (`chip.css`). A chip of the contact you marked *This is me*,
+  whichever of its handles it is drawn by, carries a small "me" after
+  its name (`ChipLook.me`, `.chip-me`): decoration, so it is no part of
+  the name, the accessible label's name or a copy. A list of one
+  person's handles (`identifierLook`) leaves it off, since every line
+  there is theirs. An address several of your contacts share is still
   one chip, blue, named for them all ("Robert Picard & Marie Picard",
   "Robert Picard & 2 others") and led by its kind's mark, since no one
   photo is right; its tooltip lists them, and its double-click opens the

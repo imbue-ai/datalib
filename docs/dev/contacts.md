@@ -505,7 +505,7 @@ for an agent, as steps:
 | `GET /health` | `{ok: true}` |
 | `POST /resolve` | `{handles}` → `{resolved: {<handle>: [NormalizedContact]}}`, the contacts each handle is on, by name; a handle nobody holds is absent |
 | `GET /search?q=` | contacts whose name contains `q`, for the person card's *Add to contacts* |
-| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the contact as its own chip (`datalib:contact/<id>`), never by a handle, which another contact may share; a "me" chip on a contact marked as you; the first address and number; its labels but `real`; how many handles; the note; when it changed. What the contacts app's own table shows |
+| `GET /contacts` | every contact, by name, as a typed table (`columns`, `rows`): the contact as its own chip (`datalib:contact/<id>`), never by a handle, which another contact may share; the first address and number; its labels but `real`; how many handles; the note; when it changed. What the contacts app's own table shows |
 | `GET /labels` | `{labels: [{label, contacts}]}`: every label your contacts carry but `real`, by label, and how many carry each; what the Library tree's *Contacts* lists |
 | `POST /contacts` | create, with `name` and the `handles` to link at once |
 | `POST /contacts/add` | `{people: [{name, handles, held?, said?}]}`, in one commit (`add_people.rs`): each a new contact with every handle, unless a contact has one of them; then, when it has their name (case aside), they are that contact, which gets the rest, less any taken off it as not theirs, and when it has another name they are skipped, since it may be an address two people share and only the person can say. `held`, `{<handle>: "share" \| "move"}`, names handles other contacts have that are theirs too or theirs alone; those never make them one of those contacts. `said`, `{<handle>: {label?, copied_from?}}`, is what the card each handle came from said of it, its label and the card as `{source_id, key}`, and the handle keeps both. A person with no handle is already there when a contact has their name. Answers `{created, added_to, already, skipped: [{what, why}]}`; skipped are those with no name, those whose handles are on a contact of another name, and those whose handles are on several contacts |
@@ -773,8 +773,8 @@ Everything is in `datalib/ui/src/cards/`:
   through the index, so it needs no sync and shows an edit made
   anywhere as soon as the `curated` frame arrives. It is a pinned tab of
   a new window, and Browse on the app's Manage row opens it. A contact with no handle is drawn as a contact
-  chip (`contactCell`, through `contactsById`), and one marked as you
-  wears a "me" chip. Its right-click deletes the rows it aims at, or
+  chip (`contactCell`, through `contactsById`), and the one marked as you
+  carries a small "me" after its name, as every chip of yours does. Its right-click deletes the rows it aims at, or
   merges every other selected row into the one clicked. Your contacts
   are not in the search grid: nothing renders this store. Its tabs are
   the list and *Unfiled*, and a banner opens an agent's suggestions
