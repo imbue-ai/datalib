@@ -74,6 +74,12 @@ and `src/ingest/mod.rs`:
   and is tried again next run; the rest are read. When every snapshot
   a run tried fails — most likely a passphrase that is not this
   account's — the run fails instead.
+- **A symbolic link below the folder is not followed**, since a backup
+  folder can be made by anyone (`etl/files/README.md` § "An export can
+  be made by anyone"). A snapshot that is a link, or that has a link
+  for its `metadata`, `main` or `files`, is skipped as one that will
+  not open. An attachment whose path under `files/` passes through a
+  link is not stored, and is a problem on its row.
 - **A frame that would not decode** means its snapshot was not read
   whole: it deletes nothing, and the `phase:frames` problem describes
   the last snapshot read, which is what HEAD holds.

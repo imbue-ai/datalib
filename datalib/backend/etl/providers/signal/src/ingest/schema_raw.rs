@@ -133,6 +133,9 @@ pub async fn snapshot_fingerprint(
 ) -> anyhow::Result<String> {
     use anyhow::Context;
     const PARTS: [&str; 3] = ["metadata", "main", "files"];
+    for name in PARTS {
+        datalib_etl_files::export_files::refuse_links_below(snapshot_dir, name)?;
+    }
 
     let scan = datalib_etl_files::file_changes_scan::scan(
         cache,

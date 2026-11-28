@@ -20,6 +20,7 @@ use datalib_etl::prune;
 use datalib_etl::read_marks::{self, ReadMarkRow};
 use datalib_etl::run_problems::{self, RunProblems};
 use datalib_etl::stop::StopFlag;
+use datalib_etl_files::export_files::{refuse_links_below, LINK_REFUSED};
 use datalib_signal_backup::{backup, decrypt_attachment, local_media_name, Snapshot};
 use serde::Serialize;
 use tracing::info;
@@ -114,11 +115,16 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     // `path` lives inside the `backup` table (not on SourceCommon.input_path),
     // so core's load-time tilde expansion doesn't reach it.
     let snapshot_root = expand_tilde(&opts.snapshot_root);
-    let files_root = opts
-        .files_root
-        .clone()
-        .map(|p| expand_tilde(&p))
-        .unwrap_or_else(|| snapshot_root.join("files"));
+    let files = match &opts.files_root {
+        Some(root) => FilesTree {
+            root: expand_tilde(root),
+            below: PathBuf::new(),
+        },
+        None => FilesTree {
+            root: snapshot_root.clone(),
+            below: PathBuf::from("files"),
+        },
+    };
 
     let (snapshots, unreadable) = find_snapshots(&opts.cache, &snapshot_root).await?;
     let plan = backups::plan(snapshots, &db.read_ledger().await?);
@@ -154,7 +160,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
         if stop.requested() {
             break;
         }
-        match read_snapshot(db, aep, &files_root, snap, &mut summary).await? {
+        match read_snapshot(db, aep, &files, snap, &mut summary).await? {
             Ok(read) => {
                 let date = commit_date(read.backup_time_ms);
                 let msg = format!("download signal: backup {}", snap.name);
@@ -178,7 +184,7 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     if !stop.requested() {
         match backups::top(&plan, &db.read_ledger().await?, &failed) {
             Top::Read(snap) => {
-                match read_snapshot(db, aep, &files_root, snap, &mut summary).await? {
+                match read_snapshot(db, aep, &files, snap, &mut summary).await? {
                     Ok(read) => {
                         // Dated now: the reason for this commit is now, not
                         // when the backup was taken.
@@ -229,25 +235,38 @@ async fn read_backups(opts: FetchOptions, found: RunProblems) -> Result<FetchSum
     Ok(summary)
 }
 
+/// The encrypted attachments, at `<root>/<below>/XX/<media_name>`. `root`
+/// is what a person chose. The folder can be made by anyone, so no link
+/// below `root` is followed.
+struct FilesTree {
+    root: PathBuf,
+    below: PathBuf,
+}
+
 /// Every snapshot directory under `root`, fingerprinted, and
-/// `(name, why)` for each one that could not be.
+/// `(name, why)` for each one that could not be, a link among them.
 async fn find_snapshots(
     cache: &datalib_etl_files::fingerprint_cache::FingerprintCache,
     root: &Path,
 ) -> Result<(Vec<Found>, Vec<(String, String)>)> {
     let mut dirs = Vec::new();
+    let mut unreadable = Vec::new();
     for entry in std::fs::read_dir(root).with_context(|| format!("read_dir {}", root.display()))? {
         let entry = entry.context("read_dir entry")?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if backups::is_snapshot_name(&name) && entry.file_type().is_ok_and(|t| t.is_dir()) {
-            dirs.push((name, entry.path()));
+        if !backups::is_snapshot_name(&name) {
+            continue;
+        }
+        match entry.file_type() {
+            Ok(t) if t.is_dir() => dirs.push((name, entry.path())),
+            Ok(t) if t.is_symlink() => unreadable.push((name, LINK_REFUSED.to_string())),
+            _ => {}
         }
     }
-    if dirs.is_empty() {
+    if dirs.is_empty() && unreadable.is_empty() {
         bail!("no signal-backup-* subdirectory under {}", root.display());
     }
     let mut found = Vec::new();
-    let mut unreadable = Vec::new();
     for (name, dir) in dirs {
         match schema_raw::snapshot_fingerprint(cache, &dir).await {
             Ok(fingerprint) => found.push(Found {
@@ -284,14 +303,14 @@ fn commit_date(backup_time_ms: u64) -> Option<String> {
 async fn read_snapshot(
     db: &RawDb,
     aep: &str,
-    files_root: &Path,
+    files: &FilesTree,
     snap: &Found,
     summary: &mut FetchSummary,
 ) -> Result<Result<Read, String>> {
     info!(
         event = "signal_open_snapshot",
         snapshot = %snap.dir.display(),
-        files_root = %files_root.display(),
+        files_root = %files.root.join(&files.below).display(),
         "opened the backup snapshot"
     );
     let opened = {
@@ -384,7 +403,7 @@ async fn read_snapshot(
                 if let Some(backup::chat_item::Item::StandardMessage(sm)) = &ci.item {
                     for (idx, att) in sm.attachments.iter().enumerate() {
                         ingest_attachment(
-                            files_root,
+                            files,
                             &pk,
                             idx,
                             att,
@@ -584,7 +603,7 @@ impl Held {
 /// accumulator.
 #[allow(clippy::too_many_arguments)]
 fn ingest_attachment(
-    files_root: &Path,
+    files: &FilesTree,
     chat_item_pk: &str,
     slot_idx: usize,
     att: &backup::MessageAttachment,
@@ -627,7 +646,13 @@ fn ingest_attachment(
     }
 
     let shard = &media_name[..2];
-    let enc_path = files_root.join(shard).join(&media_name);
+    let rel = files.below.join(shard).join(&media_name);
+    if refuse_links_below(&files.root, &rel).is_err() {
+        let problem = blob_failed(attachment_id.clone(), format!("its file: {LINK_REFUSED}"));
+        not_stored(row(media_name), problem, held, pending, summary);
+        return;
+    }
+    let enc_path = files.root.join(rel);
     let enc = match std::fs::read(&enc_path) {
         Ok(b) => b,
         Err(e) => {

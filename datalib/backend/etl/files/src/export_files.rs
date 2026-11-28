@@ -1,5 +1,6 @@
 //! For a provider that reads a person's unpacked export tree (Facebook,
-//! LinkedIn): finding its files, and naming the raw table each lands in.
+//! LinkedIn) or a file at a fixed name inside one (WhatsApp): finding its
+//! files without following a link, and naming the raw table each lands in.
 
 use std::path::{Path, PathBuf};
 
@@ -7,12 +8,40 @@ use anyhow::{bail, Context, Result};
 
 use datalib_etl::download_problems::RunProblem;
 
-const LINK_REFUSED: &str = "a symbolic link, which an export does not hold; it was not followed";
+/// What a link found in an export is, wherever one is refused.
+pub const LINK_REFUSED: &str =
+    "a symbolic link, which an export does not hold; it was not followed";
 
 /// A file itself, not a link to one. For a reader of an export, where a
 /// link could point anywhere on the machine.
 pub fn is_regular_file(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_ok_and(|m| m.is_file())
+}
+
+/// An error naming the first symbolic link on the way from `root` to
+/// `root/rel`, `rel`'s last part included. For a file an export holds at
+/// a fixed name (`Databases/msgstore.db.crypt15`): the name is ours, but
+/// every part of the path is the export's, and a link in any of them could
+/// reach anything on the machine. `root` is what a person chose, and may
+/// itself be a link. A part that is not there ends the check, as there is
+/// no link past it.
+pub fn refuse_links_below(root: &Path, rel: impl AsRef<Path>) -> Result<()> {
+    let mut below = PathBuf::new();
+    for part in rel.as_ref().components() {
+        below.push(part);
+        match std::fs::symlink_metadata(root.join(&below)) {
+            // The part first, and short: a problem's sample is cut at 80
+            // characters.
+            Ok(m) if m.file_type().is_symlink() => bail!(
+                "{}: {LINK_REFUSED} (under {})",
+                below.display(),
+                root.display()
+            ),
+            Ok(_) => {}
+            Err(_) => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 /// The raw table for an export file, from its path relative to the
@@ -337,5 +366,45 @@ mod tests {
         assert!(!is_regular_file(&link));
         assert!(!is_regular_file(d.path()));
         assert!(!is_regular_file(&d.path().join("gone")));
+    }
+
+    /// A file at a fixed name is refused for a link in any part of its
+    /// path, and the root a person chose is theirs.
+    #[cfg(unix)]
+    #[test]
+    fn a_fixed_name_is_refused_for_a_link_anywhere_below_the_root() {
+        let top = tempfile::tempdir().unwrap();
+        let outside = top.path().join("outside");
+        std::fs::create_dir_all(outside.join("Databases")).unwrap();
+        std::fs::write(outside.join("Databases/msgstore"), "x").unwrap();
+        let real = top.path().join("real");
+        std::fs::create_dir_all(real.join("Databases")).unwrap();
+        std::fs::write(real.join("Databases/msgstore"), "x").unwrap();
+        let chosen = top.path().join("chosen");
+        std::os::unix::fs::symlink(&real, &chosen).unwrap();
+        refuse_links_below(&chosen, "Databases/msgstore").unwrap();
+        refuse_links_below(&chosen, "Databases/not_there").unwrap();
+
+        let folder = top.path().join("folder_link");
+        std::fs::create_dir(&folder).unwrap();
+        std::os::unix::fs::symlink(outside.join("Databases"), folder.join("Databases")).unwrap();
+        let e = format!(
+            "{:#}",
+            refuse_links_below(&folder, "Databases/msgstore").unwrap_err()
+        );
+        assert!(e.starts_with("Databases: a symbolic link"), "{e}");
+
+        let file = top.path().join("file_link");
+        std::fs::create_dir_all(file.join("Databases")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.join("Databases/msgstore"),
+            file.join("Databases/msgstore"),
+        )
+        .unwrap();
+        let e = format!(
+            "{:#}",
+            refuse_links_below(&file, "Databases/msgstore").unwrap_err()
+        );
+        assert!(e.starts_with("Databases/msgstore: a symbolic link"), "{e}");
     }
 }

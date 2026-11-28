@@ -291,7 +291,10 @@ every part of one export (`datalib_etl_files::archive`). A folder of
 parts is that Takeout, and anything else in it, an unpacked copy
 included, is passed over, as the `google_takeout` source does. A part's
 `.mbox` entries are read straight out of it, never unpacked to disk,
-and each is named `<part>/<entry>` in a problem row.
+and each is named `<part>/<entry>` in a problem row. A folder of
+`.mbox` files is an export, which anyone can make (`etl/files/README.md`
+§ "An export can be made by anyone"), so a symbolic link in it is not
+followed: it is a walk error, a `listing:files` row naming it.
 
 A run reads every `.mbox` or none. It reads none when the input's
 files (the `.mbox` files, or the parts) hash to what the last clean

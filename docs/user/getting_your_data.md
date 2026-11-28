@@ -1611,6 +1611,11 @@ list.
   file is what drops the messages that only it held.
   `when_deleted_upstream` is not offered. Cause: Datalib's
   implementation.
+- **Symbolic links in a folder of `.mbox` files are not followed.** A
+  link is reported as a `listing:files` problem, and while one is there
+  no message is deleted from the copy. The path you configure may itself
+  be a link. Cause: Datalib's implementation, for safety: anyone can make
+  an export, and a link in one could point at any file on this computer.
 - **Narrowing `only_extract_labels` (unset: every label) deletes
   nothing.** Mail already copied under a label you stopped asking for
   stays. Cause: Datalib's implementation.
@@ -3808,6 +3813,13 @@ params name.
   If no backup the run tried opens, most likely because the recovery
   key belongs to another account, the whole sync fails. Cause: Datalib's
   implementation.
+- **Symbolic links in the backup folder are not followed.** A snapshot
+  folder that is a link, or that holds a link in place of one of its
+  files, is an error on the Manage row and is not read. An attachment
+  whose file under `files` is a link is not saved, and the Manage row
+  says so. The folder you configure may itself be a link. Cause:
+  Datalib's implementation, for safety: anyone can make a backup folder,
+  and a link in one could point at any file on this computer.
 - **A backup with a part that would not decode deletes nothing.** The
   messages in that part are missing from the copy, and messages the
   backup seems to have dropped are kept, until a newer backup reads
@@ -4039,6 +4051,7 @@ is stored twice.
 - **Every message and call in every backup file is mirrored; there is no way to mirror less.** The source has no `since` and no filter by contact or date; its only option is `backup.path`, and the config refuses any other key. Cause: Datalib's implementation. Nothing in the config changes it; to mirror less, keep fewer files in the folder.
 - **A message you delete on the phone stays in the copy as long as any backup file in the folder still holds it.** Datalib deletes a message or call only when no file in the folder holds it any more, and only on a run that read every file without an error. Backups are snapshots, so an older backup still holds what you deleted later. Cause: the export format. What changes it: removing the older backup files from the folder. `when_deleted_upstream` is not offered.
 - **If any backup file fails to read, nothing is deleted on that run.** A file that cannot be opened, does not parse, is cut off before its closing tag, or is empty holds deletions back until it reads cleanly; the store records this as a problem. Cause: Datalib's implementation, on purpose (an unreadable file may hold any message). What changes it: fixing or removing the bad file.
+- **A symbolic link in the folder is not read.** A link named `.xml` is reported as a `listing:files` problem and holds deletions back, as a file that fails to read does. The path you configure may itself be a link. Cause: Datalib's implementation, for safety: anyone can make an export, and a link in one could point at any file on this computer. What changes it: putting the file itself in the folder.
 - **A backup file that does not parse adds none of its messages.** A file cut off part way (a copy that stopped early) is refused whole, not read up to where it stops. Cause: Datalib's implementation. What changes it: copying the file again in full.
 - **A draft, a queued message, or a message that failed to send is shown as one you received.** Only Android's "sent" type (2) counts as yours; every other type, outbox, draft, failed and queued included, is filed as incoming from the other number. Cause: Datalib's implementation (an accidental limitation). Nothing can change it today.
 - **The same message can appear twice if two backups record it with different types**, for example once as queued and once as sent. A text's identity is its number, time, type and body, so a change of type makes a second record, and both stay while both files are in the folder. Cause: Datalib's implementation. What changes it: removing the older file.
@@ -4264,6 +4277,15 @@ so a backup with no new messages makes no new commit.
   implementation (the one ingest method, `backup`, reads local files).
   What changes it: make a new backup on the phone (Settings → Chats →
   Chat backup → Back Up), pull the folder again, and sync.
+- **Symbolic links inside the backup folder are not followed.** A link
+  under `Media/` is reported as a `listing:media` problem, and while one
+  is there no attachment is removed from the copy. `Media`,
+  `Backups/wa.db.crypt15` or `Databases/msgstore.db.crypt15` as a link,
+  or under a folder that is one, is not read: the first two are
+  problems on the Manage row, and the third fails the sync. The folder
+  you configure may itself be a link. Cause: Datalib's implementation,
+  for safety: anyone can make a backup folder, and a link in one could
+  point at any file on this computer.
 - **Only Android backups in the `crypt15` format with the 64-digit key
   can be read.** An iPhone backup, an older `crypt14`/`crypt12` file, or
   a backup protected by a password is refused. Cause: the export

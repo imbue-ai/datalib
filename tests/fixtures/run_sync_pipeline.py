@@ -445,7 +445,11 @@ def prepare(argv: list[str]) -> Prepared:
             unpacked("google-takeout", gtk_fx),
         ),
         "linkedin": ("linkedin", linkedin_fx, unpacked("linkedin", linkedin_fx)),
-        "sms-backup-restore": ("sms_backup_restore", sms_fx, sms_fx),
+        "sms-backup-restore": (
+            "sms_backup_restore",
+            sms_fx,
+            unpacked("sms-backup-restore", sms_fx),
+        ),
         # Render-only; its raw store was seeded above. The path is
         # unused by yolink, but every entry in this table declares one,
         # so point it at the spec.
