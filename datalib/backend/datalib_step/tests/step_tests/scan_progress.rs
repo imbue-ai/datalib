@@ -55,7 +55,7 @@ fn has(lines: &[String], start: &str) -> bool {
 #[test]
 fn a_step_that_hashes_first_says_so_on_its_row_and_in_its_log() {
     let d = tempfile::tempdir().unwrap();
-    let fixture = PathBuf::from(std::env::var_os("SMS_FIXTURE_DIR").expect("SMS_FIXTURE_DIR"));
+    let fixture = crate::sms_fixture_in(d.path());
     let ran = ingest(
         d.path(),
         "sms_backup_restore",
