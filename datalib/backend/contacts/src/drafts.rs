@@ -3,7 +3,7 @@
 // the draft winning only the cells it changed, and makes each address or
 // number typed into it one of the contact's handles. The mechanism is
 // `datalib_etl::draft`; why it is shaped this way is
-// docs/dev/plans/contact_editing.md and docs/dev/plans/people.md
+// docs/dev/plans/contact_editing.md and docs/dev/plans/completed/people.md
 // § "Editing a contact".
 
 use std::collections::BTreeMap;

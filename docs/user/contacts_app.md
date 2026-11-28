@@ -210,7 +210,7 @@ you in `review/items` and `not_linked`.
 
 `from:me` knows the account each source marks as its owner's. If it
 misses some of their handles, propose those handles as a contact and tell
-them to tick *This is me* on its card. `POST /me` is that tick, and is
+them to choose *This is me* from the ⋯ menu on its page. `POST /me` is that choice, and is
 theirs. `from:me` then reaches every handle on that contact, as
 [Searching your mirror](searching.md#me) says.
 

@@ -376,6 +376,20 @@ describe("movesPeople", () => {
  *  it, in place of the list's old Me column, its own handles' chips and
  *  an address it shares included; the mark is no part of the name, so a
  *  copy and the label's name leave it out. */
+/** A service's id is never the name a chip shows: an account a source
+ *  knows only by its id (a Slack user seen only in a reaction) is "Slack
+ *  user", its mark and tooltip saying which. */
+describe("an account known only by its id", () => {
+  it("is called its service's user, with the id in the tooltip", () => {
+    const SLACK = "slack:T_NCC1701D/U_TROI";
+    const look = chipLook(SLACK, "U_TROI", NOBODY);
+    expect([look.text, look.icon]).toEqual(["Slack user", "slack"]);
+    expect(look.title).toContain("T_NCC1701D/U_TROI");
+    expect(chipLook(SLACK, "Deanna Troi", NOBODY).text).toBe("Deanna Troi");
+    expect(chipLook("email:troi@enterprise.org", "", NOBODY).text).toBe("troi@enterprise.org");
+  });
+});
+
 describe("the me mark", () => {
   it("marks every chip of the contact that is you, and no one else's", () => {
     const me = { ...contact("datalib_contacts", "Jean-Luc Picard", [[TEL, null]]), account: true };
@@ -433,9 +447,7 @@ describe("identifierLook", () => {
     expect([look.text, look.icon]).toEqual(["worf.of.mogh", "slack"]);
     expect(look.title).toContain("T1701D/U0WORF");
     expect(identifierLook("facebook:name/Worf", "name/Worf", NOBODY).text).toBe("Worf");
-    expect(identifierLook("discord:170100000000000005", "", NOBODY).text).toBe(
-      "170100000000000005",
-    );
+    expect(identifierLook("discord:170100000000000005", "", NOBODY).text).toBe("Discord user");
   });
 });
 
