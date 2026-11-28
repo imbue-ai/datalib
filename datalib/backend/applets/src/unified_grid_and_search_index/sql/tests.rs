@@ -340,6 +340,7 @@ async fn nothing_a_caller_sends_writes() {
         file_bytes(root.path(), DOLT),
     );
     let outside = root.path().join("written.db");
+    let dumped = root.path().join("dumped.sql");
 
     for (store, sql, status, says) in [
         (
@@ -405,8 +406,17 @@ async fn nothing_a_caller_sends_writes() {
         (
             PLAIN,
             "SELECT load_extension('x')".to_string(),
-            StatusCode::BAD_REQUEST,
-            "not authorized",
+            StatusCode::FORBIDDEN,
+            "load_extension",
+        ),
+        (
+            DOLT,
+            format!(
+                "SELECT dolt_dump('--file-name', '{}', '--result-format', 'sql')",
+                dumped.display()
+            ),
+            StatusCode::FORBIDDEN,
+            "dolt_dump",
         ),
     ] {
         let failure = ask(root.path(), json!({"store": store, "sql": sql}))
@@ -421,6 +431,7 @@ async fn nothing_a_caller_sends_writes() {
         );
     }
     assert!(!outside.exists());
+    assert!(!dumped.exists());
     assert!(!root.path().join("x").exists());
     assert_eq!(
         (
