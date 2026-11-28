@@ -639,6 +639,7 @@ user list, claude's orgs and project docs).
 | linear | each walked connection's pages are the rows | the sidecar of each of the five tables walked page by page, at `updatedAt` | each connection's `updatedAt`, per selection |
 | todoist | `/sync` sends only what changed since its token, which is kept in `sync_state`; completed tasks, each page | `completed_items` sidecar, at `updated_at` | completion time, from `since`, else the account's `joined_at` |
 | garmin | days, activities, files | each table's sidecar | activity dates |
+| baby_connect | the home page's children and each day's answer are the content | — | the days read whole, less the last two, which every run reads again |
 | contacts, calendar (DAV) | `dav_resources`, at each href's etag | `dav_resources` sidecar | — |
 | calendar (Google) | the events page is the content | — | — |
 | contacts (Google) | the connections page is the content; each contact's photo link | `google_photos` sidecar, at its link | — |

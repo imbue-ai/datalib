@@ -76,18 +76,30 @@ pub fn span_for(d: NaiveDate, held: &[Span]) -> Span {
     Span::new(lo, key(d))
 }
 
-/// The entries of one day's answer that are that day's: the answer also
-/// carries some from the days beside it.
-pub fn entries_of(answer: &Value, d: NaiveDate) -> Vec<Value> {
+/// What one day's answer holds of that day.
+#[derive(Debug, Default, PartialEq)]
+pub struct DayEntries {
+    /// The entries that are that day's: the answer also carries some from
+    /// the days beside it.
+    pub entries: Vec<Value>,
+    /// Entries whose `Pdt` is not a number, so which day they are is not
+    /// known.
+    pub undated: Vec<Value>,
+}
+
+/// `None` when the answer holds no `list` of entries at all: that says
+/// nothing about the day, so it is not a day with nothing logged.
+pub fn entries_of(answer: &Value, d: NaiveDate) -> Option<DayEntries> {
     let want = pdt(d) as u64;
-    answer
-        .get("list")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.get("Pdt").and_then(Value::as_u64) == Some(want))
-        .cloned()
-        .collect()
+    let mut out = DayEntries::default();
+    for e in answer.get("list")?.as_array()? {
+        match e.get("Pdt").and_then(Value::as_u64) {
+            Some(day) if day == want => out.entries.push(e.clone()),
+            Some(_) => {}
+            None => out.undated.push(e.clone()),
+        }
+    }
+    Some(out)
 }
 
 /// The people a day's answer names, each with its id: a map of id to
@@ -179,10 +191,33 @@ mod tests {
             {"Id": 1, "Pdt": 310317}, {"Id": 2, "Pdt": 140518}, {"Id": 3, "Pdt": 310317}
         ]});
         let ids: Vec<i64> = entries_of(&answer, d("2031-03-17"))
+            .unwrap()
+            .entries
             .iter()
             .map(|e| e["Id"].as_i64().unwrap())
             .collect();
         assert_eq!(ids, vec![1, 3]);
+    }
+
+    #[test]
+    fn an_answer_with_no_list_is_not_a_day_with_nothing_logged() {
+        let day = d("2031-03-17");
+        for answer in [json!({}), json!({"Code": 200}), json!({"list": {}})] {
+            assert_eq!(entries_of(&answer, day), None, "{answer}");
+        }
+        assert_eq!(
+            entries_of(&json!({"list": []}), day),
+            Some(DayEntries::default())
+        );
+    }
+
+    #[test]
+    fn an_entry_whose_day_is_not_a_number_is_undated() {
+        let answer =
+            json!({"list": [{"Id": 1, "Pdt": "310317"}, {"Id": 2}, {"Id": 3, "Pdt": 310317}]});
+        let got = entries_of(&answer, d("2031-03-17")).unwrap();
+        assert_eq!(got.entries, [json!({"Id": 3, "Pdt": 310317})]);
+        assert_eq!(got.undated.len(), 2);
     }
 
     #[test]

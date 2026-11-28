@@ -36,6 +36,7 @@ rust_test(
     srcs = glob(["tests/baby_connect_tests/*.rs"]),
     crate_root = "tests/baby_connect_tests/main.rs",
     edition = "2021",
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         ":datalib_etl_baby_connect",
         "//datalib/backend/etl:datalib_etl",

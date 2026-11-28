@@ -224,3 +224,55 @@ async fn a_signed_out_session_fails_as_a_refused_credential() {
     );
     assert_eq!(asked.count("StatusList"), 0);
 }
+
+/// A day whose answer holds no `list` (`{"Code": 200}`), or an entry
+/// whose `Pdt` is not a number, is a problem and stays owed. Both used to
+/// read as a day with nothing logged: once two days old it was recorded
+/// as read and never asked for again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_day_answered_without_its_entries_stays_owed() {
+    let store = tempfile::tempdir().unwrap();
+    let (bad, good) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    tape::write(bad.path(), Edition::Before);
+    tape::write(good.path(), Edition::Before);
+    tape::write_day(bad.path(), "2048-10-13", &serde_json::json!({"Code": 200}));
+    let mut undated = tape::day_answer(Edition::Before, "2048-10-14");
+    undated["list"][0]["Pdt"] = serde_json::json!("481014");
+    tape::write_day(bad.path(), "2048-10-14", &undated);
+    let sync = BabyConnectSync::default();
+
+    run(store.path(), bad.path(), Edition::Before, sync.clone())
+        .await
+        .0
+        .unwrap();
+    let coverage = test_sql!("SELECT lo, hi FROM coverage WHERE scope = 'days'");
+    assert_eq!(
+        rows(store.path(), coverage).await,
+        vec![("2048-10-12".to_string(), "2048-10-12".to_string())]
+    );
+    let problems = test_sql!("SELECT scope_key, sample FROM problems");
+    let problems = rows(store.path(), problems).await;
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(problems[0].0, "listing:entries", "{problems:?}");
+
+    let (again, asked) = run(store.path(), good.path(), Edition::Before, sync).await;
+    assert_eq!(again.unwrap().days_recorded_read, 2);
+    assert_eq!(asked.count("StatusList"), 4, "the 13th to the 16th");
+    let coverage = test_sql!("SELECT lo, hi FROM coverage WHERE scope = 'days'");
+    assert_eq!(
+        rows(store.path(), coverage).await,
+        vec![("2048-10-12".to_string(), "2048-10-14".to_string())]
+    );
+    let diary = test_sql!(
+        "SELECT id, '' FROM entries WHERE json_extract(payload, '$.Pdt') IN (481013, 481014)"
+    );
+    assert_eq!(rows(store.path(), diary).await.len(), 5);
+    assert_eq!(
+        rows(
+            store.path(),
+            test_sql!("SELECT scope_key, sample FROM problems")
+        )
+        .await,
+        []
+    );
+}

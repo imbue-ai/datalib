@@ -24,9 +24,6 @@ pub const HTTP_SERVICE: HttpService = HttpService::BabyConnect;
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 
-/// The home page bounds what it embeds; a much larger answer is not it.
-const HOME_MAX_BYTES: u64 = 16 * 1024 * 1024;
-
 #[derive(thiserror::Error, Debug)]
 pub enum BabyConnectError {
     /// No session latchkey will send, or one Baby Connect refused:
@@ -66,7 +63,6 @@ pub fn home_request() -> HttpRequest {
     HttpRequest::get(HTTP_SERVICE, format!("{BASE}/home2"))
         .header("Accept", "text/html")
         .timeout(TIMEOUT)
-        .max_bytes(HOME_MAX_BYTES)
 }
 
 /// Every entry logged on one day, `pdt` the day as Baby Connect writes it
