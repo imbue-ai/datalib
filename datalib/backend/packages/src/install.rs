@@ -4,6 +4,7 @@
 //! unpacks it where the config's steps look for it.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -22,6 +23,9 @@ const MANIFEST_LIMIT: u64 = 1 << 20;
 /// cannot collide with a package's own files.
 const MANIFEST_COPY: &str = ".datalib-package.toml";
 const STAMP: &str = ".datalib-installed";
+
+/// Held in the packages directory while a package is unpacked into it.
+const LOCK: &str = ".lock";
 
 /// A manifest fetched for review: what it says, and the pin that adding
 /// it would write.
@@ -106,6 +110,13 @@ pub fn ensure(data_root: &Path, url: &str, sha256: &str) -> Result<Manifest> {
     let dir = package_dir(data_root, sha256);
     let parent = dir.parent().expect("a package dir has a parent");
     fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    // Two fetches of one package at once would each remove the other's
+    // directory; the second waits here and finds it installed.
+    let lock = fs::File::create(parent.join(LOCK)).context("open the packages lock")?;
+    lock.lock().context("lock the packages directory")?;
+    if let Some(m) = installed(data_root, sha256) {
+        return Ok(m);
+    }
     let staging = tempfile::Builder::new()
         .prefix(".staging-")
         .tempdir_in(parent)
@@ -115,13 +126,31 @@ pub fn ensure(data_root: &Path, url: &str, sha256: &str) -> Result<Manifest> {
     let unpacked = staging.path().join("unpacked");
     fs::create_dir(&unpacked)?;
     datalib_fetch::unpack_tar_gz(&archive, &unpacked)?;
-    fs::write(unpacked.join(MANIFEST_COPY), &fetched.bytes)?;
-    fs::write(unpacked.join(STAMP), target)?;
+    write_new(&unpacked.join(MANIFEST_COPY), &fetched.bytes)?;
+    write_new(&unpacked.join(STAMP), target.as_bytes())?;
     if dir.exists() {
         fs::remove_dir_all(&dir).with_context(|| format!("remove {}", dir.display()))?;
     }
     fs::rename(&unpacked, &dir).with_context(|| format!("move into {}", dir.display()))?;
     Ok(manifest)
+}
+
+/// Write `bytes` to a new file at `path`, removing whatever the archive
+/// put there first: `fs::write` would follow a symlink of the package's
+/// and write through it.
+fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
+    match fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            return Err(e).with_context(|| format!("remove {}", path.display()));
+        }
+        _ => {}
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut f| f.write_all(bytes))
+        .with_context(|| format!("write {}", path.display()))
 }
 
 fn package_dir(data_root: &Path, sha256: &str) -> PathBuf {
@@ -180,9 +209,31 @@ mod tests {
     /// A package with one script, built and published as files, so the
     /// whole lookup → ensure path runs without a network.
     fn publish(dir: &Path, script: &str) -> String {
+        publish_with(dir, script, &[])
+    }
+
+    /// A link the archive carries beside the script.
+    enum Link<'a> {
+        Symbolic(&'a str, &'a str),
+        Hard(&'a str, &'a str),
+    }
+
+    fn publish_with(dir: &Path, script: &str, links: &[Link]) -> String {
         let tar_path = dir.join("weather.tar.gz");
+        write_build(&tar_path, script, links);
+        let sha = datalib_fetch::sha256_file(&tar_path).unwrap();
+        let manifest = format!(
+            "schema = 1\nname = \"Weather\"\nversion = \"1.2.0\"\n\
+             [artifacts]\nany = {{ url = \"weather.tar.gz\", sha256 = \"{sha}\" }}\n"
+        );
+        let m = dir.join("datalib-package.toml");
+        fs::write(&m, manifest).unwrap();
+        format!("file://{}", m.display())
+    }
+
+    fn write_build(tar_path: &Path, script: &str, links: &[Link]) {
         let gz = flate2::write::GzEncoder::new(
-            fs::File::create(&tar_path).unwrap(),
+            fs::File::create(tar_path).unwrap(),
             flate2::Compression::default(),
         );
         let mut tar = tar::Builder::new(gz);
@@ -192,15 +243,17 @@ mod tests {
         header.set_cksum();
         tar.append_data(&mut header, "bin/fetch-weather", script.as_bytes())
             .unwrap();
+        for link in links {
+            let (kind, at, target) = match link {
+                Link::Symbolic(at, target) => (tar::EntryType::Symlink, at, target),
+                Link::Hard(at, target) => (tar::EntryType::Link, at, target),
+            };
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_size(0);
+            tar.append_link(&mut header, at, target).unwrap();
+        }
         tar.into_inner().unwrap().finish().unwrap();
-        let sha = datalib_fetch::sha256_file(&tar_path).unwrap();
-        let manifest = format!(
-            "schema = 1\nname = \"Weather\"\nversion = \"1.2.0\"\n\
-             [artifacts]\nany = {{ url = \"weather.tar.gz\", sha256 = \"{sha}\" }}\n"
-        );
-        let m = dir.join("datalib-package.toml");
-        fs::write(&m, manifest).unwrap();
-        format!("file://{}", m.display())
     }
 
     #[test]
@@ -252,6 +305,139 @@ mod tests {
         ] {
             let e = ensure(root.path(), url, &sha).unwrap_err().to_string();
             assert!(e.contains("https"), "{url}: {e}");
+        }
+    }
+
+    /// An archive carrying a symlink at the name of the manifest copy or
+    /// the stamp, pointing at a file outside: writing either used to
+    /// follow the link and overwrite that file.
+    #[test]
+    fn a_link_at_the_manifest_copy_or_stamp_writes_nothing_outside() {
+        for name in [MANIFEST_COPY, STAMP] {
+            let published = tempfile::tempdir().unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let outside = published.path().join("shell-profile");
+            fs::write(&outside, "kept\n").unwrap();
+            let target = outside.to_str().unwrap();
+            let url = publish_with(
+                published.path(),
+                "#!/bin/sh\n",
+                &[Link::Symbolic(name, target)],
+            );
+            let found = lookup(&url).unwrap();
+            let e = format!(
+                "{:#}",
+                ensure(root.path(), &found.url, &found.sha256).unwrap_err()
+            );
+            assert!(e.contains(name), "{name}: {e}");
+            assert_eq!(fs::read_to_string(&outside).unwrap(), "kept\n", "{name}");
+            assert!(installed(root.path(), &found.sha256).is_none());
+        }
+    }
+
+    /// The same names linked to a file inside the package: the link is
+    /// replaced by Datalib's own file, and the package's file is left
+    /// as the archive had it.
+    #[test]
+    fn a_link_at_the_stamp_inside_the_package_is_replaced_not_followed() {
+        let published = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let script = "#!/bin/sh\necho hi\n";
+        let url = publish_with(
+            published.path(),
+            script,
+            &[
+                Link::Symbolic(MANIFEST_COPY, "bin/fetch-weather"),
+                Link::Symbolic(STAMP, "bin/fetch-weather"),
+            ],
+        );
+        let found = lookup(&url).unwrap();
+        ensure(root.path(), &found.url, &found.sha256).unwrap();
+        let dir = package_dir(root.path(), &found.sha256);
+        assert_eq!(
+            fs::read_to_string(dir.join("bin/fetch-weather")).unwrap(),
+            script
+        );
+        for name in [MANIFEST_COPY, STAMP] {
+            assert!(
+                fs::symlink_metadata(dir.join(name)).unwrap().is_file(),
+                "{name}"
+            );
+        }
+        assert!(installed(root.path(), &found.sha256).is_some());
+    }
+
+    /// A symlink or hard link reaching outside the package is refused,
+    /// and nothing is installed.
+    #[test]
+    fn a_link_out_of_the_package_is_refused() {
+        let published = tempfile::tempdir().unwrap();
+        let outside = published.path().join("secret");
+        fs::write(&outside, "x").unwrap();
+        let outside = outside.to_str().unwrap().to_string();
+        for link in [
+            Link::Symbolic("bin/sh", "/bin/sh"),
+            Link::Symbolic("bin/up", "../../../../../../../../secret"),
+            Link::Hard("bin/hard", &outside),
+            Link::Hard("bin/hard", "../../../../../../../../secret"),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let url = publish_with(published.path(), "#!/bin/sh\n", &[link]);
+            let found = lookup(&url).unwrap();
+            assert!(ensure(root.path(), &found.url, &found.sha256).is_err());
+            assert!(installed(root.path(), &found.sha256).is_none());
+            assert!(!package_dir(root.path(), &found.sha256).exists());
+        }
+    }
+
+    /// The build the manifest names is pinned by its sha256: bytes that
+    /// do not hash to it are refused even though the manifest itself
+    /// is unchanged.
+    #[test]
+    fn a_build_that_does_not_match_the_manifest_is_refused() {
+        let published = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let url = publish(published.path(), "#!/bin/sh\necho hi\n");
+        let found = lookup(&url).unwrap();
+        write_build(
+            &published.path().join("weather.tar.gz"),
+            "#!/bin/sh\necho swapped\n",
+            &[],
+        );
+        let e = format!(
+            "{:#}",
+            ensure(root.path(), &found.url, &found.sha256).unwrap_err()
+        );
+        assert!(e.contains("the manifest says"), "{e}");
+        assert!(installed(root.path(), &found.sha256).is_none());
+    }
+
+    /// The app fetches every configured package when the Manage screen
+    /// lists them, and the add flow fetches one too, so two `ensure`s of
+    /// one package can run at once; each used to remove the directory
+    /// the other had just moved into place.
+    #[test]
+    fn two_ensures_of_one_package_both_succeed() {
+        let published = tempfile::tempdir().unwrap();
+        let url = publish(published.path(), "#!/bin/sh\necho hi\n");
+        let found = lookup(&url).unwrap();
+        for _ in 0..20 {
+            let root = tempfile::tempdir().unwrap();
+            let gate = std::sync::Barrier::new(4);
+            std::thread::scope(|s| {
+                let runs: Vec<_> = (0..4)
+                    .map(|_| {
+                        s.spawn(|| {
+                            gate.wait();
+                            ensure(root.path(), &found.url, &found.sha256).map(|_| ())
+                        })
+                    })
+                    .collect();
+                for run in runs {
+                    run.join().unwrap().unwrap();
+                }
+            });
+            assert!(installed(root.path(), &found.sha256).is_some());
         }
     }
 }

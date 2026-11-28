@@ -98,7 +98,10 @@ once per process; a failed fetch is reported, not retried by the next
    parallel steps of one sync fetch once and the rest wait;
 2. downloads the asset to a `.partial` file, hashing as it streams,
    and refuses a mismatch with nothing kept;
-3. unpacks it into `<sha12>.part-<pid>/` and renames that to `<sha12>/`
+3. unpacks it into `<sha12>.part-<pid>/`, refusing a symlink that is
+   absolute or climbs out of the tree with `..` (`unpack_tar_gz`; the
+   relative links Node's `bin/` and the pnpm `node_modules` are made of
+   pass), and renames that to `<sha12>/`
    — the first twelve hex digits of the asset's sha256 — so a directory
    that exists was verified and unpacked whole, and a new release lands
    beside the old one rather than over it;
