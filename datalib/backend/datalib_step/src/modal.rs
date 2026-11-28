@@ -90,9 +90,8 @@ pub(crate) fn not_signed_in(group: &str, owed: usize, threshold: u64, detail: &s
     format!(
         "`{group}/embed` owes {owed} chunks, at least its `{PARAM}` of {threshold}, so they go \
          to Modal, and {detail}. Sign in with Modal's own CLI (`pip install modal`, then \
-         `modal setup`, which writes ~/.modal.toml), or give the step MODAL_TOKEN_ID and \
-         MODAL_TOKEN_SECRET (under a sync, also name them in DATALIB_CHILD_ENV); or raise \
-         `{PARAM}`, or take it out, to embed this source here"
+         `modal setup`, which writes ~/.modal.toml); or raise `{PARAM}`, or take it out, \
+         to embed this source here"
     )
 }
 
@@ -509,16 +508,12 @@ mod tests {
             5000,
             "this machine is not signed in to Modal",
         );
-        for want in [
-            "gmail/embed",
-            "7000",
-            "5000",
-            "modal setup",
-            "MODAL_TOKEN_ID",
-            PARAM,
-        ] {
+        for want in ["gmail/embed", "7000", "5000", "modal setup", PARAM] {
             assert!(said.contains(want), "{want}: {said}");
         }
+        // Named there, a token reaches every child of the sync: custom and
+        // package steps, applets and latchkey.
+        assert!(!said.contains("DATALIB_CHILD_ENV"), "{said}");
     }
 
     #[test]

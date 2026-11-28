@@ -12,7 +12,7 @@ rust_library(
     # The router curl and the impersonator it fronts travel with the
     # library, so any binary that can sign in gets both in runfiles, side
     # by side (the router finds the impersonator as a sibling);
-    # `latchkey::ensure_curl_router` resolves the router through them.
+    # `latchkey::curl_router` resolves the router through them.
     data = ["//third-party/latchkey-curl-shims"],
     proc_macro_deps = [
         "@datalib_crates//:async-trait",

@@ -526,7 +526,6 @@ pub async fn fetch_with(api: &dyn Api, opts: FetchOptions) -> Result<FetchSummar
 }
 
 async fn download(api: &dyn Api, opts: FetchOptions, found: RunProblems) -> Result<FetchSummary> {
-    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let db = opts.db.clone();
     let run_config = json!({ "teams": opts.sync.teams, "projects": opts.sync.projects });
     let run = DownloadRun::start(&found, db.pool(), &run_config).await?;

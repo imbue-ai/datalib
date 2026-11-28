@@ -437,5 +437,8 @@ rust_test(
     size = "small",
     crate = ":datalib_http_bin",
     edition = "2021",
-    deps = ["//datalib/backend/agent_docs:datalib_agent_docs"],
+    deps = [
+        "//datalib/backend/agent_docs:datalib_agent_docs",
+        "@datalib_crates//:tempfile",
+    ],
 )

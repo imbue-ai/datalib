@@ -221,13 +221,8 @@ impl ApiToken {
         let dir = path.parent().expect("token file always has a parent");
         std::fs::create_dir_all(dir)
             .map_err(|e| anyhow::anyhow!("create {}: {e}", dir.display()))?;
-        // Truncate-then-tighten would leave a window where the old
-        // file's mode applies to new bytes, so remove and recreate.
-        let _ = std::fs::remove_file(path);
-        std::fs::write(path, &self.0.value)
-            .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))?;
-        restrict_to_owner(path)?;
-        Ok(())
+        datalib_runtime::atomic::write_owner_only(path, self.0.value.as_bytes())
+            .map_err(|e| anyhow::anyhow!("write {}: {e}", path.display()))
     }
 
     fn partitioned_cookie_name(&self) -> String {
@@ -341,18 +336,6 @@ enum Credential {
 
 pub fn token_file_path(root: &Path) -> PathBuf {
     datalib_core::layout::system_dir(root).join(TOKEN_FILE)
-}
-
-pub fn restrict_to_owner(path: &Path) -> anyhow::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| anyhow::anyhow!("chmod 0600 {}: {e}", path.display()))?;
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
 }
 
 /// The raw value of the `token` key in a query string, if present.

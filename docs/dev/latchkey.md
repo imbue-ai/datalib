@@ -15,9 +15,12 @@ sign-in, the wizard's account row, or a provider's HTTP client.
   bundled runtime ships that version beside its own Node. Nothing runs
   whatever `latchkey` happens to be on the PATH.
 - **Requests** go through `datalib_etl_web::http::latchkey_curl`, which
-  sets `LATCHKEY_CURL` to our router curl so that Cloudflare-fronted
-  hosts get the Chrome-impersonating curl
-  ([`curl_impersonate.md`](curl_impersonate.md)).
+  sets `LATCHKEY_CURL` on the `latchkey` it starts to our router curl, so
+  that Cloudflare-fronted hosts get the Chrome-impersonating curl
+  ([`curl_impersonate.md`](curl_impersonate.md)). It also points that
+  `latchkey`'s `CURL_HOME` at a directory holding an empty `.curlrc`, so
+  the curl it runs reads no `~/.curlrc`, and passes `--globoff`, so a
+  URL holding `[…]` or `{…}` is the one request latchkey checked.
 - **The wizard** runs the other commands (`services info`,
   `auth browser`, `auth set`, `ensure-browser`, and for Google
   `auth browser-prepare` and `auth prepare`) from
@@ -319,7 +322,15 @@ renews must check the account it got before using it
   `datalib/backend/probe/src/issue.rs`, worded in
   `datalib/ui/src/config/issues.ts`.
 
-## A pasted credential is on latchkey's command line
+## A credential is on a command line while it is used
+
+**Every request `latchkey curl` makes puts its credential on curl's
+command line.** latchkey adds the stored credential to the arguments it
+starts curl with (an `Authorization` header, a cookie, a user and
+password), so for as long as the request runs, another user on the
+machine can read it with `ps`. Nothing on Datalib's side can change
+this: the arguments are latchkey's. It is open until a pinned latchkey
+hands curl the credential some other way.
 
 The wizard's paste form stores a credential with `latchkey auth set
 <service> -H '<header>'` (or `-u user:password`, or `auth set-nocurl

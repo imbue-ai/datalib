@@ -162,6 +162,9 @@ async function place(n) {
         command: ["sleep", String(Math.ceil(options.timeoutMs / 1000))],
         timeoutMs: options.timeoutMs,
         tags: TAGS,
+        // The model is in the image and the prompts arrive as files, so
+        // the code reading them is given no network to send them on.
+        blockNetwork: true,
       });
       const placed = Date.now();
       return { sb, placed, limit: placed + options.timeoutMs };

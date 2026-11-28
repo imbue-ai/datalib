@@ -134,6 +134,11 @@ step's side is `datalib_step/src/modal.rs` and `embed_on_modal` in
   Modal App `datalib-embed`, as many at once as
   `DATALIB_STEP_MODAL_MAX_SANDBOXES` allows. Modal's own limit for the
   account may hold a run to fewer; the rest wait their turn there.
+- **A Sandbox has no network** (`blockNetwork`). Nothing in it needs
+  one: the model is in the image, and the slice arrives and leaves
+  through the SDK's calls to Modal, not through a connection the
+  Sandbox opens. So the code reading a source's text has nowhere to
+  send it.
 - **A slice moves as files, never through the Sandbox's stdin and
   stdout.** The Sandbox idles (`sleep`). The driver writes the slice to
   `/tmp/datalib-embed/in.jsonl` with the SDK's `filesystem` calls, runs
@@ -184,8 +189,10 @@ step's side is `datalib_step/src/modal.rs` and `embed_on_modal` in
   what every child gets, and Modal's own variables (`MODAL_TOKEN_ID`,
   `MODAL_TOKEN_SECRET`, `MODAL_PROFILE`, `MODAL_CONFIG_PATH`,
   `MODAL_ENVIRONMENT`, `MODAL_SERVER_URL`; `datalib_env::Child::Modal`).
-  A sync's runner hands a step none of those unless `DATALIB_CHILD_ENV`
-  names them, so under a sync the sign-in is `~/.modal.toml`.
+  A sync's runner hands a step none of those, so under a sync the
+  sign-in is `~/.modal.toml`. Naming the token's variables in
+  `DATALIB_CHILD_ENV` would get them to the step, and to every other
+  child of the sync too: custom and package steps, applets and latchkey.
 - **`DATALIB_MODAL_IMAGE`, `DATALIB_MODAL_GPU` and
   `DATALIB_MODAL_SANDBOXES`** change the image, the GPU and how many
   Sandboxes run at once, for measuring; the last wins over the

@@ -101,7 +101,10 @@ fn run(cli: Cli) -> Result<()> {
             .with_context(|| format!("keep the original as {}", orig.display()))?;
         eprintln!("kept the original as {}", orig.display());
     }
-    std::fs::write(&out, &converted).with_context(|| format!("write {}", out.display()))?;
+    // A config can name a secret in a step's `env`: owner-only, as the app
+    // writes one.
+    datalib_runtime::atomic::write_owner_only(&out, converted.as_bytes())
+        .with_context(|| format!("write {}", out.display()))?;
 
     eprintln!("migrated {} -> {}", input.display(), out.display());
     if !in_place {
@@ -123,6 +126,37 @@ fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory;
+
+    /// The rewrite took the umask's mode, or kept a loose one it wrote
+    /// over, though the app writes every config owner-only.
+    #[cfg(unix)]
+    #[test]
+    fn the_rewritten_config_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("old.toml");
+        std::fs::write(
+            &input,
+            "[[steps]]\nid = \"slack/raw\"\ncommand = \"datalib-step download slack_api\"\n",
+        )
+        .unwrap();
+        let fresh = dir.path().join("fresh.toml");
+        let loose = dir.path().join("loose.toml");
+        std::fs::write(&loose, "").unwrap();
+        std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        for out in [&fresh, &loose] {
+            super::run(super::Cli {
+                input: input.clone(),
+                output: Some(out.clone()),
+                stdout: false,
+                force: true,
+            })
+            .unwrap();
+            let mode = std::fs::metadata(out).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "{}", out.display());
+        }
+    }
 
     #[test]
     fn the_help_examples_parse() {

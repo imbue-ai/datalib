@@ -1758,6 +1758,9 @@ mod tests {
             // No reservation: Modal's minimum, and whatever the run uses.
             assert!(s["cpu"].is_null() && s["memoryMiB"].is_null(), "{s}");
             assert_eq!(s["app"], "datalib-embed");
+            // The model is in the image and the prompts come as files:
+            // the code that reads them reaches no network.
+            assert_eq!(s["blockNetwork"], true, "{s}");
             // The Sandbox idles and the slice moves as files: its own
             // stdout is what lost answers on a GPU.
             assert_eq!(s["command"][0], "sleep", "{s}");

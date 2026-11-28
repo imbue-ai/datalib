@@ -4,7 +4,7 @@ use clap::Parser;
 use datalib_cli_help::Example;
 use datalib_http::{router, ApiToken, FrameAncestors};
 use std::io::{IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_BIND: &str = "127.0.0.1:8731";
 
@@ -189,11 +189,7 @@ async fn main() -> anyhow::Result<()> {
     // so the parent can point a webview/browser at it and let requests
     // queue in the listen backlog until `axum::serve` starts.
     if let Some(url_file) = &args.url_file {
-        std::fs::write(url_file, &url)
-            .map_err(|e| anyhow::anyhow!("write --url-file {}: {e}", url_file.display()))?;
-        // The URL carries the API token, and this file usually
-        // lands in a shared /tmp. Same 0600 the token file gets.
-        datalib_http::auth::restrict_to_owner(url_file)?;
+        write_url_file(url_file, &url)?;
     }
     if args.url_stdout {
         writeln!(std::io::stdout(), "{url}")
@@ -343,9 +339,40 @@ async fn terminated(mut signals: ShutdownSignals, parent_gone: tokio::sync::ones
     });
 }
 
+/// The URL carries the API token, and this file usually lands in a
+/// shared /tmp, where someone else may have left a link at its path.
+fn write_url_file(path: &Path, url: &str) -> anyhow::Result<()> {
+    datalib_runtime::atomic::write_owner_only(path, url.as_bytes())
+        .map_err(|e| anyhow::anyhow!("write --url-file {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod tests {
     use clap::CommandFactory;
+
+    /// The URL went through a link left at the path, into whatever file
+    /// it named, and was readable by others until a chmod after it.
+    #[cfg(unix)]
+    #[test]
+    fn the_url_file_is_owner_only_and_never_written_through_a_link() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = dir.path().join("elsewhere");
+        std::fs::write(&elsewhere, "untouched").unwrap();
+        let path = dir.path().join("url");
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+
+        super::write_url_file(&path, "http://127.0.0.1:1/?token=t").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), "untouched");
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        assert!(meta.file_type().is_file(), "{meta:?}");
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "http://127.0.0.1:1/?token=t"
+        );
+    }
 
     #[test]
     fn the_help_examples_parse() {
