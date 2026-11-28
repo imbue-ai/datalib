@@ -160,12 +160,146 @@ impl<'a> Action<'a> {
     }
 }
 
-/// Doltlite's own SQL functions are the ones that reach past the store:
-/// `dolt_push`, `dolt_clone`, `dolt_fetch`, `dolt_creds_new`. These only
-/// answer. Every other function is SQLite's, and none of those writes:
-/// `load_extension` is off unless a connection turns it on, and this
-/// library has none of the shell's `readfile`, `writefile` or `fsdir`.
-const DOLT_READ_FUNCTIONS: &[&str] = &[
+/// The functions a statement may call, by name: SQLite's that only compute
+/// an answer from their arguments, the row or the connection, and
+/// doltlite's that only answer. Every other function is refused, since a
+/// read-only open does not stop one writing: `dolt_creds_new()` writes a
+/// key under `~/.doltlite`, `dolt_dump('--file-name', …)` a file at any
+/// path, and FTS4's `optimize()` rewrites the index it is called on.
+/// `every_registered_function_is_allowed_or_refused_by_name` fails on a
+/// function the linked engine registers that is on neither this list nor
+/// the test's refused one.
+const ALLOWED_FUNCTIONS: &[&str] = &[
+    // Scalar.
+    "abs",
+    "changes",
+    "char",
+    "coalesce",
+    "concat",
+    "concat_ws",
+    "format",
+    "glob",
+    "hex",
+    "if",
+    "ifnull",
+    "iif",
+    "instr",
+    "last_insert_rowid",
+    "length",
+    "like",
+    "likelihood",
+    "likely",
+    "lower",
+    "ltrim",
+    "max",
+    "min",
+    "nullif",
+    "octet_length",
+    "printf",
+    "quote",
+    "random",
+    "randomblob",
+    "replace",
+    "round",
+    "rtrim",
+    "sign",
+    "sqlite_compileoption_get",
+    "sqlite_compileoption_used",
+    "sqlite_source_id",
+    "sqlite_version",
+    "substr",
+    "substring",
+    "subtype",
+    "total_changes",
+    "trim",
+    "typeof",
+    "unhex",
+    "unicode",
+    "unistr",
+    "unistr_quote",
+    "unlikely",
+    "upper",
+    "zeroblob",
+    // Aggregate.
+    "avg",
+    "count",
+    "group_concat",
+    "string_agg",
+    "sum",
+    "total",
+    // Window.
+    "cume_dist",
+    "dense_rank",
+    "first_value",
+    "lag",
+    "last_value",
+    "lead",
+    "nth_value",
+    "ntile",
+    "percent_rank",
+    "rank",
+    "row_number",
+    // Date and time.
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "date",
+    "datetime",
+    "julianday",
+    "strftime",
+    "time",
+    "timediff",
+    "unixepoch",
+    // JSON, and its `->` and `->>` operators.
+    "->",
+    "->>",
+    "json",
+    "json_array",
+    "json_array_insert",
+    "json_array_length",
+    "json_error_position",
+    "json_extract",
+    "json_group_array",
+    "json_group_object",
+    "json_insert",
+    "json_object",
+    "json_patch",
+    "json_pretty",
+    "json_quote",
+    "json_remove",
+    "json_replace",
+    "json_set",
+    "json_type",
+    "json_valid",
+    "jsonb",
+    "jsonb_array",
+    "jsonb_array_insert",
+    "jsonb_extract",
+    "jsonb_group_array",
+    "jsonb_group_object",
+    "jsonb_insert",
+    "jsonb_object",
+    "jsonb_patch",
+    "jsonb_remove",
+    "jsonb_replace",
+    "jsonb_set",
+    // Full-text search: `MATCH` and the ranking and snippet functions.
+    "bm25",
+    "fts5_get_locale",
+    "fts5_insttoken",
+    "fts5_locale",
+    "fts5_source_id",
+    "highlight",
+    "match",
+    "matchinfo",
+    "offsets",
+    "snippet",
+    // R*Tree's read-only inspection.
+    "rtreecheck",
+    "rtreedepth",
+    "rtreenode",
+    // Doltlite's that only answer.
+    "active_branch",
     "dolt_hashof",
     "dolt_hashof_catalog",
     "dolt_hashof_db",
@@ -195,10 +329,9 @@ const READ_PRAGMAS: &[&str] = &[
 pub fn allows(action: &Action) -> bool {
     match action {
         Action::Read | Action::Select | Action::Recursive => true,
-        Action::Function(name) => {
-            let name = name.to_ascii_lowercase();
-            !name.starts_with("dolt") || DOLT_READ_FUNCTIONS.contains(&name.as_str())
-        }
+        Action::Function(name) => ALLOWED_FUNCTIONS
+            .iter()
+            .any(|f| f.eq_ignore_ascii_case(name)),
         Action::Pragma(name) => READ_PRAGMAS.iter().any(|p| p.eq_ignore_ascii_case(name)),
         Action::Other(_) => false,
     }
@@ -626,28 +759,214 @@ pub fn ordered(params: &Params, names: &[Option<String>]) -> Result<Vec<Value>, 
 mod tests {
     use super::*;
 
-    /// The functions that reach past the store stay out, whatever their
-    /// case; the ones that only answer, and SQLite's own, stay in.
+    /// The functions the linked engine registers that a statement may not
+    /// call: doltlite's that write, move a branch or reach past the store,
+    /// and SQLite's that load code, write or do nothing a read needs.
+    const REFUSED_FUNCTIONS: &[&str] = &[
+        "dolt_add",
+        "dolt_branch",
+        "dolt_checkout",
+        "dolt_cherry_pick",
+        "dolt_clean",
+        "dolt_clone",
+        "dolt_commit",
+        "dolt_commit_all",
+        "dolt_config",
+        "dolt_conflicts_resolve",
+        "dolt_connect_branch",
+        "dolt_creds",
+        "dolt_creds_bind",
+        "dolt_creds_export",
+        "dolt_creds_import",
+        "dolt_creds_new",
+        "dolt_creds_rm",
+        "dolt_creds_use",
+        "dolt_default_branch",
+        "dolt_dump",
+        "dolt_fetch",
+        "dolt_gc",
+        "dolt_merge",
+        "dolt_pull",
+        "dolt_push",
+        "dolt_rebase",
+        "dolt_rebase_commit_check",
+        "dolt_remote",
+        "dolt_reset",
+        "dolt_revert",
+        "dolt_tag",
+        "dolt_verify_constraints",
+        "doltlite_engine",
+        // Loads a shared library.
+        "load_extension",
+        // Registers a tokenizer from a pointer.
+        "fts3_tokenizer",
+        // Hands out FTS5's API as a pointer.
+        "fts5",
+        // FTS4's index merge, a write.
+        "optimize",
+        // Writes to SQLite's error log.
+        "sqlite_log",
+    ];
+
+    /// A function is allowed only by name, whatever its case: doltlite's
+    /// that write a file or reach past the store, and any name not on the
+    /// list, stay out.
     #[test]
-    fn doltlite_functions_are_allowed_by_name_and_sqlites_are_not_judged() {
-        for refused in [
-            "dolt_creds_new",
+    fn functions_are_allowed_by_name_and_every_other_is_refused() {
+        for refused in REFUSED_FUNCTIONS.iter().copied().chain([
             "DOLT_PUSH",
-            "dolt_clone",
-            "dolt_fetch",
-            "dolt_commit",
-            "dolt_gc",
-            "doltlite_engine",
-        ] {
+            "Dolt_Dump",
+            "vec1_train",
+            "writefile",
+            "no_such_function",
+        ]) {
             assert!(!allows(&Action::Function(refused)), "{refused}");
         }
-        for allowed in ["dolt_hashof", "Dolt_HashOf_Table", "count", "json_extract"] {
+        for allowed in
+            ALLOWED_FUNCTIONS
+                .iter()
+                .copied()
+                .chain(["Dolt_HashOf_Table", "COUNT", "Json_Extract"])
+        {
             assert!(allows(&Action::Function(allowed)), "{allowed}");
         }
         assert!(allows(&Action::Pragma("table_info")));
         assert!(!allows(&Action::Pragma("writable_schema")));
         assert!(!allows(&Action::Other(SQLITE_ATTACH)));
         assert!(!allows(&Action::Other(SQLITE_INSERT)));
+    }
+
+    /// No name is on both lists.
+    #[test]
+    fn no_function_is_both_allowed_and_refused() {
+        let both: Vec<&str> = ALLOWED_FUNCTIONS
+            .iter()
+            .copied()
+            .filter(|f| REFUSED_FUNCTIONS.contains(f))
+            .collect();
+        assert!(both.is_empty(), "{both:?}");
+    }
+
+    extern "C" {
+        fn sqlite3_exec(
+            db: *mut c_void,
+            sql: *const c_char,
+            callback: *const c_void,
+            arg: *mut c_void,
+            errmsg: *mut *mut c_char,
+        ) -> c_int;
+    }
+
+    const SQLITE_OPEN_READWRITE: c_int = 0x2;
+    const SQLITE_OPEN_CREATE: c_int = 0x4;
+    const SQLITE_OPEN_URI: c_int = 0x40;
+
+    /// Writes a store with one table: a doltlite store at a plain path, a
+    /// plain SQLite file through `file:…?doltlite_engine=sqlite`.
+    fn write_store(name: &str) {
+        let c_name = CString::new(name).unwrap();
+        let mut db: *mut c_void = std::ptr::null_mut();
+        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_URI;
+        // Safety: `c_name` outlives the calls; `db` is closed once.
+        unsafe {
+            assert_eq!(
+                sqlite3_open_v2(c_name.as_ptr(), &mut db, flags, std::ptr::null()),
+                SQLITE_OK,
+                "open {name}"
+            );
+            let sql = CString::new("CREATE TABLE t(x)").unwrap();
+            let rc = sqlite3_exec(
+                db,
+                sql.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            sqlite3_close_v2(db);
+            assert_eq!(rc, SQLITE_OK, "create a table in {name}");
+        }
+    }
+
+    /// Every function name a guarded connection to `path` has registered.
+    fn registered_functions(path: &Path) -> Vec<String> {
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        let mut reader = Reader::open(path, deadline).unwrap();
+        let read = reader
+            .read(
+                "SELECT DISTINCT name FROM pragma_function_list ORDER BY name",
+                &Params::ByPosition(vec![]),
+                Window {
+                    offset: 0,
+                    limit: 10_000,
+                    max_bytes: usize::MAX,
+                },
+            )
+            .unwrap();
+        assert!(!read.more);
+        read.rows
+            .into_iter()
+            .map(|row| match &row[..] {
+                [Value::Text(name)] => name.to_ascii_lowercase(),
+                other => panic!("a function_list row: {other:?}"),
+            })
+            .collect()
+    }
+
+    /// Every function the linked engine registers, on a doltlite store and
+    /// on a plain SQLite file, is on one list or the other, so an engine
+    /// that registers a new one fails here until someone decides which.
+    #[test]
+    fn every_registered_function_is_allowed_or_refused_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let doltlite = dir.path().join("store.doltlite_db");
+        let plain = dir.path().join("store.sqlite");
+        write_store(doltlite.to_str().unwrap());
+        write_store(&format!(
+            "file:{}?doltlite_engine=sqlite",
+            plain.to_str().unwrap()
+        ));
+        let mut unlisted = Vec::new();
+        for path in [&doltlite, &plain] {
+            for name in registered_functions(path) {
+                let listed = ALLOWED_FUNCTIONS.contains(&name.as_str())
+                    || REFUSED_FUNCTIONS.contains(&name.as_str());
+                if !listed && !unlisted.contains(&name) {
+                    unlisted.push(name);
+                }
+            }
+        }
+        assert!(
+            unlisted.is_empty(),
+            "registered but on neither ALLOWED_FUNCTIONS nor REFUSED_FUNCTIONS: {unlisted:?}"
+        );
+    }
+
+    /// On a guarded connection `dolt_dump` is refused before it runs, and
+    /// the JSON operators, `LIKE` and `json_each` still read.
+    #[test]
+    fn a_guarded_connection_refuses_dolt_dump_at_prepare() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store.doltlite_db");
+        write_store(store.to_str().unwrap());
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        let mut reader = Reader::open(&store, deadline).unwrap();
+        let dumped = dir.path().join("dumped.sql");
+        let dump = format!(
+            "SELECT dolt_dump('--file-name', '{}')",
+            dumped.to_str().unwrap()
+        );
+        assert_eq!(
+            reader.check(&dump),
+            Err(Refusal::Refused("the function dolt_dump()".into()))
+        );
+        assert!(!dumped.exists());
+        for read in [
+            "SELECT '{\"a\": 1}' ->> '$.a'",
+            "SELECT 'x' LIKE 'x%'",
+            "SELECT value FROM json_each('[1, 2]')",
+        ] {
+            assert_eq!(reader.check(read), Ok(()), "{read}");
+        }
     }
 
     fn names(names: &[Option<&str>]) -> Vec<Option<String>> {

@@ -159,7 +159,15 @@ Steps:
    brought.
    A failed count assertion elsewhere may be upstream getting *more*
    right; check before calling it a regression.
-10. Then `bazelisk test //...`: every store open goes through the new
+10. Classify every function the new engine registers.
+   `//datalib/backend/sql_guard:sql_guard_unittests` lists them on a
+   guarded connection and fails on any name that is on neither
+   `ALLOWED_FUNCTIONS` (what `/sql` may call) nor the test's
+   `REFUSED_FUNCTIONS`. Read what a new one does in `doltlite.c` before
+   allowing it: a read-only open does not stop a function writing
+   (`dolt_dump` writes a file at any path), so the allowlist is the only
+   thing that does.
+11. Then `bazelisk test //...`: every store open goes through the new
    engine.
 
 ## Files in this package
