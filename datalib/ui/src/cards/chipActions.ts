@@ -49,6 +49,7 @@ import {
   documentMenu,
 } from "./documentChip";
 import { nodeCardSource, nodeMenu } from "./nodeChip";
+import { outsideLink } from "@/outsideLink";
 import { parseNode } from "@/uri";
 import { CONTACT, type ChipRef } from "@/search/queryText";
 import { dateCopyText, dateMenu, dateWallText, dayQuery, parseStamp, sideQuery } from "./dates";
@@ -470,7 +471,8 @@ export async function runChipAction(id: ChipEntryId, chip: Chip, host: ChipHost)
       if (ref.kind === "person") await copy(copyText(ref.handle, name));
       if (ref.kind === "entity") await copy(entityCopyText(ref.uri, name));
       if (ref.kind === "document" || ref.kind === "node") {
-        await copyLink(documentCopyText(ref.uri, name), documentCopyHtml(ref.uri, name));
+        const link = outsideLink(ref.uri);
+        await copyLink(documentCopyText(link, name), documentCopyHtml(link, name));
       }
       return;
     case "search":

@@ -104,6 +104,27 @@ pub fn level_sql(parent: &Parent) -> String {
     )
 }
 
+/// One node of the tree, by uuid: what a `datalib:node/…` link opens.
+/// Any node, a place or not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct Node {
+    pub uuid: String,
+    pub source_id: String,
+    pub kind: String,
+    pub name: Option<String>,
+    /// The document it is; `None` for a node that is none.
+    pub markdown_uuid: Option<String>,
+}
+
+/// The node `?1` names.
+pub const NODE_SQL: Sql = sql!(
+    "unified_grid_and_search_index.read_node",
+    "SELECT n.uuid, n.source_id, n.kind, n.name, g.markdown_uuid \
+     FROM nodes n INDEXED BY sqlite_autoindex_nodes_1 \
+     LEFT JOIN grid_rows g ON g.uuid = n.uuid \
+     WHERE n.uuid = ?1"
+);
+
 /// The sources that hold places at their top.
 pub const SOURCES_WITH_PLACES_SQL: Sql = sql!(
     "unified_grid_and_search_index.list_sources_with_places",

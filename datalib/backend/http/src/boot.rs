@@ -69,6 +69,7 @@ pub async fn build_state(
     // as this user (an agent the UI handed a wayfinder to, a curl in a
     // terminal) reads it from here instead of scraping our stderr.
     api_token.write_token_file()?;
+    crate::library_id::ensure(&root)?;
 
     // A root a newer line of datalib wrote is not opened at all: this
     // server then boots only to show the gate that says so, with a repo

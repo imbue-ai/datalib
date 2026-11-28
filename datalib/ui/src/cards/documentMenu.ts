@@ -5,6 +5,7 @@
 // entry names (DocCard.ce.vue).
 import type { ChatResponse } from "@/api";
 import { filePathFromUrl } from "@/desktop";
+import { outsideLink } from "@/outsideLink";
 import { writeDoc } from "@/uri";
 
 export type DocumentAbout = Pick<
@@ -51,7 +52,8 @@ export function documentLink(doc: DocumentAbout): string {
 
 /** `Title (datalib:doc/<uuid>)`, as a group chip copies itself. */
 export function documentCopyText(doc: DocumentAbout): string {
-  return `${documentTitle(doc)} (${writeDoc({ page: doc.markdown_uuid, section: null })})`;
+  const name = writeDoc({ page: doc.markdown_uuid, section: null });
+  return `${documentTitle(doc)} (${outsideLink(name)})`;
 }
 
 export function outlinkOf(doc: DocumentAbout, host: Host): Outlink | null {

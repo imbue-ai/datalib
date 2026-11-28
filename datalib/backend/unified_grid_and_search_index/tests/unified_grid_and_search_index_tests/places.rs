@@ -15,7 +15,7 @@ use datalib_schema::providers::Provider;
 use datalib_unified_grid_and_search_index::at_node::FACTS_SQL;
 use datalib_unified_grid_and_search_index::dolt_repo::DoltRepo;
 use datalib_unified_grid_and_search_index::places::{
-    level_sql, Key, Parent, Place, PlacesPage, SOURCES_WITH_PLACES_SQL,
+    level_sql, Key, Node, Parent, Place, PlacesPage, NODE_SQL, SOURCES_WITH_PLACES_SQL,
 };
 use datalib_unified_grid_and_search_index::repo::IndexRepo;
 
@@ -328,6 +328,31 @@ pub(crate) async fn plan(w: &sqlx::SqlitePool, sql: &str, binds: usize) -> Vec<S
 /// read in order with no sort, and so is each place's question of whether
 /// more lie below it; nothing reads a table whole. And every index made
 /// for the tree is one some read of it plans with.
+/// A `datalib:node/…` link opens any node by its uuid: a place, and a
+/// thread that is a document and no place.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_node_is_read_by_its_uuid() {
+    let library = seeded().await;
+    let repo = &library.repo;
+    assert_eq!(
+        repo.node("bridge").await.expect("read bridge"),
+        Some(Node {
+            uuid: "bridge".into(),
+            source_id: SOURCE.into(),
+            kind: "Slack channel".into(),
+            name: Some("#bridge".into()),
+            markdown_uuid: None,
+        })
+    );
+    let thread = repo
+        .node("t1")
+        .await
+        .expect("read t1")
+        .expect("t1 is a node");
+    assert_eq!(thread.markdown_uuid.as_deref(), Some("t1"), "{thread:?}");
+    assert_eq!(repo.node("nowhere").await.expect("read nowhere"), None);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn every_read_of_the_tree_is_served_by_its_index() {
     let library = seeded().await;
@@ -345,6 +370,11 @@ async fn every_read_of_the_tree_is_served_by_its_index() {
             vec![level, below],
         ),
         (SOURCES_WITH_PLACES_SQL.to_string(), 0, vec![top]),
+        (
+            NODE_SQL.to_string(),
+            1,
+            vec!["SEARCH n USING INDEX sqlite_autoindex_nodes_1 (uuid=?)"],
+        ),
         (FACTS_SQL.to_string(), 1, vec![]),
     ] {
         let plan = plan(&w, &sql, binds).await;

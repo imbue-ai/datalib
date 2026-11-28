@@ -127,7 +127,8 @@ test("the app's own controls still work inside the frame", async ({ page }) => {
   const body = page.frameLocator("iframe.doc-frame").locator("body.chat-body");
   // A listener of the app's, on the frame's document, answers the click,
   // and a message's 🔗 copies a link to that message, the email's subject
-  // written before the document's id.
+  // written before the document's id and the library the link is in
+  // before the message.
   const copy = body.locator("[data-section-uuid] button.copy-link").first();
   const message = await copy.getAttribute("data-uuid");
   // A message's actions show while the pointer is over it.
@@ -137,7 +138,13 @@ test("the app's own controls still work inside the frame", async ({ page }) => {
   await expect(copy).toHaveClass(/copied/);
   const copied = await page.evaluate(() => (window as unknown as { copied: string[] }).copied);
   expect(copied).toHaveLength(1);
-  expect(copied[0]).toMatch(new RegExp(`^datalib:doc/[A-Za-z0-9-]+-${doc}#${message}$`));
+  const library = await page.evaluate(
+    async () => ((await (await fetch("/api/health")).json()) as { library_id: string }).library_id,
+  );
+  expect(library).toMatch(/^[0-9a-f-]{36}$/);
+  expect(copied[0]).toMatch(
+    new RegExp(`^datalib:doc/[A-Za-z0-9-]+-${doc}\\?library=${library}#${message}$`),
+  );
 });
 
 // A link need not be an `<a>`: an image map's `<area>` and SVG's `<a>` are links

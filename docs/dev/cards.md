@@ -450,7 +450,9 @@ trade tabs.
 so the URL is data like any other source) is a link: the layout opens
 those cards as a tab
 and puts the address back to `/`, since what is open is kept in the
-tree. A `/chat/<uuid>` link — the shape every renderer writes into a
+tree. A `/name/<kind>/<id>` address, a `datalib:` name's fixed address,
+opens the card the name opens the same way (`router/names.ts`,
+`datalib/backend/uri/README.md` § "The fixed address"). A `/chat/<uuid>` link — the shape every renderer writes into a
 document body — is routed to that document alone (`router/index.ts`).
 The browser's Back and Forward do not step through cards.
 

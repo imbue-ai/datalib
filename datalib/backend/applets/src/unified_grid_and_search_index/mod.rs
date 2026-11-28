@@ -220,6 +220,7 @@ pub fn serve(port: u16) -> Result<()> {
             .route("/problems/mute", post(mutes::handler))
             .route("/chat/{markdown_uuid}", get(chat))
             .route("/places/{parent}", get(places::handler))
+            .route("/node/{uuid}", get(places::node_handler))
             .route("/sources_with_places", get(places::sources_handler))
             .route("/sql", post(sql::handler))
             .route("/sql/stores", get(sql::stores_handler))

@@ -160,7 +160,9 @@ bundled doltlite shell) is kept free of `tauri` the same way, for
 `//datalib/tauri:raw_store_test`, `src/protected.rs` (the protected
 folder, below) for `//datalib/tauri:protected_test`,
 `src/backend_output.rs` (the backend's URL and output) for
-`//datalib/tauri:backend_output_test`, `src/navigation.rs` (where a window may go) for
+`//datalib/tauri:backend_output_test`, `src/deep_link.rs` (what a
+`datalib:` link from another app opens) for
+`//datalib/tauri:deep_link_test`, `src/navigation.rs` (where a window may go) for
 `//datalib/tauri:navigation_test`, and `src/zoom.rs` (the zoom level) for
 `//datalib/tauri:zoom_test`. Those
 targets are the only way any of this crate's logic reaches `bazelisk
@@ -351,6 +353,11 @@ have you let in?".
   first need by the steps and the search applet (`datalib_embedding_models`),
   the same as the web packaging — the shell passes nothing besides
   `--no-open` and the `--url-stdout` handshake.
-- There is no `datalib:` link handler; the shell does not link
-  `tauri-plugin-deep-link`. So the `datalib:doc/…` link a 🔗 button
-  copies opens nothing outside the app yet.
+- A `datalib:` link clicked in any other app opens here: the bundle
+  registers the scheme (`tauri-plugin-deep-link`, `plugins.deep-link` in
+  `tauri.conf.json`), and `src/deep_link.rs` finds the library the link
+  names and sends the main window to its `/name/…` address. A link for a
+  library that is not open asks first, in a native dialog, since any
+  page can hand macOS one; `datalib/backend/uri/README.md` § "Opening a
+  link from another app" has the cases. `src/deep_link.rs` is kept free
+  of `tauri` too, for `//datalib/tauri:deep_link_test`.

@@ -1,7 +1,7 @@
-// datalib's names: a `datalib:<kind>/<id>` link saying what something is
-// (docs/dev/plans/datalib_uris.md). The Rust crate `datalib_uri` is the
-// same; both read and write `tests/uri-fixtures.json` alike. The `doc`,
-// `photo` and `node` kinds live here so far.
+// Datalib's names: a `datalib:<kind>/<id>` link saying what something is,
+// and the library it is in when it leaves the app
+// (datalib/backend/uri/README.md). The Rust crate `datalib_uri` is the
+// same; both read and write `tests/uri-fixtures.json` alike.
 
 /** A rendered page, and a section of it: a message's uuid, its
  *  `data-section-uuid`. */
@@ -89,4 +89,31 @@ export function parseNode(link: string): string | null {
   if (!link.startsWith(NODE)) return null;
   const id = link.slice(NODE.length);
   return UUID.test(id) ? id : null;
+}
+
+/** A name, and the library it is in when the link names one. */
+export type Link = { name: string; library: string | null };
+
+const LIBRARY = "library=";
+
+/** `name` as it leaves the app, carrying the library it is in, before a
+ *  page's section as a web address's query goes before its fragment:
+ *  `datalib:doc/<page>?library=<uuid>#<section>`. */
+export function withLibrary(name: string, library: string): string {
+  const hash = name.indexOf("#");
+  if (hash === -1) return `${name}?${LIBRARY}${library}`;
+  return `${name.slice(0, hash)}?${LIBRARY}${library}${name.slice(hash)}`;
+}
+
+/** The name a link carries and its library; `null` for a query that is
+ *  anything but one library's uuid. The name is still to be read. */
+export function splitLibrary(link: string): Link | null {
+  const q = link.indexOf("?");
+  const hash = link.indexOf("#");
+  if (q === -1 || (hash !== -1 && hash < q)) return { name: link, library: null };
+  const end = hash === -1 ? link.length : hash;
+  const query = link.slice(q + 1, end);
+  const library = query.startsWith(LIBRARY) ? query.slice(LIBRARY.length) : "";
+  if (!UUID.test(library)) return null;
+  return { name: link.slice(0, q) + link.slice(end), library };
 }

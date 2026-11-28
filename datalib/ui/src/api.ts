@@ -460,6 +460,23 @@ export function fetchPlaces(
   return getJson<PlacesPage>(`${path}?${q}`, signal);
 }
 
+/// One node of the tree, by uuid: what a `datalib:node/…` link opens.
+export type TreeNodeAbout = {
+  uuid: string;
+  source_id: string;
+  kind: string;
+  name: string | null;
+  /// The document it is, or null for a node that is none.
+  markdown_uuid: string | null;
+};
+
+/// The node `uuid` names; an `ApiError` with status 404 when the index
+/// holds none.
+export function fetchNode(uuid: string, signal?: AbortSignal): Promise<TreeNodeAbout> {
+  const path = `${UNIFIED_GRID_AND_SEARCH_INDEX}/node/${encodeURIComponent(uuid)}`;
+  return getJson<TreeNodeAbout>(path, signal, { toast: false });
+}
+
 /// The sources that hold places at their top, by id: the ones a library's
 /// tree opens.
 export async function fetchSourcesWithPlaces(signal?: AbortSignal): Promise<string[]> {
@@ -578,6 +595,9 @@ export type Health = {
   // to. Used to tell a coding agent where to read it (see handoff.ts) —
   // the token itself never enters the UI.
   token_file: string;
+  // This library's id, which a copied `datalib:` link carries
+  // (`outsideLink.ts`).
+  library_id: string | null;
   // A person's terminal cannot reach this library's sign-ins, so the
   // wizard offers no command to run.
   protected_library: boolean;

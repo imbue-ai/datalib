@@ -98,6 +98,10 @@ mod tests {
             "https://www.notion.so/1701d000abcd4e00a0000000000000ef#h1",
             "https://claude.ai/chat/1701d000-abcd-4e00-a000-0000000000ef/",
             " 1701D000ABCD4E00A0000000000000EF ",
+            // A copied link names its library after the page: the page is
+            // what a search pasted it into finds.
+            "datalib:doc/Ten-Forward-1701d000-abcd-4e00-a000-0000000000ef\
+             ?library=9b1d0000-0000-4000-8000-0000000000aa#9b1d0000-0000-4000-8000-0000000000bb",
         ] {
             assert_eq!(at_end(word).as_deref(), Some(ID), "{word}");
         }

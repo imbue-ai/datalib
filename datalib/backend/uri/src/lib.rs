@@ -1,9 +1,10 @@
-//! Datalib's names: a `datalib:<kind>/<id>` link saying what something is
-//! (docs/dev/plans/datalib_uris.md). `ui/src/uri.ts` is the same in the
-//! UI; both read and write `ui/tests/uri-fixtures.json` alike. The `doc`,
-//! `photo` and `node` kinds are the ones defined here. A `doc` link may carry its page's
-//! title as words before the uuid (`datalib:doc/Ten-Forward-<uuid>`), for
-//! a person to read; this reads past them and writes none.
+//! Datalib's names: a `datalib:<kind>/<id>` link saying what something is,
+//! and the library it is in when it leaves the app
+//! (`datalib/backend/uri/README.md`). `ui/src/uri.ts` is the same in the
+//! UI; both read and write `ui/tests/uri-fixtures.json` alike. A `doc`
+//! link may carry its page's title as words before the uuid
+//! (`datalib:doc/Ten-Forward-<uuid>`), for a person to read; this reads
+//! past them and writes none.
 
 /// A name read back, or one to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,60 @@ impl Name {
     }
 }
 
+/// A name with the library it is in: what a link that leaves the app
+/// carries, so the desktop app can open it in that library. The library
+/// goes before a page's section, as a web address's query goes before its
+/// fragment: `datalib:doc/<page>?library=<uuid>#<section>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub name: Name,
+    pub library: Option<String>,
+}
+
+const LIBRARY: &str = "library=";
+
+impl Link {
+    pub fn write(&self) -> String {
+        let name = self.name.write();
+        let Some(library) = &self.library else {
+            return name;
+        };
+        match name.split_once('#') {
+            Some((before, section)) => format!("{before}?{LIBRARY}{library}#{section}"),
+            None => format!("{name}?{LIBRARY}{library}"),
+        }
+    }
+
+    /// `None` for anything but a name this build knows, followed by
+    /// nothing or by one library's uuid.
+    pub fn parse(s: &str) -> Option<Self> {
+        let query_at = s.find('?').filter(|&q| s.find('#').is_none_or(|h| q < h));
+        let Some(q) = query_at else {
+            return Name::parse(s).map(|name| Link {
+                name,
+                library: None,
+            });
+        };
+        let (before, rest) = (&s[..q], &s[q + 1..]);
+        let (query, section) = match rest.split_once('#') {
+            Some((query, section)) => (query, Some(section)),
+            None => (rest, None),
+        };
+        let library = query.strip_prefix(LIBRARY)?;
+        if !datalib_uuid_text::is_dashed(library) {
+            return None;
+        }
+        let name = match section {
+            Some(section) => Name::parse(&format!("{before}#{section}")),
+            None => Name::parse(before),
+        }?;
+        Some(Link {
+            name,
+            library: Some(library.to_string()),
+        })
+    }
+}
+
 /// The uuid at the end of a page's part of the link, past any title
 /// written before it: words that end in a dash and hold nothing that would
 /// end the path or start another part of the link.
@@ -112,6 +167,8 @@ mod tests {
         /// What the UI wrote the link with; this writes no title.
         #[serde(default)]
         title: Option<String>,
+        #[serde(default)]
+        library: Option<String>,
     }
 
     #[derive(serde::Deserialize)]
@@ -132,9 +189,28 @@ mod tests {
                 })
                 .or(f.photo.map(|id| Name::Photo { id }))
                 .or(f.node.map(|id| Name::Node { id }));
-            assert_eq!(Name::parse(&f.link), want, "{}: reading {}", f.name, f.link);
+            let read = Link::parse(&f.link);
+            assert_eq!(
+                read.clone().map(|l| l.name),
+                want,
+                "{}: reading {}",
+                f.name,
+                f.link
+            );
+            if want.is_some() {
+                assert_eq!(
+                    read.and_then(|l| l.library),
+                    f.library,
+                    "{}: its library",
+                    f.name
+                );
+            }
             if let Some(name) = want.filter(|_| f.title.is_none()) {
-                assert_eq!(name.write(), f.link, "{}: writing", f.name);
+                let link = Link {
+                    name,
+                    library: f.library.clone(),
+                };
+                assert_eq!(link.write(), f.link, "{}: writing", f.name);
             }
         }
     }
