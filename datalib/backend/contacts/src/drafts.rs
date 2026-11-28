@@ -535,7 +535,6 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ContactKind;
     use strum::VariantArray;
 
     use datalib_sql::test_sql;
@@ -548,10 +547,7 @@ mod tests {
     async fn riker() -> Fixture {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&crate::store_path(dir.path())).await.unwrap();
-        let riker = store
-            .create("William Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let riker = store.create("William Riker", &[]).await.unwrap();
         Fixture {
             _dir: dir,
             store,
@@ -678,11 +674,7 @@ mod tests {
         let tel = Handle::tel("+15550123456").unwrap();
         let email = Handle::email("riker@enterprise.org").unwrap();
         f.store
-            .create(
-                "Deanna Troi",
-                ContactKind::Person,
-                std::slice::from_ref(&tel),
-            )
+            .create("Deanna Troi", std::slice::from_ref(&tel))
             .await
             .unwrap();
         f.store
@@ -810,11 +802,7 @@ mod tests {
     #[tokio::test]
     async fn a_change_to_another_contact_does_not_make_the_draft_stale() {
         let f = riker().await;
-        let troi = f
-            .store
-            .create("Deanna Troi", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let troi = f.store.create("Deanna Troi", &[]).await.unwrap();
         let view = f.store.draft(&f.riker).await.unwrap();
         f.store
             .autosave(&f.riker, &edit("Will Riker", None, vec![]))
@@ -948,10 +936,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = crate::store_path(dir.path());
         let store = Store::open(&path).await.unwrap();
-        let riker = store
-            .create("William Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let riker = store.create("William Riker", &[]).await.unwrap();
         store.draft(&riker).await.unwrap();
         store
             .autosave(&riker, &edit("Will Riker", None, vec![]))

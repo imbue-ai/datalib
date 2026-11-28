@@ -111,9 +111,10 @@ export function pageSubject(page: string): string {
   return `page:${page}`;
 }
 
-/// The source of the contacts app's table.
-export function contactsSource(): string {
-  return "contactsView()";
+/// The source of the contacts app's table, or of those of your contacts
+/// that carry `label`.
+export function contactsSource(label: string | null = null): string {
+  return label === null ? "contactsView()" : `contactsView(${JSON.stringify({ label })})`;
 }
 
 /// The source of the Time series card.

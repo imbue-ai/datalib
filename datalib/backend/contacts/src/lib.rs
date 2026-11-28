@@ -8,7 +8,7 @@
 //! `docs/dev/contacts.md` is the reference; what is still to build is
 //! `docs/dev/plans/contact_linking.md` and `contact_editing.md`.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -120,7 +120,76 @@ pub const LADDER: &[Migration] = &[
         name: "a handle may be linked to more than one contact",
         apply: |conn| Box::pin(key_handles_by_contact_too(conn)),
     },
+    Migration {
+        version: 4,
+        name: "a group is an ordinary contact, and its members carry its name as a label",
+        apply: |conn| Box::pin(groups_become_labels(conn)),
+    },
 ];
+
+/// Rung 4: a contact is anyone the person added, so a group is an
+/// ordinary contact, and what it grouped is a label: each member gets the
+/// group's name as a label, as the person's own, and `members` goes. A
+/// store last opened before `labels` existed has no members to carry (no
+/// route ever added one), and is refused if it has.
+async fn groups_become_labels(conn: &mut sqlx::SqliteConnection) -> Result<()> {
+    let has_labels: Option<i64> = sql!(
+        "contacts_app.migrate.has_labels",
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'labels'"
+    )
+    .query_scalar()
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read whether the store has labels")?;
+    let members: Vec<(String, String, String, String)> = sql!(
+        "contacts_app.migrate.list_members",
+        "SELECT m.member_id, g.name, m.added_at_utc, m.tz_offset \
+           FROM members m JOIN contacts g ON g.contact_id = m.group_id \
+          ORDER BY m.member_id, g.name"
+    )
+    .query_as()
+    .fetch_all(&mut *conn)
+    .await
+    .context("read the group members")?;
+    if !members.is_empty() && has_labels.is_none() {
+        bail!("this contacts store has group members and no labels table to carry them in");
+    }
+    for (member, group, at, tz) in &members {
+        let Some(label) = labels::normalize_label(group) else {
+            bail!("the group {group:?} is no label: rename it, then open the store again");
+        };
+        sql!(
+            "contacts_app.migrate.label_a_member",
+            "INSERT OR IGNORE INTO labels (subject, label, applies, decided_how, decided_at_utc, \
+               reviewed_at_utc, tz_offset) VALUES (?, ?, 1, 'manual', ?, ?, ?)"
+        )
+        .query()
+        .bind(contact_subject(member))
+        .bind(&label)
+        .bind(at)
+        .bind(at)
+        .bind(tz)
+        .execute(&mut *conn)
+        .await
+        .context("label a group's member with the group")?;
+    }
+    for (stmt, what) in [
+        (
+            sql!("contacts_app.migrate.drop_members", "DROP TABLE members"),
+            "drop the members",
+        ),
+        (
+            sql!(
+                "contacts_app.migrate.drop_contact_kind",
+                "ALTER TABLE contacts DROP COLUMN kind"
+            ),
+            "drop whether a contact is a group",
+        ),
+    ] {
+        stmt.query().execute(&mut *conn).await.context(what)?;
+    }
+    Ok(())
+}
 
 /// The `handles` table as rung 3 writes it, keyed `(handle, contact_id)`.
 /// Frozen here rather than read from `schema.rs`, so a later rung starts
@@ -479,7 +548,6 @@ impl FieldKind {
 pub struct ContactSummary {
     pub contact_id: String,
     pub name: String,
-    pub kind: String,
 }
 
 /// A contact as the store answers it, from its `contacts` row, its links
@@ -492,12 +560,7 @@ fn assemble(
     me: bool,
 ) -> NormalizedContact {
     let contact_id: String = r.get("contact_id");
-    let kind: String = r.get("kind");
-    let mut contact = NormalizedContact::new(
-        SOURCE_ID,
-        &contact_id,
-        ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
-    );
+    let mut contact = NormalizedContact::new(SOURCE_ID, &contact_id, ContactKind::Person);
     contact.names = vec![r.get("name")];
     contact.note = r.get("note");
     contact.created_at = r.get("created_at_utc");
@@ -523,7 +586,7 @@ pub(crate) async fn search_in(
     );
     let rows = sql!(
         "contacts_app.search_contacts_by_name",
-        "SELECT contact_id, name, kind FROM contacts c \
+        "SELECT contact_id, name FROM contacts c \
           WHERE merged_into IS NULL AND name LIKE ? ESCAPE '\\' AND NOT (agent IS NOT NULL \
             AND EXISTS (SELECT 1 FROM handles h INDEXED BY handles_by_contact \
                          WHERE h.contact_id = c.contact_id \
@@ -544,7 +607,6 @@ pub(crate) async fn search_in(
         .map(|r| ContactSummary {
             contact_id: r.get("contact_id"),
             name: r.get("name"),
-            kind: r.get("kind"),
         })
         .collect())
 }
@@ -718,7 +780,7 @@ impl Store {
         let contact_id = contact_id.as_str();
         let Some(r) = sql!(
             "contacts_app.read_contact",
-            "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
+            "SELECT contact_id, name, note, created_at_utc, updated_at_utc \
                FROM contacts WHERE contact_id = ?"
         )
         .query()
@@ -769,13 +831,36 @@ impl Store {
         )))
     }
 
+    /// Each contact's labels, by its id, sorted: those a person gave or
+    /// said Yes to, in, but `REAL`, which is about whether they are spam.
+    /// What the contacts list's *Labels* and the Library tree's labels read.
+    pub async fn contact_labels(&self) -> Result<BTreeMap<String, Vec<String>>> {
+        let rows: Vec<(String, String)> = sql!(
+            "contacts_app.list_contact_labels",
+            "SELECT substr(subject, length('contact:') + 1), label FROM labels \
+              WHERE subject LIKE 'contact:%' AND applies = 1 AND label <> ? \
+                AND (decided_how = 'manual' OR reviewed_at_utc IS NOT NULL) \
+              ORDER BY 1, 2"
+        )
+        .query_as()
+        .bind(REAL)
+        .fetch_all(&self.pool)
+        .await
+        .context("list the contacts' labels")?;
+        let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for (id, label) in rows {
+            out.entry(id).or_default().push(label);
+        }
+        Ok(out)
+    }
+
     /// Every contact, by name, as [`Store::contact`] answers each: what the
     /// contacts app's own table lists. Merged-away contacts are left out.
     /// Four reads, whatever the count.
     pub async fn list(&self) -> Result<Vec<NormalizedContact>> {
         let rows = sql!(
             "contacts_app.list_unmerged_contacts",
-            "SELECT contact_id, name, kind, note, created_at_utc, updated_at_utc \
+            "SELECT contact_id, name, note, created_at_utc, updated_at_utc \
                FROM contacts c WHERE merged_into IS NULL AND NOT (agent IS NOT NULL \
                 AND EXISTS (SELECT 1 FROM handles h INDEXED BY handles_by_contact \
                              WHERE h.contact_id = c.contact_id \
@@ -841,19 +926,14 @@ impl Store {
 
     /// A new contact holding `handles`. Refused, with nothing written, if
     /// any of them already belongs to someone.
-    pub async fn create(
-        &self,
-        name: &str,
-        kind: ContactKind,
-        handles: &[Handle],
-    ) -> Result<String> {
+    pub async fn create(&self, name: &str, handles: &[Handle]) -> Result<String> {
         let name = name.trim();
         if name.is_empty() {
             bail!("a contact needs a name");
         }
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        let contact_id = insert_contact(&mut tx, name, kind, Maker::Person, &now, &tz).await?;
+        let contact_id = insert_contact(&mut tx, name, Maker::Person, &now, &tz).await?;
         for h in handles {
             let held = holders(&mut *tx, h).await?;
             match plan_link(&held, &contact_id, WhenHeld::Refuse) {
@@ -866,8 +946,7 @@ impl Store {
             }
         }
         tx.commit().await?;
-        self.seal(&format!("contacts: new {} {name:?}", kind.as_str()))
-            .await?;
+        self.seal(&format!("contacts: new {name:?}")).await?;
         Ok(contact_id)
     }
 
@@ -904,42 +983,6 @@ impl Store {
         };
         tx.commit().await?;
         self.seal(&format!("contacts: {what}")).await
-    }
-
-    /// `member_id` a member of the group contact `group_id`. Refused for a
-    /// contact that is not a group, or a member the store lacks.
-    pub async fn add_member(&self, group_id: &str, member_id: &str) -> Result<()> {
-        let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
-        let mut tx = self.pool.begin().await?;
-        let kind: Option<String> = sql!(
-            "contacts_app.read_group_kind",
-            "SELECT kind FROM contacts WHERE contact_id = ?"
-        )
-        .query_scalar()
-        .bind(group_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        match kind.as_deref().and_then(ContactKind::parse) {
-            Some(ContactKind::Group) => {}
-            Some(_) => bail!("{group_id} is not a group"),
-            None => bail!("no contact {group_id}"),
-        }
-        let name = name_of_existing(&mut tx, member_id).await?;
-        sql!(
-            "contacts_app.insert_group_member",
-            "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
-             VALUES (?, ?, ?, ?)"
-        )
-        .query()
-        .bind(group_id)
-        .bind(member_id)
-        .bind(&now)
-        .bind(&tz)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        self.seal(&format!("contacts: {name:?} joins {group_id}"))
-            .await
     }
 
     /// Returns whether the handle was linked to the contact. Taking a
@@ -1125,7 +1168,7 @@ impl Store {
         let mut tx = self.pool.begin().await?;
         let row = sql!(
             "contacts_app.read_survivor_for_me",
-            "SELECT c.contact_id, c.name, c.kind FROM contacts c \
+            "SELECT c.contact_id, c.name FROM contacts c \
                JOIN contacts asked ON c.contact_id = COALESCE(asked.merged_into, asked.contact_id) \
               WHERE asked.contact_id = ?"
         )
@@ -1136,10 +1179,6 @@ impl Store {
         .context("read the contact to mark")?
         .ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))?;
         let (id, name): (String, String) = (row.get("contact_id"), row.get("name"));
-        let kind: String = row.get("kind");
-        if me && ContactKind::parse(&kind) == Some(ContactKind::Group) {
-            bail!("{name:?} is a group: only a person can be you");
-        }
         let done = if me {
             let row = MeRow {
                 contact_id: id.clone(),
@@ -1181,8 +1220,8 @@ impl Store {
         Ok(done)
     }
 
-    /// Delete a contact: its row, its links, fields, photo, draft,
-    /// memberships and labels, and every contact merged into it, which
+    /// Delete a contact: its row, its links, fields, photo, draft and
+    /// labels, and every contact merged into it, which
     /// were the same person. Its handles are nobody's afterwards. What a
     /// person turned down for it stays, as a record. The commit before it
     /// still holds all of it.
@@ -1219,10 +1258,6 @@ impl Store {
                     "DELETE FROM me WHERE contact_id = ?1"
                 ),
                 sql!(
-                    "contacts_app.delete.delete_members",
-                    "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1"
-                ),
-                sql!(
                     "contacts_app.delete.delete_labels",
                     "DELETE FROM labels WHERE subject = 'contact:' || ?1"
                 ),
@@ -1247,7 +1282,7 @@ impl Store {
     }
 
     /// Merge `from` into `into`, which survives: its links, fields,
-    /// memberships, labels and turned-down links move over, and so does
+    /// labels and turned-down links move over, and so does
     /// its mark as me; its photo and note fill in where the survivor has
     /// none, and `from` is kept as a row pointing at `into` so an id saved
     /// anywhere (a `contact:` search) still reaches the person. A contact
@@ -1260,15 +1295,8 @@ impl Store {
         let _held = self.drafts.lock().await;
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
-        let (from_name, from_kind, from_note) = merge_side(&mut tx, from).await?;
-        let (into_name, into_kind, into_note) = merge_side(&mut tx, into).await?;
-        if from_kind != into_kind {
-            bail!(
-                "{from_name:?} is a {} and {into_name:?} a {}: only two people, or two groups, can be merged",
-                from_kind.as_str(),
-                into_kind.as_str()
-            );
-        }
+        let (from_name, from_note) = merge_side(&mut tx, from).await?;
+        let (into_name, into_note) = merge_side(&mut tx, into).await?;
         let after: i64 = sql!(
             "contacts_app.read_next_field_position",
             "SELECT COALESCE(MAX(position), -1) + 1 FROM fields WHERE contact_id = ?"
@@ -1301,20 +1329,6 @@ impl Store {
                 "move the mark that it is me",
             ),
             ("DELETE FROM me WHERE contact_id = ?1", "drop the mark"),
-            (
-                "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
-                 SELECT group_id, ?2, added_at_utc, tz_offset FROM members WHERE member_id = ?1",
-                "move the memberships",
-            ),
-            (
-                "INSERT OR IGNORE INTO members (group_id, member_id, added_at_utc, tz_offset) \
-                 SELECT ?2, member_id, added_at_utc, tz_offset FROM members WHERE group_id = ?1",
-                "move the members",
-            ),
-            (
-                "DELETE FROM members WHERE group_id = ?1 OR member_id = ?1 OR group_id = member_id",
-                "drop the old memberships",
-            ),
             (
                 "INSERT OR IGNORE INTO not_linked (handle, contact_id, contact_name, agent, \
                    reason, decided_at_utc, tz_offset, contact_rejected) \
@@ -1494,15 +1508,15 @@ async fn name_of_existing(conn: &mut sqlx::SqliteConnection, contact_id: &str) -
     name.ok_or_else(|| anyhow::anyhow!("no contact {contact_id}"))
 }
 
-/// One side of a merge: its name, kind and note. Refused for a contact
+/// One side of a merge: its name and note. Refused for a contact
 /// the store lacks or one already merged away.
 async fn merge_side(
     conn: &mut sqlx::SqliteConnection,
     contact_id: &str,
-) -> Result<(String, ContactKind, Option<String>)> {
+) -> Result<(String, Option<String>)> {
     let row = sql!(
         "contacts_app.read_merge_side",
-        "SELECT name, kind, note, merged_into FROM contacts WHERE contact_id = ?"
+        "SELECT name, note, merged_into FROM contacts WHERE contact_id = ?"
     )
     .query()
     .bind(contact_id)
@@ -1514,12 +1528,7 @@ async fn merge_side(
     if row.get::<Option<String>, _>("merged_into").is_some() {
         bail!("{name:?} was already merged into another contact");
     }
-    let kind: String = row.get("kind");
-    Ok((
-        name,
-        ContactKind::parse(&kind).unwrap_or(ContactKind::Person),
-        row.get("note"),
-    ))
+    Ok((name, row.get("note")))
 }
 
 /// The survivor's note, then the merged-away one's, each kept whole.
@@ -1549,7 +1558,6 @@ pub(crate) async fn name_of(tx: &mut sqlx::SqliteConnection, contact_id: &str) -
 async fn insert_contact(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     name: &str,
-    kind: ContactKind,
     by: Maker<'_>,
     now: &str,
     tz: &str,
@@ -1557,7 +1565,6 @@ async fn insert_contact(
     let contact_id = uuid::Uuid::new_v4().to_string();
     let row = ContactRow {
         contact_id: contact_id.clone(),
-        kind,
         name: name.to_string(),
         note: None,
         merged_into: None,
@@ -1683,7 +1690,7 @@ async fn insert_handle(
 mod tests {
     use super::*;
 
-    use datalib_sql::test_sql;
+    use datalib_sql::{test_sql, test_sql_id};
     fn email(s: &str) -> Handle {
         Handle::email(s).unwrap()
     }
@@ -1823,19 +1830,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
         let picard = store
-            .create(
-                "Jean-Luc Picard",
-                ContactKind::Person,
-                &[email("jlp@e.org")],
-            )
+            .create("Jean-Luc Picard", &[email("jlp@e.org")])
             .await
             .unwrap();
         let old = store
-            .create("J. Picard", ContactKind::Person, &[email("old@e.org")])
-            .await
-            .unwrap();
-        let crew = store
-            .create("Bridge crew", ContactKind::Group, &[])
+            .create("J. Picard", &[email("old@e.org")])
             .await
             .unwrap();
         let is_me = |id: String| {
@@ -1857,15 +1856,9 @@ mod tests {
         assert_eq!(
             listed,
             [
-                ("Bridge crew".to_string(), false),
                 ("J. Picard".to_string(), true),
                 ("Jean-Luc Picard".to_string(), false),
             ]
-        );
-        let refused = store.set_me(&crew, true).await.unwrap_err();
-        assert!(
-            format!("{refused:#}").contains("only a person"),
-            "{refused:#}"
         );
 
         store.merge(&old, &picard).await.unwrap();
@@ -1895,10 +1888,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = store_path(dir.path());
         let store = Store::open(&path).await.unwrap();
-        let picard = store
-            .create("Jean-Luc Picard", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let picard = store.create("Jean-Luc Picard", &[]).await.unwrap();
         for old in ["email:mailto:picard@enterprise.org", "tel:+1123456"] {
             test_sql!(
                 "INSERT INTO handles (handle, contact_id, linked_how, linked_at_utc, tz_offset) \
@@ -1911,6 +1901,7 @@ mod tests {
             .await
             .unwrap();
         }
+        back_to_tables_before_rung_4(&store.pool).await;
         test_sql!("UPDATE _datalib_meta SET value = '0' WHERE key = 'schema_version'")
             .query()
             .execute(&store.pool)
@@ -1955,11 +1946,7 @@ mod tests {
         let store = Store::open(&path).await.unwrap();
         let riker = email("riker@enterprise.org");
         let troi = store
-            .create(
-                "Deanna Troi",
-                ContactKind::Person,
-                std::slice::from_ref(&riker),
-            )
+            .create("Deanna Troi", std::slice::from_ref(&riker))
             .await
             .unwrap();
         let hidden = "email:riker\u{202E}@enterprise.org";
@@ -1973,6 +1960,7 @@ mod tests {
         .execute(&store.pool)
         .await
         .unwrap();
+        back_to_tables_before_rung_4(&store.pool).await;
         test_sql!("UPDATE _datalib_meta SET value = '1' WHERE key = 'schema_version'")
             .query()
             .execute(&store.pool)
@@ -2074,9 +2062,6 @@ mod tests {
              '2364-03-01T09:00:00Z', '+00:00', NULL)"
             ),
             test_sql!(
-                "INSERT INTO members VALUES ('away', 'riker', '2364-03-01T09:00:00Z', '+00:00')"
-            ),
-            test_sql!(
                 "INSERT INTO photos VALUES ('riker', 'image/png', x'89504e47', \
              '2364-03-01T09:00:00Z', '+00:00')"
             ),
@@ -2114,6 +2099,140 @@ mod tests {
     run TEXT
 )";
 
+    /// Give a store this build made the tables every rung before 4 found,
+    /// for a test that sets its version back to replay the ladder.
+    async fn back_to_tables_before_rung_4(pool: &SqlitePool) {
+        for sql in [
+            test_sql!("ALTER TABLE contacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'person'"),
+            Sql::dynamic(test_sql_id!(), MEMBERS_BEFORE_RUNG_4),
+        ] {
+            sql.query().execute(pool).await.unwrap();
+        }
+    }
+
+    /// `contacts` and `members` as every rung before 4 left them: a
+    /// contact was a person or a group, and a group had members.
+    const CONTACTS_BEFORE_RUNG_4: &str = "CREATE TABLE IF NOT EXISTS contacts (
+    contact_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    note TEXT,
+    merged_into TEXT,
+    agent TEXT,
+    created_at_utc TEXT NOT NULL,
+    updated_at_utc TEXT NOT NULL,
+    tz_offset TEXT NOT NULL,
+    PRIMARY KEY (contact_id)
+)";
+    const MEMBERS_BEFORE_RUNG_4: &str = "CREATE TABLE IF NOT EXISTS members (
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    added_at_utc TEXT NOT NULL,
+    tz_offset TEXT NOT NULL,
+    PRIMARY KEY (group_id, member_id)
+)";
+
+    /// This build's tables as they were before rung `rung`, which is 3 or
+    /// 4.
+    fn ddl_before(rung: u32) -> Vec<&'static str> {
+        let mut out: Vec<&str> = DDL
+            .iter()
+            .map(|d| {
+                if rung == 3 && d.starts_with("CREATE TABLE IF NOT EXISTS handles ") {
+                    HANDLES_BEFORE_RUNG_3
+                } else if d.starts_with("CREATE TABLE IF NOT EXISTS contacts ") {
+                    CONTACTS_BEFORE_RUNG_4
+                } else {
+                    d
+                }
+            })
+            .collect();
+        out.insert(1, MEMBERS_BEFORE_RUNG_4);
+        out
+    }
+
+    /// A store as rung 3 left it, with `rows` in it, committed.
+    async fn store_at_rung_3(dir: &Path, rows: &[&'static str]) -> PathBuf {
+        let path = store_path(dir);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let pool =
+            doltlite_raw::open_curated(&path, &ddl_before(4), StoreKind::Contacts, &LADDER[..3])
+                .await
+                .unwrap();
+        for row in rows {
+            Sql::dynamic(sql_id!("contacts_app.test.fill_rung_3"), *row)
+                .query()
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        doltlite_raw::commit_run(&pool, "a store at rung 3")
+            .await
+            .unwrap();
+        pool.close().await;
+        path
+    }
+
+    const AWAY_TEAM: &str = "INSERT INTO contacts (contact_id, kind, name, created_at_utc, \
+        updated_at_utc, tz_offset) VALUES ('away', 'group', 'Away team', '2364-03-01T09:00:00Z', \
+        '2364-03-01T09:00:00Z', '+00:00'), ('riker', 'person', 'Will Riker', \
+        '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00'), ('troi', 'person', \
+        'Deanna Troi', '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')";
+    const AWAY_MEMBERS: &str = "INSERT INTO members VALUES \
+        ('away', 'riker', '2364-03-02T09:00:00Z', '+00:00'), \
+        ('away', 'troi', '2364-03-02T09:00:00Z', '+00:00')";
+    const TROI_IS_CREW: &str = "INSERT INTO labels (subject, label, applies, decided_how, \
+        decided_at_utc, reviewed_at_utc, tz_offset) VALUES ('contact:troi', 'away-team', 1, \
+        'manual', '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')";
+
+    /// Rung 4: a group is an ordinary contact, and its members carry its
+    /// name as a label of their own, which a member that had it already
+    /// keeps as it was; `members` goes.
+    #[tokio::test]
+    async fn rung_4_makes_a_group_a_contact_and_its_members_a_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = store_at_rung_3(dir.path(), &[AWAY_TEAM, AWAY_MEMBERS, TROI_IS_CREW]).await;
+        let store = Store::open(&path).await.unwrap();
+        let names: Vec<String> = store
+            .list()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|c| format!("{} {:?}", c.names[0], c.kind))
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "Away team Person",
+                "Deanna Troi Person",
+                "Will Riker Person"
+            ]
+        );
+        let labels: Vec<String> = test_sql!(
+            "SELECT subject || ' ' || label || ' ' || decided_how || ' ' || decided_at_utc \
+               FROM labels ORDER BY 1"
+        )
+        .query_scalar()
+        .fetch_all(&store.pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            labels,
+            [
+                "contact:riker away-team manual 2364-03-02T09:00:00Z",
+                "contact:troi away-team manual 2364-03-01T09:00:00Z",
+            ]
+        );
+        let tables: Vec<String> =
+            test_sql!("SELECT name FROM sqlite_master WHERE name = 'members'")
+                .query_scalar()
+                .fetch_all(&store.pool)
+                .await
+                .unwrap();
+        assert!(tables.is_empty(), "members is gone");
+        store.close().await;
+    }
+
     /// Rung 3 rekeys the links by handle and contact. Every link comes
     /// through with all it said, a handle can then be shared, and a draft
     /// cut before the upgrade still saves.
@@ -2122,16 +2241,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = store_path(dir.path());
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let before: Vec<&str> = DDL
-            .iter()
-            .map(|d| {
-                if d.starts_with("CREATE TABLE IF NOT EXISTS handles ") {
-                    HANDLES_BEFORE_RUNG_3
-                } else {
-                    d
-                }
-            })
-            .collect();
+        let before = ddl_before(3);
         let pool = doltlite_raw::open_curated(&path, &before, StoreKind::Contacts, &LADDER[..2])
             .await
             .unwrap();
@@ -2171,7 +2281,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(meta.schema_version, 3);
+        assert_eq!(meta.schema_version as usize, LADDER.len());
         let vineyard = email("vineyard@labarre.earth");
         let robert = store.contact("robert").await.unwrap().unwrap();
         assert_eq!(robert.handles[0].handle.as_ref(), Some(&vineyard));
@@ -2242,14 +2352,8 @@ mod tests {
         let store = Store::open(&store_path(dir.path())).await.unwrap();
         let vineyard = email("vineyard@labarre.earth");
         let one = std::slice::from_ref(&vineyard);
-        let robert = store
-            .create("Robert Picard", ContactKind::Person, one)
-            .await
-            .unwrap();
-        let marie = store
-            .create("Marie Picard", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let robert = store.create("Robert Picard", one).await.unwrap();
+        let marie = store.create("Marie Picard", &[]).await.unwrap();
         let err = store
             .link(&vineyard, &marie, WhenHeld::Refuse, &HandleFrom::default())
             .await
@@ -2286,10 +2390,7 @@ mod tests {
             vec![robert.clone()]
         );
 
-        let beverly = store
-            .create("Beverly Crusher", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let beverly = store.create("Beverly Crusher", &[]).await.unwrap();
         store
             .link(&vineyard, &beverly, WhenHeld::Move, &HandleFrom::default())
             .await
@@ -2346,11 +2447,7 @@ mod tests {
         let riker = email("riker@enterprise.org");
         let tel = Handle::tel("+15550123456").unwrap();
         let will = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                std::slice::from_ref(&riker),
-            )
+            .create("Will Riker", std::slice::from_ref(&riker))
             .await
             .unwrap();
         store
@@ -2361,26 +2458,17 @@ mod tests {
             .set_stopped_working(&riker, &will, Some("2369"))
             .await
             .unwrap();
-        let data = store
-            .create("data", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let data = store.create("data", &[]).await.unwrap();
         let data_photo = store
             .set_photo(&data, "image/png", b"\x89PNG\r\n\x1a\n")
-            .await
-            .unwrap();
-        let crew = store
-            .create("Bridge crew", ContactKind::Group, &[])
             .await
             .unwrap();
 
         let listed = store.list().await.unwrap();
         let names: Vec<&str> = listed.iter().filter_map(|c| c.name()).collect();
-        assert_eq!(names, ["Bridge crew", "data", "Will Riker"]);
-        assert_eq!(listed[0].key, crew);
-        assert_eq!(listed[0].kind, ContactKind::Group);
-        assert_eq!(listed[1].photo_url, Some(data_photo));
-        let handles: Vec<Option<&str>> = listed[2]
+        assert_eq!(names, ["data", "Will Riker"]);
+        assert_eq!(listed[0].photo_url, Some(data_photo));
+        let handles: Vec<Option<&str>> = listed[1]
             .handles
             .iter()
             .map(|h| h.handle.as_ref().map(Handle::as_str))
@@ -2411,11 +2499,7 @@ mod tests {
             .unwrap()
             .is_empty());
         let id = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                std::slice::from_ref(&riker),
-            )
+            .create("Will Riker", std::slice::from_ref(&riker))
             .await
             .unwrap();
         store
@@ -2433,10 +2517,7 @@ mod tests {
         assert_eq!(got[tel.as_str()][0].key, id);
         assert_eq!(got[tel.as_str()][0].source_id, SOURCE_ID);
 
-        let other = store
-            .create("Thomas Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let other = store.create("Thomas Riker", &[]).await.unwrap();
         let err = store
             .link(&tel, &other, WhenHeld::Refuse, &HandleFrom::default())
             .await
@@ -2446,7 +2527,7 @@ mod tests {
             "{err}"
         );
         let err = store
-            .create("Twin", ContactKind::Person, std::slice::from_ref(&riker))
+            .create("Twin", std::slice::from_ref(&riker))
             .await
             .unwrap_err();
         assert!(err.to_string().contains("already belongs"), "{err}");
@@ -2502,10 +2583,7 @@ mod tests {
     async fn a_photo_rides_on_the_contact_until_it_is_taken_off() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
-        let id = store
-            .create("Will Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let id = store.create("Will Riker", &[]).await.unwrap();
         assert_eq!(store.contact(&id).await.unwrap().unwrap().photo_url, None);
         assert!(store.photo(&id).await.unwrap().is_none());
         let png = b"\x89PNG\r\n\x1a\n not really".to_vec();
@@ -2589,35 +2667,19 @@ mod tests {
         let work = email("riker@enterprise.org");
         let home = email("will@risa.test");
         let keep = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                std::slice::from_ref(&work),
-            )
+            .create("Will Riker", std::slice::from_ref(&work))
             .await
             .unwrap();
         let dup = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                std::slice::from_ref(&home),
-            )
+            .create("Will Riker", std::slice::from_ref(&home))
             .await
             .unwrap();
-        let older = store
-            .create("W. Riker", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let older = store.create("W. Riker", &[]).await.unwrap();
         store.merge(&older, &dup).await.unwrap();
         let dup_photo = store
             .set_photo(&dup, "image/png", b"\x89PNG\r\n\x1a\n")
             .await
             .unwrap();
-        let crew = store
-            .create("Bridge crew", ContactKind::Group, &[])
-            .await
-            .unwrap();
-        store.add_member(&crew, &dup).await.unwrap();
         test_sql!("UPDATE contacts SET note = 'trombone' WHERE contact_id = ?")
             .query()
             .bind(&dup)
@@ -2651,14 +2713,7 @@ mod tests {
             .into_iter()
             .map(|c| c.key)
             .collect();
-        assert_eq!(listed, [crew.clone(), keep.clone()]);
-        let members: Vec<String> = test_sql!("SELECT member_id FROM members WHERE group_id = ?")
-            .query_scalar()
-            .bind(&crew)
-            .fetch_all(&store.pool)
-            .await
-            .unwrap();
-        assert_eq!(members, [keep.as_str()]);
+        assert_eq!(listed, std::slice::from_ref(&keep));
         let chain: Vec<String> =
             test_sql!("SELECT merged_into FROM contacts WHERE merged_into IS NOT NULL")
                 .query_scalar()
@@ -2674,7 +2729,6 @@ mod tests {
         for (from, into, says) in [
             (&keep, &keep, "into itself"),
             (&dup, &keep, "already merged"),
-            (&crew, &keep, "only two people, or two groups"),
         ] {
             let err = store.merge(from, into).await.unwrap_err().to_string();
             assert!(err.contains(says), "{err}");
@@ -2689,22 +2743,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
         let tel = Handle::tel("+15550123456").unwrap();
-        let keep = store
-            .create("Deanna Troi", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let keep = store.create("Deanna Troi", &[]).await.unwrap();
         let dup = store
-            .create(
-                "Deanna Troi",
-                ContactKind::Person,
-                std::slice::from_ref(&tel),
-            )
+            .create("Deanna Troi", std::slice::from_ref(&tel))
             .await
             .unwrap();
-        let older = store
-            .create("D. Troi", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let older = store.create("D. Troi", &[]).await.unwrap();
         store.merge(&older, &dup).await.unwrap();
         store
             .set_photo(&dup, "image/png", b"\x89PNG\r\n\x1a\n")
@@ -2760,11 +2804,7 @@ mod tests {
         let path = store_path(dir.path());
         let store = Store::open(&path).await.unwrap();
         store
-            .create(
-                "Deanna Troi",
-                ContactKind::Person,
-                &[email("troi@enterprise.org")],
-            )
+            .create("Deanna Troi", &[email("troi@enterprise.org")])
             .await
             .unwrap();
         let reader = doltlite_raw::open_reader(&path, None)

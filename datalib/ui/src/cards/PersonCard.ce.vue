@@ -30,6 +30,9 @@ import {
   hasContactsApp,
   identifierCell,
   isMinted,
+  labelContact,
+  labelCounts,
+  labelsOf,
   linkHandle,
   nameOf,
   NOBODY,
@@ -143,6 +146,8 @@ async function ask() {
     await people.ask(shownHandles(now));
     await entities.ask(now.sections.map((x) => sourceUri(x.sourceId)));
     turnedDown.value = now.mine ? await notTheirs(now.mine.key) : new Set();
+    myLabels.value = now.mine ? await labelsOf(now.mine.key) : [];
+    knownLabels.value = now.mine ? (await labelCounts()).map((l) => l.label) : [];
     waiting.value = await suggested;
   } catch (e) {
     error.value = (e as Error).message;
@@ -423,6 +428,29 @@ async function addAll(s: PersonSection) {
   await act(async () => {
     for (const h of linkable(s)) await linkHandle(h, mine.key, undefined, saidBy(s, h));
   });
+}
+
+/// Your contact's labels, and every label your contacts carry, which the
+/// box offers.
+const myLabels = ref<string[]>([]);
+const knownLabels = ref<string[]>([]);
+const newLabel = ref("");
+const offeredLabels = computed(() => knownLabels.value.filter((l) => !myLabels.value.includes(l)));
+
+async function giveLabel() {
+  const mine = model.value.mine;
+  const label = newLabel.value.trim();
+  if (!mine || !label) return;
+  await act(async () => {
+    await labelContact(mine.key, label, true);
+    newLabel.value = "";
+    await ask();
+  });
+}
+
+async function takeLabel(label: string) {
+  const mine = model.value.mine;
+  if (mine) await act(() => labelContact(mine.key, label, false).then(ask));
 }
 
 async function toggleMe(ev: Event) {
@@ -726,11 +754,7 @@ const headPhoto = computed(() => {
 
     <section v-if="model.mine" class="person-section person-mine" aria-label="Your contact">
       <h2 class="person-source">Your contact</h2>
-      <label
-        v-if="model.mine.kind === 'person'"
-        class="person-me"
-        title="from:me, to:me and with:me find every handle on this contact"
-      >
+      <label class="person-me" title="from:me, to:me and with:me find every handle on this contact">
         <input
           type="checkbox"
           data-testid="contact-is-me"
@@ -740,6 +764,33 @@ const headPhoto = computed(() => {
         />
         This is me
       </label>
+      <div class="person-labels" role="group" aria-label="Labels">
+        <span v-for="l in myLabels" :key="l" class="person-label">
+          {{ l }}
+          <button
+            type="button"
+            class="person-label-off"
+            :aria-label="`Take the label ${l} off`"
+            :disabled="busy"
+            @click.stop="takeLabel(l)"
+          >
+            ×
+          </button>
+        </span>
+        <form class="person-label-add" @submit.prevent="giveLabel">
+          <input
+            v-model="newLabel"
+            class="person-input"
+            list="person-known-labels"
+            placeholder="Add a label"
+            aria-label="Add a label"
+            :disabled="busy"
+          />
+          <datalist id="person-known-labels">
+            <option v-for="l in offeredLabels" :key="l" :value="l"></option>
+          </datalist>
+        </form>
+      </div>
       <ul v-if="!editor?.editing" class="person-handles">
         <li v-for="h in model.mine.handles" :key="h.value">
           <span
@@ -998,6 +1049,30 @@ const headPhoto = computed(() => {
 }
 .person-error {
   color: var(--datalib-error-fg);
+}
+.person-labels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.45rem;
+}
+.person-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0 0.15rem 0 0.5rem;
+  border: 1px solid var(--datalib-border);
+  border-radius: 999px;
+  background: var(--datalib-surface);
+}
+.person-label-off {
+  font: inherit;
+  padding: 0 0.3rem;
+  border: none;
+  background: none;
+  color: var(--datalib-muted);
+  cursor: pointer;
 }
 .person-me {
   display: inline-flex;

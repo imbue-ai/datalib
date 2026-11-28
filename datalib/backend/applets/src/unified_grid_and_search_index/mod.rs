@@ -2796,7 +2796,7 @@ mod tests {
     /// it back.
     #[tokio::test]
     async fn me_reaches_the_contacts_marked_as_me() {
-        use datalib_contacts::{store_path, ContactKind, Store};
+        use datalib_contacts::{store_path, Store};
         let tmp = tempfile::tempdir().unwrap();
         mail(tmp.path()).await;
         let s = index_over(tmp.path()).await;
@@ -2814,7 +2814,6 @@ mod tests {
         let ann = store
             .create(
                 "Ann",
-                ContactKind::Person,
                 &[datalib_handle::Handle::email("ann@example.com").unwrap()],
             )
             .await
@@ -3056,13 +3055,13 @@ mod tests {
         }
     }
 
-    /// A contact is every handle linked to it, a merged-away contact's and
-    /// a group's members' too, read when the search runs: a link made after
+    /// A contact is every handle linked to it, a merged-away contact's
+    /// too, read when the search runs: a link made after
     /// a search changes the next one. A contact the store lacks, or a root
     /// with no contacts app, is refused by name.
     #[tokio::test]
     async fn a_contact_is_every_handle_linked_to_it() {
-        use datalib_contacts::{store_path, ContactKind, Store};
+        use datalib_contacts::{store_path, Store};
         let tmp = tempfile::tempdir().unwrap();
         bridge(tmp.path()).await;
         let s = index_over(tmp.path()).await;
@@ -3076,18 +3075,9 @@ mod tests {
         let email = |s: &str| datalib_handle::Handle::email(s).unwrap();
         let store = Store::open(&store_path(tmp.path())).await.unwrap();
         let picard = store
-            .create("Captain", ContactKind::Person, &[email("jlp@e.org")])
+            .create("Captain", &[email("jlp@e.org")])
             .await
             .unwrap();
-        let couple = store
-            .create("Riker and Troi", ContactKind::Group, &[])
-            .await
-            .unwrap();
-        let riker = store
-            .create("Riker", ContactKind::Person, &[email("wtr@e.org")])
-            .await
-            .unwrap();
-        store.add_member(&couple, &riker).await.unwrap();
         store.close().await;
 
         let found = |q: String| {
@@ -3102,11 +3092,6 @@ mod tests {
         assert_eq!(
             found(format!("with:contact:{picard}")).await,
             ["b-3", "b-1"]
-        );
-        assert_eq!(
-            found(format!("with:contact:{couple}")).await,
-            ["b-4", "b-3"],
-            "a group reaches its members"
         );
 
         // Linking his Slack handle widens the next search at once.

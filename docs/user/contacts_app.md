@@ -171,8 +171,9 @@ curl -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   So give each one you can: a close call marked as one costs them less
   than a wrong one marked as sure.
 - A label is any word. `applies` is `true` (the default) or `false`.
-  `real` is the one to work on; the others stand alone, and nothing reads
-  them but the person.
+  `real` is the one to work on, about whether a sender is spam; a label
+  on a contact is also what the person sees in the Library tree under
+  *Contacts*, once they say *Yes* to it.
 
 The answer says what landed and what did not:
 
@@ -214,6 +215,5 @@ theirs. `from:me` then reaches every handle on that contact, as
 ## What it does not do yet
 
 Labels are not in search: there is no `label:real` to filter by, so a
-label shows only on the contacts card. There is no route to add a member
-to a group contact. The reference's [Not built](../dev/contacts.md#not-built)
+label shows only on the contacts card. The reference's [Not built](../dev/contacts.md#not-built)
 has the rest.

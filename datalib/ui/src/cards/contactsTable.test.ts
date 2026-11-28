@@ -24,7 +24,7 @@ function row(key: string, label: string, id: string, extra: Partial<ContactRow> 
     phone: null,
     handles: 0,
     note: null,
-    kind: "Contact",
+    labels: [],
     updated_at: null,
     ...extra,
   };

@@ -780,9 +780,13 @@ besides components:
   own tree as a custom element (`third-party/vscode-tree/README.md`),
   which Bazel copies beside the UI's sources as `vendor/vs-tree.js` and
   Vite loads as its own chunk when the card first draws; its colours are
-  the app's, through its `--vs-tree-*` variables. The top level is the
+  the app's, through its `--vs-tree-*` variables. The top level is
+  *Contacts*, where the library has the contacts app, then the
   configured sources (`GET /api/manage/rows`; a comparison's `diff`
-  group is none), and each place below them, an account, a label, a
+  group is none). Under *Contacts* is each label your contacts carry
+  (`GET /applet/datalib_contacts/labels`), and picking it or a label
+  shows `contactsView` beside the tree, held to that label
+  (`library.ts::contactsNodeOf`). Each place below a source, an account, a label, a
   workspace, a channel, a folder, a page, a chat, is a level of
   `GET /places/{parent}` read when it is opened
   (`docs/user/applets.md` § "Places"); a thread or a

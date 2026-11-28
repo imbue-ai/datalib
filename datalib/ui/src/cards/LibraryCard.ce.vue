@@ -10,7 +10,9 @@ import { onBeforeUnmount, onMounted, ref, useTemplateRef, watchEffect } from "vu
 import type { VsTree, VsTreeNode, VsTreeViewState } from "vs-tree";
 import { useApi } from "@/cards/cardApi";
 import type { CardCtx, Teardown } from "./types";
-import { nodeSource, type NodeViewOpts } from "./cardSources";
+import { contactsSource, nodeSource, type NodeViewOpts } from "./cardSources";
+import { labelCounts } from "./contacts";
+import { contactsView } from "./libs/contactsView";
 import { nodeView } from "./libs/nodeView";
 import ChipMenu from "./ChipMenu.ce.vue";
 import chipCss from "./chip.css?inline";
@@ -27,7 +29,11 @@ import {
 import { entities, entityCell } from "./entities";
 import { nodeCell } from "./nodeChip";
 import {
+  CONTACTS_NODE,
   TREE_PICKS,
+  contactsNode,
+  contactsNodeOf,
+  labelNodes,
   nodeOpts,
   placeNodes,
   sourceNodes,
@@ -76,14 +82,18 @@ async function placesUnder(parent: string): Promise<TreeNode[]> {
 
 const dataSource = {
   async getChildren(node: VsTreeNode | null): Promise<VsTreeNode[]> {
+    if (node?.id === CONTACTS_NODE) return labelNodes(await labelCounts());
     if (node !== null) return placesUnder(node.id);
     try {
-      const [{ rows }, held] = await Promise.all([
+      const [{ rows }, held, labels] = await Promise.all([
         api.fetchManageRows(),
         api.fetchSourcesWithPlaces(),
+        // A library with no contacts app has no Contacts in its tree.
+        labelCounts().catch(() => null),
       ]);
       const opens = new Set(held.map(sourceTop));
-      return sourceNodes(rows, (id) => opens.has(id));
+      const contacts = labels === null ? [] : [contactsNode(labels.length)];
+      return [...contacts, ...sourceNodes(rows, (id) => opens.has(id))];
     } catch (e) {
       failed.value = `The library could not be read: ${(e as Error).message}`;
       return [];
@@ -122,9 +132,13 @@ function show(opts: NodeViewOpts | null) {
   paneRoot ??= paneEl.value.attachShadow({ mode: "open" });
   paneRoot.replaceChildren();
   if (!opts) return;
-  teardown = nodeView(opts)(paneRoot, {
+  const contacts = contactsNodeOf(opts.node);
+  const render = contacts
+    ? contactsView(contacts.label === null ? {} : { label: contacts.label })
+    : nodeView(opts);
+  teardown = render(paneRoot, {
     cardId: `${props.ctx.cardId}:node`,
-    cardType: "nodeView",
+    cardType: contacts ? "contactsView" : "nodeView",
     initialState: "",
     setTitle: (t) => {
       if (t) paneTitle.value = t;
@@ -141,7 +155,10 @@ function show(opts: NodeViewOpts | null) {
 }
 
 function openShownAsCard() {
-  if (shown.value) props.ctx.host.openCards(nodeSource(shown.value));
+  const opts = shown.value;
+  if (!opts) return;
+  const contacts = contactsNodeOf(opts.node);
+  props.ctx.host.openCards(contacts ? contactsSource(contacts.label) : nodeSource(opts));
 }
 
 // ---- chips ----
@@ -229,7 +246,8 @@ function holdLink(ev: Event) {
 onMounted(async () => {
   props.ctx.setTitle("Library");
   props.ctx.setHelp(
-    "<p>Your library as a tree: each source, then the places in it — accounts, " +
+    "<p>Your library as a tree: your contacts and the labels you gave them, " +
+      "then each source and the places in it — accounts, " +
       "labels, workspaces, channels, folders, chats — a level at a time.</p>" +
       "<p>Pick a place to list what is directly in it beside the tree, newest " +
       "first, the picked one to read; the box above searches within it. " +

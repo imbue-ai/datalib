@@ -1,8 +1,9 @@
 # Contacts: a simpler UI
 
 *Plan (2026-11-24, revised 2026-11-25 after Thad's notes and answers).
-Steps 1 to 5 of §"Order of work" are built, and
-[`../contacts.md`](../contacts.md) says how they work; the rest is not. "The problem" is as it was before. What the screens do was seen by using the TNG
+Every step of §"Order of work" is built, and
+[`../contacts.md`](../contacts.md) says how they work; step 6 says the
+two moves left undone. "The problem" is as it was before. What the screens do was seen by using the TNG
 demo. The numbers are counts from copies of real libraries and from one
 real address book. If this is agreed, it replaces
 [`contact_linking.md`](contact_linking.md)'s "Where links are made".
@@ -267,17 +268,17 @@ An agent made the rest, and nobody has reviewed any of it.
 |---|---|
 | contacts, links, `not_linked` | stay |
 | agents suggest, a person decides | stays, as *Yes* and *No* |
-| `real` | stays, shown as *Hide this sender*; other labels go |
+| `real` | stays, shown as *Hide this sender* |
+| other labels | stay (decided 2026-11-27): given on a contact's page, a node each in the Library tree |
 | *This is me* | stays, on the page's menu |
 | merging | stays, from the list and now from the page |
 | details, drafts, copying from a source | stay (§"Editing a contact") |
 | "no longer works" dates | stay, in a handle's menu: publishing leaves out an old number |
-| group contacts and members | go: a shared handle needs no group |
+| group contacts and members | go: a shared handle needs no group, and a label lists who is in it |
 | a photo of your own | stays |
 
-A table that goes (`members`) goes only where its root has no rows in
-it, and the rung that drops one refuses otherwise and says how to export
-it.
+`members` goes without losing a row: each member is given its group's
+name as a label first.
 
 ## How many, and when last
 
@@ -329,7 +330,15 @@ Each step stands alone; the first two change no stored data.
    unconfirmed *not real* still hides a sender from *Unfiled*, as §"The
    screens" says.
 6. **What goes, goes**, with the store's rung, the routes and
-   [`contacts_app.md`](../../user/contacts_app.md).
+   [`contacts_app.md`](../../user/contacts_app.md). Built: rung 4 makes a
+   group an ordinary contact and gives its members the group's name as
+   a label, then drops `members` and `contacts.kind`; `GET /review` and
+   the list's *Type* column went. Labels stay, against the table
+   above: a contact carries any label, given on its page, shown as the
+   list's *Labels*, and each label is a node under *Contacts* in the
+   Library tree listing who carries it, as an address book's groups
+   are. *This is me* stays a checkbox on the page, and merging stays on
+   the list's right-click: neither moved to a menu on the page.
 
 ## Decided
 

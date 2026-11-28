@@ -26,13 +26,13 @@ expression: dump
     {
       "key": "schema_hash",
       "tz_offset": "[redacted]",
-      "value": "37bcaa60e0669748bf29b4b7554a15ec65b3eebab1c1718c855c211ba4e7f647",
+      "value": "83affa3295fff77d16fd335b9267ca9ede89e026b553968f51782458893a2fed",
       "written_at_utc": "[redacted]"
     },
     {
       "key": "schema_version",
       "tz_offset": "[redacted]",
-      "value": "3",
+      "value": "4",
       "written_at_utc": "[redacted]"
     },
     {
@@ -53,7 +53,6 @@ expression: dump
       "agent": null,
       "contact_id": "053cf673-0eb8-4ee8-8605-ebfec110af30",
       "created_at_utc": "2026-11-26T08:36:50.528489+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Deanna Troi",
       "note": null,
@@ -64,7 +63,6 @@ expression: dump
       "agent": null,
       "contact_id": "1cd26398-cf3f-4946-a288-38e87df8b788",
       "created_at_utc": "2026-11-26T08:36:50.490242+00:00",
-      "kind": "person",
       "merged_into": "3a59c3d3-2c66-42be-94f5-6c301a0edc9b",
       "name": "Will Riker",
       "note": null,
@@ -75,7 +73,6 @@ expression: dump
       "agent": null,
       "contact_id": "2905e18b-2930-4efc-89f0-11f724b16a75",
       "created_at_utc": "2026-11-26T08:36:50.541066+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Beverly Crusher",
       "note": null,
@@ -86,7 +83,6 @@ expression: dump
       "agent": null,
       "contact_id": "331ce136-ef35-4d35-956f-34251937a012",
       "created_at_utc": "2026-11-26T08:36:50.532925+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Worf",
       "note": null,
@@ -97,7 +93,6 @@ expression: dump
       "agent": null,
       "contact_id": "3a59c3d3-2c66-42be-94f5-6c301a0edc9b",
       "created_at_utc": "2026-11-26T08:36:50.485485+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "William T. Riker",
       "note": "Made up, for the TNG fixture's curated overlay.",
@@ -108,7 +103,6 @@ expression: dump
       "agent": null,
       "contact_id": "522ccc4b-c5df-45b2-830a-2c0f66ad1ca1",
       "created_at_utc": "2026-11-26T08:36:50.524744+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Data",
       "note": null,
@@ -119,7 +113,6 @@ expression: dump
       "agent": null,
       "contact_id": "8864c0a0-4151-40b6-8c93-6ae88d2bb598",
       "created_at_utc": "2026-11-26T08:36:50.544382+00:00",
-      "kind": "group",
       "merged_into": null,
       "name": "Enterprise systems",
       "note": null,
@@ -130,7 +123,6 @@ expression: dump
       "agent": null,
       "contact_id": "9600826a-f64d-4508-a230-0f4006f41092",
       "created_at_utc": "2026-11-26T08:36:50.466108+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Jean-Luc Picard",
       "note": null,
@@ -141,7 +133,6 @@ expression: dump
       "agent": null,
       "contact_id": "9a095f49-91f8-4f6a-ade9-04dbb57babd4",
       "created_at_utc": "2026-11-27T07:55:12.176545+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Marie Picard",
       "note": null,
@@ -152,7 +143,6 @@ expression: dump
       "agent": null,
       "contact_id": "abfb5f3f-44dc-49cf-90c5-7e62ee70f26c",
       "created_at_utc": "2026-11-26T08:36:50.537387+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Geordi La Forge",
       "note": null,
@@ -163,7 +153,6 @@ expression: dump
       "agent": null,
       "contact_id": "d03d8bad-358f-4d74-ba5e-43b3eaa633ac",
       "created_at_utc": "2026-11-27T07:55:12.174496+00:00",
-      "kind": "person",
       "merged_into": null,
       "name": "Robert Picard",
       "note": null,
@@ -1248,7 +1237,6 @@ expression: dump
       "tz_offset": "+00:00"
     }
   ],
-  "members": [],
   "not_linked": [
     {
       "agent": null,

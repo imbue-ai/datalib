@@ -8,7 +8,6 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{bail, Context, Result};
-use datalib_contact_schema::ContactKind;
 use datalib_handle::Handle;
 use datalib_time::IsoOffsetTimestamp;
 use serde::{Deserialize, Serialize};
@@ -827,7 +826,7 @@ impl Store {
                         continue;
                     }
                     out.contacts_created += 1;
-                    insert_contact(&mut tx, name, ContactKind::Person, by, &now, &tz).await?
+                    insert_contact(&mut tx, name, by, &now, &tz).await?
                 }
             };
             for (h, plan) in plans {
@@ -1249,7 +1248,6 @@ mod tests {
         let picard = store
             .create(
                 "Jean-Luc Picard",
-                ContactKind::Person,
                 &[Handle::parse(&email("picard@enterprise.org")).unwrap()],
             )
             .await
@@ -1429,10 +1427,7 @@ mod tests {
     async fn a_label_is_in_out_or_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
-        let worf = store
-            .create("Worf", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let worf = store.create("Worf", &[]).await.unwrap();
         let subject = contact_subject(&worf);
         store
             .set_label(&subject, "family", Some(false))
@@ -1481,10 +1476,7 @@ mod tests {
     async fn unlinking_writes_it_down_until_a_person_relinks_it() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
-        let data = store
-            .create("Data", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let data = store.create("Data", &[]).await.unwrap();
         let lore = Handle::parse(&email("lore@enterprise.org")).unwrap();
         store.propose(&lore_to_data(&data, &lore)).await.unwrap();
         assert!(store.unlink(&lore, &data).await.unwrap());
@@ -1511,14 +1503,8 @@ mod tests {
     async fn labels_and_turn_downs_follow_a_merge() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(dir.path())).await.unwrap();
-        let keep = store
-            .create("Worf", ContactKind::Person, &[])
-            .await
-            .unwrap();
-        let dup = store
-            .create("Worf", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let keep = store.create("Worf", &[]).await.unwrap();
+        let dup = store.create("Worf", &[]).await.unwrap();
         for (who, l, applies) in [
             (&keep, "real", true),
             (&dup, "real", false),
@@ -1572,10 +1558,7 @@ mod tests {
         let riker = Handle::email("riker@enterprise.org").unwrap();
         let slack = Handle::slack("T1", "U1RIKER").unwrap();
         let number = Handle::tel("+12025550101").unwrap();
-        let troi = store
-            .create("Deanna Troi", ContactKind::Person, &[])
-            .await
-            .unwrap();
+        let troi = store.create("Deanna Troi", &[]).await.unwrap();
         store
             .propose(&Proposals {
                 agent: "claude-test".into(),

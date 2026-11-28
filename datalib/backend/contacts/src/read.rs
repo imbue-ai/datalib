@@ -61,10 +61,9 @@ impl ContactsReader {
         self.reader.close().await;
     }
 
-    /// Every handle `contact_id` reaches: its own; those of the contact
-    /// it was merged into and of any merged into it, one person either
-    /// way; and each member's when it is a group, a member that is a group
-    /// included. Each contact is read once, however they loop. Stopped
+    /// Every handle `contact_id` reaches: its own, and those of the
+    /// contact it was merged into and of any merged into it, one person
+    /// either way. Each contact is read once. Stopped
     /// handles count: they still name the person in what they sent. One
     /// an agent suggested and nobody said Yes to does not.
     /// `None` for a contact the store does not have.
@@ -101,8 +100,7 @@ impl ContactsReader {
             .context("read a contact's handles")?;
             handles.extend(own);
             let next: Vec<String> = sql!("contacts_app.read.list_related_contacts", "SELECT merged_into FROM contacts WHERE contact_id = ?1 AND merged_into IS NOT NULL \
-                 UNION SELECT contact_id FROM contacts WHERE merged_into = ?1 \
-                 UNION SELECT member_id FROM members WHERE group_id = ?1").query_scalar()
+                 UNION SELECT contact_id FROM contacts WHERE merged_into = ?1").query_scalar()
             .bind(&id)
             .fetch_all(pool)
             .await
@@ -190,10 +188,10 @@ impl ContactsReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ContactKind, Store};
+    use crate::Store;
     use datalib_handle::Handle;
 
-    use datalib_sql::{test_sql, test_sql_id, Sql};
+    use datalib_sql::test_sql;
     fn email(s: &str) -> Handle {
         Handle::email(s).unwrap()
     }
@@ -206,15 +204,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(tmp.path())).await.unwrap();
         let riker = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                &[email("riker@enterprise.org")],
-            )
+            .create("Will Riker", &[email("riker@enterprise.org")])
             .await
             .unwrap();
         let old = store
-            .create("W. Riker", ContactKind::Person, &[email("wtr@old.org")])
+            .create("W. Riker", &[email("wtr@old.org")])
             .await
             .unwrap();
         store.merge(&old, &riker).await.unwrap();
@@ -248,81 +242,28 @@ mod tests {
         );
     }
 
-    /// A merged-away contact reads as its survivor; a group as its own
-    /// handles and every member's, a nested group's too, each contact read
-    /// once however the groups loop.
+    /// A merged-away contact reads as its survivor, and its survivor as
+    /// both of them; a contact the store lacks reads as `None`.
     #[tokio::test]
-    async fn a_contact_reaches_its_survivor_and_its_members() {
+    async fn a_contact_reaches_its_survivor() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(tmp.path())).await.unwrap();
         let riker = store
-            .create(
-                "Will Riker",
-                ContactKind::Person,
-                &[email("riker@enterprise.org")],
-            )
+            .create("Will Riker", &[email("riker@enterprise.org")])
             .await
             .unwrap();
         let old = store
-            .create("W. Riker", ContactKind::Person, &[email("wtr@old.org")])
+            .create("W. Riker", &[email("wtr@old.org")])
             .await
             .unwrap();
-        let troi = store
-            .create(
-                "Deanna Troi",
-                ContactKind::Person,
-                &[email("troi@enterprise.org")],
-            )
+        test_sql!("UPDATE contacts SET merged_into = ? WHERE contact_id = ?")
+            .query()
+            .bind(&riker)
+            .bind(&old)
+            .execute(&store.pool)
             .await
             .unwrap();
-        let couple = store
-            .create(
-                "Riker and Troi",
-                ContactKind::Group,
-                &[email("home@betazed.org")],
-            )
-            .await
-            .unwrap();
-        let crew = store
-            .create("Bridge crew", ContactKind::Group, &[])
-            .await
-            .unwrap();
-        for (sql, a, b) in [
-            (
-                "UPDATE contacts SET merged_into = ? WHERE contact_id = ?",
-                &riker,
-                &old,
-            ),
-            (
-                "INSERT INTO members VALUES (?, ?, '2026-10-09T00:00:00Z', '+00:00')",
-                &couple,
-                &old,
-            ),
-            (
-                "INSERT INTO members VALUES (?, ?, '2026-10-09T00:00:00Z', '+00:00')",
-                &couple,
-                &troi,
-            ),
-            (
-                "INSERT INTO members VALUES (?, ?, '2026-10-09T00:00:00Z', '+00:00')",
-                &crew,
-                &couple,
-            ),
-            (
-                "INSERT INTO members VALUES (?, ?, '2026-10-09T00:00:00Z', '+00:00')",
-                &couple,
-                &crew,
-            ),
-        ] {
-            Sql::dynamic(test_sql_id!(), sql)
-                .query()
-                .bind(a)
-                .bind(b)
-                .execute(&store.pool)
-                .await
-                .unwrap();
-        }
-        doltlite_raw::commit_run(&store.pool, "merge and groups")
+        doltlite_raw::commit_run(&store.pool, "merge")
             .await
             .unwrap();
         store.close().await;
@@ -336,16 +277,6 @@ mod tests {
             "a merged-away contact and its survivor are one person"
         );
         assert_eq!(r.handles(&riker).await.unwrap(), Some(both));
-        assert_eq!(
-            r.handles(&crew).await.unwrap(),
-            Some(set(&[
-                "email:home@betazed.org",
-                "email:riker@enterprise.org",
-                "email:troi@enterprise.org",
-                "email:wtr@old.org",
-            ])),
-            "a group is its own handles and every member's, nested and looped"
-        );
         assert_eq!(r.handles("no-such-contact").await.unwrap(), None);
         let found: Vec<String> = r
             .search("riker", 10)
@@ -354,7 +285,7 @@ mod tests {
             .into_iter()
             .map(|c| c.name)
             .collect();
-        assert_eq!(found, ["Riker and Troi", "Will Riker"]);
+        assert_eq!(found, ["Will Riker"]);
         r.close().await;
     }
 
@@ -364,16 +295,13 @@ mod tests {
     async fn me_is_every_handle_of_the_contacts_marked_as_me() {
         let tmp = tempfile::tempdir().unwrap();
         let store = Store::open(&store_path(tmp.path())).await.unwrap();
-        let picard = store
-            .create("Picard", ContactKind::Person, &[email("jlp@e.org")])
-            .await
-            .unwrap();
+        let picard = store.create("Picard", &[email("jlp@e.org")]).await.unwrap();
         let old = store
-            .create("J. Picard", ContactKind::Person, &[email("old@e.org")])
+            .create("J. Picard", &[email("old@e.org")])
             .await
             .unwrap();
         let other = store
-            .create("Locutus", ContactKind::Person, &[email("borg@e.org")])
+            .create("Locutus", &[email("borg@e.org")])
             .await
             .unwrap();
         store.set_me(&picard, true).await.unwrap();

@@ -17,7 +17,8 @@ export type ContactRow = {
   phone: string | null;
   handles: number;
   note: string | null;
-  kind: string;
+  /** Its labels but `real`, as chips. */
+  labels: { text: string }[];
   updated_at: string | null;
   /** How much its handles wrote: what `from:contact:` finds. */
   items?: number;
@@ -182,11 +183,16 @@ export function mergeInto(anchor: ContactRow, targets: ContactRow[]): ContactRow
 
 /** The rows whose name, address, number or note holds every word of
  *  `text`, ignoring case; every row for blank text. */
+/** The rows that carry `label`; every row for none. */
+export function withLabel(rows: ContactRow[], label: string | null): ContactRow[] {
+  return label === null ? rows : rows.filter((r) => r.labels.some((l) => l.text === label));
+}
+
 export function filterContacts(rows: ContactRow[], text: string): ContactRow[] {
   const words = text.toLowerCase().split(/\s+/).filter(Boolean);
   if (words.length === 0) return rows;
   return rows.filter((r) => {
-    const hay = [r.contact_ref.label, r.email, r.phone, r.note]
+    const hay = [r.contact_ref.label, r.email, r.phone, r.note, ...r.labels.map((l) => l.text)]
       .filter((v): v is string => !!v)
       .join("\n")
       .toLowerCase();

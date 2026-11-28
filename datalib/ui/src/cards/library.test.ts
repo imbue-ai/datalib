@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { ManageRow, Place } from "@/api";
 import { parseCardSource } from "./cardCall";
+import { contactsSource } from "./cardSources";
 import {
+  CONTACTS_NODE,
+  contactsNode,
+  contactsNodeOf,
+  labelNodes,
   placeLabel,
   isNodeId,
   nodeCardSource,
@@ -190,5 +195,33 @@ describe("isNodeId", () => {
     for (const bad of ["..", ".", "source:..", "source:a/../b", "source:", "x?y", "", 7]) {
       expect(isNodeId(bad), String(bad)).toBe(false);
     }
+  });
+});
+
+/// Your contacts sit in the tree as an address book's groups do: one node,
+/// the labels under it by name, and each label naming what it lists.
+describe("the contacts' nodes", () => {
+  it("lists the labels under Contacts, and each says what it lists", () => {
+    expect(contactsNode(0).hasChildren).toBe(false);
+    const labels = labelNodes([
+      { label: "senior-staff", contacts: 7 },
+      { label: "family", contacts: 2 },
+    ]);
+    expect(labels.map((n) => [n.label, n.description])).toEqual([
+      ["family", "2"],
+      ["senior-staff", "7"],
+    ]);
+    expect(contactsNodeOf(CONTACTS_NODE)).toEqual({ label: null });
+    expect(contactsNodeOf(labels[0]!.id)).toEqual({ label: "family" });
+    expect(contactsNodeOf("00000000-0000-8011-8429-37952155b9dc")).toBeNull();
+    expect(treeChip(labels[0]!)).toBeNull();
+  });
+
+  it("opens a label as the contacts card held to it", () => {
+    expect(contactsSource("senior-staff")).toBe('contactsView({"label":"senior-staff"})');
+    expect(parseCardSource(contactsSource("senior-staff"))).toMatchObject({
+      name: "contactsView",
+      args: [{ label: "senior-staff" }],
+    });
   });
 });
