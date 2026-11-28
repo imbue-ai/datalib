@@ -243,9 +243,11 @@ export function chipLook(handle: string, shownAs: string, who: Who, ownName = fa
   if (who.mine.length > 1) {
     const text = sharedName(who.mine);
     const stale = who.mine.every((c) => stoppedBy(c, handle));
+    const me = who.mine.some((c) => c.account);
     return {
       text,
-      ariaLabel: `${text}, ${handleValue(handle)}, shared`,
+      me,
+      ariaLabel: `${text}${me ? ", you among them" : ""}, ${handleValue(handle)}, shared`,
       classes: ["handle-chip", "handle-resolved", ...(stale ? ["handle-stale"] : [])],
       initial: null,
       icon: handleIcon(handle),
@@ -346,7 +348,7 @@ export function chipTooltip(handle: string, shownAs: string, who: Who, ownName =
   const value = handleValue(handle);
   const lines: string[] = value === name ? [name] : [name, value];
   if (shared) lines.push(`Shared by ${who.mine.map(nameOf).join(", ")}`);
-  if (mine?.account) lines.push("This is you");
+  if (who.mine.some((c) => c.account)) lines.push(shared ? "One of them is you" : "This is you");
   const stopped = stoppedBy(mine, handle);
   if (stopped) lines.push(`Stopped working by ${stopped}`);
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
@@ -1156,7 +1158,6 @@ export function identifierLook(handle: string, shown: string, who: Who): ChipLoo
   return {
     ...chipLook(handle, text, who),
     text,
-    me: false,
     initial: null,
     photo: null,
     icon: handleIcon(handle),

@@ -373,11 +373,11 @@ describe("movesPeople", () => {
 });
 
 /** Your contact marked *This is me* carries a small "me" on every chip of
- *  it, in place of the list's old Me column; the mark is no part of the
- *  name, so a copy and the label's name leave it out, and a list of the
- *  person's own handles leaves it off. */
+ *  it, in place of the list's old Me column, its own handles' chips and
+ *  an address it shares included; the mark is no part of the name, so a
+ *  copy and the label's name leave it out. */
 describe("the me mark", () => {
-  it("marks every chip of the contact that is you, and nothing else", () => {
+  it("marks every chip of the contact that is you, and no one else's", () => {
     const me = { ...contact("datalib_contacts", "Jean-Luc Picard", [[TEL, null]]), account: true };
     const who = { mine: [me], sourceContacts: [] };
     const look = chipLook(TEL, "Picard", who);
@@ -385,7 +385,13 @@ describe("the me mark", () => {
     expect(look.title).toContain("This is you");
     expect(contactLook("", me).me).toBe(true);
     expect(contactLook("", { ...me, account: false }).me).toBe(false);
-    expect(identifierLook(TEL, "", who).me).toBe(false);
+    expect(identifierLook(TEL, "", who).me).toBe(true);
+    const marie = contact("datalib_contacts", "Marie Picard", [[TEL, null]]);
+    const shared = chipLook(TEL, "", { mine: [marie, me], sourceContacts: [] });
+    expect([shared.me, shared.title.includes("One of them is you")]).toEqual([true, true]);
+    expect(
+      chipLook(TEL, "", { mine: [marie, { ...marie, key: "m2" }], sourceContacts: [] }).me,
+    ).toBe(false);
     expect(chipLook(TEL, "Picard", NOBODY).me).toBeFalsy();
 
     const el = dom(`<a class="chip" data-handle="${TEL}">Picard</a>`)
