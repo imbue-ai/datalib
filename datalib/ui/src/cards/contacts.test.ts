@@ -372,6 +372,42 @@ describe("movesPeople", () => {
   });
 });
 
+/** Your contact marked *This is me* carries a small "me" on every chip of
+ *  it, in place of the list's old Me column, its own handles' chips and
+ *  an address it shares included; the mark is no part of the name, so a
+ *  copy and the label's name leave it out. */
+describe("the me mark", () => {
+  it("marks every chip of the contact that is you, and no one else's", () => {
+    const me = { ...contact("datalib_contacts", "Jean-Luc Picard", [[TEL, null]]), account: true };
+    const who = { mine: [me], sourceContacts: [] };
+    const look = chipLook(TEL, "Picard", who);
+    expect(look.me).toBe(true);
+    expect(look.title).toContain("This is you");
+    expect(contactLook("", me).me).toBe(true);
+    expect(contactLook("", { ...me, account: false }).me).toBe(false);
+    expect(identifierLook(TEL, "", who).me).toBe(true);
+    const marie = contact("datalib_contacts", "Marie Picard", [[TEL, null]]);
+    const shared = chipLook(TEL, "", { mine: [marie, me], sourceContacts: [] });
+    expect([shared.me, shared.title.includes("One of them is you")]).toEqual([true, true]);
+    expect(
+      chipLook(TEL, "", { mine: [marie, { ...marie, key: "m2" }], sourceContacts: [] }).me,
+    ).toBe(false);
+    expect(chipLook(TEL, "Picard", NOBODY).me).toBeFalsy();
+
+    const el = dom(`<a class="chip" data-handle="${TEL}">Picard</a>`)
+      .firstElementChild as HTMLElement;
+    drawChip(el, look);
+    expect(el.querySelector(".chip-me")?.textContent).toBe("me");
+    expect(el.querySelector(".chip-me")?.getAttribute("aria-hidden")).toBe("true");
+    expect(el.dataset.label).toBe("Jean-Luc Picard");
+    drawChip(
+      el,
+      chipLook(TEL, "Picard", { mine: [{ ...me, account: false }], sourceContacts: [] }),
+    );
+    expect(el.querySelector(".chip-me")).toBeNull();
+  });
+});
+
 /** A list of one person's handles (the person card, a contact page's
  *  fields) shows each handle, not the name again, in the same colours. */
 describe("identifierLook", () => {

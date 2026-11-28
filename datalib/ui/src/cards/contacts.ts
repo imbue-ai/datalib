@@ -223,6 +223,9 @@ export type ChipLook = {
   photo: string | null;
   /** The tooltip: who, the identifier, and what each source knows. */
   title: string;
+  /** The contact is you (*This is me*): a small "me" after the name,
+   *  which is decoration, not part of the name or a copy. */
+  me?: boolean;
   /** Which end of the text gives way to "…" when the chip has less room
    *  than it needs: the right, unless its end is what tells it apart (a
    *  log's stamp, a distance from T0). */
@@ -240,9 +243,11 @@ export function chipLook(handle: string, shownAs: string, who: Who, ownName = fa
   if (who.mine.length > 1) {
     const text = sharedName(who.mine);
     const stale = who.mine.every((c) => stoppedBy(c, handle));
+    const me = who.mine.some((c) => c.account);
     return {
       text,
-      ariaLabel: `${text}, ${handleValue(handle)}, shared`,
+      me,
+      ariaLabel: `${text}${me ? ", you among them" : ""}, ${handleValue(handle)}, shared`,
       classes: ["handle-chip", "handle-resolved", ...(stale ? ["handle-stale"] : [])],
       initial: null,
       icon: handleIcon(handle),
@@ -266,7 +271,8 @@ export function chipLook(handle: string, shownAs: string, who: Who, ownName = fa
   const name = nameOf(mine);
   return {
     text: name,
-    ariaLabel: `${name}, ${handleValue(handle)}`,
+    me: mine.account,
+    ariaLabel: `${name}${mine.account ? ", you" : ""}, ${handleValue(handle)}`,
     classes: [
       "handle-chip",
       "handle-resolved",
@@ -342,6 +348,7 @@ export function chipTooltip(handle: string, shownAs: string, who: Who, ownName =
   const value = handleValue(handle);
   const lines: string[] = value === name ? [name] : [name, value];
   if (shared) lines.push(`Shared by ${who.mine.map(nameOf).join(", ")}`);
+  if (who.mine.some((c) => c.account)) lines.push(shared ? "One of them is you" : "This is you");
   const stopped = stoppedBy(mine, handle);
   if (stopped) lines.push(`Stopped working by ${stopped}`);
   if (shownAs.trim() && shownAs.trim() !== name) lines.push(`Shown here as “${shownAs.trim()}”`);
@@ -868,14 +875,20 @@ export const contactsById = new Resolver<NormalizedContact>(
 export function contactLook(shown: string, contact: NormalizedContact | undefined): ChipLook {
   const name = contact ? nameOf(contact) : shown;
   const handles = (contact?.handles ?? []).map((h) => h.value);
+  const me = contact?.account ?? false;
   return {
     text: name,
-    ariaLabel: `${name}, your contact`,
+    me,
+    ariaLabel: me ? `${name}, you` : `${name}, your contact`,
     classes: ["handle-chip", "handle-resolved", "contact-chip"],
     initial: [...name.trim()][0]?.toUpperCase() ?? "?",
     icon: null,
     photo: contact ? contactPhoto(contact) : null,
-    title: [name, ...(handles.length > 0 ? [handles.join(", ")] : [])].join("\n"),
+    title: [
+      name,
+      ...(me ? ["This is you"] : []),
+      ...(handles.length > 0 ? [handles.join(", ")] : []),
+    ].join("\n"),
   };
 }
 
@@ -1004,8 +1017,15 @@ export function drawChip(el: HTMLElement, look: ChipLook): void {
   } else {
     text.textContent = look.text;
   }
-  if (lead) el.replaceChildren(lead, text);
-  else el.replaceChildren(text);
+  const parts: Node[] = lead ? [lead, text] : [text];
+  if (look.me) {
+    const me = el.ownerDocument.createElement("span");
+    me.className = "chip-me";
+    me.setAttribute("aria-hidden", "true");
+    me.textContent = "me";
+    parts.push(me);
+  }
+  el.replaceChildren(...parts);
 }
 
 /// The chip's lead: the photo, else the initial in a disc, else the

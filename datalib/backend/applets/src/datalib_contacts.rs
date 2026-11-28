@@ -405,11 +405,6 @@ fn contacts_table(
 ) -> serde_json::Value {
     let columns = vec![
         ColumnSpec::new("contact_ref", "Contact", ColumnType::Identity).width(200),
-        ColumnSpec::new("me", "Me", ColumnType::Chips)
-            .describe(
-                "Whether you said the contact is you: `from:me` finds what its handles wrote.",
-            )
-            .width(56),
         ColumnSpec::new("email", "Email", ColumnType::Text),
         ColumnSpec::new("phone", "Phone", ColumnType::Text),
         ColumnSpec::new("labels", "Labels", ColumnType::Chips)
@@ -440,7 +435,6 @@ fn contacts_table(
             json!({
                 "key": c.key,
                 "contact_ref": contact_ref,
-                "me": me_chip(c.account),
                 "labels": labels.get(&c.key).map_or_else(Vec::new, |ls| {
                     ls.iter().map(|l| label_chip(l)).collect()
                 }),
@@ -461,17 +455,6 @@ fn label_chip(label: &str) -> Chip {
         text: label.to_string(),
         title: format!("Labelled {label}"),
     }
-}
-
-fn me_chip(me: bool) -> Vec<Chip> {
-    if !me {
-        return Vec::new();
-    }
-    vec![Chip {
-        kind: ChipKind::Metric,
-        text: "me".to_string(),
-        title: "You: `from:me` finds what this contact's handles wrote".to_string(),
-    }]
 }
 
 #[derive(Deserialize)]
@@ -1226,17 +1209,16 @@ mod tests {
         assert_eq!(status, StatusCode::CONFLICT, "{err}");
     }
 
-    /// The card's switch: a contact marked as me answers as the account
-    /// and wears the chip in the table; one the store lacks is the
-    /// person's to fix.
+    /// The card's switch: a contact marked as me answers as the account,
+    /// which its chip is drawn by; one the store lacks is the person's to
+    /// fix.
     #[tokio::test]
-    async fn a_contact_is_marked_as_me_and_the_table_says_so() {
+    async fn a_contact_is_marked_as_me() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(&datalib_contacts::store_path(dir.path()))
             .await
             .unwrap();
         let picard = store.create("Picard", &[]).await.unwrap();
-        store.create("Data", &[]).await.unwrap();
         let store = Arc::new(store);
         let app = routes(store.clone());
 
@@ -1245,15 +1227,6 @@ mod tests {
         assert_eq!((status, &body["changed"]), (StatusCode::OK, &json!(true)));
         let (_, contact) = call(&app, "GET", &format!("/contact/{picard}"), json!(null)).await;
         assert_eq!(contact["account"], true);
-        let (_, table) = call(&app, "GET", "/contacts", json!(null)).await;
-        let chips: Vec<serde_json::Value> = table["rows"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|r| r["me"].clone())
-            .collect();
-        assert_eq!(chips[0], json!([]), "Data is not me");
-        assert_eq!(chips[1][0]["text"], "me");
 
         let (status, _) = call(&app, "POST", "/me", mark("no-such", true)).await;
         assert_eq!(status, StatusCode::CONFLICT);

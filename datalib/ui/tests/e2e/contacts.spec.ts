@@ -272,7 +272,9 @@ test("a contact marked as me on its card is who from:me finds", async ({ page, r
   await page.goto("/contactsView()");
   const table = page.locator(".contacts-card");
   await table.getByLabel("Filter contacts").fill("Mr. Data");
-  await expect(table.locator(`.slick-row[data-key="${id}"] [col-id="me"]`)).toContainText("me");
+  const chip = table.locator(`.slick-row[data-key="${id}"] a.chip[data-contact="${id}"]`);
+  await expect(chip.locator(".chip-me")).toHaveText("me");
+  await expect(table.locator('.slick-header-column[data-id="me"]')).toHaveCount(0);
 
   const off = await request.post("/applet/datalib_contacts/me", {
     data: { contact_id: id, me: false },
