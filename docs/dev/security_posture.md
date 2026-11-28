@@ -405,7 +405,7 @@ it came from, so it gets its own section.
   the prompt's hash. No file, path, store or credential of the library.
   What comes back is one vector per chunk, which goes into the inference
   cache as a local embed's would. Read from source:
-  `embed_on_modal` in `datalib_step/src/search_index.rs` writes
+  `embed_on_modal` in `datalib_step/lib/src/search_index.rs` writes
   `modal::request_line(hash, prompt)` and nothing else to the driver.
 - **Only for a source that names a threshold, and only on a run that owes
   at least that many chunks.** Absent, nothing of the source leaves; a

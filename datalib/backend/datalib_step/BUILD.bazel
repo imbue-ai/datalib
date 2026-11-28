@@ -11,29 +11,21 @@ load("//tools:insta.bzl", "insta_update")
 rust_binary(
     name = "datalib_step",
     srcs = glob(["src/**/*.rs"]),
-    # The Modal driver, run by the bundled Node (src/modal.rs).
-    compile_data = ["src/modal/embed_on_modal.mjs"],
     crate_name = "datalib_step",
     crate_root = "src/main.rs",
     edition = "2021",
     visibility = ["//visibility:public"],
     deps = [
-        "//datalib/backend/sql:datalib_sql",
+        "//datalib/backend/datalib_step/lib:datalib_step_lib",
         "//datalib/backend/step_problems:datalib_step_problems",
         "//datalib/backend/agent_docs:datalib_agent_docs",
         "//datalib/backend/core:datalib_core",
         "//datalib/backend/dag:datalib_dag",
-        "//datalib/backend/pin:datalib_pin",
         "//datalib/backend/etl/time_series:datalib_etl_time_series",
         "//datalib/backend/time_series_schema:datalib_time_series_schema",
-        "//datalib/backend/embedding_map:datalib_embedding_map",
         "//datalib/backend/etl:datalib_etl",
         "//datalib/backend/etl/web:datalib_etl_web",
         "//datalib/backend/etl/render:datalib_etl_render",
-        "//datalib/backend/columns:datalib_columns",
-        "//datalib/backend/handle:datalib_handle",
-        "//datalib/backend/id:datalib_id",
-        "//datalib/backend/metrics:datalib_metrics",
         "//datalib/backend/schema:datalib_schema",
         "//datalib/backend/sql_work:datalib_sql_work",
         "//datalib/backend/etl/providers/claude:datalib_etl_claude",
@@ -148,12 +140,10 @@ rust_binary(
         "//datalib/backend/source_common:datalib_source_common",
         "//datalib/backend/time:datalib_time",
         "//datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index",
-        "@datalib_crates//:anyhow",
-        "@datalib_crates//:blake3",
-        "@datalib_crates//:chrono",
         "//datalib/backend/cli_help:datalib_cli_help",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:chrono",
         "@datalib_crates//:clap",
-        "@datalib_crates//:futures",
         "@datalib_crates//:libc",
         "@datalib_crates//:schemars",
         "@datalib_crates//:serde",
@@ -189,19 +179,12 @@ rust_test(
         # The UI's copy of the ingest-method declarations, which
         # `methods.rs` checks is generated from the config crates.
         "//datalib/ui:src/config/ingestMethods.json",
-        # The Modal driver's tests run it on the pinned Node against a
-        # stand-in for Modal's SDK (search_index.rs).
-        "@nodejs_host//:node_bin",
-        "src/modal/testdata/fake_embed_prompts.mjs",
-        "src/modal/testdata/fake_sdk.mjs",
     ] + glob(["raw_shapes/*.json"]),
     edition = "2021",
-    env = {"NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)"},
-    # Stub `DataProcessor`s for the render-version staleness tests.
-    proc_macro_deps = ["@datalib_crates//:async-trait"],
     deps = [
         "//datalib/backend/blob_store:datalib_blob_store",
         "//datalib/backend/migrate_config:datalib_migrate_config",
+        "//datalib/backend/sql:datalib_sql",
         "@datalib_crates//:runfiles",
     ],
 )

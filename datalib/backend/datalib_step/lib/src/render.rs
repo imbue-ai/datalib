@@ -14,8 +14,8 @@ use datalib_etl_render::processor::{Input, ReadScope, RenderCtx, RenderProcessor
 use datalib_schema::problems::{ProblemRow, Severity, Stage, METRIC};
 use datalib_schema::render_cursor::RenderCursorRow;
 
-use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
+use crate::planned_source::{PlannedSource, Processors};
 use crate::source::StepEnv;
 use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownStore, WHOLE_TABLE};
 use datalib_sql::sql;
@@ -65,7 +65,6 @@ pub async fn run(
     // is the only thing they put in the grid.
     let storage = crate::introspect::plan(&name, measured, now)?;
     let raw_db = datalib_etl::doltlite_raw::db_path_for(&raw_path);
-    require_raw_shape(&raw_db, source_type.as_str()).await?;
 
     let source = RenderSource {
         name: name.clone(),
@@ -155,7 +154,7 @@ pub async fn run(
 
 /// The Manage screen's Documents and Items, as one pair so they never
 /// disagree about which moment they describe.
-pub(crate) fn report_holdings(progress: &Progress, h: Holdings) {
+pub fn report_holdings(progress: &Progress, h: Holdings) {
     progress.metric(datalib_metrics::DOCUMENTS, &[], h.documents);
     progress.metric(datalib_metrics::ITEMS, &[], h.items);
 }
@@ -1214,30 +1213,6 @@ fn raw_entity(scope_key: &str) -> Option<(&str, &str)> {
         .split_once(':')
 }
 
-/// The raw store a render reads is in this build's shape, or the render
-/// is refused before any provider reads it, naming the download step that
-/// brings it there: the launch's prepare pass migrates every raw store, so
-/// a refusal here is one that pass could not migrate. A store this very
-/// build opened is in its shape by construction; any other is compared
-/// with a new store made in scratch. No store yet is nothing to read.
-pub(crate) async fn require_raw_shape(raw_db: &Path, source_type: &str) -> Result<()> {
-    if !raw_db.exists() {
-        return Ok(());
-    }
-    let meta = datalib_store_meta::guard::read_at(raw_db)
-        .await
-        .with_context(|| format!("read {}'s _datalib_meta", raw_db.display()))?;
-    if meta
-        .as_ref()
-        .is_some_and(crate::prepare::opened_by_this_build)
-    {
-        return Ok(());
-    }
-    let want = crate::prepare::raw_shape(source_type).await?;
-    let step = datalib_store_meta::step_of(raw_db);
-    datalib_store_meta::require(raw_db, step.as_deref(), meta.as_ref(), &want)
-}
-
 /// The entity scopes of the raw store's fetch problems at `commit` (HEAD
 /// when the run consumed none). None when there is no store or nothing
 /// committed.
@@ -1347,7 +1322,7 @@ const SHARED_RULES_PARAM: &str = "_shared_render_rules";
 /// cursor carries all of them and a change to any one — a processor's
 /// knob, the shape of the store, what a handle normalizes to, what every
 /// page's shared parts say — re-renders the source.
-pub(crate) fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
+pub fn declared_render_params(processors: &[Box<dyn RenderProcessor>]) -> serde_json::Value {
     processors
         .iter()
         .map(|p| (p.id().to_string(), p.render_params()))

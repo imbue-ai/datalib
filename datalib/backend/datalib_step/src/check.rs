@@ -8,8 +8,9 @@ use std::path::Path;
 
 use datalib_dag::config::DagConfig;
 
-use crate::dispatch::{self, Phase};
+use crate::dispatch;
 use crate::function::Function;
+use crate::planned_source::Phase;
 use crate::source::StepEnv;
 
 /// One datalib-step step whose params a sync would refuse.

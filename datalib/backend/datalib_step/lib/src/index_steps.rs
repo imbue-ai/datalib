@@ -20,7 +20,7 @@ use crate::source::StepEnv;
 /// Taking the list from the graph rather than from a directory scan means
 /// a source dropped from the config stops being indexed on the next run,
 /// even while its rendered tree is still on disk.
-pub(crate) fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
+pub fn groups_from_inputs(inputs: &[String]) -> Vec<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for input in inputs {
         if let Some(group) = input.split('/').next() {
@@ -45,7 +45,7 @@ fn provision_embed_model(
 }
 
 /// [`provision_embed_model`] into exactly `dir`.
-pub(crate) fn ensure_embed_model(dir: &Path, fetch: datalib_embedding_models::Fetch) -> Result<()> {
+pub fn ensure_embed_model(dir: &Path, fetch: datalib_embedding_models::Fetch) -> Result<()> {
     let models = datalib_runtime::models::EMBED_MODELS;
     let outcomes = datalib_embedding_models::ensure_models(dir, models, fetch)
         .with_context(|| format!("provision the embedding model in {}", dir.display()))?;

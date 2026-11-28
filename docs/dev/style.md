@@ -62,7 +62,7 @@ shape.
 | core | shell that feeds it | what it decides |
 |---|---|---|
 | `supervisor::tick::tick(shape, intent, facts) -> Tick` in `dag/src/supervisor/tick.rs` | the loop in `supervisor/round.rs` | what each step is doing, and what to start, stop and close |
-| `RenderPlan::decide(stored, params, version_changed)` in `datalib_step/src/render.rs` | `render_source` | diff from the cursor, or render everything |
+| `RenderPlan::decide(stored, params, version_changed)` in `datalib_step/lib/src/render.rs` | `render_source` | diff from the cursor, or render everything |
 | `select_targets` in `slack/src/ingest/mod.rs` | `fetch` | which conversations to walk |
 | `coverage::gaps(want, held)` in `etl/web/src/coverage.rs` | each provider's walk | which stretches of a range are still owed |
 | `Scan::changes_since(prev) -> Changes` in `etl/files/src/file_changes_scan.rs` | `scan` | which files were added, modified, moved, removed |

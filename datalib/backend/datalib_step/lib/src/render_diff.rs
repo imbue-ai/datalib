@@ -18,8 +18,8 @@ use datalib_etl_render::processor::{Input, RenderCtx, RenderProcessor, RenderUni
 use datalib_etl_render::section::Section;
 use datalib_schema::render_cursor::RenderCursorRow;
 
-use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
+use crate::planned_source::{PlannedSource, Processors};
 use crate::render::{
     declared_render_params, declared_render_versions, every_stored_version_must_be_declared,
     seal_run, Ending, Fate, RenderReport, RenderSource, RunEnd,

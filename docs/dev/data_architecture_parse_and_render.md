@@ -835,7 +835,7 @@ the whole section rests on:
 ### What is recorded
 
 Two tables in the render store, both written by the driver
-(`datalib_step/src/render.rs`):
+(`datalib_step/lib/src/render.rs`):
 
 - **`render_cursor`** — one row: the raw store's commit the last run
   consumed, and the render params (a label filter, a size cap — whatever
@@ -951,7 +951,7 @@ in the same transaction as the storage report and the cursor
 - **Per render unit, every run.** A processor ends each render unit it looked at
   one of three ways (`RenderCtx`, `etl/render/src/processor.rs`), and
   the driver decides what that does to the documents the store holds
-  under its `render_unit_key` (`fate` in `datalib_step/src/render.rs`):
+  under its `render_unit_key` (`fate` in `datalib_step/lib/src/render.rs`):
 
   | the processor said | the render unit's documents |
   |---|---|
@@ -1091,7 +1091,7 @@ promises:
 
 Two tests hold it:
 
-- **`datalib_step/src/render_model_test.rs`** drives the real driver,
+- **`datalib_step/lib/src/render_model_test.rs`** drives the real driver,
   store, diff scan and index with one fake provider over a synthetic raw
   store of three tables, one for each shape a render unit query meets: the
   unit itself (`parents`), rows that reach it through a foreign key
@@ -1211,7 +1211,7 @@ concatenated they are the document's markdown) rather than leaving the driver to
 parse them back. A renderer that declares no sections has its
 documents diff as one block.
 
-How the step gets there (`datalib_step/src/render_diff.rs`):
+How the step gets there (`datalib_step/lib/src/render_diff.rs`):
 
 - **One pass per side, each scanning from the other.** The `to` side
   renders, at `to`, the render units the provider's forward scan names

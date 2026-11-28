@@ -15,14 +15,14 @@ use datalib_search_index::chunk::TokenEnds;
 /// Documents drawn together, as the keyword pass batches them.
 const BATCH: usize = 200;
 
-pub(crate) struct Ask<'a> {
-    pub(crate) source: Option<&'a str>,
-    pub(crate) document: Option<&'a str>,
-    pub(crate) at: Option<&'a str>,
-    pub(crate) chunks: bool,
+pub struct Ask<'a> {
+    pub source: Option<&'a str>,
+    pub document: Option<&'a str>,
+    pub at: Option<&'a str>,
+    pub chunks: bool,
 }
 
-pub(crate) fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
+pub fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
     let stdout = std::io::stdout();
     let written = if ask.chunks {
         tokenizer(root).and_then(|t| {
@@ -55,7 +55,7 @@ fn tokenizer(root: &Path) -> Result<datalib_embedder::Tokenizer> {
 
 /// What the index draws of each document; with `--chunks`, its chunks as
 /// `ends` (the model's tokenizer) cuts them.
-pub(crate) fn write(
+pub fn write(
     root: &Path,
     ask: &Ask<'_>,
     ends: Option<TokenEnds<'_>>,

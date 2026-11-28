@@ -8,8 +8,8 @@ use datalib_etl::processor::RunCtx;
 use datalib_etl::progress::Progress;
 use datalib_schema::problems::{Severity, METRIC};
 
-use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
+use crate::planned_source::{PlannedSource, Processors};
 
 pub async fn run(
     planned: &PlannedSource,
@@ -180,7 +180,7 @@ async fn published(planned: &PlannedSource, tree_rel: &str) -> Result<Vec<Output
 /// spelled as a seal spells it. Every edge row names bytes the blob CAS
 /// already holds, so the entities store's commit is the whole of what a
 /// render can read.
-pub(crate) async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
+pub async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
     datalib_etl::doltlite_raw::content_commit_at_path(&datalib_etl::raw_layout::entities_db(
         raw_dir,
     ))

@@ -240,7 +240,7 @@ async fn keyword_pass(
 
 /// What the embed pass asks of a model: each prompt's vector, cut to fit
 /// its context, and whether it had to be.
-pub(crate) trait EmbedPrompt: Send + 'static {
+pub trait EmbedPrompt: Send + 'static {
     fn embed_fitted_many(&mut self, prompts: &[String]) -> Result<Vec<(Vec<f32>, bool)>>;
 }
 
@@ -823,7 +823,7 @@ pub(crate) async fn keep_searched(root: &Path, searched: &[String]) -> Result<us
 }
 
 /// Where the pinned embedding model is, once provisioned.
-pub(crate) fn model_file(models_dir: &Path) -> PathBuf {
+pub fn model_file(models_dir: &Path) -> PathBuf {
     models_dir.join(datalib_runtime::models::EMBED_MODELS[0].cache_name())
 }
 
@@ -1532,9 +1532,10 @@ mod tests {
                 path
             };
             let node = file(&std::env::var("NODE_RLOC").expect("NODE_RLOC"));
-            let sdk = file("_main/datalib/backend/datalib_step/src/modal/testdata/fake_sdk.mjs");
+            let sdk =
+                file("_main/datalib/backend/datalib_step/lib/src/modal/testdata/fake_sdk.mjs");
             let embed_prompts = file(
-                "_main/datalib/backend/datalib_step/src/modal/testdata/fake_embed_prompts.mjs",
+                "_main/datalib/backend/datalib_step/lib/src/modal/testdata/fake_embed_prompts.mjs",
             );
             let dir = tempfile::tempdir().unwrap();
             let root = dir.path().join("runtime");

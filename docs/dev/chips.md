@@ -82,7 +82,7 @@ recipients and reactors; Slack for a `<@U…>` mention in a body, and email for 
 mention; contact-common for
 the person a contact's page is about, as its heading, and for each
 member of a group of contacts that has a handle; the storage report
-(`datalib_step/src/introspect.rs`) for its group in the heading and
+(`datalib_step/lib/src/introspect.rs`) for its group in the heading and
 each store's step in a column.
 
 ## Drawing a chip

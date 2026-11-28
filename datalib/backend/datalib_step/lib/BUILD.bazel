@@ -1,0 +1,89 @@
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+# The part of `datalib-step` that names no provider crate (src/lib.rs).
+# Nothing here may depend on a provider: `datalib-step`'s own crate, one
+# directory up, links them, so a provider change recompiles that crate and
+# this one stays built.
+rust_library(
+    name = "datalib_step_lib",
+    srcs = glob(["src/**/*.rs"]),
+    # The Modal driver, run by the bundled Node (src/modal.rs).
+    compile_data = ["src/modal/embed_on_modal.mjs"],
+    crate_name = "datalib_step_lib",
+    edition = "2021",
+    visibility = ["//datalib/backend/datalib_step:__pkg__"],
+    deps = [
+        "//datalib/backend/sql:datalib_sql",
+        "//datalib/backend/core:datalib_core",
+        "//datalib/backend/dag:datalib_dag",
+        "//datalib/backend/pin:datalib_pin",
+        "//datalib/backend/embedding_map:datalib_embedding_map",
+        "//datalib/backend/etl:datalib_etl",
+        "//datalib/backend/etl/web:datalib_etl_web",
+        "//datalib/backend/etl/render:datalib_etl_render",
+        "//datalib/backend/columns:datalib_columns",
+        "//datalib/backend/handle:datalib_handle",
+        "//datalib/backend/id:datalib_id",
+        "//datalib/backend/metrics:datalib_metrics",
+        "//datalib/backend/schema:datalib_schema",
+        "//datalib/backend/obs:datalib_obs",
+        "//datalib/backend/env:datalib_env",
+        "//datalib/backend/embedding_models:datalib_embedding_models",
+        "//datalib/backend/search_index:datalib_search_index",
+        "//datalib/backend/embedder:datalib_embedder",
+        "//datalib/backend/runtime:datalib_runtime",
+        "//datalib/backend/store_meta:datalib_store_meta",
+        "//datalib/backend/source_common:datalib_source_common",
+        "//datalib/backend/time:datalib_time",
+        "//datalib/backend/unified_grid_and_search_index:datalib_unified_grid_and_search_index",
+        "@datalib_crates//:anyhow",
+        "@datalib_crates//:blake3",
+        "@datalib_crates//:chrono",
+        "@datalib_crates//:clap",
+        "@datalib_crates//:futures",
+        "@datalib_crates//:libc",
+        "@datalib_crates//:serde",
+        "@datalib_crates//:serde_json",
+        "@datalib_crates//:shlex",
+        "@datalib_crates//:sqlx",
+        "@datalib_crates//:strum",
+        "@datalib_crates//:tokio",
+        "@datalib_crates//:tracing",
+    ],
+)
+
+rust_test(
+    name = "datalib_step_lib_unittests",
+    crate = ":datalib_step_lib",
+    data = [
+        # The Modal driver's tests run it on the pinned Node against a
+        # stand-in for Modal's SDK (search_index.rs).
+        "@nodejs_host//:node_bin",
+        "src/modal/testdata/fake_embed_prompts.mjs",
+        "src/modal/testdata/fake_sdk.mjs",
+    ],
+    edition = "2021",
+    env = {"NODE_RLOC": "$(rlocationpath @nodejs_host//:node_bin)"},
+    # Stub `RenderProcessor`s for the render-version staleness tests.
+    proc_macro_deps = ["@datalib_crates//:async-trait"],
+    deps = [
+        "@datalib_crates//:runfiles",
+        "@datalib_crates//:tempfile",
+    ],
+)
+
+# Everything the library is built from, for the test below.
+genquery(
+    name = "deps",
+    expression = "kind(rule, deps(//datalib/backend/datalib_step/lib:datalib_step_lib))",
+    scope = [":datalib_step_lib"],
+)
+
+sh_test(
+    name = "no_provider_deps_test",
+    size = "small",
+    srcs = ["no_provider_deps_test.sh"],
+    args = ["$(rootpath :deps)"],
+    data = [":deps"],
+)

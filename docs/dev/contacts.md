@@ -195,7 +195,7 @@ or refused, a value normalized another way. Two things hang off it:
 
 - **Every source renders again.** The render step puts the version in
   every source's render params as `_handle_rules`
-  (`datalib_step/src/render.rs`), so a bump renders everything again the
+  (`datalib_step/lib/src/render.rs`), so a bump renders everything again the
   way any param change does, and no provider bumps its own
   `RENDER_VERSION` for it.
 - **The contacts store respells the links a person made.** Each rules

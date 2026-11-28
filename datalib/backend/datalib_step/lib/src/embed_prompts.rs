@@ -18,7 +18,7 @@ const GROUP: usize = 64;
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Prompt {
+pub struct Prompt {
     pub hash: String,
     pub prompt: String,
 }
@@ -31,7 +31,7 @@ struct Embedded<'a> {
 }
 
 /// Line `n` (from 1) of the input; `None` for a blank one.
-pub(crate) fn parse_line(n: usize, line: &str) -> Result<Option<Prompt>> {
+pub fn parse_line(n: usize, line: &str) -> Result<Option<Prompt>> {
     if line.trim().is_empty() {
         return Ok(None);
     }
@@ -43,7 +43,7 @@ pub(crate) fn parse_line(n: usize, line: &str) -> Result<Option<Prompt>> {
 /// Embeds every prompt `input` holds and writes each vector to `out`, a
 /// group at a time; the count embedded. `open` runs only when the first
 /// prompt arrives, so an empty input loads no model.
-pub(crate) fn run<E: EmbedPrompt>(
+pub fn run<E: EmbedPrompt>(
     input: impl BufRead,
     mut out: impl Write,
     open: impl FnOnce() -> Result<E>,
