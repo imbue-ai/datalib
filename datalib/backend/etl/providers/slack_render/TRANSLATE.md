@@ -110,15 +110,23 @@ banner.
 
 - `*bold*` → `**bold**` and `~strike~` → `~~strike~~`, with Slack's
   word-boundary rules; a `>` quote is ended with a blank line. `_italic_`
-  and backticks are already CommonMark;
+  is already CommonMark;
+- inline code is found a paragraph at a time, as markdown finds it: a
+  pair of backticks never spans a blank line. It is written on one
+  line, as markdown shows it, so no line inside it can start a heading
+  or an HTML block. Each piece of code is held aside as finished
+  markdown until the end, so no later step reads into it, and every
+  backtick outside code is escaped, so the only ones markdown reads are
+  the code's own;
 - a ```` ``` ```` block becomes a fence on lines of its own: Slack lets
   the code begin on the opening line, end on the closing one and sit
   mid-line, which markdown would read as a language name and an
   unclosed fence. A thread's title ends at a ```` ``` ````;
 - `<@U…>` is a chip link to the user, `[@Name](slack://user?team=T&id=U
   "@Name (slack:T/U)")`, through `chip_link`, so Datalib draws who that
-  is; inside code it is plain `@Name`, which code shows literally, and a
-  thread's title, plain text, keeps `@Name` too;
+  is; inside code it is plain `@Name` (a channel `#name`, a link its
+  URL), which code shows literally, and a thread's title, plain text,
+  keeps `@Name` too;
 - `<#C…|name>`, `<!subteam^…>`, `<!here>` / `<!channel>` /
   `<!everyone>`, resolved against the workspace's users and channels;
 - a `!` typed straight before any of these, or before a labelled link,
@@ -136,9 +144,9 @@ banner.
   the `&gt;` that opens a Slack quote. A thread's title decodes them all:
   it is plain text, and `Title` escapes it;
 - markdown's own syntax, which Slack shows as typed, is escaped outside
-  code and outside the `<…>` constructs: `[`, `]`, `|`, a backslash
-  before punctuation, and a line's opening `#`, `- `, `1. `, `---` or
-  four-space indent. A name from the users or channels table, or a
+  code and outside the `<…>` constructs: `[`, `]`, `|`, a backtick, a
+  backslash before punctuation, and a line's opening `#`, `- `, `1. `,
+  `---` or four-space indent. A name from the users or channels table, or a
   mention's own label, is escaped as text on a markdown line.
 
 ## Unread messages

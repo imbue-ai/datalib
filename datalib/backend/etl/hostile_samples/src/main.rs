@@ -150,6 +150,7 @@ fn main() -> Result<()> {
     documents.extend(contacts()?);
     documents.extend(forge()?);
     documents.extend(slack());
+    documents.push(slack_code());
     let corpus = Corpus {
         documents,
         escapes: escapes(),
@@ -674,6 +675,63 @@ fn slack() -> Vec<Document> {
         md: to_commonmark(&text, labels),
         expect,
     }]
+}
+
+/// Backticks that markdown would not read as code: across a blank line,
+/// round a line that starts a block, or one in a link's label beside
+/// code. What they hold must show as typed, never as an HTML block, a
+/// heading or a link.
+fn slack_code() -> Document {
+    let mut f = Fields::default();
+    let html = f.tag("slack backticks round an HTML block");
+    let heading = f.tag("slack backticks round a heading");
+    let joined = f.tag("slack code over a heading line");
+    let label = f.tag("slack link label beside code");
+    let typed = [
+        (
+            "slack backticks round an HTML block",
+            format!("`{html}\n\n<img src=x>\n\n`"),
+            format!("`{html} <img src=x> `"),
+        ),
+        (
+            "slack backticks round a heading",
+            format!("`{heading}\n\n## [{heading}](https://e.test)\n\n`"),
+            format!("`{heading} ## [{heading}](https://e.test) `"),
+        ),
+        (
+            "slack code over a heading line",
+            format!("`{joined}\n## [{joined}](https://e.test)`"),
+            format!("{joined} ## [{joined}](https://e.test)"),
+        ),
+    ];
+    let mut text: Vec<String> = typed.iter().map(|(_, t, _)| slack_encoded(t)).collect();
+    text.push(format!(
+        "<https://x.test/a|{label}`b> `{}`",
+        slack_encoded("<img src=x>")
+    ));
+    let mut expect: Vec<Expect> = typed
+        .into_iter()
+        .map(|(field, _, shown)| Expect {
+            field,
+            typed: shown,
+        })
+        .collect();
+    expect.push(Expect {
+        field: "slack link label beside code",
+        typed: format!("{label}`b <img src=x>"),
+    });
+    let inputs = Inputs::default();
+    let none = BTreeMap::new();
+    let labels = Labels {
+        users: inputs.lookup("users", &none),
+        channels: inputs.lookup("channels", &none),
+        team_id: "T1",
+    };
+    Document {
+        name: "slack code".into(),
+        md: to_commonmark(&text.join("\n\n"), labels),
+        expect,
+    }
 }
 
 /// Strings from an alphabet of every character markdown or HTML gives a

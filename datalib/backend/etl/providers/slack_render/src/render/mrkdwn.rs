@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use datalib_etl_render::html::{
     code_span_parts, escape_md_inline, escape_md_syntax, escape_name_inline, md_code_block,
-    md_link_dest,
+    md_code_span, md_link_dest,
 };
 use datalib_etl_render::inputs::Lookup;
 use datalib_etl_render::message::chip_link;
@@ -51,17 +51,22 @@ pub struct Labels<'a> {
 /// Mentions and emoji only, as plain text — what a thread title needs,
 /// without the rest of the CommonMark conversion.
 pub fn resolve_mentions(text: &str, labels: Labels<'_>) -> String {
+    decode(&emojize(&mentions_as_text(text, labels))).into_owned()
+}
+
+/// Each user and channel mention as the name it shows, still
+/// entity-encoded as Slack's text is.
+fn mentions_as_text(text: &str, labels: Labels<'_>) -> String {
     let replaced = USER_REF
         .replace_all(text, |caps: &Captures<'_>| {
             format!("@{}", user_label(caps, labels, slack_encode))
         })
         .into_owned();
-    let replaced = CHANNEL_REF
+    CHANNEL_REF
         .replace_all(&replaced, |caps: &Captures<'_>| {
             format!("#{}", channel_label(caps, labels, slack_encode))
         })
-        .into_owned();
-    decode(&emojize(&replaced)).into_owned()
+        .into_owned()
 }
 
 /// The people a message's text mentions (`<@U…>`), each once, in the
@@ -135,34 +140,36 @@ fn md_name(name: &str) -> String {
 /// `labels.channels`.
 ///
 /// Markdown's own syntax in what someone typed — a `[x](url)`, a `# `,
-/// a `|` — is escaped first, since Slack shows it as typed. A name
-/// stands in as a placeholder until the end, so none of the passes that
-/// read mrkdwn can read into it.
+/// a `|` — is escaped, since Slack shows it as typed. Code is written
+/// as markdown where it is found, and it and each name stand in as a
+/// placeholder until the end, so none of the passes that read mrkdwn
+/// can read into them.
 pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
-    let mut names: Vec<String> = Vec::new();
+    let text = text.replace([HELD_OPEN, HELD_CLOSE, CONSTRUCT_OPEN, CONSTRUCT_CLOSE], "");
+    let mut held: Vec<String> = Vec::new();
+    let mut out = String::with_capacity(text.len() + 8);
+    for piece in code_and_text(&text) {
+        let code = match piece {
+            Piece::Text(typed) => {
+                let starts_line = out.is_empty() || out.ends_with('\n');
+                out.push_str(&escape_typed_markdown(&typed, starts_line));
+                continue;
+            }
+            Piece::Block(body) => md_code_block("", &code_text(&body, labels)),
+            Piece::Span(inner) => md_code_span(&code_text(&span_text(&inner), labels)),
+        };
+        held.push(code);
+        out.push_str(&held_mark(held.len() - 1));
+    }
+
     let mut hold = |md: String| {
-        names.push(md);
-        format!("{NAME_OPEN}{}{NAME_CLOSE}", names.len() - 1)
+        held.push(md);
+        held_mark(held.len() - 1)
     };
 
-    let mut out = escape_typed_markdown(&fence_code_blocks(text));
-
-    // A mention is a chip link in text, and `@Name` in code, which shows
-    // what it holds literally.
-    out = code_parts_whole_constructs(&out)
-        .into_iter()
-        .map(|(part, is_code)| {
-            USER_REF
-                .replace_all(&part, |caps: &Captures<'_>| {
-                    if is_code {
-                        format!("@{}", user_label(caps, labels, slack_encode))
-                    } else {
-                        hold(user_mention(caps, labels))
-                    }
-                })
-                .into_owned()
-        })
-        .collect();
+    out = USER_REF
+        .replace_all(&out, |caps: &Captures<'_>| hold(user_mention(caps, labels)))
+        .into_owned();
 
     out = CHANNEL_REF
         .replace_all(&out, |caps: &Captures<'_>| {
@@ -188,11 +195,19 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
                 Some(label) if !label.is_empty() && label != &caps[1] => {
                     format!(
                         "[{}]({})",
-                        escape_md_syntax(&label.replace(['\r', '\n'], " "), false),
+                        escape_backticks(&escape_md_syntax(
+                            &label.replace(['\r', '\n'], " "),
+                            false
+                        )),
                         md_link_dest(&url)
                     )
                 }
-                _ => format!("<{}>", url.replace('<', "%3C").replace('>', "%3E")),
+                _ => format!(
+                    "<{}>",
+                    url.replace('<', "%3C")
+                        .replace('>', "%3E")
+                        .replace('`', "%60")
+                ),
             }
         })
         .into_owned();
@@ -209,133 +224,195 @@ pub fn to_commonmark(text: &str, labels: Labels<'_>) -> String {
         })
         .into_owned();
 
-    // After the angle-bracket constructs are consumed, so we never
-    // synthesise a `<@U…>` from text the user actually typed.
-    out = decode_entities_where_literal(&out);
-
-    out = terminate_blockquotes(&out);
-    // Slack draws no emoji inside code.
-    out = code_span_parts(&out)
-        .into_iter()
-        .map(|(part, is_code)| {
-            if is_code {
-                part.to_string()
-            } else {
-                emojize(part)
-            }
-        })
-        .collect();
-    NAME_HELD
-        .replace_all(&out, |caps: &Captures<'_>| {
-            caps[1]
-                .parse::<usize>()
-                .ok()
-                .and_then(|n| names.get(n).cloned())
-                .unwrap_or_default()
-        })
-        .into_owned()
+    out = terminate_blockquotes(&quote_marks(&out));
+    out = emojize(&out);
+    HELD.replace_all(&out, |caps: &Captures<'_>| {
+        caps[1]
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| held.get(n).cloned())
+            .unwrap_or_default()
+    })
+    .into_owned()
 }
 
-/// Slack's ``` block as a CommonMark fence. Slack lets the code start
-/// on the opening line and end on the closing one, and puts the block
-/// mid-line; markdown wants each fence on a line of its own, and reads
-/// what follows an opening fence as the code's language.
-fn fence_code_blocks(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() + 8);
+/// Brackets the index of markdown held aside until the end: code, or a
+/// name. Private-use characters, which are taken out of Slack's text
+/// first.
+const HELD_OPEN: char = '\u{E000}';
+const HELD_CLOSE: char = '\u{E001}';
+static HELD: LazyLock<Regex> = LazyLock::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
+
+fn held_mark(n: usize) -> String {
+    format!("{HELD_OPEN}{n}{HELD_CLOSE}")
+}
+
+/// A piece of Slack text: what someone typed, or the code in it.
+enum Piece {
+    Text(String),
+    /// A ``` block's content.
+    Block(String),
+    /// Inline code's content, between its backticks.
+    Span(String),
+}
+
+/// `text` cut into its code and the text around it. A ``` block may
+/// hold blank lines; inline code, as in markdown, never crosses one.
+/// Slack lets a block start and end mid-line, and a fence needs lines
+/// of its own, so the text beside a block is moved off its lines. A
+/// `<…>` construct stays whole in one piece: a mention's label may hold
+/// a backtick, which must not open code that cuts the mention in two.
+fn code_and_text(text: &str) -> Vec<Piece> {
+    let masked = Masked::new(text);
+    let mut pieces = Vec::new();
+    let mut run = String::new();
     let mut after_block = false;
-    for (part, is_code) in code_parts_whole_constructs(text) {
-        let block = is_code
-            .then(|| part.strip_prefix("```")?.strip_suffix("```"))
-            .flatten()
-            .filter(|code| !code.starts_with('`') && !code.ends_with('`'));
-        let Some(code) = block else {
+    for (part, is_code) in code_span_parts(&masked.text) {
+        let Some(body) = is_code.then(|| block_body(part)).flatten() else {
             if after_block && !part.starts_with('\n') {
-                out.push('\n');
-                out.push_str(part.trim_start_matches([' ', '\t']));
+                run.push('\n');
+                run.push_str(part.trim_start_matches([' ', '\t']));
             } else {
-                out.push_str(&part);
+                run.push_str(part);
             }
             after_block = false;
             continue;
         };
-        let code = code.strip_prefix('\n').unwrap_or(code);
-        let code = code.strip_suffix('\n').unwrap_or(code);
-        out.truncate(out.trim_end_matches([' ', '\t']).len());
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
+        run.truncate(run.trim_end_matches([' ', '\t']).len());
+        if (!run.is_empty() || !pieces.is_empty()) && !run.ends_with('\n') {
+            run.push('\n');
         }
-        out.push_str(&md_code_block("", code));
+        cut_spans(&run, &masked, &mut pieces);
+        run.clear();
+        let body = body.strip_prefix('\n').unwrap_or(body);
+        let body = body.strip_suffix('\n').unwrap_or(body);
+        pieces.push(Piece::Block(masked.unmask(body)));
         after_block = true;
     }
-    out
+    cut_spans(&run, &masked, &mut pieces);
+    pieces
 }
 
-/// Brackets a held name's index: private-use characters, which Slack
-/// text has no business carrying.
-const NAME_OPEN: char = '\u{E000}';
-const NAME_CLOSE: char = '\u{E001}';
-static NAME_HELD: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new("\u{E000}([0-9]+)\u{E001}").unwrap());
+/// The content of a ``` block, if `part` is one.
+fn block_body(part: &str) -> Option<&str> {
+    part.strip_prefix("```")?
+        .strip_suffix("```")
+        .filter(|code| !code.starts_with('`') && !code.ends_with('`'))
+}
 
-/// [`escape_md_syntax`] over what someone typed: not inside a `<…>`,
-/// which is Slack's own markup (a typed `<` arrives as `&lt;`), and not
-/// inside code, which shows literally anyway. The `<…>`s are held aside
-/// while the code is found, so a backtick in a link's label cannot pair
-/// with one outside it.
-fn escape_typed_markdown(text: &str) -> String {
-    let mut constructs: Vec<String> = Vec::new();
-    let masked = SLACK_CONSTRUCT.replace_all(text, |caps: &Captures<'_>| {
-        constructs.push(caps[0].to_string());
-        format!("{CONSTRUCT_OPEN}{}{CONSTRUCT_CLOSE}", constructs.len() - 1)
-    });
-    let mut out = String::with_capacity(text.len() + 8);
-    for (part, is_code) in code_span_parts(&masked) {
+/// The inline code in `run`, found a paragraph at a time.
+fn cut_spans(run: &str, masked: &Masked, pieces: &mut Vec<Piece>) {
+    let mut paragraph = 0;
+    let mut at = 0;
+    for line in run.split_inclusive('\n') {
+        let next = at + line.len();
+        if is_blank(line) {
+            cut_paragraph(&run[paragraph..at], masked, pieces);
+            push_text(pieces, masked.unmask(line));
+            paragraph = next;
+        }
+        at = next;
+    }
+    cut_paragraph(&run[paragraph..], masked, pieces);
+}
+
+/// A blank line, to markdown: spaces and tabs at most.
+fn is_blank(line: &str) -> bool {
+    line.trim_end_matches(['\n', '\r'])
+        .trim_matches([' ', '\t'])
+        .is_empty()
+}
+
+fn cut_paragraph(paragraph: &str, masked: &Masked, pieces: &mut Vec<Piece>) {
+    for (part, is_code) in code_span_parts(paragraph) {
         if is_code {
-            out.push_str(part);
+            let ticks = part.len() - part.trim_start_matches('`').len();
+            let inner = &part[ticks..part.len() - ticks];
+            pieces.push(Piece::Span(masked.unmask(inner)));
         } else {
-            let starts_line = out.is_empty() || out.ends_with('\n');
-            // A `!` typed straight before a construct that becomes a
-            // link would make that link an image.
-            let escaped = escape_md_syntax(part, starts_line).replace(
-                &format!("!{CONSTRUCT_OPEN}"),
-                &format!("\\!{CONSTRUCT_OPEN}"),
-            );
-            out.push_str(&escaped);
+            push_text(pieces, masked.unmask(part));
         }
     }
-    CONSTRUCT_HELD
-        .replace_all(&out, |caps: &Captures<'_>| {
-            caps[1]
-                .parse::<usize>()
-                .ok()
-                .and_then(|n| constructs.get(n).cloned())
-                .unwrap_or_default()
-        })
-        .into_owned()
 }
 
-/// [`code_span_parts`] over Slack text, with each `<…>` construct kept
-/// whole inside one part: a mention's label may hold a backtick, which
-/// must not open a code span that cuts the mention in two.
-fn code_parts_whole_constructs(text: &str) -> Vec<(String, bool)> {
-    let mut constructs: Vec<String> = Vec::new();
-    let masked = SLACK_CONSTRUCT.replace_all(text, |caps: &Captures<'_>| {
-        constructs.push(caps[0].to_string());
-        format!("{CONSTRUCT_OPEN}{}{CONSTRUCT_CLOSE}", constructs.len() - 1)
+fn push_text(pieces: &mut Vec<Piece>, text: String) {
+    match pieces.last_mut() {
+        Some(Piece::Text(before)) => before.push_str(&text),
+        _ => pieces.push(Piece::Text(text)),
+    }
+}
+
+/// What markdown shows of a code span's content: each line end as a
+/// space, and one space off each end when both ends have one.
+fn span_text(inner: &str) -> String {
+    let line = inner.replace("\r\n", " ").replace(['\r', '\n'], " ");
+    match line.strip_prefix(' ').and_then(|l| l.strip_suffix(' ')) {
+        Some(core) if !line.trim_matches(' ').is_empty() => core.to_string(),
+        _ => line,
+    }
+}
+
+/// Code as it shows: a mention is the name it shows, a link its URL, an
+/// entity the character it stands for. Slack draws no emoji in code.
+fn code_text(code: &str, labels: Labels<'_>) -> String {
+    let text = mentions_as_text(code, labels);
+    let text = SUBTEAM_REF.replace_all(&text, |caps: &Captures<'_>| {
+        format!("@{}", caps.get(1).map_or("group", |m| m.as_str()))
     });
-    code_span_parts(&masked)
-        .into_iter()
-        .map(|(part, is_code)| {
-            let whole = CONSTRUCT_HELD.replace_all(part, |caps: &Captures<'_>| {
+    let text = SPECIAL_REF.replace_all(&text, |caps: &Captures<'_>| format!("@{}", &caps[1]));
+    let text = URL_REF.replace_all(&text, |caps: &Captures<'_>| caps[1].to_string());
+    decode(&text).into_owned()
+}
+
+/// What someone typed, with markdown's syntax escaped: not inside a
+/// `<…>`, which is Slack's own markup (a typed `<` arrives as `&lt;`).
+fn escape_typed_markdown(text: &str, starts_line: bool) -> String {
+    let masked = Masked::new(text);
+    // A `!` typed straight before a construct that becomes a link would
+    // make that link an image.
+    let escaped = escape_md_syntax(&masked.text, starts_line).replace(
+        &format!("!{CONSTRUCT_OPEN}"),
+        &format!("\\!{CONSTRUCT_OPEN}"),
+    );
+    masked.unmask(&escape_backticks(&escaped))
+}
+
+/// Every backtick outside code escaped, so the only backticks markdown
+/// reads are the fences of the code written here. One left as it is
+/// pairs with such a fence and shows the code's content as markdown.
+fn escape_backticks(text: &str) -> String {
+    text.replace('`', "\\`")
+}
+
+/// Slack text with each `<…>` construct held aside as a placeholder.
+struct Masked {
+    text: String,
+    constructs: Vec<String>,
+}
+
+impl Masked {
+    fn new(text: &str) -> Self {
+        let mut constructs: Vec<String> = Vec::new();
+        let text = SLACK_CONSTRUCT
+            .replace_all(text, |caps: &Captures<'_>| {
+                constructs.push(caps[0].to_string());
+                format!("{CONSTRUCT_OPEN}{}{CONSTRUCT_CLOSE}", constructs.len() - 1)
+            })
+            .into_owned();
+        Self { text, constructs }
+    }
+
+    fn unmask(&self, text: &str) -> String {
+        CONSTRUCT_HELD
+            .replace_all(text, |caps: &Captures<'_>| {
                 caps[1]
                     .parse::<usize>()
                     .ok()
-                    .and_then(|n| constructs.get(n).cloned())
+                    .and_then(|n| self.constructs.get(n).cloned())
                     .unwrap_or_default()
-            });
-            (whole.into_owned(), is_code)
-        })
-        .collect()
+            })
+            .into_owned()
+    }
 }
 
 static SLACK_CONSTRUCT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<[^<>]*>").unwrap());
@@ -344,28 +421,17 @@ const CONSTRUCT_CLOSE: char = '\u{E003}';
 static CONSTRUCT_HELD: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("\u{E002}([0-9]+)\u{E003}").unwrap());
 
-/// Slack's entities stay entities in running text, so a `<b>` someone
-/// typed shows as typed rather than being read as HTML. They are decoded
-/// where markdown would show them literally — inside a code span or
-/// block — and where Slack's own `&gt;` quote mark opens a line.
-fn decode_entities_where_literal(text: &str) -> String {
-    let quoted: Vec<String> = text
-        .split('\n')
+/// Slack's entities stay entities in what someone typed, so a `<b>`
+/// shows as typed rather than being read as HTML; Slack's own `&gt;`
+/// quote mark opening a line becomes markdown's.
+fn quote_marks(text: &str) -> String {
+    text.split('\n')
         .map(|line| match line.strip_prefix("&gt;") {
             Some(rest) => format!(">{rest}"),
             None => line.to_string(),
         })
-        .collect();
-    code_span_parts(&quoted.join("\n"))
-        .into_iter()
-        .map(|(part, is_code)| {
-            if is_code {
-                decode(part).into_owned()
-            } else {
-                part.to_string()
-            }
-        })
-        .collect()
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Slack `>` quotes only the prefixed line(s); CommonMark would lazily
@@ -642,6 +708,11 @@ mod tests {
             to_commonmark("```\n<@U_DATA>, <@U_X|a&amp;b>\n```", lbl),
             "```\n@Lt. Cmdr. Data, @a&b\n```"
         );
+        assert_eq!(
+            to_commonmark("`<#C_BRIDGE> <!here> <https://x.test/a|b>`", lbl),
+            "`#bridge @here https://x.test/a`",
+            "a channel is its name and a link its URL"
+        );
     }
 
     /// A `!` typed straight before a mention or a labelled link stays a
@@ -684,6 +755,76 @@ mod tests {
             to_commonmark("```a ```` b```", lbl),
             "`````\na ```` b\n`````",
             "a fence is longer than any backtick run inside it"
+        );
+    }
+
+    /// Markdown never lets a code span cross a blank line. Paired across
+    /// one, the text between was left as code — unescaped, its entities
+    /// decoded — and markdown read it as an HTML block or a heading: a
+    /// second message, drawn from someone else.
+    #[test]
+    fn backticks_across_a_blank_line_are_text() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("`x\n\n&lt;img src=x&gt;\n\n`", lbl),
+            "\\`x\n\n&lt;img src=x&gt;\n\n\\`"
+        );
+        assert_eq!(
+            to_commonmark("`x\n\n## [Picard](tel:+15550100)\n\n`", lbl),
+            "\\`x\n\n\\## \\[Picard\\](tel:+15550100)\n\n\\`"
+        );
+        assert_eq!(
+            to_commonmark("`a\n\nb` `[c](tel:+1)`", lbl),
+            "\\`a\n\nb` `\\[c\\](tel:+1)\\`",
+            "a backtick left alone by the blank line pairs with the next one"
+        );
+        assert_eq!(
+            to_commonmark("```\nfirst\n\nsecond\n```", lbl),
+            "```\nfirst\n\nsecond\n```",
+            "a ``` block holds blank lines"
+        );
+    }
+
+    /// A heading or an HTML block can start on the line after a code
+    /// span opens, with no blank line, and ends the paragraph the span
+    /// was in. Code that runs over lines is written on one line, as
+    /// markdown shows it, so no line inside it can start a block.
+    #[test]
+    fn code_over_lines_is_one_line() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("`a\n## [b](tel:+1)`", lbl),
+            "`a ## [b](tel:+1)`"
+        );
+        assert_eq!(to_commonmark("`a\n&lt;div&gt;`", lbl), "`a <div>`");
+    }
+
+    /// A backtick outside code is escaped. Left as it is, it paired with
+    /// the fence of the code after it, which markdown then showed as
+    /// markdown: here, a link's label pairing with the code's fence.
+    #[test]
+    fn a_backtick_outside_code_pairs_with_nothing() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("<https://e.test|a`b> `&lt;img src=x&gt;`", lbl),
+            "[a\\`b](https://e.test) `<img src=x>`"
+        );
+        assert_eq!(
+            to_commonmark("` x ``&lt;img src=x&gt;``", lbl),
+            "\\` x `<img src=x>`",
+            "code is written with a fence of its own length"
+        );
+    }
+
+    /// A link's URL may hold a backtick, which markdown reads as part of
+    /// the link. Code found again after the link was written paired that
+    /// backtick with a later one and decoded the entities between.
+    #[test]
+    fn a_backtick_in_a_url_opens_no_code() {
+        let lbl = no_labels();
+        assert_eq!(
+            to_commonmark("<https://a.test/`> &lt;img src=x&gt; `y`", lbl),
+            "<https://a.test/%60> &lt;img src=x&gt; `y`"
         );
     }
 
