@@ -97,7 +97,7 @@ The file then declares those two locks in `[[locks]]` entries
 (`embedder` with 1 slot, `index` with 2), since a
 step that holds an undeclared lock is dropped, and lists the verbs
 `datalib-step` takes in a `[[programs]]` entry. `datalib-step`'s own
-code for all of this is `datalib_step/src/step_entry.rs`, which the
+code for all of this is `datalib_step/lib/src/step_entry.rs`, which the
 examples and `examples --append` share.
 
 `[env]` is a table of variables handed to every step, below each
@@ -174,14 +174,14 @@ package's programs by its path under the data root, in its `command`;
   `ingest`,
   `render_markdown`, `render_time_series`, `render_occurrences`,
   `embed`, `unified_grid_and_search_index`, `embedding_map`, `time_series_index`
-  (`datalib_step/src/function.rs`, tested against the layout constants
+  (`datalib_step/lib/src/function.rs`, tested against the layout constants
   the render and index crates use). `unified_grid_and_search_index` and `embedding_map`
   write `unified_grid_and_search_index/<function>`, and
   `time_series_index` writes `unified_time_series_index/time_series_index`,
   and nothing else, because the applet that reads each finds it from the
   data root alone.
 - A source whose type has time series (`SourceType::renders_time_series`
-  in `datalib_step/src/source_type.rs`: `garmin`, `yolink`,
+  in `datalib_step/lib/src/source_type.rs`: `garmin`, `yolink`,
   `airvisual`) has a `render_time_series` step beside
   its `render_markdown`, reading its ingest, and the
   `time_series_index` reads every such step (`*/render_time_series`).
@@ -542,7 +542,7 @@ is missing, and only once it has a document to cut or a chunk to
 embed. Each `embed` reports the chunks of its own source it left
 without vectors, as the metric `search_chunks_not_embedded{source=…}`:
 the chunks the cache had no vector for when it began, less those it
-embedded (`datalib_step/src/index_steps.rs`). Nothing of a source's reads a step that reads
+embedded (`datalib_step/lib/src/index_steps.rs`). Nothing of a source's reads a step that reads
 every source, and that is what lets each source's `embed` finish on its
 own: the runner does not count a step as finished while anything
 upstream of it is still running, so a step downstream of a fan-in would finish only

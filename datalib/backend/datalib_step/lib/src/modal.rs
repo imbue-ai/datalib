@@ -23,13 +23,13 @@ const DRIVER: &str = include_str!("modal/embed_on_modal.mjs");
 /// An `embed` step's params.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct EmbedParams {
+pub struct EmbedParams {
     /// Absent: nothing of the source leaves the machine. Present: a run
     /// that owes at least this many chunks sends all of them to Modal.
     pub(crate) embed_on_modal_from_n_chunks: Option<u64>,
 }
 
-pub(crate) fn params(value: serde_json::Value) -> Result<EmbedParams> {
+pub fn params(value: serde_json::Value) -> Result<EmbedParams> {
     let value = match value {
         serde_json::Value::Null => serde_json::json!({}),
         v => v,

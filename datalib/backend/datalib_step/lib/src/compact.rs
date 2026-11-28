@@ -8,6 +8,7 @@
 //! time-series store's commits are what its index points at, so neither is
 //! ever folded. The grid index is plain SQLite and has nothing to give.
 
+use futures::future::BoxFuture;
 use std::path::Path;
 
 use anyhow::Result;
@@ -23,7 +24,16 @@ pub enum Verb {
     Compact,
 }
 
-pub async fn run(
+pub fn run<'a>(
+    env: &'a StepEnv,
+    data_root: &'a Path,
+    verb: Verb,
+    emitter: &'a Emitter,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_unboxed(env, data_root, verb, emitter))
+}
+
+async fn run_unboxed(
     env: &StepEnv,
     data_root: &Path,
     verb: Verb,

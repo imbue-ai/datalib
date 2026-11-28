@@ -48,7 +48,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #                   linker and warns; lld present means we can opt in.
 # git               workspace_status.sh, crate fetches that vendor from git.
 # gdb               a `datalib-step` whose exit stalls prints every thread's
-#                   stack through it (datalib_step/src/exit_watchdog.rs).
+#                   stack through it (datalib_step/lib/src/exit_watchdog.rs).
 # rsync             `//datalib/ui:e2e_test`'s wrapper stages the spec
 #                   tree with `rsync -aL`.
 # sqlite3           the beeper extract shells out to the *stock* CLI

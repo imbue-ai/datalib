@@ -71,7 +71,7 @@ in, and one reader-open that checks it:
 
 | store | shape | reader |
 |---|---|---|
-| raw store | a new store made in scratch (`datalib_step::prepare::raw_shape`) | the render step, before any provider reads (`render::require_raw_shape`) |
+| raw store | a new store made in scratch (`datalib_step::prepare::raw_shape`) | the render step, before any provider reads (`datalib_step::prepare::require_raw_shape`) |
 | render store | `indexed_markdown::shape` | `IndexedMarkdownStore::open_for_reading` |
 | grid index | `grid_index::shape` | `DoltRepo::pinned`, inside each read; `grid_index::open_for_reading` |
 | search index (in the grid index's file) | `grid_index::Part::Keywords`, its part of the grid index's | `search_index::open` in the grid's crate, through `grid_index::keywords_readable` |

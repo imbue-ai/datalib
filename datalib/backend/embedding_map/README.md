@@ -4,7 +4,7 @@ The map card (`umapView()`) shows every document the search index has embedded a
 point on a plane, placed so that documents with similar content sit near
 each other. This crate computes where the points go. It is pure
 computation: the `embedding_map` function in `datalib-step`
-(`datalib_step/src/embedding_map.rs`) reads the vectors and writes the
+(`datalib_step/lib/src/embedding_map.rs`) reads the vectors and writes the
 result, and the `unified_grid_and_search_index` applet serves it joined to the grid.
 
 ```

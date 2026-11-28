@@ -1,6 +1,7 @@
 //! The ingest step driver: one source's ingest processors, written to the
 //! tree the step id names.
 
+use futures::future::BoxFuture;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -8,10 +9,20 @@ use datalib_etl::processor::RunCtx;
 use datalib_etl::progress::Progress;
 use datalib_schema::problems::{Severity, METRIC};
 
-use crate::dispatch::{PlannedSource, Processors};
 use crate::events::{Emitter, OutputClaim};
+use crate::planned_source::{PlannedSource, Processors};
 
-pub async fn run(
+pub fn run<'a>(
+    planned: &'a PlannedSource,
+    tree_rel: &'a str,
+    now: &'a str,
+    control: &'a datalib_etl::control::DownloadControl,
+    emitter: &'a Emitter,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_unboxed(planned, tree_rel, now, control, emitter))
+}
+
+async fn run_unboxed(
     planned: &PlannedSource,
     tree_rel: &str,
     now: &str,
@@ -180,7 +191,11 @@ async fn published(planned: &PlannedSource, tree_rel: &str) -> Result<Vec<Output
 /// spelled as a seal spells it. Every edge row names bytes the blob CAS
 /// already holds, so the entities store's commit is the whole of what a
 /// render can read.
-pub(crate) async fn raw_store_version(raw_dir: &Path) -> Result<Option<String>> {
+pub fn raw_store_version<'a>(raw_dir: &'a Path) -> BoxFuture<'a, Result<Option<String>>> {
+    Box::pin(raw_store_version_unboxed(raw_dir))
+}
+
+async fn raw_store_version_unboxed(raw_dir: &Path) -> Result<Option<String>> {
     datalib_etl::doltlite_raw::content_commit_at_path(&datalib_etl::raw_layout::entities_db(
         raw_dir,
     ))

@@ -8,41 +8,25 @@
 
 mod append;
 mod check;
-mod compact;
-mod config_backup;
 mod dispatch;
-mod embed_prompts;
-mod embedding_map;
-mod events;
-mod exit_watchdog;
-mod function;
 mod help;
-mod hints;
-mod index_steps;
-mod index_text;
-mod ingest;
-mod introspect;
-mod markdown;
 mod methods;
-mod modal;
 mod occurrences;
 mod prepare;
 mod probe;
-mod published;
-mod render;
-mod render_diff;
-#[cfg(test)]
-mod render_model_test;
 mod reset;
-mod search_index;
-mod source;
 mod source_docs;
-mod source_type;
-mod step_entry;
 mod synth;
 mod time_series;
-mod topo_sort_config;
-mod unified_grid_and_search_index;
+
+// The modules that name no provider, in their own crate so a provider
+// change recompiles only the modules above (`lib/src/lib.rs`).
+use datalib_step_lib::{
+    compact, config_backup, embed_prompts, embedding_map, events, exit_watchdog, function, hints,
+    index_steps, index_text, ingest, markdown, modal, planned_source, published, render,
+    render_diff, search_index, source, source_type, step_entry, topo_sort_config,
+    unified_grid_and_search_index,
+};
 
 #[cfg(test)]
 mod agent_docs_test;
@@ -890,7 +874,7 @@ async fn run_function(
             }
             let planned = dispatch::plan(
                 env.source_type()?,
-                dispatch::Phase::Ingest,
+                planned_source::Phase::Ingest,
                 &env.group,
                 data_root.join(&env.step),
                 params,
@@ -904,7 +888,7 @@ async fn run_function(
             let (pair, params) = render_diff::split_params(params)?;
             let planned = dispatch::plan(
                 env.diff_source_type()?,
-                dispatch::Phase::Render,
+                planned_source::Phase::Render,
                 &env.group,
                 data_root.join(&raw_rel),
                 params,
@@ -915,13 +899,18 @@ async fn run_function(
             let raw_rel = env.raw_store_rel()?;
             let planned = dispatch::plan(
                 env.source_type()?,
-                dispatch::Phase::Render,
+                planned_source::Phase::Render,
                 &env.group,
                 data_root.join(&raw_rel),
                 params,
             )?;
             let source_type = planned.source_type;
-            let res = render::run(planned, &env, &raw_rel, data_root, now, emitter, control).await;
+            let raw_db = datalib_etl::doltlite_raw::db_path_for(&planned.raw_path);
+            let res = async {
+                prepare::require_raw_shape(&raw_db, source_type.as_str()).await?;
+                render::run(planned, &env, &raw_rel, data_root, now, emitter, control).await
+            }
+            .await;
             hints::emit_hint_on_failure(emitter, source_type, &res);
             res
         }

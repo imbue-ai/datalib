@@ -70,13 +70,13 @@ async fn report_problems(emitter: &Emitter, store: &Path) -> Result<()> {
 fn refuse_if_kept(env: &StepEnv, tree: &Path) -> Result<()> {
     let planned = crate::dispatch::plan(
         env.source_type()?,
-        crate::dispatch::Phase::Ingest,
+        crate::planned_source::Phase::Ingest,
         &env.group,
         tree.to_path_buf(),
         crate::source::params_from_env()?,
     )?;
     anyhow::ensure!(
-        !matches!(planned.processors, crate::dispatch::Processors::Kept),
+        !matches!(planned.processors, crate::planned_source::Processors::Kept),
         "{} does not download (`common.download = false`), so nothing would fill its raw \
          store again after a reset; turn the download back on first",
         env.step

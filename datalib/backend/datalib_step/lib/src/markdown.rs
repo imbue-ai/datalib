@@ -11,16 +11,16 @@ use anyhow::{Context, Result};
 use datalib_etl_render::indexed_markdown::IndexedMarkdownStore;
 use datalib_obs::status_line;
 
-pub(crate) struct Ask<'a> {
-    pub(crate) source: Option<&'a str>,
-    pub(crate) document: Option<&'a str>,
-    pub(crate) at: Option<&'a str>,
+pub struct Ask<'a> {
+    pub source: Option<&'a str>,
+    pub document: Option<&'a str>,
+    pub at: Option<&'a str>,
     /// Write each document to `<out>/<source>/<id>.md`; without it, the
     /// documents are printed.
-    pub(crate) out: Option<&'a Path>,
+    pub out: Option<&'a Path>,
 }
 
-pub(crate) fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
+pub fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
     let stdout = std::io::stdout();
     match write(root, ask, &mut stdout.lock()) {
         Ok(written) => {
@@ -37,14 +37,14 @@ pub(crate) fn run_cli(root: &Path, ask: &Ask<'_>) -> i32 {
 }
 
 /// Where a document is written under `out`.
-pub(crate) fn file_for(out: &Path, source: &str, markdown_uuid: &str) -> PathBuf {
+pub fn file_for(out: &Path, source: &str, markdown_uuid: &str) -> PathBuf {
     out.join(source).join(format!("{markdown_uuid}.md"))
 }
 
 /// Writes the documents `ask` names, to its folder or to `printed`, and
 /// returns how many. One document asked for and not found is an error, so
 /// a script that names one learns it is gone.
-pub(crate) fn write(root: &Path, ask: &Ask<'_>, printed: &mut impl Write) -> Result<usize> {
+pub fn write(root: &Path, ask: &Ask<'_>, printed: &mut impl Write) -> Result<usize> {
     let sources = match ask.source {
         Some(s) => vec![s.to_string()],
         None => datalib_etl_render::grid_index::discover_sources(root),

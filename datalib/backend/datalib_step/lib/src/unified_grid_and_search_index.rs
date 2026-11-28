@@ -4,6 +4,7 @@
 //! tables in the same file. It keeps the inference cache to the vectors a
 //! chunk still names, and reports what search holds of each source.
 
+use futures::future::BoxFuture;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -75,7 +76,18 @@ fn render_inputs(inputs: &[String]) -> Vec<String> {
 
 /// The step. It needs no embedding model: its keyword pass is SQLite's
 /// FTS5, and each source's `embed` cuts the chunks the model reads.
-pub async fn run(
+pub fn run<'a>(
+    data_root: &'a Path,
+    env: &'a StepEnv,
+    params: &'a Params,
+    now: Option<&'a str>,
+    emitter: &'a Emitter,
+    stop: &'a StopFlag,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_unboxed(data_root, env, params, now, emitter, stop))
+}
+
+async fn run_unboxed(
     data_root: &Path,
     env: &StepEnv,
     params: &Params,

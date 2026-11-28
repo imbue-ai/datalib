@@ -299,7 +299,7 @@ pub(crate) fn opened_by_this_build(stored: &Meta) -> bool {
 /// The shape a raw store of `source_type` is in at this build: read off a
 /// new one made in a scratch directory, since only the provider's open
 /// knows its DDL and its ladders. Made once per process and type. What a
-/// render requires of the raw store it reads (`crate::render`).
+/// render requires of the raw store it reads (`require_raw_shape`).
 pub(crate) async fn raw_shape(source_type: &str) -> Result<datalib_store_meta::Shape> {
     static MADE: std::sync::Mutex<std::collections::BTreeMap<String, datalib_store_meta::Shape>> =
         std::sync::Mutex::new(std::collections::BTreeMap::new());
@@ -317,6 +317,27 @@ pub(crate) async fn raw_shape(source_type: &str) -> Result<datalib_store_meta::S
         .expect("unpoisoned")
         .insert(source_type.to_string(), shape.clone());
     Ok(shape)
+}
+
+/// The raw store a render reads is in this build's shape, or the render
+/// is refused before any provider reads it, naming the download step that
+/// brings it there: the launch's prepare pass migrates every raw store, so
+/// a refusal here is one that pass could not migrate. A store this very
+/// build opened is in its shape by construction; any other is compared
+/// with a new store made in scratch. No store yet is nothing to read.
+pub(crate) async fn require_raw_shape(raw_db: &Path, source_type: &str) -> Result<()> {
+    if !raw_db.exists() {
+        return Ok(());
+    }
+    let meta = datalib_store_meta::guard::read_at(raw_db)
+        .await
+        .with_context(|| format!("read {}'s _datalib_meta", raw_db.display()))?;
+    if meta.as_ref().is_some_and(opened_by_this_build) {
+        return Ok(());
+    }
+    let want = raw_shape(source_type).await?;
+    let step = datalib_store_meta::step_of(raw_db);
+    datalib_store_meta::require(raw_db, step.as_deref(), meta.as_ref(), &want)
 }
 
 /// The source's own migration, then its older problems named.
@@ -896,17 +917,11 @@ mod tests {
         let tree = root.path().join("mail/ingest");
         crate::dispatch::migrate("email", &tree).await.unwrap();
         let db = entities_db(&tree);
-        crate::render::require_raw_shape(&db, "email")
-            .await
-            .unwrap();
+        super::require_raw_shape(&db, "email").await.unwrap();
         set_meta(&db, "git_hash", "another-commit").await;
-        crate::render::require_raw_shape(&db, "email")
-            .await
-            .unwrap();
+        super::require_raw_shape(&db, "email").await.unwrap();
         set_meta(&db, "schema_hash", "an older shape").await;
-        let e = crate::render::require_raw_shape(&db, "email")
-            .await
-            .unwrap_err();
+        let e = super::require_raw_shape(&db, "email").await.unwrap_err();
         let refused = datalib_store_meta::other_shape(&e).expect("refused for its shape");
         assert_eq!(refused.step.as_deref(), Some("mail/ingest"));
     }

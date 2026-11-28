@@ -5,6 +5,7 @@
 //! one out afresh. The layout is `datalib_embedding_map`; the file is
 //! `datalib_unified_grid_and_search_index::embedding_map`.
 
+use futures::future::BoxFuture;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -23,7 +24,15 @@ pub fn out_rel() -> String {
     )
 }
 
-pub async fn run(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
+pub fn run<'a>(
+    data_root: &'a Path,
+    now: &'a str,
+    emitter: &'a Emitter,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_unboxed(data_root, now, emitter))
+}
+
+async fn run_unboxed(data_root: &Path, now: &str, emitter: &Emitter) -> Result<Vec<OutputClaim>> {
     let progress = emitter.progress();
     progress.set_message("reading the embeddings");
     let vectors = document_vectors(data_root).await?;

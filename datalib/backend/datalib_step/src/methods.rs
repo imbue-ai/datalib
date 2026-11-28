@@ -261,7 +261,8 @@ mod tests {
     /// (`export.path`) is fine, it proves the table is real.
     #[test]
     fn every_declared_method_names_a_field_the_config_has() {
-        use crate::dispatch::{plan, Phase};
+        use crate::dispatch::plan;
+        use crate::planned_source::Phase;
         let td = tempfile::tempdir().unwrap();
         for &t in SourceType::VARIANTS {
             for m in ingest_methods(t) {
