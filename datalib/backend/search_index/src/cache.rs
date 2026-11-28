@@ -231,6 +231,7 @@ impl InferenceCache {
         let shape = shape();
         let kept = crate::file::keep_in_shape(
             &pool,
+            path,
             StoreKind::InferenceCache,
             &shape,
             &ddl,
@@ -556,6 +557,67 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(indexed.as_deref(), Some("vectors_keys"));
+    }
+
+    /// A cache holding `a`, then marked as reshaped by `version`: its
+    /// recorded tables are no longer this build's.
+    async fn reshaped_by(version: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cache.sqlite");
+        let cache = InferenceCache::open(&path).await.unwrap();
+        cache.put("gemma", &[(h("a"), vec![0.5])]).await.unwrap();
+        test_sql!("UPDATE _datalib_meta SET value = 'another' WHERE key = 'schema_hash'")
+            .query()
+            .execute(&cache.pool)
+            .await
+            .unwrap();
+        test_sql!("UPDATE _datalib_meta SET value = ? WHERE key = 'datalib_version'")
+            .query()
+            .bind(version)
+            .execute(&cache.pool)
+            .await
+            .unwrap();
+        cache.close().await;
+        (dir, path)
+    }
+
+    async fn vectors_held(path: &Path) -> i64 {
+        let pool = crate::file::open(path, &[], WAIT).await.unwrap();
+        let n = test_sql!("SELECT count(*) FROM vectors")
+            .query_scalar()
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
+        n
+    }
+
+    /// An older build opening a cache a newer line reshaped refuses it,
+    /// naming the build that wrote it, and keeps every vector: emptying
+    /// it would cost the library every embedding.
+    #[tokio::test]
+    async fn a_cache_a_newer_line_reshaped_is_refused_and_kept() {
+        let (_dir, path) = reshaped_by("99.0.0").await;
+        let err = match InferenceCache::open(&path).await {
+            Ok(_) => panic!("a cache a newer line wrote was opened"),
+            Err(e) => e,
+        };
+        let newer = err
+            .chain()
+            .find_map(|e| e.downcast_ref::<datalib_store_meta::NewerBuild>())
+            .unwrap_or_else(|| panic!("not refused as newer: {err:#}"));
+        assert_eq!(newer.wrote, "99.0.0");
+        assert_eq!(vectors_held(&path).await, 1);
+    }
+
+    /// A cache an older line wrote in another shape is still emptied and
+    /// made again in this build's.
+    #[tokio::test]
+    async fn a_cache_an_older_line_wrote_in_another_shape_is_emptied() {
+        let (_dir, path) = reshaped_by("0.0.1").await;
+        let cache = InferenceCache::open(&path).await.unwrap();
+        assert_eq!(cache.missing("gemma", &[h("a")]).await.unwrap(), [h("a")]);
+        cache.close().await;
     }
 
     /// The vectors' shape is the one every library's cache records: a

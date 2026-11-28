@@ -87,5 +87,14 @@ is in it. A "no such table" or "no such column" after that means the
 store is damaged, not old, and fails as one.
 
 The other side, `guard::refuse_if_newer`, keeps a build from writing a
-store a newer line of Datalib wrote, and refuses it at prepare
-(`failure: incompatible`).
+store a newer line of Datalib wrote. Three places run it:
+
+1. `datalib-http`, at start, over every store `guard::stores_under`
+   finds: each `.doltlite_db`, the run store, disk stats, the grid index
+   and the inference cache. One newer store and the app opens nothing.
+2. The prepare pass, over the stores the steps own
+   (`failure: incompatible`). It checks the inference cache only before
+   it rewrites the cache's pages.
+3. Each owner's open, before it writes: `doltlite_raw`, the app stores,
+   and the inference cache's `search_index::file::keep_in_shape`, which
+   would otherwise empty a cache in a shape it does not know.
