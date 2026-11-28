@@ -328,7 +328,7 @@ is not what this section defends, and the desktop app does not use it.
 | way in | what guards it | what it does not stop | how we know |
 |---|---|---|---|
 | The library's files | macOS's guard on a group container, from macOS 15. Before that the app does not offer the folder | A program you said Allow to, and one with Full Disk Access | Full Disk Access measured on macOS 26.7.2. The version comes from Apple's documentation |
-| The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same | Read from source; `tauri/README.md` has the detail |
+| The sign-ins | Only the folder. The keychain item lets in the app's Node, which any program can run | The same, and `ps` while a request runs (below) | Read from source; `tauri/README.md` has the detail |
 | The server, with the API token | The token is in `system/api-token`. The launch URL reaches the desktop app over a pipe and is printed only to a terminal | A path a script gives `--url-file`, which is that script's choice | Measured on a scratch library: the token was in no other file and not in `ps`. `launch_url_test` |
 | Any store, read with SQL the caller writes (`POST /applet/unified_grid_and_search_index/sql`) | The API token, as every route. The store opens read-only and pinned to one commit; `datalib_sql_guard`'s authorizer lets a statement read tables and call the functions on its allowlist by name (`ALLOWED_FUNCTIONS` in `datalib_sql_guard`: SQLite's that only compute an answer, and doltlite's that only answer), and nothing else, and the statement it checked is the one that runs, refused again if SQLite does not call it read-only; under `system/`, only the stores it names | Reading: the token's holder reads every store a step wrote, the raw stores and the log among them. A program that can read the token could read those files anyway | `sql::tests::nothing_a_caller_sends_writes` and `a_guarded_connection_refuses_attach_and_writes_at_prepare`, both seen failing with the authorizer off; `detached_readers_running_guarded_sql_never_make_the_writers_commit_fail`; `every_registered_function_is_allowed_or_refused_by_name` fails on any function the linked engine registers that is on neither the allowlist nor the test's refused list, seen failing with both lists empty. Measured with the doltlite shell: a read-only open, detached or not, still let `dolt_creds_new()` write a key under `~/.doltlite`, and doltlite's `dolt_dump('--file-name', …)` writes a file at any path |
 | Temp files, which hold web responses, decrypted databases, unpacked archives and a sign-in browser's state | `TMPDIR` names `<library>/system/tmp` for the server and everything it runs; the server empties it at start | A program that ignores `TMPDIR`, which macOS's own tools do (below). Anything written there by earlier builds, until macOS clears it | `protected_temp_test`, on the real server with a real step. One launch of the real desktop app at the protected path, with a scratch home: the server and its applets had this `TMPDIR`, and what a crash left was gone |
@@ -369,8 +369,12 @@ These all put something from a protected library outside its folder:
   into the folder: that shell's app may have been allowed. The same query found
   files in a folder named `*.noindex`, so that name is not expected to stop it. To
   learn what Spotlight holds, query machine-wide, never with `-onlyin`.
-- **A credential pasted into the wizard** is on `latchkey`'s command line for
-  the second that runs. It needs a change upstream
+- **Every credential latchkey sends is on curl's command line.** For each
+  request `latchkey curl` makes, latchkey hands curl the stored credential as
+  an argument, so `ps` shows it to any program on the machine for as long as
+  the request runs, and a sync makes requests all the time. A credential
+  pasted into the wizard is on `latchkey`'s own command line too, for the
+  second `auth set` runs. Both wait on a change in latchkey
   ([`latchkey.md`](latchkey.md)).
 - **The fingerprint cache** is in `~/Library/Caches/datalib` on a Mac, shared by
   every library on the machine. It says which local files a source read. Read
@@ -427,9 +431,18 @@ it came from, so it gets its own section.
   sending everything (a misspelled name is refused too).
 - **The driver is handed a named environment**
   (`datalib_env::Child::Modal`): what every child gets plus Modal's own
-  variables, and no other secret the step holds. A step itself is not
-  handed `MODAL_*` by a sync's runner unless `DATALIB_CHILD_ENV` names
-  them, so a custom step or a package's never sees a Modal token.
+  variables, and no other secret the step holds. A sync's runner hands
+  a step no `MODAL_*` variable, so under a sync the sign-in is
+  `~/.modal.toml`, and a custom step or a package's is never handed a
+  Modal token; like any program running as the person, it can still read
+  that file. The sign-in error names only `modal setup`: naming the
+  token's variables in `DATALIB_CHILD_ENV` instead would hand them to
+  every child of the sync, applets and latchkey included.
+- **The Sandbox has no network.** The driver creates each one with
+  `blockNetwork`, so the code that reads the text can send it nowhere: the
+  model is in the image, and the text arrives and leaves through the SDK's
+  calls to Modal. Read from source and asserted against the fake SDK; not
+  yet run on Modal.
 - **The driver prints no prompt.** Its stderr, which goes to the step's
   log, says which slice ran where and how long it took. Read from
   source; no test greps the log for prompt text.

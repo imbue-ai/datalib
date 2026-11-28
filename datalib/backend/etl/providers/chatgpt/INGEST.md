@@ -474,7 +474,7 @@ or a machine whose `chatgpt` service you would rather not deregister.
 `chatgpt.com` is fronted by Cloudflare's managed challenge, which
 fingerprints TLS handshakes, so every request goes out through the
 bundled Chrome-impersonating curl. Leave `LATCHKEY_CURL` unset and the
-downloader finds it (`ensure_curl_router`); setting it by hand is in
+downloader finds it (`curl_router`); setting it by hand is in
 [`docs/dev/curl_impersonate.md`](/docs/dev/curl_impersonate.md).
 
 Cloudflare issues a `cf_clearance` cookie only to a client whose

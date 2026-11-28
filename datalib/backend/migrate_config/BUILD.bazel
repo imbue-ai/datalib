@@ -51,6 +51,7 @@ rust_binary(
     deps = [
         ":datalib_migrate_config",
         "//datalib/backend/cli_help:datalib_cli_help",
+        "//datalib/backend/runtime:datalib_runtime",
         "@datalib_crates//:anyhow",
         "@datalib_crates//:clap",
     ],
@@ -63,5 +64,8 @@ rust_test(
     size = "small",
     crate = ":datalib_migrate_config_bin",
     edition = "2021",
-    deps = ["//datalib/backend/agent_docs:datalib_agent_docs"],
+    deps = [
+        "//datalib/backend/agent_docs:datalib_agent_docs",
+        "@datalib_crates//:tempfile",
+    ],
 )

@@ -28,30 +28,20 @@ static RESOLVED: OnceLock<Option<PathBuf>> = OnceLock::new();
 )]
 pub struct CurlRouterNotFound;
 
-/// Ensure `LATCHKEY_CURL` points at the bundled router curl and return
-/// its resolved path. Idempotent — the first call resolves and caches;
-/// later calls are a `OnceLock` read.
-pub fn ensure_curl_router() -> Result<PathBuf, CurlRouterNotFound> {
-    match RESOLVED.get_or_init(resolve) {
-        Some(path) => {
-            if should_export_curl_router(
-                std::env::var_os(CURL_ENV_VAR).as_deref(),
-                std::env::var_os(GATEWAY_ENV_VAR).as_deref(),
-            ) {
-                std::env::set_var(CURL_ENV_VAR, path);
-            }
-            Ok(path.clone())
-        }
-        None => Err(CurlRouterNotFound),
-    }
+/// The bundled router curl, resolved once per process.
+pub fn curl_router() -> Result<PathBuf, CurlRouterNotFound> {
+    RESOLVED
+        .get_or_init(resolve)
+        .clone()
+        .ok_or(CurlRouterNotFound)
 }
 
 fn is_gateway_mode(gateway: Option<&OsStr>) -> bool {
     matches!(gateway, Some(value) if !value.is_empty())
 }
 
-/// Whether [`ensure_curl_router`] should point `LATCHKEY_CURL` at the
-/// router curl it resolved. Two reasons not to:
+/// Whether [`latchkey_command`] should point `LATCHKEY_CURL` at the
+/// router curl. Two reasons not to:
 fn should_export_curl_router(existing_curl: Option<&OsStr>, gateway: Option<&OsStr>) -> bool {
     existing_curl.is_none() && !is_gateway_mode(gateway)
 }
@@ -124,13 +114,15 @@ pub use datalib_runtime::node_runtime::{latchkey_cli_hint, LATCHKEY_VERSION};
 
 /// `std::process::Command` for `latchkey` from the staged runtime tree
 /// (`datalib_runtime::node_runtime::latchkey_command` decides; the
-/// error says where it looked). Sets `LATCHKEY_CURL` to the router on
-/// first call. If the router can't be found, logs a warning and returns
-/// the `Command` anyway — callers may still succeed against non-CF
-/// endpoints.
+/// error says where it looked), with `LATCHKEY_CURL` set on it to the
+/// router. Set on the command, never on this process: `set_var` is not
+/// safe while other threads read the environment. If the router can't be
+/// found, logs a warning and returns the `Command` anyway — callers may
+/// still succeed against non-CF endpoints.
 pub fn latchkey_command() -> anyhow::Result<std::process::Command> {
-    warn_if_missing();
-    Ok(datalib_runtime::node_runtime::latchkey_command()?)
+    let mut cmd = datalib_runtime::node_runtime::latchkey_command()?;
+    point_at_curl_router(&mut cmd);
+    Ok(cmd)
 }
 
 pub fn latchkey_tokio_command() -> anyhow::Result<tokio::process::Command> {
@@ -213,14 +205,25 @@ pub async fn renew_by_browser_login(
     Ok(())
 }
 
-fn warn_if_missing() {
+fn point_at_curl_router(cmd: &mut std::process::Command) {
+    let gateway = std::env::var_os(GATEWAY_ENV_VAR);
     // In gateway mode the gateway supplies its own router curl, so a
     // missing local one costs nothing and the warning would be misleading.
-    if is_gateway_mode(std::env::var_os(GATEWAY_ENV_VAR).as_deref()) {
+    if is_gateway_mode(gateway.as_deref()) {
         return;
     }
-    if let Err(e) = ensure_curl_router() {
-        tracing::warn!(error = %e, "running latchkey without the bundled curl router; Cloudflare-protected endpoints will likely 403");
+    match curl_router() {
+        Ok(path) => {
+            if should_export_curl_router(
+                std::env::var_os(CURL_ENV_VAR).as_deref(),
+                gateway.as_deref(),
+            ) {
+                cmd.env(CURL_ENV_VAR, path);
+            }
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "running latchkey without the bundled curl router; Cloudflare-protected endpoints will likely 403");
+        }
     }
 }
 
@@ -286,6 +289,27 @@ mod tests {
             .collect();
         assert!(!args.iter().any(|a| a == "--account"), "{args:?}");
         assert!(args.iter().any(|a| a == "curl"), "{args:?}");
+    }
+
+    /// The router reached latchkey through `set_var` on this process,
+    /// which races every thread reading the environment.
+    #[test]
+    fn the_router_is_set_on_the_command_not_on_this_process() {
+        assert!(
+            std::env::var_os(CURL_ENV_VAR).is_none()
+                && !is_gateway_mode(std::env::var_os(GATEWAY_ENV_VAR).as_deref()),
+            "the test's environment names a curl or a gateway already"
+        );
+        let router = curl_router().expect("the router is in this test's runfiles");
+        // SAFETY: the test reads the env for no other reason.
+        unsafe { std::env::set_var(datalib_runtime::node_runtime::ALLOW_NPX_ENV, "1") };
+        let cmd = latchkey_command().expect("npx fallback enabled above");
+        let set = cmd
+            .get_envs()
+            .find(|(name, _)| *name == CURL_ENV_VAR)
+            .and_then(|(_, value)| value);
+        assert_eq!(set, Some(router.as_os_str()));
+        assert_eq!(std::env::var_os(CURL_ENV_VAR), None);
     }
 
     /// A caller's explicit `LATCHKEY_CURL` always wins.

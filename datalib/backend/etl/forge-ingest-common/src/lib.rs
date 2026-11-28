@@ -218,7 +218,6 @@ async fn sync_collecting<F: Forge>(
     opts: SyncOptions<'_>,
     found: RunProblems,
 ) -> Result<F::Summary> {
-    let _ = datalib_etl_web::latchkey::ensure_curl_router();
     let run = DownloadRun::start(&found, forge.pool(), &opts.run_config).await?;
     let fetcher = ChangeRequests {
         forge,

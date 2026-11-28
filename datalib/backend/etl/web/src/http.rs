@@ -949,6 +949,8 @@ fn log_attempt(
 
 mod live {
     use super::*;
+    use std::ffi::OsString;
+    use std::path::Path;
 
     pub(super) async fn send(req: &HttpRequest) -> Result<HttpResponse, HttpError> {
         let body_file = tempfile::NamedTempFile::new().map_err(|e| HttpError::Spawn {
@@ -972,43 +974,19 @@ mod live {
                 message: format!("{e:#}"),
             })?
         };
-        cmd.arg("-sS");
-        // -D - dumps the response header block to stdout so we can
-        // parse every header. -o <path> writes the body to a tempfile
-        // so headers and body are cleanly separated (no need to split
-        // on a CRLFCRLF boundary).
-        cmd.args(["-D", "-", "-o"]).arg(&body_path);
-        if req.method.needs_x_flag() {
-            cmd.args(["-X", req.method.as_str()]);
-        }
-        for (k, v) in &req.headers {
-            cmd.arg("-H").arg(format!("{}: {}", k, v));
-        }
-        // Route CF-fronted providers to the impersonating curl via the
-        // router curl's marker header. Only on the latchkey path -- a
-        // bypass_latchkey request uses plain curl, which has no router
-        // curl to act on the marker and would just send it upstream.
-        // The Chrome profile advertises compression. A gateway's router can
-        // hand the reply on as the server sent it, so the decoding is this
-        // curl's, with the header dump describing the wire body. The router
-        // we pin adds the flag itself, and giving it twice is harmless.
-        if !req.bypass_latchkey && req.service.impersonates() {
-            cmd.arg("--compressed");
-            cmd.arg("-H").arg(IMPERSONATE_MARKER_HEADER);
-        }
+        let _curl_home = if req.bypass_latchkey {
+            None
+        } else {
+            Some(without_curlrc(&mut cmd).map_err(|e| HttpError::Spawn {
+                service: req.service,
+                message: format!("curl home: {e}"),
+            })?)
+        };
+        cmd.args(request_args(req, &body_path));
         let writes_body_to_stdin = req.body.is_some();
         if writes_body_to_stdin {
-            // `@-` reads the request body from stdin so we don't smuggle
-            // it through argv (avoids ARG_MAX and lets binary payloads
-            // round-trip cleanly).
-            cmd.arg("--data-binary").arg("@-");
             cmd.stdin(Stdio::piped());
         }
-        if req.bypass_latchkey {
-            // A URL someone else wrote cannot be read as an option.
-            cmd.arg("--url");
-        }
-        cmd.arg(&req.url);
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -1080,6 +1058,66 @@ mod live {
             body,
             duration_ms,
         })
+    }
+
+    /// What curl is told after the program that runs it: the same on
+    /// both paths. `--globoff`, because a URL upstream wrote can hold
+    /// `[1-9]` or `{a,b}`, which curl would otherwise send as many
+    /// requests, none of them the URL latchkey checked.
+    pub(super) fn request_args(req: &HttpRequest, body_path: &Path) -> Vec<OsString> {
+        let mut args: Vec<OsString> = vec!["-sS".into(), "--globoff".into()];
+        // -D - dumps the response header block to stdout so we can
+        // parse every header. -o <path> writes the body to a tempfile
+        // so headers and body are cleanly separated (no need to split
+        // on a CRLFCRLF boundary).
+        args.extend(["-D".into(), "-".into(), "-o".into(), body_path.into()]);
+        if req.method.needs_x_flag() {
+            args.extend(["-X".into(), req.method.as_str().into()]);
+        }
+        for (k, v) in &req.headers {
+            args.extend(["-H".into(), format!("{}: {}", k, v).into()]);
+        }
+        // Route CF-fronted providers to the impersonating curl via the
+        // router curl's marker header. Only on the latchkey path -- a
+        // bypass_latchkey request uses plain curl, which has no router
+        // curl to act on the marker and would just send it upstream.
+        // The Chrome profile advertises compression. A gateway's router can
+        // hand the reply on as the server sent it, so the decoding is this
+        // curl's, with the header dump describing the wire body. The router
+        // we pin adds the flag itself, and giving it twice is harmless.
+        if !req.bypass_latchkey && req.service.impersonates() {
+            args.extend([
+                "--compressed".into(),
+                "-H".into(),
+                IMPERSONATE_MARKER_HEADER.into(),
+            ]);
+        }
+        if req.body.is_some() {
+            // `@-` reads the request body from stdin so we don't smuggle
+            // it through argv (avoids ARG_MAX and lets binary payloads
+            // round-trip cleanly).
+            args.extend(["--data-binary".into(), "@-".into()]);
+        }
+        if req.bypass_latchkey {
+            // A URL someone else wrote cannot be read as an option.
+            args.push("--url".into());
+        }
+        args.push(req.url.as_str().into());
+        args
+    }
+
+    /// Points the curl `cmd` starts at a `CURL_HOME` holding an empty
+    /// `.curlrc`, so it reads no `~/.curlrc`: latchkey puts its own
+    /// arguments first, where `-q` would have to be. An empty `CURL_HOME`
+    /// is not enough, since curl then goes on to `$XDG_CONFIG_HOME` and
+    /// `$HOME`. The directory must outlive the process.
+    pub(super) fn without_curlrc(
+        cmd: &mut tokio::process::Command,
+    ) -> std::io::Result<tempfile::TempDir> {
+        let home = tempfile::tempdir()?;
+        std::fs::File::create(home.path().join(".curlrc"))?;
+        cmd.env("CURL_HOME", home.path());
+        Ok(home)
     }
 
     /// What plain curl is told first, for a URL that carries its own
@@ -1194,6 +1232,69 @@ mod live {
                 Err(HttpError::Curl { .. }) => {}
                 other => panic!("expected curl to refuse the url, got {other:?}"),
             }
+        }
+
+        /// A brace in a URL was a glob to curl, which would have sent
+        /// one request per expansion; an unmatched one it refused with
+        /// exit 3 before connecting. Port 1 answers nothing, so reaching
+        /// the connect means curl took the URL as one.
+        #[tokio::test]
+        async fn plain_curl_reads_a_brace_in_a_url_as_a_brace() {
+            match send(&plain("https://127.0.0.1:1/x{a")).await {
+                Err(HttpError::Curl { exit, stderr, .. }) => {
+                    assert_ne!(exit, 3, "curl read the url as a glob: {stderr}");
+                }
+                other => panic!("expected curl to fail to connect, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn both_paths_turn_globbing_off() {
+            let path = Path::new("/body");
+            let url = "https://api.notion.com/v1/[1-9]";
+            for req in [HttpRequest::get(HttpService::Notion, url), plain(url)] {
+                let args = request_args(&req, path);
+                assert!(
+                    args.iter().any(|a| a == "--globoff"),
+                    "bypass_latchkey={}: {args:?}",
+                    req.bypass_latchkey
+                );
+            }
+        }
+
+        /// curl behind latchkey read `~/.curlrc`, where a `verbose` line
+        /// would have put the credential's header in its stderr, which an
+        /// error keeps.
+        #[tokio::test]
+        async fn the_latchkey_path_reads_no_curlrc() {
+            let home = tempfile::tempdir().unwrap();
+            std::fs::write(
+                home.path().join(".curlrc"),
+                "write-out = \"read-the-curlrc\"\n",
+            )
+            .unwrap();
+            let body = home.path().join("body");
+            std::fs::write(&body, "x").unwrap();
+            let curl = || {
+                let mut cmd = tokio::process::Command::new("curl");
+                cmd.env("HOME", home.path())
+                    .env_remove("CURL_HOME")
+                    .env_remove("XDG_CONFIG_HOME")
+                    .args(["-sS", "-o", "/dev/null"])
+                    .arg(format!("file://{}", body.display()));
+                cmd
+            };
+            let stdout = |out: std::process::Output| {
+                assert!(out.status.success(), "{out:?}");
+                String::from_utf8(out.stdout).unwrap()
+            };
+
+            let unguarded = stdout(curl().output().await.unwrap());
+            assert_eq!(unguarded, "read-the-curlrc", "the .curlrc was not read");
+
+            let mut guarded = curl();
+            let _curl_home = without_curlrc(&mut guarded).unwrap();
+            assert_eq!(stdout(guarded.output().await.unwrap()), "");
         }
 
         #[test]

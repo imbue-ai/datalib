@@ -26,7 +26,7 @@ on the two names.
 |---|---|
 | `latchkey-curl-router` | The `curl` that `LATCHKEY_CURL` points at. An invocation carrying the private `X-Imbue-Impersonate` header is rewritten — that header and any `User-Agent` dropped, `--compressed --noproxy '*' --impersonate <profile>` put in front — and handed to the impersonating curl; anything else goes to the system curl untouched. `--noproxy '*'` keeps `HTTP(S)_PROXY` and the macOS proxy pane away from a request that carries credentials. It can also send a request out through the latchkey gateway on the user's own computer, chosen by URL from the file `LATCHKEY_DESKTOP_PROXY_CONFIG` names; Datalib plays no part in that decision. |
 | `curl-impersonate` | Upstream `curl-impersonate`, unmodified. It ships next to the router in every release tarball and in the app bundle, and the router finds it only as a sibling of that exact name. **On its own it does not impersonate**: without `--impersonate` it is a plain curl 8.x and gets the same `403` as one. |
-| `DATALIB_IMPERSONATE_PROFILE` | The `--impersonate` target, default `chrome150`. The marker's value plays no part: Datalib sends `1`, and `X-Imbue-Impersonate: chrome131` still gets `chrome150`. Passed through as-is; a name curl-impersonate does not know fails the request with exit 43 and a message naming a valid one. |
+| `DATALIB_IMPERSONATE_PROFILE` | The `--impersonate` target, default `chrome150`. The marker's value plays no part: Datalib sends `1`, and `X-Imbue-Impersonate: chrome131` still gets `chrome150`. Passed through as-is; a name curl-impersonate does not know fails the request with exit 43 and a message naming a valid one. The router reads it from the environment it is started with, which under a sync holds it only when the config's `[env]` or the step's own `env` sets it, or `DATALIB_CHILD_ENV` names it. |
 
 This table describes the router this tree pins (`LATCHKEY_CURL_SHIMS_RELEASE`,
 below), which is the one the desktop app and a local run use. A request
@@ -41,10 +41,11 @@ Only the router understands the marker header, so **point
 `LATCHKEY_CURL` at the router, never at the impersonator directly.**
 Pointing it at the impersonator gives you a plain curl that forwards
 the marker header to the third party. Leaving `LATCHKEY_CURL` unset is
-usually right: `datalib_etl_web::latchkey::ensure_curl_router` takes
+usually right: `datalib_etl_web::latchkey::curl_router` takes
 `DATALIB_CURL_ROUTER` if set, else finds the router in bazel's
-runfiles, next to the running binary, or on `PATH`, and points
-`LATCHKEY_CURL` at it (not in `LATCHKEY_GATEWAY` mode).
+runfiles, next to the running binary, or on `PATH`, and
+`latchkey_command` sets `LATCHKEY_CURL` to it on each `latchkey` it
+starts (not in `LATCHKEY_GATEWAY` mode).
 
 To make one hand-run request impersonate, pass the marker yourself:
 
@@ -100,7 +101,8 @@ profile, a router change:
 3. `bazelisk build //third-party/latchkey-curl-shims` and run one
    impersonating request (above) to see it work.
 4. If the release changed the default profile, nothing here needs to
-   follow: `DATALIB_IMPERSONATE_PROFILE` is only an override.
+   follow: `DATALIB_IMPERSONATE_PROFILE` is only an override, and one a
+   sync passes on only from the config's `[env]` or `DATALIB_CHILD_ENV`.
 5. Read the router's source at the new tag against §"The three pieces"
    and correct that section, which says what the pinned release does.
 
