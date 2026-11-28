@@ -18,7 +18,7 @@ use crate::schema::labels::LabelRow;
 use crate::schema::not_linked::NotLinkedRow;
 use crate::{
     any_holders, contact_subject, insert_contact, insert_handle, plan_link, DecidedHow, HandleFrom,
-    LinkPlan, Maker, Store, WhenHeld,
+    LinkPlan, Maker, Store, WhenHeld, REAL,
 };
 use datalib_sql::sql;
 
@@ -173,6 +173,28 @@ fn plan_agent_link(holders: &[String], turned_down: bool, target: &str) -> Agent
 /// A person's word on one label inside `tx`: in, out, or (`None`)
 /// unknown again, which deletes the row. Returns whether anything
 /// changed.
+/// `label` as the store already spells it, where some row has it in
+/// another case: "klingon" typed where "Klingon" is held is "Klingon", so
+/// a label never splits in two by case. `REAL` is always `REAL`.
+pub(crate) async fn spelled_as_held(
+    conn: &mut sqlx::SqliteConnection,
+    label: &str,
+) -> Result<String> {
+    if label.eq_ignore_ascii_case(REAL) {
+        return Ok(REAL.to_string());
+    }
+    let held: Option<String> = sql!(
+        "contacts_app.review.find_label_spelling",
+        "SELECT label FROM labels WHERE label = ? COLLATE NOCASE ORDER BY label LIMIT 1"
+    )
+    .query_scalar()
+    .bind(label)
+    .fetch_optional(&mut *conn)
+    .await
+    .context("read how a label is spelled")?;
+    Ok(held.unwrap_or_else(|| label.to_string()))
+}
+
 async fn person_says(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     subject: &str,
@@ -463,6 +485,7 @@ async fn agent_labels(
             });
             continue;
         };
+        let label = spelled_as_held(tx, &label).await?;
         let confidence = match check_confidence(p.confidence) {
             Ok(c) => c,
             Err(why) => {
@@ -975,6 +998,7 @@ impl Store {
         };
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
         let mut tx = self.pool.begin().await?;
+        let label = spelled_as_held(&mut tx, &label).await?;
         let subject = check_subject(&mut tx, subject).await?;
         let changed = person_says(&mut tx, &subject, &label, applies, &now, &tz).await?;
         tx.commit().await?;
@@ -1666,6 +1690,32 @@ mod tests {
         assert_eq!(listed, 2, "Yes makes him a contact");
         assert_eq!(store.resolve(&[riker]).await.unwrap().len(), 1);
         assert!(store.suggestions().await.unwrap().is_empty());
+        store.close().await;
+    }
+
+    /// A label keeps the capitals and spaces it was typed with, and one
+    /// typed again in another case is the label already held, so it
+    /// never splits in two; `real` is `real` however an agent spells it.
+    #[tokio::test]
+    async fn a_label_is_kept_as_typed_and_one_whatever_its_case() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(&store_path(dir.path())).await.unwrap();
+        let worf = contact_subject(&store.create("Worf", &[]).await.unwrap());
+        let alexander = contact_subject(&store.create("Alexander", &[]).await.unwrap());
+        store
+            .set_label(&worf, "  House  of Mogh ", Some(true))
+            .await
+            .unwrap();
+        store
+            .set_label(&alexander, "house of mogh", Some(true))
+            .await
+            .unwrap();
+        store.set_label(&worf, "Real", Some(true)).await.unwrap();
+        assert_eq!(
+            labels_on(&store, &worf).await,
+            ["House of Mogh=in", "real=in"]
+        );
+        assert_eq!(labels_on(&store, &alexander).await, ["House of Mogh=in"]);
         store.close().await;
     }
 }

@@ -9,12 +9,13 @@
 use crate::schema::labels::LabelRow;
 use crate::DecidedHow;
 
-/// A label as a person or an agent may write it: trimmed, lowercased,
-/// its inner whitespace a `-`. `None` for one that is empty, too long or
-/// holds a control character.
+/// A label as a person or an agent may write it: as typed, trimmed, its
+/// inner whitespace one space ("Bridge crew"). Labels that differ only in
+/// case are one label, which the store keeps in the spelling it has
+/// (`review.rs::spelled_as_held`). `None` for one that is empty, too long
+/// or holds a control character.
 pub fn normalize_label(raw: &str) -> Option<String> {
-    let words: Vec<String> = raw.split_whitespace().map(str::to_lowercase).collect();
-    let label = words.join("-");
+    let label = raw.split_whitespace().collect::<Vec<_>>().join(" ");
     let ok =
         !label.is_empty() && label.chars().count() <= 64 && !label.chars().any(char::is_control);
     ok.then_some(label)
@@ -102,12 +103,12 @@ mod tests {
     }
 
     #[test]
-    fn a_label_is_a_lowercase_word_or_phrase() {
+    fn a_label_is_a_word_or_phrase_as_typed() {
         assert_eq!(
-            normalize_label("  Bridge  Crew "),
-            Some("bridge-crew".into())
+            normalize_label("  Bridge \t Crew "),
+            Some("Bridge Crew".into())
         );
-        assert_eq!(normalize_label("Real"), Some("real".into()));
+        assert_eq!(normalize_label("senior-staff"), Some("senior-staff".into()));
         assert_eq!(normalize_label("  "), None);
         assert_eq!(normalize_label(&"x".repeat(65)), None);
     }

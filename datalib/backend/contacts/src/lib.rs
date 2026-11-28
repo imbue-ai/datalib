@@ -158,6 +158,7 @@ async fn groups_become_labels(conn: &mut sqlx::SqliteConnection) -> Result<()> {
         let Some(label) = labels::normalize_label(group) else {
             bail!("the group {group:?} is no label: rename it, then open the store again");
         };
+        let label = review::spelled_as_held(conn, &label).await?;
         sql!(
             "contacts_app.migrate.label_a_member",
             "INSERT OR IGNORE INTO labels (subject, label, applies, decided_how, decided_at_utc, \
@@ -1160,8 +1161,7 @@ impl Store {
     }
 
     /// Say whether `contact_id` is the person whose library this is, or
-    /// stop saying so. A merged-away contact marks its survivor; a group
-    /// is refused, since its handles are other people's too. Returns
+    /// stop saying so. A merged-away contact marks its survivor. Returns
     /// whether anything changed.
     pub async fn set_me(&self, contact_id: &str, me: bool) -> Result<bool> {
         let (now, tz) = IsoOffsetTimestamp::now_local().to_utc_and_offset();
@@ -2182,12 +2182,13 @@ mod tests {
         ('away', 'riker', '2364-03-02T09:00:00Z', '+00:00'), \
         ('away', 'troi', '2364-03-02T09:00:00Z', '+00:00')";
     const TROI_IS_CREW: &str = "INSERT INTO labels (subject, label, applies, decided_how, \
-        decided_at_utc, reviewed_at_utc, tz_offset) VALUES ('contact:troi', 'away-team', 1, \
+        decided_at_utc, reviewed_at_utc, tz_offset) VALUES ('contact:troi', 'away team', 1, \
         'manual', '2364-03-01T09:00:00Z', '2364-03-01T09:00:00Z', '+00:00')";
 
     /// Rung 4: a group is an ordinary contact, and its members carry its
-    /// name as a label of their own, which a member that had it already
-    /// keeps as it was; `members` goes.
+    /// name as a label of their own, in the spelling a label of that name
+    /// already has ("away team" for the group "Away team"), which a member
+    /// that had it already keeps as it was; `members` goes.
     #[tokio::test]
     async fn rung_4_makes_a_group_a_contact_and_its_members_a_label() {
         let dir = tempfile::tempdir().unwrap();
@@ -2219,8 +2220,8 @@ mod tests {
         assert_eq!(
             labels,
             [
-                "contact:riker away-team manual 2364-03-02T09:00:00Z",
-                "contact:troi away-team manual 2364-03-01T09:00:00Z",
+                "contact:riker away team manual 2364-03-02T09:00:00Z",
+                "contact:troi away team manual 2364-03-01T09:00:00Z",
             ]
         );
         let tables: Vec<String> =
