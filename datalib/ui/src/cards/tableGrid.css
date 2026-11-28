@@ -78,9 +78,9 @@
   height: 100%;
   color: var(--datalib-muted);
 }
-.tg-status-running,
-.tg-status-waiting { color: var(--datalib-accent); }
-.tg-status-queued { color: var(--datalib-muted); }
+.tg-status-running { color: var(--datalib-accent); }
+.tg-status-waiting,
+.tg-status-queued { color: var(--datalib-wait-fg); }
 .tg-status-failed { color: var(--datalib-log-error); }
 .tg-status-interrupted { color: var(--datalib-log-warn); }
 /* Stopped on request: the same "not done, nothing broke" as above. */

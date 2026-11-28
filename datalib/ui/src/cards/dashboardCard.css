@@ -316,6 +316,12 @@
 .tone-run {
   color: var(--datalib-accent);
 }
+.tone-wait {
+  color: var(--datalib-wait-fg);
+}
+.tone-wait .dot {
+  background: var(--datalib-wait-dot);
+}
 .tone-warn {
   color: var(--datalib-warn-fg);
 }
