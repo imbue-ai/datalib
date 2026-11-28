@@ -2,6 +2,7 @@
 //! the tree the step id names and read from the raw store its input
 //! names.
 
+use futures::future::BoxFuture;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,7 +22,21 @@ use datalib_etl_render::indexed_markdown::{blocking, Holdings, IndexedMarkdownSt
 use datalib_sql::sql;
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run(
+pub fn run<'a>(
+    planned: PlannedSource,
+    env: &'a StepEnv,
+    raw_rel: &'a str,
+    data_root: &'a Path,
+    now: &'a str,
+    emitter: &'a Emitter,
+    control: &'a datalib_etl::control::DownloadControl,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_unboxed(
+        planned, env, raw_rel, data_root, now, emitter, control,
+    ))
+}
+
+async fn run_unboxed(
     planned: PlannedSource,
     env: &StepEnv,
     raw_rel: &str,

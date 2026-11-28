@@ -5,6 +5,7 @@
 //! one ordinary render tree. `docs/dev/data_architecture_parse_and_render.md`
 //! §"Rendering the delta itself".
 
+use futures::future::BoxFuture;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
@@ -125,7 +126,21 @@ pub fn split_params(mut params: serde_json::Value) -> Result<(DiffPair, serde_js
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run(
+pub fn run<'a>(
+    planned: PlannedSource,
+    env: &'a StepEnv,
+    data_root: &'a Path,
+    now: &'a str,
+    emitter: &'a Emitter,
+    control: &'a datalib_etl::control::DownloadControl,
+    pair: &'a DiffPair,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_unboxed(
+        planned, env, data_root, now, emitter, control, pair,
+    ))
+}
+
+async fn run_unboxed(
     planned: PlannedSource,
     env: &StepEnv,
     data_root: &Path,

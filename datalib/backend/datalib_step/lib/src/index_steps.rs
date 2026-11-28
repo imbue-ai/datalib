@@ -2,6 +2,7 @@
 //! each source's `embed`, which cuts its documents into chunks and fills
 //! the vectors they lack (`search_index.rs`).
 
+use futures::future::BoxFuture;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -111,7 +112,20 @@ impl ModelFile {
 
 /// `<group>/embed`: the vectors this source's chunks are missing from the
 /// inference cache.
-pub async fn run_embed(
+pub fn run_embed<'a>(
+    data_root: &'a Path,
+    env: &'a StepEnv,
+    params: serde_json::Value,
+    models_dir: Option<PathBuf>,
+    emitter: &'a Emitter,
+    stop: &'a StopFlag,
+) -> BoxFuture<'a, Result<Vec<OutputClaim>>> {
+    Box::pin(run_embed_unboxed(
+        data_root, env, params, models_dir, emitter, stop,
+    ))
+}
+
+async fn run_embed_unboxed(
     data_root: &Path,
     env: &StepEnv,
     params: serde_json::Value,
